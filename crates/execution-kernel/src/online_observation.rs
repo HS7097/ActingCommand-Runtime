@@ -253,6 +253,33 @@ impl PreparedPageObservation {
                     .push(redact_row(row, metadata), 1)
                     .map_err(fact_error)?;
             }
+            if let Err(error) = &page.result {
+                let definition = &detector.page_definitions()[page.index];
+                let mut declared = Vec::new();
+                let mut groups = vec![(PageTargetRole::Required, None, &definition.required)];
+                groups.extend(
+                    definition
+                        .any_of
+                        .iter()
+                        .enumerate()
+                        .map(|(index, targets)| (PageTargetRole::AnyOf, Some(index), targets)),
+                );
+                groups.push((PageTargetRole::Optional, None, &definition.optional));
+                groups.push((PageTargetRole::Forbidden, None, &definition.forbidden));
+                for (role, group, targets) in groups {
+                    for (index, target) in targets.iter().enumerate() {
+                        declared.push((role, group, index, target));
+                    }
+                }
+                let attempted = values.len() + usize::from(error.failed_target.is_some());
+                for (role, group, index, target) in declared.into_iter().skip(attempted) {
+                    let row = json!({"kind":"target_not_evaluated", "stage":"evaluate_page_target", "page_id":page.page_id,
+                        "page_index":page.index, "target_id":target, "role":role, "group_index":group, "target_index":index,
+                        "state":"not_evaluated", "reason":"earlier_target_failed"});
+                    private_facts.push(row.clone(), 0).map_err(fact_error)?;
+                    facts.push(row, 0).map_err(fact_error)?;
+                }
+            }
         }
         if let Some(error) = batch_error {
             let row = json!({"kind":"page_batch_failure", "stage":"evaluate_pages", "cause":error.cause, "unexecuted":error.unexecuted});

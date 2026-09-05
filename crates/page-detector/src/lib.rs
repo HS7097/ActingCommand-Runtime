@@ -266,6 +266,10 @@ impl PageDetector {
         self.page_set.pages.iter().map(|page| page.id.as_str())
     }
 
+    pub fn page_definitions(&self) -> &[PageDefinition] {
+        &self.page_set.pages
+    }
+
     pub fn page_uses_any_of(&self, page_id: &str) -> bool {
         self.page_indexes
             .get(page_id)

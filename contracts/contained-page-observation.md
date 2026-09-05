@@ -25,8 +25,10 @@ One `DiagnosticJson` artifact binds the request, correlation, instance, expected
 and actual package hashes, original frame reference, RGB8 hash, shared
 `PageProjection` and actual evaluation facts. Page summary rows and target rows
 retain the original evaluation relationships, including results completed before a
-failure. The projection's artifact-kind frame identity uses the PNG artifact hash;
-the separately named RGB8 hash covers decoded RGB8 pixels.
+failure. Remaining targets after a page failure carry explicit `not_evaluated` rows
+with their original role, group and target position; these rows do not count as
+actual evaluations. The projection's artifact-kind frame identity uses the PNG
+artifact hash; the separately named RGB8 hash covers decoded RGB8 pixels.
 
 The diagnostic artifact is created and verified before the final receipt.
 `projection_sequence` and `projection_event_id` identify that artifact's actual

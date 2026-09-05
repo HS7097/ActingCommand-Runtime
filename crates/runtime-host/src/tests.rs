@@ -109,15 +109,15 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         )
         .unwrap();
         let pages = if mode == 2 {
-            br#"{"schema_version":"0.6","pages":[{"id":"page","required":["anchor","text"]},{"id":"other","required":["text"]}]}"#.as_slice()
+            br#"{"schema_version":"0.6","pages":[{"id":"page","required":["anchor","text"],"optional":["later"]},{"id":"other","required":["text"]}]}"#.as_slice()
         } else {
-            br#"{"schema_version":"0.6","pages":[{"id":"page","required":["anchor","text"]}]}"#
+            br#"{"schema_version":"0.6","pages":[{"id":"page","required":["anchor","text"],"optional":["later"]}]}"#
                 .as_slice()
         };
         let files: &[(&str, &[u8])] = &[
             ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#),
             ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
-            ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.6","coordinate_space":{"width":2,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"ocr","id":"text","region":"full_frame","languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["home"],"case_sensitive":false,"minimum_confidence":0.9,"model_ref":"PP-OCRv6_medium","model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#),
+            ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.6","coordinate_space":{"width":2,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"ocr","id":"text","region":"full_frame","languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["home"],"case_sensitive":false,"minimum_confidence":0.9,"model_ref":"PP-OCRv6_medium","model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"type":"color","id":"later","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
             ("resources/recognition/neutral.test.pages.json", pages),
             ("resources/navigation/neutral.test.navigation.json", br#"{"navigation":[]}"#),
             ("resources/operations/task/task.json", br#"{"task_id":"task","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"text","privacy":"personal"}]}}"#),
@@ -200,13 +200,22 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
             assert_eq!(
                 evidence.private_facts.target_evaluation_count,
                 if mode == 2 {
-                    3
+                    4
                 } else if mode == 3 {
                     1
                 } else {
-                    2
+                    3
                 }
             );
+            if mode == 3 {
+                assert!(observation.facts.rows.iter().any(|row| {
+                    row["kind"] == "target_not_evaluated"
+                        && row["target_id"] == "later"
+                        && row["state"] == "not_evaluated"
+                        && row["page_id"] == "page"
+                        && row["target_index"] == 0
+                }));
+            }
             assert!(
                 !serde_json::to_string(&observation.facts)
                     .unwrap()
