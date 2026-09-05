@@ -120,7 +120,7 @@ impl OcrFieldsDeclaration {
                 OcrFieldType::UnsignedInteger { min, max } if min > max => {
                     return Err("ocr_fields_range_invalid");
                 }
-                OcrFieldType::DictionaryEntry { dictionary } => {
+                OcrFieldType::DictionaryEntry { dictionary }
                     if dictionary.path.is_empty()
                         || dictionary.path.len() > 256
                         || dictionary.path.contains(['\\', ':'])
@@ -132,10 +132,9 @@ impl OcrFieldsDeclaration {
                         || !dictionary
                             .sha256
                             .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                    {
-                        return Err("ocr_fields_dictionary_reference_invalid");
-                    }
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                {
+                    return Err("ocr_fields_dictionary_reference_invalid");
                 }
                 _ => {}
             }
