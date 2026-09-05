@@ -18,7 +18,6 @@ sha2 = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
-actingcommand-execution-kernel = { workspace = true }
 actingcommand-page-detector = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-recognition = { workspace = true }

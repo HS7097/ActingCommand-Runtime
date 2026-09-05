@@ -288,7 +288,6 @@ name = "actingcommand-resource-tooling"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
- "actingcommand-execution-kernel",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",
  "actingcommand-policy",
