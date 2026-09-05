@@ -1,8 +1,9 @@
 <div align="center">
 
 **首席执行官 兼 董事长** — HS7097<br/>
-**首席技术官 兼 董事长顾问** — Claude Fable 5<br/>
-**首席架构师 兼 首席技术工程师** — GPT‑5.6 Sol<br/>
+**首席技术官 兼 首席架构师** — GPT‑6 Astra<br/>
+**董事长顾问** — Fable 5.1<br/>
+**首席技术工程师** — GPT‑5.6 Sol<br/>
 **正在面试** — DeepSeek
 
 </div>
@@ -15,9 +16,9 @@
 >
 > **设计立场:智能体在环外,运行时在环内。**智能体只做维护——规划、制作资源、处理例外;逐帧执行由运行时确定性完成,每一步入账、可审计。推理花在维护,不花在执行。
 
-`cargo test --workspace` 全绿(数字随主线滚动) · CI:GitHub Actions(windows-latest:fmt / clippy `-D warnings` / test,另有精确 SHA Windows 构建产物链) · 许可 `AGPL-3.0-only` · 本仓公开
+CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)(Windows:fmt / clippy `-D warnings` / test) · [精确 SHA Windows 构建产物](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · 本仓公开
 
-**当前成熟度(2026-09-01)**:调度仲裁、设备咽喉、全局账本与任务收容成体系运转;**OCR 识别链已完成一轮官方 CPU 实机全流程验证**(严格无回退、逐帧入账、全部证据封箱)——自动回 Home 恢复、模板导航、单触分段滑动翻页、逐帧 16 目标 OCR、字典规范化比对、terminal 锚页判终、`return_home` 收口,一条命令 219 秒无人工输入完成。CUDA 实测与整页多框识别为已立项待排产能力(见路线图)。
+**当前成熟度(2026-09-05)**:调度仲裁、设备咽喉、任务收容、声明式策略目录与预算派发已接入常驻运行时;实例事实、战略求值、报告与规划信号、提案生成及 Runtime Dispatcher 会话协议已有实现。GlobalLedger 是全局唯一事件事实源,正推进为覆盖各模块的权威调试工具。**OCR 识别链已完成一轮官方 CPU 实机全流程验证**:自动回 Home 恢复、模板导航、单触分段滑动翻页、逐帧 16 目标 OCR、字典规范化比对、terminal 锚页判终、`return_home` 收口,一条命令 219 秒无人工输入完成。真实调度时间语义、长期无人值守、OCR 覆盖率与 CUDA 仍需完成对应实证。
 
 早期的 Python mock 与 Go 历史契约、以及 Go/Python 基准工具已迁出本仓(归档于 ActingCommand-Legacy-Runtime,**暂未公开**);仓内保留 Rust 基准工具 `benchmarks/rust` 与历史基准报告。
 
@@ -29,17 +30,19 @@
 
 这套架构存在的理由:让游戏自动化摆脱「游戏一更新,全世界等维护者发版」。目标闭环是——游戏版本更新(①)后,智能体试玩摸清变化(②),制作或修订声明式资源包(③);资源包经哈希收容进入运行时,由调度器准入(④)、确定性执行(⑤)、全程入账(⑥);失败时,智能体凭账本证据自诊断并修复资源(⑦),回到 ③。环内逐帧零推理——推理花在维护,不花在执行。
 
-③→⑦ 一段已在实战中运转:2026-08 至 09 月初的 OCR 任务链上,资源包由智能体撰写、经账本证据诊断缺陷、按裁定四次修订后实机通过——含智能体辅助制作的 `return_home` 恢复包(实机验证后冻结为可复用基线并正式入资源仓)。②(自动摸清)仍在路线图上。
+资源制作、执行与账本诊断已在实战中串联:2026-08 至 09 月初的 OCR 任务链上,资源包由智能体撰写、经账本证据诊断并修订后实机通过——含智能体辅助制作的 `return_home` 恢复包(实机验证后成为资源仓中的可复用基线)。Runtime 已具备唤醒记录、会话启动/恢复、响应与有界会话管理;外部智能体的实际自动启动、②(自动摸清)与完整自主维护闭环仍在规划中。
 
 ## 🏛 系统形态
 
 ![ActingCommand Runtime 架构图](./docs/assets/runtime-architecture.png)
 
-图中实线仅表示已经合入 `main` 的能力。虚线表示源码已经存在但尚未接入生产路径,或仍处于规划阶段;开放中的 PR 不计入可用能力。
+图中绿色/蓝色节点及实线表示已经合入 `main` 并接入相应入口的当前能力;橙色节点及虚线表示规划、推进或待验证的能力。GlobalLedger 是全局唯一事件事实源;已有只读取证与未来权威调试能力都从这一事件源读取。源码接入不等于对应实机场景已经验证。
 
 术语以仓内 [CONTEXT.md](./CONTEXT.md) 为准(Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy 等逐条定义)。
 
-## 📍 当前进度(2026-09-01)
+**GlobalLedger 的诊断定位**:当前已有类型化事件、持久回执与重放,`actingledger` 提供只读取证入口。全模块探针覆盖、复发签名比对与回放考核正在推进,目标是把账本升格为权威调试工具:从同一个事件源定位正常结果、降级与失败原因,保持每条诊断与原始事实可追溯。完整诊断覆盖尚未完成。
+
+## 📍 当前进度(2026-09-05)
 
 | 里程碑 | 内容 |
 |---|---|
@@ -49,26 +52,28 @@
 
 | 维度 | 状态 |
 |---|---|
-| **已在 `main` 可用** | 常驻 daemon、typed loopback IPC、调度准入与租约 fencing、收容任务执行(任务级超时声明、`operator_end` 类终止锚页、独立 `max_steps`、恢复包自动回位)、GlobalLedger、工件存储与官方 OCR 投影(v2,分页)、资源包收容、设备后端(含单触分段滑动 `SegmentedSwipe`,MaaTouch/Minitouch 点流,MuMu Nemu IPC 动态绑定)、NCC 模板匹配与颜色判据、OCR provider 生产接线(PP-OCRv6_medium / ONNX Runtime,CPU 实机验证)、字典约束比对(规范/证据别名/容错+有界重试)、ActingLab 资源制作链路(含 `package dry-run` 离线预演)。 |
-| **正在进行** | GlobalLedger SQLite 后端与统一 RuntimeDatabase 迁移、常驻账本探针与复发签名比对(前置链;收口后体系转入"出红查账本、账本不够加探针",全面停增工装与测试)。 |
-| **已立项待排产** | 视觉 provider 整页多框检测(det→逐框 rec→多块输出;覆盖率由半页重叠结构保证)与 **CUDA 实机验证**;调度策略目录与虚拟时间测试;智能体驾驶接口产品化;UI 正式客户端。 |
-| **尚未完成** | 采集三后端矩阵(adb / droidcast_raw / nemu_ipc)正式覆盖;多任务链内容扩充;自动摸清与自动修复。 |
+| **执行与资源入口已接入 `main`** | 常驻 daemon、typed loopback IPC、调度准入与租约 fencing、收容任务执行(任务超时、终止锚页、独立 `max_steps`、恢复包自动回位)、资源包收容、工件存储与官方 OCR 投影(v2,分页)、设备后端(含 `SegmentedSwipe`、MaaTouch/Minitouch 点流、MuMu Nemu IPC 动态绑定)、NCC 模板匹配与颜色判据、OCR provider 生产接线及字典约束比对。ActingLab 已串起录制、草稿、构包、事务化发布与 `package dry-run` 离线预演。 |
+| **调度与维护接口已接入 `main`** | 四文档声明式策略目录、纯求值器、不可变目录版本、派发与预算已接入 `actingd`;实例事实 `PublishFact`、战略差额/容量/紧迫度求值、报告、规划信号与提案生成已有实现。Runtime Dispatcher 已有 wake/session/start/resume/response、恢复与有界配置。项目接口 v2 提供项目、实例、目录、事实、目标、决策、运行状态与诊断的只读投影及分页,可供后续 UI 查询。 |
+| **当前持久化与诊断** | GlobalLedger 使用分段持久化,是全局唯一事件事实源;RuntimeState 使用 SQLite 保存运行状态与不可变发布代次,并与 Ledger 对账。`ledger-forensics` / `actingledger` 提供只读取证入口。 |
+| **正在推进与待验证** | 全模块账本探针覆盖、签名匹配与回放考核;真实调度时间语义与长期无人值守实证;资源产线首批完整任务扩充;OCR 覆盖率、整页多框检测与 CUDA 实测;采集三后端矩阵(adb / droidcast_raw / nemu_ipc)覆盖。CPU OCR 已有上述单次全流程实机结果。 |
+| **后续规划** | 外部智能体自动启动与完整自主维护闭环;Rust 原生只读监控台;GlobalLedger SQLite 后端与统一 RuntimeDatabase。 |
 
 ## 🗺 路线图
 
-以下均为目标态口径,按序推进,不承诺日期:
+以下列出剩余能力与验证工作,不承诺日期:
 
-1. **账本前置链**——GlobalLedger SQLite 后端、常驻探针、复发签名比对;收口后诊断体制切换:不再新增工装与测试,复发防护由运行期签名比对承担,"无法从账本读出原因的错误直接为对应模块增加探针能力";
-2. **冲刺组**——调度策略目录+虚拟时间调度测试、智能体驾驶接口正式化(Dispatcher 合同、机器可读命令目录、会话闸)、UI 正式客户端(Rust 原生渲染);
-3. **识别面收官**——provider 整页多框检测(整页识别+重叠去重,消解格位对齐课题)与 CUDA 实机验证;
-4. **MAA / MaaFramework 兼容**——MAA 资源格式作为种子导入源:导入一次,此后由自维护环接管维护;MaaFramework 第二执行后端蓝图已立;
-5. **自动摸清与自动修复**——把自维护闭环图中 ② 与 ⑦ 两段全面转为实线,以及多实例战略规划与报告管线。
+1. **权威账本调试**——扩充各模块类型化探针,完成签名匹配与回放考核,使正常结果、降级与失败原因都能从账本定位;
+2. **常驻运行实证**——在现有策略、预算、事实与战略报告能力上,完成真实时间语义、恢复与长期无人值守验证,对照实际结果评估规划信号;
+3. **资源与识别**——推进首批完整任务,验证名单覆盖率,完成 provider 整页多框检测(整页识别+重叠去重)、CUDA 与采集后端矩阵验证;
+4. **客户端与自主维护**——建设 Rust 原生只读监控台,接通外部智能体自动启动与现有 Dispatcher 会话接口,逐步完成自动摸清、资源修订与复验闭环;
+5. **后续存储演进**——规划 GlobalLedger SQLite 后端与统一 RuntimeDatabase,保持唯一事件事实源及可恢复的状态对账;
+6. **MAA / MaaFramework 兼容**——继续完善 MAA 资源种子导入与 MaaFramework 第二执行后端方向。
 
 ## ⚖ 七条结构不变量(守卫 / 测试 / 编译期与真实进程反例执法)
 
 1. **调度器唯一仲裁写路径**:一切改变设备状态的操作先经调度器准入并持有每实例租约;fencing 五元组(epoch / lease / instance / holder / expiry)逐字段校验先于后端调用,takeover 与 epoch 换代永久作废旧牌;只读观察走 epoch 绑定的只读采集能力(非租约),同样全程入账;
 2. **Runtime 唯一设备持有**:生产客户端(actingctl / runtime-client / ActingLab)的依赖图与源码均不可触达设备后端,raw adb 只存在于 Runtime 之下的 `device` crate;客户端历史设备命令一律 fail-loud 墓碑。(例外:`apps/device-test` 是直连设备的诊断二进制,不在生产链路、不受该守卫约束);
-3. **GlobalLedger 唯一事实源**:唯一写入口是编译期唯一的 `append(SanitizedEventDraft)`,脱敏先于持久化;终态为吸收态(重复/冲突提交被拒并留审计事实);客户端不可提交语义事实——契约层根本不暴露语义事实类型;
+3. **GlobalLedger 唯一事实源**:唯一账本写入口是 `append(SanitizedEventDraft)`,脱敏先于持久化;终态为吸收态(重复/冲突提交被拒并留审计事实);客户端可经 `PublishFact` 提交类型化实例事实,由 Runtime 受控处理并入账,客户端不直接写账本;
 4. **收容为内核资源唯一入口**:哈希校验(常量时间比较)先于解压,并有压缩体积上界预检;`LoadedBundle` capability 按构造使"未校验包被使用"不可表示——由 trybuild 编译失败用例钉死;
 5. **任务不得唤起任务**:任务只产出纯数据的后继建议,自身绝不链式启动后继;生产路径遇到后继建议即 fail-loud 交还上层(`contained_task_requires_scheduler`)。由调度器裁决后继属规划中的下一步;
 6. **Lab 与资源工具链可拆**:由 `--all-features` 下的依赖图守卫证明——除 Lab / ActingLab / resource-tooling 自身外,任何工作区包都不存在通向它们的依赖路径(含特性门绕过的反例用例);资源工具链亦不得反向触达 Runtime 与设备层;
@@ -83,27 +88,28 @@
 | 名称 | 职责 |
 |---|---|
 | `actingd` | 常驻 daemon 进程适配器,承载下列全部内核组件 |
-| `actingctl` | 生产用户 CLI(observe / status / monitor-* / stream / reset / task-run,支持 `--recovery-package` 自动回位);输出为单行 JSON |
+| `actingctl` | 生产用户 CLI(observe / status / monitor-* / stream / reset / task-run,支持 `--recovery-package` 自动回位);成功结果为单行 JSON |
 | `actinglab` | 调试探针 + 资源制作(录制→草稿→构包→事务化发布→`package dry-run` 离线预演);**非生产依赖** |
 | `device-test` | 设备后端诊断工具 |
 | `vision-provider-check` | 视觉 provider 自检(ABI 校验 / artifact 锁 / OCR·NN 冒烟) |
+| `actingledger` (`apps/ledger-forensics`) | GlobalLedger 只读取证 CLI |
 
 **生产内核**
 
 | 名称 | 职责 |
 |---|---|
-| `runtime-host` | 常驻所有权、本地 typed IPC、租约门控的 DeviceProxy 与生命周期控制 |
-| `runtime-client` | 客户端 typed 本地 IPC;不构造也不持有生产设备后端 |
+| `runtime-host` | 常驻所有权、本地 typed IPC、租约门控的 DeviceProxy、实例事实与策略/预算派发、战略报告及 Dispatcher 会话生命周期 |
+| `runtime-client` | 客户端 typed 本地 IPC及项目接口 v2 只读分页投影;不构造也不持有生产设备后端 |
 | `scheduler` | 每实例写准入、租约生命周期与 fencing 权威 |
 | `execution-kernel` | daemon 持有的执行会话 + 纯任务/探针决策规划;收容任务超时、步数与终止锚页语义 |
-| `ledger` | 全局事件账本(唯一事实源) |
+| `ledger` | 分段持久化的全局事件账本(唯一事件事实源与权威诊断来源) |
 | `artifact-store` | 工件字节、哈希、留存元数据、帧缓冲与证据归档导出 |
-| `runtime-state` | SQLite 承载的权威 Runtime 状态与不可变发布代次 |
+| `runtime-state` | SQLite 承载的 Runtime 状态与不可变发布代次,与 GlobalLedger 对账 |
 | `pack-containment` | 资源包海关(开发与生产共用) |
 | `device` | 设备层原语;触控经显式后端链选择(含单触分段滑动),单后端失败可见 |
 | `recognition` / `recognition-pack` | 模板匹配求值 / 识别包声明词表(含 OCR 目标与真值声明) |
 | `page-detector` | 页面检测(规则 + 阈值匹配) |
-| `policy` | 目录编译器与求值器共享的纯调度策略契约 |
+| `policy` | 四文档策略目录编译、纯调度求值、战略差额/容量/紧迫度计算与有界规划 |
 | `actingcommand-contract` | Rust 主线契约定义(协议 / 设备 / 引擎边界词汇) |
 | `host-metrics` | 平台性能计数器的安全边界 |
 
@@ -122,26 +128,31 @@
 |---|---|
 | `lab` | 可选的 Lab 制作与调试适配器 |
 | `resource-tooling` | 确定性资源编译与包校验(仅 Lab / CI / 密封测试) |
+| `ledger-forensics` | 账本只读查询与取证,供 `actingledger` 使用 |
 | `tools/actinglab-architecture` | 源码派生的架构守卫(所有权规则执法) |
 | `benchmarks/rust` | Rust 基准工具 |
 
 ## 🔍 识别面现状
 
 - **可用(实机验证)**:模板匹配(NCC 族)与颜色判据;OCR 生产链路——`PP-OCRv6_medium`(ONNX Runtime,CPU,严格无回退)、逐目标执行证明(provider/模型/设备逐次哈希证明)、字典规范/别名/容错比对与有界重试;
-- **已知边界**:provider 当前为区域单行识别语义(每目标一块);整页多框检测(det→逐框 rec)已立项待排产,落地后名单类任务转为"整页读+重叠去重"口径;
-- **待实测**:CUDA 执行(闭包、Ready 清单、设备 ordinal/稳定身份校验机制均已建成,与整页识别同单排产);
+- **已知边界**:provider 当前为区域单行识别语义(每目标一块);名单覆盖率仍需验证,整页多框检测(det→逐框 rec)待实现与验证,目标为"整页读+重叠去重";
+- **待实测**:CUDA 执行(闭包、Ready 清单、设备 ordinal/稳定身份校验机制已有实现);CPU 单次流程通过不代表 CUDA、整页识别或完整名单覆盖率通过;
 - **不随仓分发**:ONNX Runtime 原生库与 OCR/NN 模型均不在本仓;由钉源验哈希的官方物化工具按任务本地缓存获取,`apps/vision-provider-check` 提供自检入口。
 
 ## 🧭 设计原则
 
 - **游戏形状,而非游戏身份**:接入新游戏=新建一个资源仓,运行时零提交;
-- **声明先于代码**:识别、导航、操作、恢复、(规划中的)调度策略全部为可静态校验的声明数据;
+- **声明先于代码**:识别、导航、操作、恢复与调度策略均采用可静态校验的声明数据;
 - **fail-loud**:严重错误显式失败,不返回伪成功;仅暂态错误允许有界重试并完整入账;
 - **净室**:参照公开行为与协议,不复制受版权保护的实现;
 - **事务化资源发布**:staging→全量验证→哈希→原子替换,失败不留混合树;
 - **账本先行诊断**:出红先查全局账本;账本读不出根因的,为对应模块补探针能力,而非新造诊断工装。
 
 ## 🚀 构建与运行
+
+当前 CI 使用 Windows 与 Rust stable,默认 Windows 产物目标为 `x86_64-pc-windows-msvc`。本地构建需 Rust/Cargo、Git 与相应 MSVC 构建环境;也可获取上述精确 SHA 构建产物。外部工具与产物校验入口见 [Windows 工具说明](./scripts/windows-tools/README.md)。
+
+首次运行先准备 daemon 配置与至少一个实例。配置需声明 `schema_version`、`state_root`、loopback `bind_host`、16–1024 字节的 `secret_fingerprint_salt` 和非空 `instances`;设备实例需别名、`instance_id`、应用标识、ADB 寻址和显式截图/触控后端。完整字段与校验以 [配置定义](./apps/actingd/src/config.rs) 为准。设备任务另需可用的 ADB/所选后端及自备资源包;OCR 任务还需外部 provider、模型和原生库清单。策略目录说明与中性声明示例见 [调度契约](./contracts/scheduling/README.md),客户端查询契约见 [项目接口 v2](./contracts/runtime-project-interface.md)。
 
 ```bash
 # 构建需能读取 git 元数据;无 .git 时须显式设置 ACTINGCOMMAND_RUNTIME_HEAD=<40 位提交哈希>
@@ -172,7 +183,19 @@ actingctl task-run --state-root <state-root> --instance <alias> \
   [--recovery-package <recovery.zip> --recovery-expected-sha256 <hash>]
 ```
 
-`actingctl` 的全部输出为写到 stdout 的单行 JSON(含官方 OCR 投影),便于脚本与智能体消费;另有 `monitor-status` / `monitor-set` / `monitor-clear` / `stream` / `reset` 子命令。两个 CLI 均为手写参数解析,**不提供 `--help` / `--version`**。
+`actingctl` 成功时向 stdout 写单行 JSON(含适用的官方 OCR 投影);参数、连接等错误向 stderr 写文本并以非零状态退出。接入方需同时处理退出码和两个输出通道。两个 CLI 均为手写参数解析,**不提供 `--help` / `--version`**。
+
+所有 `actingctl` 命令均需 `--state-root`;当前各子命令实际使用的参数如下,以 [参数解析源码](./apps/actingctl/src/main.rs) 为准:
+
+| 子命令 | 实例参数与命令参数 |
+|---|---|
+| `status` / `monitor-status` | 不接受 `--instance` |
+| `observe` / `reset` / `monitor-clear` | 必需 `--instance` |
+| `monitor-set` | 必需 `--instance`;可选 `--interval-ms`(默认 30000)、`--expect`(默认 `home`)、`--recover` |
+| `stream` | 必需 `--instance`;可选 `--max-frames`(默认 1)、`--interval-ms`(默认 250) |
+| `task-run` | 必需 `--instance`、`--package`、`--expected-sha256`;恢复参数 `--recovery-package` 与 `--recovery-expected-sha256` 必须成对提供 |
+
+请仅使用对应子命令的参数;当前解析器接收某个已知参数并不表示该子命令会使用它。
 
 ## 🎮 资源仓
 
@@ -186,7 +209,7 @@ actingctl task-run --state-root <state-root> --instance <alias> \
 
 ## 🤝 协作方式
 
-开发由多智能体在治理规则下执行:任务契约(最小知识分发)+ 集成信封(精确头合并授权)+ 独立验收(Phase 1)+ 程序终审(实机窗独占所有权与证据封箱);GitHub 原生对象(PR 评审 / 合并事件 / Actions 运行)为正典技术记录,recorder-only 自动化(交付快照等)辅助记账但不批准不拦截。全部裁定权归 HS7097。
+开发通过分支与 PR 协作。评审以明确的源码版本、可观察行为与相关 CI 结果为依据;设备验证结果应说明对应后端、资源包与运行边界。公开仓提供 Runtime 与资源制作入口,复现游戏任务还需取得或自行制作对应资源。
 
 ## 约定与许可
 
