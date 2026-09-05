@@ -116,6 +116,13 @@ controls, missing targets and fields, and 32 KiB of compact JSON. Counts describ
 the original input and actual emission. An oversized entry can be omitted; an
 identity that cannot fit fails explicitly. The `Min` transport can request a
 smaller byte budget from the same owner. It never edits DTO fields independently.
+The default Min envelope targets 1 KiB and keeps at most one resolvable element
+when that target requires its existing 2 KiB hard limit. Unresolvable entries may
+all be omitted, with original counts and a freshly hashed truncation state.
+Empty missing/control/field arrays and an absent window are omitted in JSON;
+the root `omitted_count` is the serialized omission count. The offline frame
+digest supplies the default Min provenance; `frame_source` remains available by
+explicit field selection.
 
 `content_sha256` hashes compact `serde_json` serialization of the entire DTO as a
 JSON value, with only `content_sha256` removed. DTO members retain declaration

@@ -305,7 +305,7 @@ pub(super) fn project(
                 object.remove(key);
             }
         }
-        if object.contains_key("frame_path") && !requested_fields.contains("frame_source") {
+        if !requested_fields.contains("frame_source") {
             object.remove("frame_source");
         }
     }
@@ -318,14 +318,18 @@ pub(super) fn project(
             .map_err(|error| CliError::device(error.to_string()))?
             .len();
         if request.verbosity != ProjectionVerbosity::Min
-            || bytes <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
+            || bytes <= actingcommand_ledger::MIN_PROJECTION_SOFT_LIMIT_BYTES
         {
             return Ok(projected);
         }
-        let observation_bytes = serde_json::to_vec(&observation)
-            .map_err(|error| CliError::device(error.to_string()))?
-            .len();
-        let excess = bytes - actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES;
-        observation.fit_byte_limit(observation_bytes.saturating_sub(excess))?;
+        if observation.reduce_for_min()? {
+            continue;
+        }
+        if bytes <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES {
+            return Ok(projected);
+        }
+        return Err(CliError::package_invalid(
+            "observation identity or its remaining resolvable element exceeds the Min byte limit",
+        ));
     }
 }

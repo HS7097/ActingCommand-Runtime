@@ -546,13 +546,17 @@ pub struct PageProjection {
     pub standby: bool,
     pub frame: FrameIdentity,
     pub elements: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unscoped_controls: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Value>,
     pub truncated: bool,
     pub output_truncated: bool,
     pub omitted_count: usize,
     pub page_window_completeness: WindowCompleteness,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<PageWindow>,
     pub metrics: ProjectionMetrics,
     pub content_sha256: String,
@@ -567,7 +571,9 @@ pub struct ProjectionMetrics {
     pub unscoped_control_count: usize,
     pub entry_count: usize,
     pub emitted_count: usize,
+    #[serde(skip_serializing)]
     pub omitted_count: usize,
+    #[serde(skip_serializing)]
     pub empty_list: bool,
 }
 
@@ -578,6 +584,27 @@ fn serialized_len(value: &impl Serialize) -> LabResult<usize> {
 }
 
 impl PageProjection {
+    /// Min keeps one resolvable element when its soft budget cannot fit the full view.
+    pub fn reduce_for_min(&mut self) -> LabResult<bool> {
+        if self.fields.is_empty()
+            && self.missing.is_empty()
+            && self.unscoped_controls.is_empty()
+            && self.elements.len() == 1
+            && self.elements[0]["actionable"] == true
+        {
+            return Ok(false);
+        }
+        let removed = self
+            .fields
+            .pop()
+            .or_else(|| self.missing.pop())
+            .or_else(|| self.unscoped_controls.pop())
+            .or_else(|| self.elements.pop())
+            .is_some();
+        self.refresh()?;
+        Ok(removed)
+    }
+
     fn refresh(&mut self) -> LabResult<()> {
         self.metrics.emitted_count = self.elements.len()
             + self.missing.len()
