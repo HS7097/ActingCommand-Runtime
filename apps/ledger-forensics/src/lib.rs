@@ -106,7 +106,7 @@ where
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
         "open" => ForensicCommand::Open,
-        "events" => return parse_events(state_root, args).map(CliRequest::StateRoot),
+        "events" => return parse_events(state_root, args, false).map(CliRequest::StateRoot),
         "chain" => {
             require_utf8(args.next(), "--req")?;
             let request_id = require_utf8(args.next(), "request id")?;
@@ -117,7 +117,13 @@ where
         }
         "tail" => ForensicCommand::Tail,
         "repairs" => ForensicCommand::Repairs,
-        "export" => ForensicCommand::Export,
+        "export" => {
+            if let Some(option) = args.next() {
+                require_utf8(Some(option), "--performance")?;
+                return parse_events(state_root, args, true).map(CliRequest::StateRoot);
+            }
+            ForensicCommand::Export
+        }
         _ => return Err(invalid_arguments("unsupported command")),
     };
     if args.next().is_some() {
@@ -164,7 +170,11 @@ where
     )))
 }
 
-fn parse_events<I>(state_root: PathBuf, mut args: I) -> Result<ForensicRequest, CliError>
+fn parse_events<I>(
+    state_root: PathBuf,
+    mut args: I,
+    performance: bool,
+) -> Result<ForensicRequest, CliError>
 where
     I: Iterator<Item = OsString>,
 {
@@ -179,6 +189,11 @@ where
         let option = option
             .into_string()
             .map_err(|_| invalid_arguments("event option is not valid UTF-8"))?;
+        if performance && !matches!(option.as_str(), "--after" | "--through" | "--limit") {
+            return Err(invalid_arguments(format!(
+                "unsupported performance option {option}"
+            )));
+        }
         let value = next_value(&mut args, &option)?;
         match option.as_str() {
             "--after" if after_sequence.is_none() => {
@@ -210,7 +225,11 @@ where
         limit.unwrap_or(MAX_FORENSIC_EVENTS),
     )
     .map_err(|error| invalid_arguments(error.to_string()))?;
-    Ok(ForensicRequest::events(state_root, events))
+    Ok(if performance {
+        ForensicRequest::performance(state_root, events)
+    } else {
+        ForensicRequest::events(state_root, events)
+    })
 }
 
 fn next_value<I>(args: &mut I, option: &str) -> Result<String, CliError>

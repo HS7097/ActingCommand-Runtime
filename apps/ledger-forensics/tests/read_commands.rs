@@ -635,6 +635,184 @@ fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
     }
 }
 
+#[test]
+fn performance_export_is_explicit_bounded_and_preserves_ordinary_export() {
+    use actingcommand_contract::{
+        EventPayloadDraft, PerformanceControlEventData, PerformanceControlLevel,
+        PerformanceControlReason, PerformancePayloadDraft, PerformanceStutterEventData,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state_root = temp.path();
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let request_id = identifiers.mint_request_id().expect("request id");
+    let writer = GlobalLedger::open(GlobalLedgerConfig::new(
+        state_root.join("ledger"),
+        "performance-cli-fixture",
+    ))
+    .expect("open fixture ledger");
+    let payloads: [EventPayloadDraft; 3] = [
+        CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
+        PerformancePayloadDraft::stutter_detected(
+            PerformanceStutterEventData {
+                instance_id: "instance:fixture-a".to_owned(),
+                observed_at_unix_ms: 1_752_147_201_000,
+                frame_gap_ms: 1_500,
+                capture_latency_ms: Some(120),
+                recognition_latency_ms: None,
+                action_effect_latency_ms: Some(250),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        PerformancePayloadDraft::balance_changed(
+            PerformanceControlEventData {
+                observed_at_unix_ms: 1_752_147_202_000,
+                instance_id: None,
+                previous_level: PerformanceControlLevel::Normal,
+                level: PerformanceControlLevel::Normal,
+                reason: PerformanceControlReason::ClockJump,
+                host_responsiveness_basis_points: None,
+                third_party_pressure_basis_points: None,
+                recovery: false,
+                deadline_disposition: None,
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    ];
+    let mut facts = Vec::new();
+    for payload in payloads {
+        let draft = EventDraft::new(
+            identifiers.mint_event_id().expect("event id"),
+            1_752_147_203_000,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::PerformanceMonitor,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default().with_request_id(request_id),
+            payload,
+        )
+        .sanitize(&Sha256SecretFingerprinter::new(b"performance-cli-salt").expect("fingerprinter"))
+        .expect("sanitize fixture event");
+        facts.push(writer.append(draft).expect("append fixture event"));
+    }
+    writer.close().expect("close fixture writer");
+    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let ordinary = invoke(binary, state_root, &["export".to_owned()]);
+    assert!(ordinary.status.success(), "ordinary export: {ordinary:?}");
+    assert!(ordinary.stderr.is_empty());
+    assert!(
+        std::str::from_utf8(&ordinary.stdout)
+            .expect("ordinary text")
+            .starts_with("ActingCommand ledger forensic export\n")
+    );
+
+    let first = invoke(
+        binary,
+        state_root,
+        &[
+            "export".to_owned(),
+            "--performance".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+        ],
+    );
+    assert!(first.status.success(), "first performance page: {first:?}");
+    assert!(first.stderr.is_empty());
+    let first: serde_json::Value =
+        serde_json::from_slice(&first.stdout).expect("machine performance JSON");
+    assert_eq!(first["command"], "performance");
+    assert_eq!(first["data"]["scanned_event_count"], 1);
+    assert_eq!(first["data"]["rows"], serde_json::json!([]));
+    assert_eq!(first["data"]["has_more"], true);
+    assert_eq!(first["data"]["window_complete"], false);
+    assert_eq!(first["data"]["through_sequence"], facts[2].sequence());
+    assert_eq!(first["data"]["next_after_sequence"], facts[0].sequence());
+    let next = invoke(
+        binary,
+        state_root,
+        &[
+            "export".to_owned(),
+            "--performance".to_owned(),
+            "--after".to_owned(),
+            first["data"]["next_after_sequence"].to_string(),
+            "--through".to_owned(),
+            first["data"]["through_sequence"].to_string(),
+            "--limit".to_owned(),
+            "2".to_owned(),
+        ],
+    );
+    assert!(next.status.success(), "next performance page: {next:?}");
+    assert!(next.stderr.is_empty());
+    let next: serde_json::Value = serde_json::from_slice(&next.stdout).expect("next machine JSON");
+    let data = &next["data"];
+    assert_eq!(data["scanned_event_count"], 2);
+    assert_eq!(data["scanned_through_sequence"], facts[2].sequence());
+    assert_eq!(data["stutter_count"], 1);
+    assert_eq!(data["clock_jump_count"], 1);
+    assert_eq!(data["has_more"], false);
+    assert_eq!(data["window_complete"], true);
+    assert_eq!(
+        data.get("next_after_sequence"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(data.get("corrupt_tail"), Some(&serde_json::Value::Null));
+    assert_eq!(data["gaps"], serde_json::json!([]));
+    assert_eq!(
+        data["rows"][0]["event"],
+        serde_json::to_value(&facts[1]).expect("stutter fact JSON")
+    );
+    assert_eq!(
+        data["rows"][1]["event"],
+        serde_json::to_value(&facts[2]).expect("clock fact JSON")
+    );
+    assert_eq!(data["rows"][0]["observation"]["frame_gap_ms"], 1_500);
+    assert_eq!(data["rows"][0]["observation"]["capture_latency_ms"], 120);
+    assert_eq!(
+        data["rows"][0]["observation"].get("recognition_latency_ms"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        data["rows"][1]["observation"].get("magnitude_ms"),
+        Some(&serde_json::Value::Null)
+    );
+    for row in data["rows"].as_array().expect("rows array") {
+        assert_eq!(row.get("thread_identity"), Some(&serde_json::Value::Null));
+    }
+
+    for arguments in [
+        vec!["export", "--limit", "1"],
+        vec!["export", "--performance", "--performance"],
+        vec!["export", "--performance", "--limit"],
+        vec!["export", "--performance", "--limit", "0"],
+        vec!["export", "--performance", "--limit", "1025"],
+        vec!["export", "--performance", "--limit", "1", "--limit", "2"],
+        vec!["export", "--performance", "--after", "4", "--through", "3"],
+        vec!["export", "--performance", "--after", "18446744073709551615"],
+        vec!["export", "--performance", "--through", "invalid"],
+        vec!["export", "--performance", "--origin-module", "runtime"],
+        vec!["export", "--performance", "--severity", "info"],
+        vec!["events", "--performance"],
+        vec!["performance"],
+    ] {
+        let arguments = arguments.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let output = invoke(binary, state_root, &arguments);
+        assert!(
+            !output.status.success(),
+            "invalid command accepted: {arguments:?}"
+        );
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+    }
+    let after = invoke(binary, state_root, &["export".to_owned()]);
+    assert!(after.status.success(), "final ordinary export: {after:?}");
+    assert!(after.stderr.is_empty());
+    assert_eq!(after.stdout, ordinary.stdout);
+}
+
 fn invoke(binary: &str, state_root: &std::path::Path, command: &[String]) -> std::process::Output {
     Command::new(binary)
         .arg("--state-root")
