@@ -1540,7 +1540,9 @@ pub fn validate_projection_resources<'a>(
         }
     }
     let declaration = ProjectionMetadata::parse(bytes).map_err(|e| fail(e.to_string()))?;
-    let verified = declaration.validate(catalog).map_err(|e| fail(e.to_string()))?;
+    let verified = declaration
+        .validate(catalog)
+        .map_err(|e| fail(e.to_string()))?;
     Ok(Some(verified))
 }
 
