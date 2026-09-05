@@ -188,8 +188,11 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
     writer.close().expect("close repair source");
     append_bytes(&latest_segment(&ledger_root), b"{\"repair\":true");
 
-    let active_writer = GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "active-writer"))
-        .expect("recover and hold writer");
+    let active_writer = GlobalLedger::open_with_artifact_verifier(
+        GlobalLedgerConfig::new(&ledger_root, "active-writer"),
+        |reference| store.verify_recovery_reference(reference).ok(),
+    )
+    .expect("recover and hold writer");
     let live_tail = b"{\"partial\":true";
     append_bytes(&latest_segment(&ledger_root), live_tail);
     let before = tree_bytes(state_root);
