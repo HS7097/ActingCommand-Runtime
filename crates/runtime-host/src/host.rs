@@ -3097,7 +3097,8 @@ impl HostShared {
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
-            let tick = performance.tick(observed_at_unix_ms)?;
+            let mut tick = performance.tick(observed_at_unix_ms)?;
+            performance.attach_ledger_sample(&mut tick, &self.ledger)?;
             let observation = performance.control_observation(observed_at_unix_ms)?;
             (tick, observation)
         };

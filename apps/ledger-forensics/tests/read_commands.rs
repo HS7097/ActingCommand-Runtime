@@ -21,6 +21,197 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Specification criterion 6: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
+#[test]
+fn b3_actingledger_projects_resource_samples_and_unknowns() {
+    use actingcommand_contract::{
+        PerformanceContext, PerformanceLedgerSample, PerformanceLedgerWindow,
+        PerformanceMonitorHealth, PerformancePayloadDraft, PerformanceProcessOwnership,
+        PerformanceProcessSummary, PerformanceSummaryEventData,
+    };
+    let temp = tempfile::tempdir().expect("state root");
+    let root = temp.path();
+    let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+        root.join("ledger"),
+        "neutral-resource-cli",
+    ))
+    .expect("ledger");
+    let ids = IdentifierIssuer::new().expect("ids");
+    let append = |payload: actingcommand_contract::EventPayloadDraft| {
+        ledger
+            .append(
+                EventDraft::new(
+                    ids.mint_event_id().expect("event id"),
+                    1_000,
+                    EventSeverity::Info,
+                    EventOrigin::new(
+                        EventSource::Runtime,
+                        OriginModule::PerformanceMonitor,
+                        EventActor::Runtime,
+                    ),
+                    EventLinksDraft::default(),
+                    payload,
+                )
+                .sanitize(
+                    &Sha256SecretFingerprinter::new(b"neutral-resource-cli")
+                        .expect("fingerprinter"),
+                )
+                .expect("sanitize"),
+            )
+            .expect("append")
+    };
+    let unrelated =
+        append(CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into());
+    let mut context = PerformanceContext::unavailable(1_000);
+    context.sample_count = 1;
+    context.health = PerformanceMonitorHealth::Partial;
+    let mut summary = PerformanceSummaryEventData {
+        context,
+        foreground: None,
+        owned_processes: vec![PerformanceProcessSummary {
+            pid: 7,
+            process_name: "neutral-process".to_owned(),
+            ownership: PerformanceProcessOwnership::Runtime,
+            cpu_basis_points: 100,
+            working_set_bytes: 100,
+            peak_working_set_bytes: Some(900),
+            process_created_at_windows_100ns: Some(11),
+            io_bytes_per_second: 0,
+        }],
+        third_party_high_load: Vec::new(),
+        ledger_commits: Some(PerformanceLedgerSample::Available {
+            window: PerformanceLedgerWindow {
+                writer_id: *ids.mint_correlation_id().expect("writer id").transport(),
+                start_monotonic_ns: 0,
+                end_monotonic_ns: 1_000_000_000,
+                first_sequence: Some(unrelated.sequence()),
+                last_sequence: Some(unrelated.sequence()),
+                successful_commits: 1,
+                write_sync_total_ns: 20,
+                writer_lifetime_write_sync_max_ns: 20,
+                commits_per_second_milli: 1_000,
+            },
+        }),
+    };
+    let current =
+        append(PerformancePayloadDraft::summary(summary.clone(), AuditInput::new()).into());
+    summary.ledger_commits = None;
+    summary.owned_processes[0].peak_working_set_bytes = None;
+    summary.owned_processes[0].process_created_at_windows_100ns = None;
+    let legacy = append(PerformancePayloadDraft::summary(summary, AuditInput::new()).into());
+    assert!(
+        !serde_json::to_string(&legacy)
+            .expect("old shape")
+            .contains("ledger_commits")
+    );
+    ledger.close().expect("close fixture");
+    let ledger_root = root.join("ledger");
+    let files: Vec<_> = fs::read_dir(&ledger_root)
+        .expect("ledger files")
+        .map(|entry| entry.expect("ledger entry").path())
+        .filter(|path| path.is_file())
+        .chain(
+            fs::read_dir(ledger_root.join("segments"))
+                .expect("segment files")
+                .map(|entry| entry.expect("segment entry").path()),
+        )
+        .collect();
+    let before: Vec<_> = files
+        .iter()
+        .map(|path| fs::read(path).expect("source bytes"))
+        .collect();
+    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let open = invoke(binary, root, &["open".to_owned()]);
+    assert!(open.status.success(), "{open:?}");
+    let open: serde_json::Value = serde_json::from_slice(&open.stdout).expect("open JSON");
+    let storage = &open["data"]["storage_snapshot"];
+    assert_eq!(storage["segment_count"], 1);
+    assert!(storage["observed_bytes"].as_u64().expect("observed bytes") > 0);
+    assert_eq!(storage["read_bytes"], storage["observed_bytes"]);
+    assert_eq!(storage["verified_prefix_bytes"], storage["read_bytes"]);
+    assert_eq!(storage["atomic"], false);
+    let first = invoke(
+        binary,
+        root,
+        &[
+            "export".to_owned(),
+            "--performance".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+        ],
+    );
+    assert!(first.status.success(), "{first:?}");
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).expect("first page");
+    assert_eq!(first["data"]["rows"], serde_json::json!([]));
+    assert_eq!(first["data"]["next_after_sequence"], unrelated.sequence());
+    let page = invoke(
+        binary,
+        root,
+        &[
+            "export".to_owned(),
+            "--performance".to_owned(),
+            "--after".to_owned(),
+            unrelated.sequence().to_string(),
+            "--through".to_owned(),
+            legacy.sequence().to_string(),
+            "--limit".to_owned(),
+            "2".to_owned(),
+        ],
+    );
+    assert!(page.status.success(), "{page:?}");
+    assert!(page.stderr.is_empty());
+    let page: serde_json::Value = serde_json::from_slice(&page.stdout).expect("resource page");
+    let data = &page["data"];
+    assert_eq!(data["summary_count"], 2);
+    assert_eq!(data["scanned_event_count"], 2);
+    assert_eq!(data["next_after_sequence"], serde_json::Value::Null);
+    assert_eq!(data["window_complete"], true);
+    let rows = &data["rows"];
+    assert_eq!(
+        rows[0]["event"],
+        serde_json::to_value(current).expect("source event")
+    );
+    assert_eq!(rows[0]["observation"]["kind"], "resource_sample");
+    assert_eq!(
+        rows[0]["observation"]["ledger_commits"]["window"]["commits_per_second_milli"],
+        1_000
+    );
+    assert_eq!(
+        rows[0]["observation"]["owned_processes"][0]["peak_working_set_bytes"],
+        900
+    );
+    assert_eq!(
+        rows[0]["observation"]["owned_processes"][0]["process_created_at_windows_100ns"],
+        11
+    );
+    assert_eq!(
+        rows[1]["event"],
+        serde_json::to_value(legacy).expect("legacy source event")
+    );
+    assert_eq!(
+        rows[1]["observation"].get("ledger_commits"),
+        Some(&serde_json::Value::Null)
+    );
+    for field in ["peak_working_set_bytes", "process_created_at_windows_100ns"] {
+        assert_eq!(
+            rows[1]["observation"]["owned_processes"][0].get(field),
+            Some(&serde_json::Value::Null)
+        );
+    }
+    let ordinary = invoke(binary, root, &["export".to_owned()]);
+    assert!(ordinary.status.success(), "{ordinary:?}");
+    assert!(
+        std::str::from_utf8(&ordinary.stdout)
+            .expect("human export")
+            .contains("storage_snapshot:")
+    );
+    let after: Vec<_> = files
+        .iter()
+        .map(|path| fs::read(path).expect("preserved source bytes"))
+        .collect();
+    assert_eq!(after, before);
+}
+
 #[test]
 fn actingledger_read_commands_are_thin_and_fail_loud() {
     let temp = tempfile::tempdir().expect("tempdir");

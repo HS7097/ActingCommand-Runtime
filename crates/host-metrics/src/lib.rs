@@ -35,6 +35,8 @@ pub struct ProcessSample {
     pub ownership: ProcessOwnership,
     pub cpu_basis_points: u16,
     pub working_set_bytes: u64,
+    pub peak_working_set_bytes: Option<u64>,
+    pub process_created_at_windows_100ns: Option<u64>,
     pub io_bytes_per_second: u64,
 }
 
