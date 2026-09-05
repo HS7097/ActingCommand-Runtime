@@ -172,21 +172,23 @@ pub fn validate_lab_package_bytes(
     let entry_count = bundle.entry_count();
     let control = lab_control_from_bundle(&bundle)?;
     control.validate()?;
-    let resources = if bundle.operation()["schema_version"] == "0.8"
-        && bundle.operation()["operations"].as_array().is_some_and(Vec::is_empty)
-    {
-        // The offline consumer uses the same admission as the Runtime for fields-only tasks.
+    let resources = if bundle.operation()["schema_version"] == "0.8" {
+        // Fields packages use Runtime admission before the existing offline interpreter.
         actingcommand_execution_kernel::PreparedContainedTask::load(
             input_label, bytes, expected_input_sha256,
         ).map_err(|error| CliError::package_invalid(error.to_string()))?;
         let evaluator = bundle.evaluator().ok_or_else(|| {
             CliError::package_invalid("missing recognition evaluator for Lab package")
         })?;
+        let operation_count = bundle.operation()["operations"]
+            .as_array()
+            .ok_or_else(|| CliError::package_invalid("missing operations for Lab package"))?
+            .len();
         LabValidateResourcesResponse {
             resource_root: bundle.resource_root().to_owned(),
             manifest: bundle.manifest_path().to_owned(),
             operation: bundle.operation_path().to_owned(),
-            operation_count: 0,
+            operation_count,
             pack: bundle.recognition_pack_path().ok_or_else(|| {
                 CliError::package_invalid("missing recognition pack for Lab package")
             })?.to_owned(),
