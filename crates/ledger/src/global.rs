@@ -6,6 +6,11 @@ mod projection;
 mod read_only;
 mod storage;
 
+// Read-only performance views accompany ledger-owned persisted events.
+pub use actingcommand_contract::{
+    PerformanceLedgerSample, PerformanceProcessOwnership, PerformanceProcessSummary,
+};
+
 pub use read_only::{
     GlobalLedgerCorruptTail, GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig,
     GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot, GlobalLedgerWriterMetadata,
