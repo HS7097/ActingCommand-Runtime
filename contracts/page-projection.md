@@ -55,7 +55,8 @@ annotated package, the annotation file, pack, pages, navigation and referenced
 field operation documents also require matching manifest SHA-256 entries.
 The generated-package validator and Containment call the same annotation
 admission function. A declaration at another navigation stem fails. A missing
-annotation file leaves the package readable with explicit unknown metadata.
+annotation file leaves optional action/window metadata unknown; values follow
+the verified resource identities and classifications described below.
 
 ## Safety, privacy and window meanings
 
@@ -67,17 +68,25 @@ This field describes an existing decision and grants no production execution
 permission. Existing effect/resource-policy, cost, Containment, current-page,
 geometry, lease/fencing and ledger checks remain in their existing owners.
 
-Target and field privacy annotations require `public` or `personal`. A target
-value is emitted only with an explicit public target annotation. A field value
-also requires an explicit public field annotation. Either personal annotation,
-or a personal classification on the supplied result, requires redaction.
-An existing operation's mandatory field privacy is also restrictive; public
-annotations cannot downgrade a personal operation field. That operation contract
-is consumed through its current validator and is not rewritten by this module.
-Missing annotations never imply public. Redaction removes raw text, parsed
-value and error detail together, preserving identity, parse status and a
-`redacted` flag. No image bytes or raw personal artifacts are embedded. A frame
-identity identifies bytes; it does not grant access to an artifact.
+Target and field privacy annotations use `public` or `personal`. Values bound to
+verified resource identities are public unless a valid source marks them personal.
+A field tuple also requires its original operation classification in the verified
+catalog. The operation's mandatory `public` declaration is sufficient; companion
+records can supply classification/source information or tighten it to `personal`.
+The operation contract is consumed through its current validator.
+
+Any personal classification on the target, field, original operation declaration
+or supplied result requires redaction. Public classifications cannot downgrade it.
+An unknown target, unknown field tuple or mismatched target/field is rejected.
+A field without its cataloged operation classification remains redacted with
+`privacy: null`, even when the caller or companion labels it public. This unknown
+source state is distinct from a known `personal` classification.
+
+Redaction removes raw text, parsed value and error detail together, preserving
+identity, parse status and a `redacted` flag. No image bytes or raw personal
+artifacts are embedded. A frame identity identifies bytes; it does not grant
+access to an artifact. The adapter supplies facts from the same verified frame;
+the projection retains the existing frame identity and coordinate-space checks.
 
 Window completeness is `complete`, `windowed` or `unknown`. An annotation names
 the declared scope and its source. `windowed` requires an in-frame visible
