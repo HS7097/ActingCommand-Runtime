@@ -6,6 +6,7 @@ use actingcommand_artifact_store::{
     ArtifactStoreError, EvidenceManifest, read_projected_verified, verify_evidence_archive,
     verify_projected_read_only,
 };
+use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
     ActionId, ArtifactKind, ArtifactRedactionState, EFFECTIVE_CONFIGURATION_SCHEMA,
     EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventType, FrameId,
@@ -1207,11 +1208,10 @@ fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult
         if event.event_type() != EventType::ArtifactVerified {
             continue;
         }
-        for artifact in event
-            .artifacts()
-            .iter()
-            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
-        {
+        for artifact in event.artifacts().iter().filter(|artifact| {
+            artifact.kind() == ArtifactKind::DiagnosticJson
+                && artifact.producer() == ArtifactProducer::ArtifactStore
+        }) {
             let reference = artifact.project(true);
             let invalid = |code| {
                 ForensicError::new(
