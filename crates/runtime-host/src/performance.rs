@@ -469,7 +469,11 @@ impl PerformanceMonitor {
         for event in &mut tick.events {
             if let PerformanceSemanticEvent::Summary(data) = event {
                 let sample = ledger.sample_commit_statistics().map_err(|_| {
-                    performance_fatal("ledger_unavailable", "sample_performance_ledger")
+                    RuntimeHostError::fatal(
+                        "ledger_failure",
+                        "sample_performance_ledger",
+                        RuntimeErrorCode::LedgerFailure,
+                    )
                 })?;
                 data.ledger_commits = Some(match sample {
                     GlobalLedgerCommitObservation::Available(current) => {
