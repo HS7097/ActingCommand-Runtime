@@ -9855,6 +9855,307 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     injected_host.close().expect("close injected-provider host");
 }
 
+// Authorized D01 callback regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
+#[test]
+fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
+    use actingcommand_recognition_pack::{
+        OcrExecutionProviderKind, OcrProviderExecutionEvidence, OcrProviderObservation,
+    };
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+    use serde_json::{Value, json};
+    use std::io::Read;
+
+    #[derive(Debug)]
+    struct FieldEvidenceProvider(Arc<FakeVisionProvider>);
+    impl VisionProvider for FieldEvidenceProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            self.0.require_ocr_model(model_ref, model_sha256)
+        }
+
+        fn require_nn_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            self.0.require_nn_model(model_ref, model_sha256)
+        }
+
+        fn read_text(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            self.0.read_text(request)
+        }
+
+        fn read_text_with_execution_evidence(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderObservation, VisionProviderError> {
+            let model_ref = request.model_ref.to_owned();
+            let model_sha256 = request.model_sha256.to_owned();
+            let result = self.0.read_text(request)?;
+            Ok(OcrProviderObservation {
+                result,
+                execution: Some(OcrProviderExecutionEvidence {
+                    invocation_id: format!("ocr-{}", self.0.ocr_calls.load(Ordering::Acquire)),
+                    session_id: "fields-session".to_owned(),
+                    session_generation: 1,
+                    requested_provider: OcrExecutionProviderKind::Cpu,
+                    resolved_provider: OcrExecutionProviderKind::Cpu,
+                    requested_cuda_ordinal: None,
+                    requested_cuda_identity: None,
+                    resolved_cuda_ordinal: None,
+                    resolved_cuda_identity: None,
+                    provider_implementation: "fixture-ocr".to_owned(),
+                    provider_binary_sha256: "b".repeat(64),
+                    runtime_version: "fixture-runtime".to_owned(),
+                    model_ref,
+                    model_sha256,
+                    cpu_ep_registered: true,
+                    cpu_fallback_disabled: false,
+                    fallback_forbidden: true,
+                    fallback_observed: None,
+                    complete: true,
+                }),
+            })
+        }
+
+        fn classify(
+            &self,
+            request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            self.0.classify(request)
+        }
+    }
+
+    let mut source = zip::ZipArchive::new(Cursor::new(
+        neutral_post_admission_ocr_contained_task_package(),
+    ))
+    .expect("existing neutral package");
+    let mut files = BTreeMap::new();
+    for index in 0..source.len() {
+        let mut entry = source.by_index(index).expect("neutral entry");
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).expect("neutral entry bytes");
+        files.insert(entry.name().to_string(), bytes);
+    }
+    let truth = serde_json::to_vec(
+        &json!({"schema_version":"actingcommand.ocr-truth-set.v2","items":["home"],"aliases":[]}),
+    )
+    .unwrap();
+    let truth_sha = format!("{:x}", Sha256::digest(&truth));
+    let mut control: Value = serde_json::from_slice(&files["control.json"]).unwrap();
+    control["execution_mode"] = json!("navigable_route");
+    control
+        .as_object_mut()
+        .unwrap()
+        .remove("stability_termination");
+    let mut task: Value =
+        serde_json::from_slice(&files["resources/operations/task/task.json"]).unwrap();
+    task["schema_version"] = json!("0.8");
+    task["target_page"] = json!("terminal");
+    task["operations"][0]["to"] = json!("terminal");
+    task.as_object_mut()
+        .unwrap()
+        .remove("stability_termination");
+    task["post_admission_ocr"] = json!({"mode":"fields_v1","page_ids":["home"],"fields":[{
+        "id":"location","group":"page","target_id":"fixture/ocr","required":true,"privacy":"public","trim":"whitespace_v1",
+        "value":{"type":"dictionary_entry","dictionary":{"path":"truth.json","sha256":truth_sha}}}],
+        "limits":{"max_frames":2,"max_items":16,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":16},"outcome_key":"fields_recorded"});
+    task["scheduling_outcome"] = json!({"mappings":[{"outcome_key":"fields_recorded","effect":"no_designated_effect","terminal_pages":["terminal"]}]});
+    let mut manifest: Value = serde_json::from_slice(&files["resources/manifest.json"]).unwrap();
+    manifest["files"][0]["sha256"] = json!(truth_sha);
+    files.insert("control.json".into(), serde_json::to_vec(&control).unwrap());
+    files.insert(
+        "resources/operations/task/task.json".into(),
+        serde_json::to_vec(&task).unwrap(),
+    );
+    files.insert("resources/operations/task/truth.json".into(), truth);
+    files.insert(
+        "resources/manifest.json".into(),
+        serde_json::to_vec(&manifest).unwrap(),
+    );
+    let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, bytes) in files {
+        package
+            .start_file(
+                path,
+                FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        package.write_all(&bytes).unwrap();
+    }
+    let bytes = package.finish().unwrap().into_inner();
+    let expected_sha = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+
+    for (capture, fatal, fail_report) in [
+        (true, false, false),
+        (false, false, false),
+        (true, true, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package_path = root.path().join("fields-callback.zip");
+        fs::write(&package_path, &bytes).expect("inline fields package");
+        let state = Arc::new(FakeState::default());
+        if capture {
+            state.fail_capture_on.store(2, Ordering::Release);
+            state
+                .transient_capture_failure
+                .store(!fatal, Ordering::Release);
+        } else {
+            let error = if fatal {
+                DeviceError::fatal("synthetic input failure")
+            } else {
+                DeviceError::transient("synthetic input failure")
+            };
+            *state.input_error.lock().unwrap() = Some(error.with_diagnostic(
+                DeviceErrorCategory::Native,
+                "device_registry.input.operation",
+            ));
+        }
+        state.block_input.store(fail_report, Ordering::Release);
+        let vision = Arc::new(FakeVisionProvider::default());
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("neutral.instance", instance_id(), state.clone())
+                    .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone()))),
+            ),
+        )
+        .expect("formal host with existing fake backends");
+        let request =
+            ContainedTaskRequest::new(package_path.display().to_string(), &expected_sha).unwrap();
+        let client_root = root.path().to_path_buf();
+        let execution = thread::spawn(move || {
+            let client = RuntimeClient::connect(RuntimeClientConfig::new(
+                client_root,
+                EventActor::Cli,
+                EventSource::Cli,
+            ))
+            .expect("official client");
+            client.run_contained_task("neutral.instance", request)
+        });
+        let artifact_root = root.path().join("artifacts");
+        let preserved_artifacts = root.path().join("preserved-artifacts");
+        if fail_report {
+            wait_until(Duration::from_secs(5), || {
+                state.input_started.load(Ordering::Acquire)
+            });
+            // The existing fake input pause occurs after parsed observation persistence.
+            // Refuse the next store write using this test's own filesystem boundary.
+            let refusal = fs::rename(&artifact_root, &preserved_artifacts)
+                .and_then(|()| fs::write(&artifact_root, b"synthetic store refusal"));
+            state.block_input.store(false, Ordering::Release);
+            refusal.expect("refuse report storage");
+        }
+        let result = execution.join().expect("official client execution");
+        if fail_report {
+            fs::remove_file(&artifact_root).expect("remove synthetic refusal");
+            fs::rename(&preserved_artifacts, &artifact_root)
+                .expect("restore original artifact evidence");
+        }
+        let expected_code = if fail_report {
+            RuntimeErrorCode::RuntimeFatal
+        } else if capture {
+            RuntimeErrorCode::CaptureFailed
+        } else {
+            RuntimeErrorCode::BackendOperationFailed
+        };
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .expect("product ledger facts");
+        let diagnostics = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::ArtifactVerified)
+            .flat_map(|event| event.artifacts())
+            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vision.ocr_calls.load(Ordering::Acquire),
+            1,
+            "resolved fields precede callback failure: {result:?}"
+        );
+        assert_eq!(
+            state.capture_count.load(Ordering::Acquire),
+            if capture { 2 } else { 1 }
+        );
+        assert_eq!(
+            diagnostics.len(),
+            if fatal || fail_report { 1 } else { 2 },
+            "one raw observation and at most one report"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type() == EventType::ArtifactStoreFailed)
+                .count(),
+            usize::from(fail_report),
+            "failed report persistence is not retried"
+        );
+        if fatal || fail_report {
+            let error = result.expect_err("fatal boundary propagates");
+            assert!(error.is_fatal());
+            assert_eq!(
+                error.projection().expect("typed fatal projection").code,
+                expected_code
+            );
+            if capture || fail_report {
+                assert!(
+                    host.fatal_error()
+                        .unwrap()
+                        .expect("fatal host state")
+                        .is_fatal()
+                );
+                assert!(host.close().expect_err("fatal host close").is_fatal());
+            } else {
+                assert!(host.fatal_error().unwrap().is_none());
+                host.close().expect("input failure remains contained");
+            }
+        } else {
+            let output = result.expect("ordinary callback failure keeps official fields output");
+            assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
+            let error = output
+                .receipt()
+                .error_projection()
+                .expect("original failed receipt");
+            assert_eq!(error.code, expected_code);
+            assert!(!error.fatal);
+            let projection = output
+                .official_ocr_fields_projection()
+                .expect("official parsed fields");
+            assert_eq!(projection.records().len(), 1);
+            assert_eq!(projection.failure(), None);
+            for artifact in &diagnostics {
+                assert_eq!(artifact.run_id(), Some(&projection.run_id()));
+                assert_eq!(
+                    artifact.frame_id(),
+                    Some(&projection.records()[0].frame_id())
+                );
+            }
+            let value = serde_json::to_value(projection).unwrap();
+            assert_eq!(value["records"][0]["group"], "page");
+            assert_eq!(value["records"][0]["fields"][0]["raw_text"], "home");
+            assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
+            assert_eq!(
+                value["records"][0]["frame_id"],
+                value["observations"][0]["frame_id"]
+            );
+            let terminals = events.iter().filter(|event| matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
+                if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
+            assert_eq!(terminals.len(), 1);
+            assert_eq!(terminals[0].links().run_id(), Some(&projection.run_id()));
+            assert!(host.fatal_error().unwrap().is_none());
+            host.close().expect("ordinary failure leaves host healthy");
+        }
+    }
+}
+
 #[test]
 fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
     const PROVIDER_DETAIL: &str = "synthetic post-admission OCR provider failure";

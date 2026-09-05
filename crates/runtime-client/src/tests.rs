@@ -55,6 +55,326 @@ use std::collections::BTreeSet;
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
 
+// Authorized D02 regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#discussion_r3940629855
+#[test]
+fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
+    for case in [
+        "public",
+        "failed",
+        "personal",
+        "hash",
+        "run",
+        "unverified",
+        "frame",
+        "task_failed",
+        "personal_task_failed",
+        "legacy_provider_failed",
+        "task_failed_missing_report",
+        "failed_missing_report",
+        "failed_missing_all",
+        "failed_schema",
+        "failed_hash",
+        "failed_run",
+        "failed_unverified",
+        "failed_frame",
+    ] {
+        let field_failed = case == "failed" || case.starts_with("failed_");
+        let failed = field_failed
+            || matches!(
+                case,
+                "task_failed"
+                    | "personal_task_failed"
+                    | "legacy_provider_failed"
+                    | "task_failed_missing_report"
+            );
+        let legacy = case == "legacy_provider_failed";
+        let root = TempDir::new().unwrap();
+        let path = root.path().to_path_buf();
+        let server = scripted_runtime(&root, move |listener, owner_epoch| {
+            let (mut stream, _) = listener.accept().unwrap();
+            respond_to_health(&mut stream, owner_epoch);
+            let request = read_scripted_request(&mut stream);
+            assert!(matches!(
+                request.operation(),
+                RuntimeOperation::RunContainedTask { .. }
+            ));
+            let correlation = request.correlation_id();
+            let ids = IdentifierIssuer::new().unwrap();
+            let run = *ids.mint_run_id().unwrap().transport();
+            let task = *ids.mint_task_id().unwrap().transport();
+            let frame = *ids.mint_frame_id().unwrap().transport();
+            let personal = matches!(case, "personal" | "personal_task_failed");
+            let name = if personal { "PrivateFixture" } else { "EntryA" };
+            let canonical = if personal {
+                "PrivateCanonical"
+            } else {
+                "EntryA"
+            };
+            let count = if field_failed { "invalid" } else { "0007" };
+            let mut observation = json!({"schema_version":OCR_OBSERVATION_SCHEMA,"task_id":task,"run_id":run,"frame_id":frame,"frame_index":0,
+                "observation":{"page_id":"fixture/panel","personal":personal,"targets":[
+                    {"target_id":"field/name","text":name,"confidence":0.9,"blocks":[],"execution":ocr_provider_fixture("name")},
+                    {"target_id":"field/count","text":count,"confidence":0.9,"blocks":[],"execution":ocr_provider_fixture("count")} ]}});
+            if legacy {
+                let payload = observation["observation"].as_object_mut().unwrap();
+                payload.remove("page_id");
+                payload.remove("personal");
+            }
+            let declaration = json!({"mode":"fields_v1","page_ids":["panel"],"fields":[
+                {"id":"name","group":"item","target_id":"field/name","required":true,"privacy":if personal {"personal"} else {"public"},
+                    "trim":"whitespace_v1","value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"a".repeat(64)}}},
+                {"id":"count","group":"item","target_id":"field/count","required":true,"privacy":"public","trim":"whitespace_v1",
+                    "value":{"type":"unsigned_integer","min":0,"max":100}}],
+                "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
+            let mut report = json!({"schema_version":OCR_COMPARISON_ENVELOPE_SCHEMA,"task_id":task,"run_id":run,"final_frame_id":frame,
+                "report":{"schema_version":actingcommand_contract::OCR_FIELDS_REPORT_SCHEMA,"declaration":declaration,
+                    "frames_collected":1,"items_collected":2,"total_observed_utf8_bytes":name.len()+count.len(),
+                    "failure":if field_failed {json!("invalid_integer")} else {Value::Null},
+                    "records":[{"frame_index":if matches!(case, "frame" | "failed_frame") {1} else {0},"page_id":"fixture/panel","group":"item","fields":[
+                        {"field_id":"name","target_id":"field/name","raw_text":name,"normalized_text":name,
+                            "value":{"type":"dictionary_entry","value":canonical},"reason":"resolved","detail":null,"redacted":false},
+                        {"field_id":"count","target_id":"field/count","raw_text":count,"normalized_text":count,
+                            "value":if field_failed {Value::Null} else {json!({"type":"unsigned_integer","value":7})},
+                            "reason":if field_failed {"invalid_integer"} else {"resolved"},"detail":null,"redacted":false}]}]}});
+            if legacy {
+                report = json!({"schema_version":"actingcommand.runtime.post-admission-ocr-failure.v1",
+                    "task_id":task,"run_id":run,"frame_id":frame,"failure_code":"contained_task_post_admission_ocr_failed",
+                    "detail":"fixture provider unavailable after first observation"});
+            }
+            if case == "failed_schema" {
+                report["report"]["schema_version"] = json!("unknown.fields.schema");
+            }
+            let mut events = Vec::new();
+            for (index, value) in [observation, report].into_iter().enumerate() {
+                if case == "failed_missing_all"
+                    || (index == 1
+                        && matches!(case, "task_failed_missing_report" | "failed_missing_report"))
+                {
+                    continue;
+                }
+                let mut reference =
+                    persisted_ocr_diagnostic(&path, &ids, correlation, run, frame, &value);
+                if personal {
+                    reference.redaction_state = ArtifactRedactionState::Pending;
+                }
+                if matches!(case, "run" | "failed_run") {
+                    reference.run_id = Some(*ids.mint_run_id().unwrap().transport());
+                }
+                if matches!(case, "hash" | "failed_hash") && index == 1 {
+                    let file = path.join(reference.object_key().unwrap());
+                    let mut bytes = fs::read(&file).unwrap();
+                    bytes[0] = b'[';
+                    fs::write(file, bytes).unwrap();
+                }
+                for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
+                    if matches!(case, "unverified" | "failed_unverified")
+                        && index == 1
+                        && event_type == EventType::ArtifactVerified
+                    {
+                        continue;
+                    }
+                    let mut event = link_projected_task_event(
+                        projected_task_event(
+                            &ids,
+                            (index * 2 + 1) as u64
+                                + u64::from(event_type == EventType::ArtifactVerified),
+                        ),
+                        correlation,
+                        task,
+                        run,
+                        Some(frame),
+                    );
+                    event.event_type = event_type;
+                    event.artifacts.push(reference.clone());
+                    events.push(event);
+                }
+            }
+            let disposition = actingcommand_contract::SchedulingDisposition::new(
+                "fields_recorded",
+                actingcommand_contract::SchedulingEffectEvidence::NoDesignatedEffect,
+            )
+            .unwrap();
+            let sanitized = EventDraft::new(
+                ids.mint_event_id().unwrap(),
+                5,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                TaskPayloadDraft::semantic(
+                    TaskSemanticFact::TerminalCommitted {
+                        outcome: if failed {
+                            TaskOutcome::Failure
+                        } else {
+                            TaskOutcome::Success
+                        },
+                        final_page: Some("fixture/panel".into()),
+                        executed_steps: 0,
+                        failure_code: if field_failed {
+                            Some("contained_task_ocr_fields_unresolved".into())
+                        } else if legacy {
+                            Some("contained_task_post_admission_ocr_failed".into())
+                        } else if failed {
+                            Some("contained_task_timeout".into())
+                        } else {
+                            None
+                        },
+                        scheduling_disposition: if failed { None } else { Some(disposition) },
+                    },
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&RejectProjectionSecrets)
+            .unwrap();
+            let mut terminal = link_projected_task_event(
+                projected_task_event(&ids, 5),
+                correlation,
+                task,
+                run,
+                None,
+            );
+            terminal.event_id = *sanitized.event_id();
+            terminal.event_type = sanitized.event_type();
+            terminal.payload_schema = sanitized.payload_schema().to_string();
+            terminal.payload = ProjectionPayload::Full(Box::new(sanitized.payload().clone()));
+            let terminal_ref = TerminalEvent {
+                sequence: 5,
+                event_id: terminal.event_id,
+            };
+            events.push(terminal);
+            if failed {
+                let receipt = RuntimeReceipt::error(
+                    &request,
+                    RuntimeReceiptState::Failed,
+                    Some(terminal_ref),
+                    RuntimeErrorProjection::new(RuntimeErrorCode::BackendOperationFailed, false),
+                )
+                .unwrap();
+                let bytes = serde_json::to_vec(&receipt).unwrap();
+                stream
+                    .write_all(&(bytes.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(&bytes).unwrap();
+                stream.flush().unwrap();
+            } else {
+                write_scripted_result(
+                    &mut stream,
+                    &request,
+                    RuntimeResult::ContainedTaskCompleted {
+                        run_id: run,
+                        task_id: task,
+                        task_request_id: request.request_id(),
+                        response_deadline_monotonic_ms: Some(60_000),
+                        outcome: TaskOutcome::Success,
+                        final_page: Some("fixture/panel".into()),
+                        executed_steps: 0,
+                    },
+                );
+            }
+            let query = read_scripted_request(&mut stream);
+            let RuntimeOperation::QueryEvents { page, .. } = query.operation() else {
+                panic!("ledger query");
+            };
+            let page = RuntimeEventQueryPage::new(events, 5, page.limit(), false, None).unwrap();
+            write_scripted_result(&mut stream, &query, RuntimeResult::EventPage { page });
+        });
+        let client = client(&root);
+        let result = client.run_contained_task("node.a", contained_task_request());
+        if legacy {
+            let error = result.expect_err("legacy provider failure keeps its rejection");
+            assert_eq!(error.code(), "runtime_request_rejected");
+            assert!(!error.is_fatal());
+            assert_eq!(
+                error.projection().unwrap().code,
+                RuntimeErrorCode::BackendOperationFailed
+            );
+            let receipt = error.committed_receipt().expect("original failed terminal");
+            assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+            assert_eq!(receipt.terminal().unwrap().sequence, 5);
+            assert_eq!(receipt.error_projection(), error.projection());
+        } else if matches!(
+            case,
+            "hash"
+                | "run"
+                | "unverified"
+                | "frame"
+                | "task_failed_missing_report"
+                | "failed_missing_report"
+                | "failed_missing_all"
+                | "failed_schema"
+                | "failed_hash"
+                | "failed_run"
+                | "failed_unverified"
+                | "failed_frame"
+        ) {
+            assert!(result.is_err(), "{case} must be rejected");
+            let error = result.unwrap_err();
+            assert!(
+                error.is_fatal(),
+                "invalid fields evidence cannot select collection mode: {case}"
+            );
+            assert_eq!(
+                error.code(),
+                "runtime_official_ocr_projection_failed_after_terminal"
+            );
+            assert!(error.committed_receipt().is_some());
+        } else {
+            let output = result.unwrap();
+            let value = serde_json::to_value(&output).unwrap();
+            assert!(value.get("official_ocr_projection").is_none());
+            let projection = &value["official_ocr_fields_projection"];
+            assert_eq!(
+                projection["schema_version"],
+                "actingcommand.runtime.official-ocr-fields-projection.v1"
+            );
+            assert_eq!(
+                projection["records"][0]["frame_id"],
+                projection["observations"][0]["frame_id"]
+            );
+            assert_eq!(
+                projection["records"][0]["fields"][1]["raw_text"],
+                if field_failed { "invalid" } else { "0007" }
+            );
+            if failed {
+                assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
+                assert_eq!(
+                    output.receipt().error_projection().unwrap().code,
+                    RuntimeErrorCode::BackendOperationFailed
+                );
+                assert!(!output.receipt().error_projection().unwrap().fatal);
+                assert!(output.receipt().terminal().is_some());
+                assert!(
+                    value["receipt"]
+                        .get("error")
+                        .is_some_and(|error| !error.is_null())
+                );
+            }
+            if field_failed {
+                assert_eq!(projection["failure"], "invalid_integer");
+            } else {
+                assert_eq!(projection["records"][0]["fields"][1]["value"]["value"], 7);
+                assert_eq!(projection["failure"], Value::Null);
+            }
+            if matches!(case, "personal" | "personal_task_failed") {
+                let text = serde_json::to_string(&value).unwrap();
+                assert!(!text.contains("PrivateFixture") && !text.contains("PrivateCanonical"));
+                assert_eq!(projection["records"][0]["fields"][0]["redacted"], true);
+            } else {
+                assert_eq!(
+                    projection["records"][0]["fields"][0]["value"]["value"],
+                    "EntryA"
+                );
+            }
+        }
+        drop(client);
+        server.join().unwrap();
+    }
+}
+
 struct RejectProjectionSecrets;
 
 impl SecretFingerprinter for RejectProjectionSecrets {
@@ -1581,8 +1901,14 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
                 events[1].artifacts[0].byte_count = MAX_OFFICIAL_OCR_ARTIFACT_BYTES + 1;
             }
         }
-        let error = resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
-            .expect_err("invalid OCR evidence must fail loud");
+        let error = resolve_official_ocr_projection(
+            root.path(),
+            &receipt,
+            correlation_id,
+            &events,
+            &mut None,
+        )
+        .expect_err("invalid OCR evidence must fail loud");
         assert_eq!(error.code(), expected_code);
     }
 }
@@ -1598,7 +1924,7 @@ fn official_ocr_projection_folds_matching_created_and_verified_lifecycle_facts()
     let events = official_ocr_fixture(root.path(), &ids, correlation_id, task_id, run_id);
 
     let projection =
-        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
+        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events, &mut None)
             .expect("matching artifact lifecycle")
             .expect("official OCR projection");
 
@@ -1643,8 +1969,9 @@ fn official_ocr_projection_rejects_conflicting_immutable_lifecycle_facts() {
     let mut events = official_ocr_fixture(root.path(), &ids, correlation_id, task_id, run_id);
     events[1].artifacts[0].created_at_unix_ms = 2;
 
-    let error = resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
-        .expect_err("conflicting artifact lifecycle must fail loud");
+    let error =
+        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events, &mut None)
+            .expect_err("conflicting artifact lifecycle must fail loud");
 
     assert_eq!(
         error.code(),
@@ -1669,7 +1996,7 @@ fn successful_non_ocr_task_preserves_the_existing_flow_shape() {
     )];
 
     assert_eq!(
-        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
+        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events, &mut None)
             .expect("non-OCR compatibility"),
         None
     );

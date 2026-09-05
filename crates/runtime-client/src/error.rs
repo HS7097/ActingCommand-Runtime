@@ -95,6 +95,11 @@ impl RuntimeClientError {
         }
         self
     }
+
+    pub(crate) fn with_committed_receipt(mut self, receipt: RuntimeReceipt) -> Self {
+        self.committed_receipt = Some(Box::new(receipt));
+        self
+    }
 }
 
 impl fmt::Debug for RuntimeClientError {

@@ -334,6 +334,7 @@ dependencies = [
  "actingcommand-pack-containment",
  "actingcommand-policy",
  "actingcommand-recognition-pack",
+ "actingcommand-runtime-client",
  "actingcommand-runtime-state",
  "actingcommand-scheduler",
  "serde",
