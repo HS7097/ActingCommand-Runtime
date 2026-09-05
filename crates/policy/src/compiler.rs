@@ -563,7 +563,10 @@ mod tests {
             let mut doc: serde_json::Value =
                 serde_json::from_slice(&source.bytes).expect("neutral document");
             doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
-            if let Some(events) = doc.get_mut("events").and_then(serde_json::Value::as_array_mut) {
+            if let Some(events) = doc
+                .get_mut("events")
+                .and_then(serde_json::Value::as_array_mut)
+            {
                 for event in events {
                     event["validity"] = serde_json::json!({"from_unix_ms":0,"until_unix_ms":null});
                 }
