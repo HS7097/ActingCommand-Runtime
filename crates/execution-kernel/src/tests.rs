@@ -71,7 +71,8 @@ fn kernel_close_preserves_each_failed_instance() {
         outcomes[1].1.recorded_event()
     ));
     assert!(error.take_closed_sessions().is_empty());
-    kernel.close().expect("already drained");
+    let mut repeated = kernel.close().expect_err("cached terminal failure");
+    assert_eq!(repeated.take_closed_sessions().len(), 2);
     drop(kernel);
     let state = state.lock().expect("state");
     assert_eq!(state.input_calls, 2);
@@ -81,6 +82,118 @@ fn kernel_close_preserves_each_failed_instance() {
 struct FakeProvider {
     state: Arc<Mutex<FakeState>>,
     instances: BTreeMap<String, ResolvedExecutionInstance>,
+}
+
+// Defect regressions D02/D08/D09/D14: PR298 review 5120590779, Workflow #257 C1B9 v16.
+#[test]
+fn c1b9_d02_readonly_close_authority() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_capture: true,
+        ..FakeState::default()
+    }));
+    let id = instance();
+    let kernel = kernel(Arc::clone(&state), &[("node.a", id, "private-a")]);
+    let failure = kernel
+        .capture_retained("node.a")
+        .expect_err("capture failure returned to owner");
+    assert_eq!(state.lock().expect("state").capture_closes, 0);
+    assert!(kernel.has_session(id).expect("owned session"));
+    let error = kernel.finish_failed_capture(
+        failure,
+        actingcommand_device::DeviceCloseAuthority::LocalOnly,
+    );
+    assert_eq!(error.code(), "capture_backend_operation_failed");
+    assert_eq!(state.lock().expect("state").capture_closes, 1);
+}
+
+#[test]
+fn c1b9_d08_panic_owner() {
+    let state = Arc::new(Mutex::new(FakeState {
+        panic_capture: true,
+        ..FakeState::default()
+    }));
+    let id = instance();
+    let kernel = kernel(Arc::clone(&state), &[("node.a", id, "private-a")]);
+    let error = kernel
+        .capture("node.a")
+        .expect_err("panic must remain a typed failure");
+    assert_eq!(error.secondary_code(), Some("execution_session_panicked"));
+    assert_eq!(
+        error.resource_quiescence(),
+        Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+    );
+    assert!(!error.lifecycle_causes().is_empty());
+    assert!(kernel.close().is_err());
+}
+
+#[test]
+fn c1b9_d09_close_terminal_cache() {
+    for fail_close in [false, true] {
+        let state = Arc::new(Mutex::new(FakeState {
+            fail_close,
+            ..FakeState::default()
+        }));
+        let id = instance();
+        let kernel = kernel(Arc::clone(&state), &[("node.a", id, "private-a")]);
+        kernel.input("node.a", InputAction::Reset).expect("input");
+        let session = kernel.session_for_test("node.a").expect("session");
+        let first =
+            session.close_with_authority(actingcommand_device::DeviceCloseAuthority::LocalOnly);
+        let second =
+            session.close_with_authority(actingcommand_device::DeviceCloseAuthority::LocalOnly);
+        assert_eq!(first, second);
+        if let (Err(first), Err(second)) = (&first, &second) {
+            assert!(Arc::ptr_eq(
+                &first.lifecycle_causes()[0].recorded_event,
+                &second.lifecycle_causes()[0].recorded_event
+            ));
+        }
+        assert_eq!(state.lock().expect("state").input_closes, 1);
+        let _ = kernel.close();
+    }
+}
+
+#[test]
+fn c1b9_d14_occurrence_folding() {
+    use actingcommand_device::{
+        DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence,
+    };
+    let device = DeviceError::fatal("same native detail").with_resource_close_cause(
+        DeviceResourceKind::VendorStdio,
+        DeviceResourceClosePhase::RestoreCrt,
+        "nemu_ipc",
+        None,
+        None,
+        DeviceResourceQuiescence::Unconfirmed,
+        1,
+    );
+    let cloned = device.clone();
+    let first = ExecutionKernelError::device("probe_failed", &device);
+    let second = ExecutionKernelError::device("shutdown_failed", &cloned);
+    assert!(Arc::ptr_eq(
+        &first.lifecycle_causes()[0].recorded_event,
+        &second.lifecycle_causes()[0].recorded_event
+    ));
+    let combined = ExecutionKernelError::merge(first, second);
+    assert_eq!(combined.lifecycle_causes().len(), 1);
+    let distinct = DeviceError::fatal("same native detail").with_resource_close_cause(
+        DeviceResourceKind::VendorStdio,
+        DeviceResourceClosePhase::RestoreCrt,
+        "nemu_ipc",
+        None,
+        None,
+        DeviceResourceQuiescence::Unconfirmed,
+        1,
+    );
+    assert_eq!(
+        ExecutionKernelError::merge(
+            combined,
+            ExecutionKernelError::device("shutdown_failed", &distinct)
+        )
+        .lifecycle_causes()
+        .len(),
+        2
+    );
 }
 
 impl FakeProvider {
@@ -596,6 +709,7 @@ fn backend_open_and_close_failures_surface_without_private_details() {
 }
 
 // Task Contract: Workflow #257 / C1B7. Test class: specification criterion.
+// D09 Defect regression alignment: PR298 review 5120590779, Workflow #257 C1B9 v16.
 #[test]
 fn execution_error_preserves_secondary_cleanup_detail() {
     use actingcommand_contract::CleanupCauseSeverity;
@@ -685,7 +799,13 @@ fn execution_error_preserves_secondary_cleanup_detail() {
             cause.detail().is_none(),
             "missing context remains unavailable"
         );
-        kernel.close().expect("failed session is already retired");
+        let repeated = kernel
+            .close()
+            .expect_err("unconfirmed close is retained after retirement");
+        assert_eq!(
+            repeated.resource_quiescence(),
+            Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+        );
         let snapshot = state.lock().expect("state");
         assert_eq!(snapshot.input_opens, 1);
         assert_eq!(snapshot.input_calls, 1);
@@ -803,7 +923,9 @@ fn kernel_retirement_failure_keeps_the_operation_error_primary_and_visible() {
     );
 
     kernel.clear_state_poison_for_test();
-    kernel.close().expect("close terminal session");
+    // D09: PR298 review 5120590779 / C1B9 v16; the consumed terminal remains visible.
+    let repeated = kernel.close().expect_err("cached terminal session failure");
+    assert_eq!(repeated.code(), "input_backend_operation_failed");
 }
 
 #[test]

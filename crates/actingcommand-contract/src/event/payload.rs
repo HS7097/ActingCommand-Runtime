@@ -956,6 +956,7 @@ pub struct LifecycleCauseDraft {
     severity: CleanupCauseSeverity,
     detail: Option<DiagnosticDetailDraft>,
     native_detail: Option<LifecycleNativeDetail>,
+    last_native_detail: Option<LifecycleNativeDetail>,
     resource: Option<RuntimeResourceKind>,
     resource_phase: Option<RuntimeResourceClosePhase>,
     candidate_index: Option<u8>,
@@ -980,6 +981,7 @@ impl LifecycleCauseDraft {
             severity,
             detail: None,
             native_detail: None,
+            last_native_detail: None,
             resource: None,
             resource_phase: None,
             candidate_index: None,
@@ -996,6 +998,10 @@ impl LifecycleCauseDraft {
     }
     pub fn with_native_detail(mut self, detail: LifecycleNativeDetail) -> Self {
         self.native_detail = Some(detail);
+        self
+    }
+    pub fn with_last_native_detail(mut self, detail: Option<LifecycleNativeDetail>) -> Self {
+        self.last_native_detail = detail;
         self
     }
     #[allow(clippy::too_many_arguments)]
@@ -1040,6 +1046,7 @@ impl LifecycleCauseDraft {
                 .map(DiagnosticDetailDraft::sanitize)
                 .transpose()?,
             native_detail: self.native_detail,
+            last_native_detail: self.last_native_detail,
             resource: self.resource,
             resource_phase: self.resource_phase,
             candidate_index: self.candidate_index,
@@ -1066,6 +1073,8 @@ pub struct LifecycleCauseRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_detail: Option<LifecycleNativeDetail>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_native_detail: Option<LifecycleNativeDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<RuntimeResourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_phase: Option<RuntimeResourceClosePhase>,
@@ -1084,6 +1093,9 @@ pub struct LifecycleCauseRecord {
 }
 
 impl LifecycleCauseRecord {
+    pub const fn last_native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.last_native_detail.as_ref()
+    }
     pub const fn phase(&self) -> LifecycleFailurePhase {
         self.phase
     }
@@ -1133,6 +1145,9 @@ impl LifecycleCauseRecord {
             detail.validate()?;
         }
         if let Some(detail) = &self.native_detail {
+            detail.validate()?;
+        }
+        if let Some(detail) = &self.last_native_detail {
             detail.validate()?;
         }
         if self.resource.is_some() != self.resource_phase.is_some()
@@ -1362,6 +1377,7 @@ impl RuntimeLifecycleFailureRecord {
         if let Some(cause) = &mut result.cause {
             cause.detail = None;
             cause.native_detail = None;
+            cause.last_native_detail = None;
             cause.native_instance = None;
         }
         result

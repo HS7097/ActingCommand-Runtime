@@ -267,13 +267,13 @@ impl SelectedTouchBackend {
                         if let Err(cleanup) = self
                             .active
                             .backend
-                            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+                            .close_once(DeviceCloseAuthority::LocalOnly)
                         {
                             self.close_result = Some(Err(cleanup.clone()));
                             let mut error = active_failure.clone().merge_resource_cleanup(cleanup);
                             if let Err(new_cleanup) = connected
                                 .backend
-                                .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+                                .close_once(DeviceCloseAuthority::LocalOnly)
                             {
                                 let unconfirmed = new_cleanup.resource_quiescence()
                                     == Some(DeviceResourceQuiescence::Unconfirmed);
@@ -306,7 +306,7 @@ impl SelectedTouchBackend {
                         ));
                         if let Err(close_err) = connected
                             .backend
-                            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+                            .close_once(DeviceCloseAuthority::LocalOnly)
                         {
                             let unconfirmed = close_err.resource_quiescence()
                                 == Some(DeviceResourceQuiescence::Unconfirmed);
@@ -317,7 +317,7 @@ impl SelectedTouchBackend {
                             return Err(error);
                         }
                         if !err.is_fallback_eligible() {
-                            return Err(self.chain_failed_error(action));
+                            return Err(err);
                         }
                     }
                 },
@@ -338,7 +338,7 @@ impl SelectedTouchBackend {
                         fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                     ));
                     if !err.is_fallback_eligible() {
-                        return Err(self.chain_failed_error(action));
+                        return Err(err);
                     }
                 }
             }
@@ -523,7 +523,7 @@ fn touch_probe_report_with_factories(
                 let name = connected.name;
                 if let Err(err) = connected
                     .backend
-                    .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+                    .close_once(DeviceCloseAuthority::LocalOnly)
                 {
                     let unconfirmed =
                         err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed);
@@ -633,10 +633,7 @@ fn select_fixed_priority(
                     fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                 ));
                 if !err.is_fallback_eligible() {
-                    return Err(DeviceError::fatal(format!(
-                        "touch backend selection stopped on non-fallback error; diagnostics: {}",
-                        format_touch_diagnostics(&diagnostics)
-                    )));
+                    return Err(err);
                 }
             }
         }
@@ -677,11 +674,7 @@ fn select_fastest(
                     backend.as_str()
                 ));
                 if !err.is_fallback_eligible() {
-                    let primary = DeviceError::fatal(format!(
-                        "touch backend fastest selection stopped on non-fallback error; diagnostics: {}",
-                        format_touch_diagnostics(&diagnostics)
-                    ));
-                    return Err(close_connected_touch_backends(connected, primary));
+                    return Err(close_connected_touch_backends(connected, err));
                 }
             }
         }
@@ -702,10 +695,7 @@ fn select_fastest(
     let (selected_factory_index, _elapsed_ms, mut active) = connected.remove(selected_pos);
     let mut cleanup_error: Option<DeviceError> = None;
     for (_index, _elapsed_ms, mut backend) in connected {
-        if let Err(error) = backend
-            .backend
-            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
-        {
+        if let Err(error) = backend.backend.close_once(DeviceCloseAuthority::LocalOnly) {
             let unconfirmed =
                 error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed);
             cleanup_error = Some(match cleanup_error {
@@ -719,10 +709,7 @@ fn select_fastest(
     }
     if let Some(primary) = cleanup_error {
         return Err(
-            match active
-                .backend
-                .close_once(DeviceCloseAuthority::FencedDeviceWrite)
-            {
+            match active.backend.close_once(DeviceCloseAuthority::LocalOnly) {
                 Ok(_) => primary,
                 Err(cleanup) => {
                     let unconfirmed = cleanup.resource_quiescence()
@@ -764,7 +751,7 @@ fn close_connected_touch_backends(
         primary,
         |primary, (_index, _elapsed_ms, mut backend)| match backend
             .backend
-            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+            .close_once(DeviceCloseAuthority::LocalOnly)
         {
             Ok(_) => primary,
             Err(cleanup) => {
@@ -920,6 +907,7 @@ pub struct AdbShellInputBackend {
     bounds: Option<TouchBounds>,
     connect_geometry: Option<AdbInputConnectGeometry>,
     connected: bool,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl AdbShellInputBackend {
@@ -932,6 +920,7 @@ impl AdbShellInputBackend {
             bounds: None,
             connect_geometry: None,
             connected: false,
+            close_result: None,
         }
     }
 
@@ -1013,6 +1002,7 @@ impl AdbShellInputBackend {
             },
         ));
         self.connected = true;
+        self.close_result = None;
         Ok(DeviceInfo {
             serial: self.serial.clone(),
             state,
@@ -1171,9 +1161,14 @@ impl InputBackend for AdbShellInputBackend {
         &mut self,
         _authority: DeviceCloseAuthority,
     ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
         let resource_count = u16::from(self.connected);
         self.connected = false;
-        Ok(DeviceResourceCloseOutcome::confirmed(resource_count))
+        let result = Ok(DeviceResourceCloseOutcome::confirmed(resource_count));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
@@ -1812,6 +1807,57 @@ mod tests {
             connect_result: Rc::new(RefCell::new(vec![connect])),
             action_result: Rc::new(RefCell::new(vec![action])),
         })
+    }
+
+    // Defect regressions D04/D09: PR298 review 5120590779, Workflow #257 C1B9 v16.
+    #[test]
+    fn c1b9_d04_factory_quiescence() {
+        let original = DeviceError::transient("acquisition primary").with_resource_close_cause(
+            crate::DeviceResourceKind::InputBackend,
+            crate::DeviceResourceClosePhase::AcquisitionCleanup,
+            "maatouch",
+            None,
+            None,
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        );
+        for requested in [TouchBackendChoice::AutoFastest, TouchBackendChoice::Auto] {
+            let factories = vec![
+                fake_factory(TouchBackendName::MaaTouch, Err(original.clone()), Ok(())),
+                fake_factory(TouchBackendName::Minitouch, Ok(()), Ok(())),
+            ];
+            let error = match requested {
+                TouchBackendChoice::AutoFastest => select_fastest(requested, factories),
+                _ => select_fixed_priority(requested, factories),
+            }
+            .err()
+            .expect("unconfirmed acquisition stops fallback");
+            assert_eq!(error, original);
+            assert!(std::sync::Arc::ptr_eq(
+                error.resource_close_causes()[0].occurrence(),
+                original.resource_close_causes()[0].occurrence()
+            ));
+        }
+    }
+
+    #[test]
+    fn c1b9_d09_adb_close_terminal_cache() {
+        let mut backend = AdbShellInputBackend::new(AdbConfig::default(), DeviceTarget::default());
+        backend
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Ok("Physical size: 720x1280".to_string()),
+                || Ok(DeviceRotation::R0),
+            )
+            .expect("simulated connect");
+        let first = backend
+            .close_once(DeviceCloseAuthority::LocalOnly)
+            .expect("close");
+        let second = backend
+            .close_once(DeviceCloseAuthority::LocalOnly)
+            .expect("cached close");
+        assert_eq!(first, second);
+        assert_eq!(first.resource_count(), 1);
     }
 
     #[test]

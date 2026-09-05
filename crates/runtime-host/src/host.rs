@@ -7826,9 +7826,12 @@ impl HostShared {
         )?;
 
         self.mark_resources_in_use()?;
-        let frame = match self.execution.capture(&probe.instance_alias) {
+        let frame = match self.execution.capture_retained(&probe.instance_alias) {
             Ok(frame) => frame,
             Err(error) => {
+                let error = self
+                    .execution
+                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
                 let error = RuntimeHostError::execution("run_monitor_capture", &error);
                 if self.retain_unconfirmed_resources(&error, links.clone())? {
                     return Err(error);
@@ -9860,9 +9863,12 @@ impl HostShared {
         )?;
         self.mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let frame = match self.execution.capture(instance_alias) {
+        let frame = match self.execution.capture_retained(instance_alias) {
             Ok(frame) => frame,
             Err(error) => {
+                let error = self
+                    .execution
+                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
                 let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
                 if self
                     .retain_unconfirmed_resources(&runtime_error, links.clone())
@@ -12727,19 +12733,9 @@ impl HostShared {
                     links,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
-                let remaining = self.execution.has_sessions().map_err(|error| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                        "inspect_execution_session_after_close",
-                        &error,
-                    ))
-                })?;
-                lock(&self.owner, "record_owner_resource_close")?.set_resource_disposition(
-                    if remaining {
-                        OwnerResourceDisposition::InUse
-                    } else {
-                        OwnerResourceDisposition::ConfirmedClosed
-                    },
-                )?;
+                // The live Host can acquire another session concurrently; only Host drain clears InUse.
+                lock(&self.owner, "record_owner_resource_close")?
+                    .set_resource_disposition(OwnerResourceDisposition::InUse)?;
                 lock(&self.scheduler, "finish_destructive_resource_close")?
                     .finish_destructive_step(token, connection_id)
                     .map_err(|error| {
@@ -12769,7 +12765,7 @@ impl HostShared {
                 }
                 lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
                 lock(&self.owner, "record_owner_resource_close_failure")?
-                    .set_resource_disposition(OwnerResourceDisposition::ConfirmedClosed)?;
+                    .set_resource_disposition(OwnerResourceDisposition::InUse)?;
                 lock(&self.scheduler, "finish_destructive_resource_close")?
                     .finish_destructive_step(token, connection_id)
                     .map_err(|scheduler_error| {
@@ -15547,7 +15543,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             links.clone(),
             CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
         )?;
-        match self.host.execution.capture(self.instance_alias) {
+        self.host.mark_resources_in_use()?;
+        match self.host.execution.capture_retained(self.instance_alias) {
             Ok(frame) => {
                 self.ensure_active()?;
                 let frame_index = self.capture_evidence.captured()?;
@@ -15595,8 +15592,18 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 Ok(frame)
             }
             Err(error) => {
+                let error = self
+                    .host
+                    .execution
+                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
                 let runtime_error =
                     RuntimeHostError::execution("run_contained_task_capture", &error);
+                if self
+                    .host
+                    .retain_unconfirmed_resources(&runtime_error, links.clone())?
+                {
+                    return Err(RequestFailure::poison_without_terminal(runtime_error));
+                }
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,
                     DiagnosticCode::CaptureFailed,

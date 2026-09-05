@@ -28,7 +28,7 @@ pub fn vendor_stdio_session_diagnostic() -> DeviceResult<VendorStdioCapture> {
 
 #[cfg(windows)]
 pub(crate) struct VendorStdioSession {
-    _lock: std::sync::MutexGuard<'static, ()>,
+    lock: Option<std::sync::MutexGuard<'static, ()>>,
     guard: Option<imp::RedirectGuard>,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
@@ -39,9 +39,17 @@ impl VendorStdioSession {
         let lock = stdio_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let guard = imp::RedirectGuard::new()?;
+        let guard = match imp::RedirectGuard::new() {
+            Ok(guard) => guard,
+            Err(error) => {
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(lock);
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
-            _lock: lock,
+            lock: Some(lock),
             guard: Some(guard),
             close_result: None,
         })
@@ -85,6 +93,9 @@ impl VendorStdioSession {
             error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
         }) {
             std::mem::forget(guard);
+            if let Some(lock) = self.lock.take() {
+                std::mem::forget(lock);
+            }
         }
         self.close_result = Some(result.clone());
         result
@@ -199,6 +210,12 @@ mod imp {
         stdout_offset: i32,
         stderr_offset: i32,
         restored: bool,
+        stdout_crt_redirected: bool,
+        stderr_crt_redirected: bool,
+        stdout_win32_redirected: bool,
+        stderr_win32_redirected: bool,
+        restore_result: Option<DeviceResult<()>>,
+        finish_result: Option<DeviceResult<VendorStdioCapture>>,
     }
 
     impl RedirectGuard {
@@ -244,127 +261,11 @@ mod imp {
                 }
             };
 
-            if let Err(error) = flush_all() {
-                return Err(cleanup_acquisition(
-                    error,
-                    &[
-                        (saved_stdout, "saved stdout"),
-                        (saved_stderr, "saved stderr"),
-                        (capture_stdout, "capture stdout"),
-                        (capture_stderr, "capture stderr"),
-                    ],
-                    &[&stdout_path, &stderr_path],
-                ));
-            }
-            if let Err(error) = dup2_fd(capture_stdout, STDOUT_FD, "stdout") {
-                return Err(cleanup_acquisition(
-                    error,
-                    &[
-                        (saved_stdout, "saved stdout"),
-                        (saved_stderr, "saved stderr"),
-                        (capture_stdout, "capture stdout"),
-                        (capture_stderr, "capture stderr"),
-                    ],
-                    &[&stdout_path, &stderr_path],
-                ));
-            }
-            if let Err(error) = dup2_fd(capture_stderr, STDERR_FD, "stderr") {
-                let mut error = error;
-                merge_close_result(
-                    &mut error,
-                    dup2_fd(saved_stdout, STDOUT_FD, "stdout").map_err(|cleanup| {
-                        resource_close_error(
-                            cleanup,
-                            DeviceResourceKind::FileDescriptor,
-                            DeviceResourceClosePhase::RestoreCrt,
-                        )
-                    }),
-                );
-                return Err(cleanup_acquisition(
-                    error,
-                    &[
-                        (saved_stdout, "saved stdout"),
-                        (saved_stderr, "saved stderr"),
-                        (capture_stdout, "capture stdout"),
-                        (capture_stderr, "capture stderr"),
-                    ],
-                    &[&stdout_path, &stderr_path],
-                ));
-            }
-            let saved_stdout_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-            let saved_stderr_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-            if let Err(error) = set_std_handle(STD_OUTPUT_HANDLE, capture_stdout, "stdout") {
-                let mut error = error;
-                for result in [
-                    dup2_fd(saved_stdout, STDOUT_FD, "stdout"),
-                    dup2_fd(saved_stderr, STDERR_FD, "stderr"),
-                ] {
-                    merge_close_result(
-                        &mut error,
-                        result.map_err(|cleanup| {
-                            resource_close_error(
-                                cleanup,
-                                DeviceResourceKind::FileDescriptor,
-                                DeviceResourceClosePhase::RestoreCrt,
-                            )
-                        }),
-                    );
-                }
-                return Err(cleanup_acquisition(
-                    error,
-                    &[
-                        (saved_stdout, "saved stdout"),
-                        (saved_stderr, "saved stderr"),
-                        (capture_stdout, "capture stdout"),
-                        (capture_stderr, "capture stderr"),
-                    ],
-                    &[&stdout_path, &stderr_path],
-                ));
-            }
-            if let Err(error) = set_std_handle(STD_ERROR_HANDLE, capture_stderr, "stderr") {
-                let mut error = error;
-                if unsafe { SetStdHandle(STD_OUTPUT_HANDLE, saved_stdout_handle) } == 0 {
-                    merge_close_result(
-                        &mut error,
-                        Err(resource_close_error(
-                            DeviceError::fatal("failed to restore vendor stdout Win32 handle"),
-                            DeviceResourceKind::VendorStdio,
-                            DeviceResourceClosePhase::RestoreWin32,
-                        )),
-                    );
-                }
-                for result in [
-                    dup2_fd(saved_stdout, STDOUT_FD, "stdout"),
-                    dup2_fd(saved_stderr, STDERR_FD, "stderr"),
-                ] {
-                    merge_close_result(
-                        &mut error,
-                        result.map_err(|cleanup| {
-                            resource_close_error(
-                                cleanup,
-                                DeviceResourceKind::FileDescriptor,
-                                DeviceResourceClosePhase::RestoreCrt,
-                            )
-                        }),
-                    );
-                }
-                return Err(cleanup_acquisition(
-                    error,
-                    &[
-                        (saved_stdout, "saved stdout"),
-                        (saved_stderr, "saved stderr"),
-                        (capture_stdout, "capture stdout"),
-                        (capture_stderr, "capture stderr"),
-                    ],
-                    &[&stdout_path, &stderr_path],
-                ));
-            }
-
-            Ok(Self {
+            let mut guard = Self {
                 saved_stdout,
                 saved_stderr,
-                saved_stdout_handle,
-                saved_stderr_handle,
+                saved_stdout_handle: unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
+                saved_stderr_handle: unsafe { GetStdHandle(STD_ERROR_HANDLE) },
                 capture_stdout,
                 capture_stderr,
                 stdout_path,
@@ -372,7 +273,35 @@ mod imp {
                 stdout_offset: 0,
                 stderr_offset: 0,
                 restored: false,
-            })
+                stdout_crt_redirected: false,
+                stderr_crt_redirected: false,
+                stdout_win32_redirected: false,
+                stderr_win32_redirected: false,
+                restore_result: None,
+                finish_result: None,
+            };
+            if let Err(mut error) = guard.install() {
+                if let Err(cleanup) = guard.finish() {
+                    error = error.merge_resource_cleanup(cleanup);
+                }
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(guard);
+                }
+                return Err(error);
+            }
+            Ok(guard)
+        }
+
+        fn install(&mut self) -> DeviceResult<()> {
+            flush_all()?;
+            self.stdout_crt_redirected = true;
+            dup2_fd(self.capture_stdout, STDOUT_FD, "stdout")?;
+            self.stderr_crt_redirected = true;
+            dup2_fd(self.capture_stderr, STDERR_FD, "stderr")?;
+            self.stdout_win32_redirected = true;
+            set_std_handle(STD_OUTPUT_HANDLE, self.capture_stdout, "stdout")?;
+            self.stderr_win32_redirected = true;
+            set_std_handle(STD_ERROR_HANDLE, self.capture_stderr, "stderr")
         }
 
         pub(super) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
@@ -392,7 +321,15 @@ mod imp {
         }
 
         pub(super) fn finish(&mut self) -> DeviceResult<VendorStdioCapture> {
-            let mut failure = self.restore().err();
+            if let Some(result) = &self.finish_result {
+                return result.clone();
+            }
+            if let Err(error) = self.restore() {
+                self.finish_result = Some(Err(error.clone()));
+                return Err(error);
+            }
+            let mut failure = None;
+            let mut resources_confirmed = true;
             let captured = match self.snapshot() {
                 Ok(captured) => Some(captured),
                 Err(error) => {
@@ -405,6 +342,7 @@ mod imp {
                 close_fd(self.capture_stderr, "capture stderr"),
             ] {
                 if let Err(error) = result {
+                    resources_confirmed = false;
                     merge_close_failure(
                         &mut failure,
                         resource_close_error(
@@ -417,6 +355,7 @@ mod imp {
             }
             for path in [&self.stdout_path, &self.stderr_path] {
                 if let Err(error) = std::fs::remove_file(path) {
+                    resources_confirmed = false;
                     merge_close_failure(
                         &mut failure,
                         resource_close_error(
@@ -430,18 +369,27 @@ mod imp {
                     );
                 }
             }
-            match (failure, captured) {
-                (Some(error), _) => Err(error),
+            let result = match (failure, captured) {
+                (Some(error), _) => Err(error.with_resource_summary(
+                    if resources_confirmed {
+                        DeviceResourceQuiescence::Confirmed
+                    } else {
+                        DeviceResourceQuiescence::Unconfirmed
+                    },
+                    6,
+                )),
                 (None, Some(captured)) => Ok(captured),
                 (None, None) => Err(DeviceError::fatal(
                     "vendor stdio snapshot was unavailable without a close error",
                 )),
-            }
+            };
+            self.finish_result = Some(result.clone());
+            result
         }
 
         fn restore(&mut self) -> DeviceResult<()> {
-            if self.restored {
-                return Ok(());
+            if let Some(result) = &self.restore_result {
+                return result.clone();
             }
             let mut failure = flush_all()
                 .map_err(|error| {
@@ -452,10 +400,21 @@ mod imp {
                     )
                 })
                 .err();
-            for (handle, name) in [
-                (self.saved_stdout_handle, "stdout"),
-                (self.saved_stderr_handle, "stderr"),
+            for (handle, name, redirected) in [
+                (
+                    self.saved_stdout_handle,
+                    "stdout",
+                    &mut self.stdout_win32_redirected,
+                ),
+                (
+                    self.saved_stderr_handle,
+                    "stderr",
+                    &mut self.stderr_win32_redirected,
+                ),
             ] {
+                if !*redirected {
+                    continue;
+                }
                 if unsafe {
                     SetStdHandle(
                         if name == "stdout" {
@@ -477,13 +436,28 @@ mod imp {
                             DeviceResourceClosePhase::RestoreWin32,
                         ),
                     );
+                } else {
+                    *redirected = false;
                 }
             }
-            for result in [
-                dup2_fd(self.saved_stdout, STDOUT_FD, "stdout"),
-                dup2_fd(self.saved_stderr, STDERR_FD, "stderr"),
+            for (saved, target, name, redirected) in [
+                (
+                    self.saved_stdout,
+                    STDOUT_FD,
+                    "stdout",
+                    &mut self.stdout_crt_redirected,
+                ),
+                (
+                    self.saved_stderr,
+                    STDERR_FD,
+                    "stderr",
+                    &mut self.stderr_crt_redirected,
+                ),
             ] {
-                if let Err(error) = result {
+                if !*redirected {
+                    continue;
+                }
+                if let Err(error) = dup2_fd(saved, target, name) {
                     merge_close_failure(
                         &mut failure,
                         resource_close_error(
@@ -492,7 +466,13 @@ mod imp {
                             DeviceResourceClosePhase::RestoreCrt,
                         ),
                     );
+                } else {
+                    *redirected = false;
                 }
+            }
+            if let Some(error) = failure {
+                self.restore_result = Some(Err(error.clone()));
+                return Err(error);
             }
             for result in [
                 close_fd(self.saved_stdout, "saved stdout"),
@@ -510,9 +490,11 @@ mod imp {
                 }
             }
             if let Some(error) = failure {
+                self.restore_result = Some(Err(error.clone()));
                 return Err(error);
             }
             self.restored = true;
+            self.restore_result = Some(Ok(()));
             Ok(())
         }
     }

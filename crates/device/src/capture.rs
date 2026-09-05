@@ -611,7 +611,7 @@ where
         let (_candidate_index, used, _elapsed_ms, backend) = successful.swap_remove(fastest_index);
         let mut cleanup_error: Option<DeviceError> = None;
         for (loser_index, _name, _elapsed_ms, mut loser) in successful {
-            if let Err(cleanup) = loser.close_once(DeviceCloseAuthority::FencedDeviceWrite) {
+            if let Err(cleanup) = loser.close_once(DeviceCloseAuthority::LocalOnly) {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(loser);
                 }
@@ -624,19 +624,17 @@ where
         }
         if let Some(primary) = cleanup_error {
             let mut backend = backend;
-            return Err(
-                match backend.close_once(DeviceCloseAuthority::FencedDeviceWrite) {
-                    Ok(_) => primary,
-                    Err(winner_cleanup) => {
-                        if winner_cleanup.resource_quiescence()
-                            == Some(DeviceResourceQuiescence::Unconfirmed)
-                        {
-                            std::mem::forget(backend);
-                        }
-                        primary.merge_resource_cleanup(winner_cleanup)
+            return Err(match backend.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(_) => primary,
+                Err(winner_cleanup) => {
+                    if winner_cleanup.resource_quiescence()
+                        == Some(DeviceResourceQuiescence::Unconfirmed)
+                    {
+                        std::mem::forget(backend);
                     }
-                },
-            );
+                    primary.merge_resource_cleanup(winner_cleanup)
+                }
+            });
         }
         return Ok(SelectedCaptureBackend {
             backend,
@@ -662,7 +660,7 @@ fn close_capture_candidates(
     candidates.into_iter().fold(
         primary,
         |primary, (index, _name, _elapsed_ms, mut backend)| match backend
-            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+            .close_once(DeviceCloseAuthority::LocalOnly)
         {
             Ok(_) => primary,
             Err(cleanup) => {
@@ -693,6 +691,9 @@ fn probe_or_cached_capture_backend(
                 ));
             }
             Err(err) => {
+                if err.resource_quiescence().is_some() || !err.resource_close_causes().is_empty() {
+                    return Err(err);
+                }
                 let attempt =
                     CaptureBackendAttempt::failure(name, err.message().to_string(), None, false);
                 if let Err(cache_error) = capture_probe_cache_store(key, &attempt) {
@@ -717,6 +718,11 @@ fn probe_or_cached_capture_backend(
                 Ok(CaptureProbeOutcome::Available(backend, attempt, elapsed_ms))
             }
             Err(error) => {
+                if error.resource_quiescence().is_some()
+                    || !error.resource_close_causes().is_empty()
+                {
+                    return Err(error);
+                }
                 let elapsed_ms = started.elapsed().as_millis();
                 let attempt = CaptureBackendAttempt::failure(
                     name,
@@ -735,6 +741,9 @@ fn probe_or_cached_capture_backend(
             }
         },
         Err(err) => {
+            if err.resource_quiescence().is_some() || !err.resource_close_causes().is_empty() {
+                return Err(err);
+            }
             let elapsed_ms = started.elapsed().as_millis();
             let attempt = CaptureBackendAttempt::failure(
                 name,
@@ -754,7 +763,7 @@ fn close_capture_backend_after_error(
     mut backend: Box<dyn CaptureBackend>,
     primary: DeviceError,
 ) -> DeviceError {
-    match backend.close_once(DeviceCloseAuthority::FencedDeviceWrite) {
+    match backend.close_once(DeviceCloseAuthority::LocalOnly) {
         Ok(_) => primary,
         Err(cleanup) => {
             if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
@@ -944,7 +953,9 @@ fn prime_capture_backend(
     name: CaptureBackendName,
     mut backend: Box<dyn CaptureBackend>,
 ) -> DeviceResult<PrimedCaptureResult> {
-    match backend.capture() {
+    let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.capture()))
+        .unwrap_or_else(|_| Err(DeviceError::fatal("capture probe panicked")));
+    match captured {
         Ok(frame) => {
             let vendor_stdio = backend.vendor_stdio().to_vec();
             let message = format!(
@@ -963,7 +974,7 @@ fn prime_capture_backend(
                 vendor_stdio,
             ))
         }
-        Err(primary) => match backend.close_once(DeviceCloseAuthority::FencedDeviceWrite) {
+        Err(primary) => match backend.close_once(DeviceCloseAuthority::LocalOnly) {
             Ok(_) => Err(primary),
             Err(cleanup) => {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
@@ -1076,7 +1087,6 @@ pub struct DroidcastRawBackend {
     serial: String,
     child: Option<Child>,
     started: bool,
-    forwarded: bool,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
@@ -1102,7 +1112,6 @@ impl DroidcastRawBackend {
             serial,
             child: None,
             started: false,
-            forwarded: false,
             close_result: None,
         })
     }
@@ -1129,15 +1138,15 @@ impl DroidcastRawBackend {
             &format!("tcp:{}", self.config.local_port),
             &format!("tcp:{}", self.config.local_port),
         )?;
-        self.forwarded = true;
         let classpath = format!("CLASSPATH={}", self.config.remote_apk);
         let child = adb.shell_spawn(
             &self.serial,
             &[&classpath, "app_process", "/", DROIDCAST_MAIN_CLASS],
         )?;
         self.child = Some(child);
+        self.close_result = None;
         if let Err(err) = wait_for_droidcast(self.config.local_port, self.capture_timeout) {
-            return match self.close_once(DeviceCloseAuthority::FencedDeviceWrite) {
+            return match self.close_once(DeviceCloseAuthority::LocalOnly) {
                 Ok(_) => Err(err),
                 Err(cleanup) => Err(err.merge_resource_cleanup(cleanup)),
             };
@@ -1160,31 +1169,6 @@ impl DroidcastRawBackend {
             self.child.take();
         }
         self.started = false;
-        result
-    }
-
-    fn remove_forward_if_present(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
-        if !self.forwarded {
-            return Ok(DeviceResourceCloseOutcome::confirmed(0));
-        }
-        let local = format!("tcp:{}", self.config.local_port);
-        let result = Adb::new(self.adb_config.clone())
-            .remove_forward(&self.serial, &local)
-            .map(|_| DeviceResourceCloseOutcome::confirmed(1))
-            .map_err(|error| {
-                error.with_resource_close_cause(
-                    DeviceResourceKind::ProviderConnection,
-                    DeviceResourceClosePhase::Close,
-                    "droidcast_raw",
-                    None,
-                    None,
-                    DeviceResourceQuiescence::Unconfirmed,
-                    1,
-                )
-            });
-        if result.is_ok() {
-            self.forwarded = false;
-        }
         result
     }
 }
@@ -1226,13 +1210,7 @@ impl CaptureBackend for DroidcastRawBackend {
         if let Some(result) = &self.close_result {
             return result.clone();
         }
-        let child = self.stop_child_if_present();
-        let forward = self.remove_forward_if_present();
-        let result = match (child, forward) {
-            (Ok(child), Ok(forward)) => Ok(child.combine(forward)),
-            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
-            (Err(primary), Err(secondary)) => Err(primary.merge_resource_cleanup(secondary)),
-        };
+        let result = self.stop_child_if_present();
         self.close_result = Some(result.clone());
         result
     }
@@ -1240,15 +1218,19 @@ impl CaptureBackend for DroidcastRawBackend {
 
 impl Drop for DroidcastRawBackend {
     fn drop(&mut self) {
-        if self.close_result.is_none()
-            && let Err(error) = self.close_once(DeviceCloseAuthority::LocalOnly)
-            && !thread::panicking()
-        {
-            panic!("{error}");
+        let first_close = self.close_result.is_none();
+        if let Err(error) = self.close_once(DeviceCloseAuthority::LocalOnly) {
+            if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                && let Some(owned) = self.child.take()
+            {
+                std::mem::forget(owned);
+            }
+            if first_close && !thread::panicking() {
+                panic!("{error}");
+            }
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NemuCaptureResolutionDetail {
     Installation,
@@ -1414,7 +1396,7 @@ impl NemuIpcBackend {
         let (frame_width, frame_height) = match worker.probe_resolution() {
             Ok(resolution) => resolution,
             Err(primary) => {
-                return match worker.shutdown_once(DeviceCloseAuthority::FencedDeviceWrite) {
+                return match worker.shutdown_once(DeviceCloseAuthority::LocalOnly) {
                     Ok(_) => Err(primary),
                     Err(cleanup) => {
                         let unconfirmed = cleanup.resource_quiescence()
@@ -1456,7 +1438,7 @@ struct NemuCapturedFrame {
 
 struct NemuIpcWorker {
     tx: mpsc::Sender<NemuIpcCommand>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<DeviceResult<()>>>,
     timeout: Duration,
     poisoned: bool,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
@@ -1474,56 +1456,84 @@ impl NemuIpcWorker {
         let handle = thread::spawn(move || {
             let mut state =
                 NemuIpcWorkerState::load(nemu_folder, dll_path, instance_id, display_id);
-            while let Ok(command) = rx.recv() {
-                match command {
-                    NemuIpcCommand::Probe(response) => {
-                        let _ = response.send(worker_state_result(&mut state, |state| {
-                            state.probe_resolution()
-                        }));
-                    }
-                    NemuIpcCommand::Capture(response) => {
-                        let _ = response.send(worker_state_result(&mut state, |state| {
-                            state.capture_frame()
-                        }));
-                    }
-                    NemuIpcCommand::Shutdown {
-                        authority,
-                        response,
-                    } => {
-                        let result = match state {
-                            Ok(mut owned) => {
-                                let result = owned.close(authority);
-                                if result.as_ref().is_err_and(|error| {
-                                    error.resource_quiescence()
-                                        == Some(DeviceResourceQuiescence::Unconfirmed)
-                                }) {
-                                    std::mem::forget(owned);
-                                }
-                                result
+            let mut closed = false;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        NemuIpcCommand::Probe(response) => {
+                            response
+                                .send(worker_state_result(&mut state, |state| {
+                                    state.probe_resolution()
+                                }))
+                                .map_err(|_| DeviceError::fatal("Nemu IPC probe response lost"))?;
+                        }
+                        NemuIpcCommand::Capture(response) => {
+                            response
+                                .send(worker_state_result(&mut state, |state| {
+                                    state.capture_frame()
+                                }))
+                                .map_err(|_| {
+                                    DeviceError::fatal("Nemu IPC capture response lost")
+                                })?;
+                        }
+                        NemuIpcCommand::Shutdown {
+                            authority,
+                            response,
+                        } => {
+                            let result =
+                                worker_state_result(&mut state, |state| state.close(authority));
+                            closed = true;
+                            if response.send(result.clone()).is_err() {
+                                return Err(match result {
+                                    Ok(_) => DeviceError::fatal("Nemu IPC close response lost"),
+                                    Err(primary) => primary,
+                                });
                             }
-                            Err(error)
-                                if error.resource_quiescence()
-                                    == Some(DeviceResourceQuiescence::Unconfirmed) =>
-                            {
-                                Err(error.with_resource_close_cause(
-                                    DeviceResourceKind::InProcessWorker,
-                                    DeviceResourceClosePhase::Close,
-                                    "nemu_ipc",
-                                    None,
-                                    Some(instance_id),
-                                    DeviceResourceQuiescence::Unconfirmed,
-                                    1,
-                                ))
-                            }
-                            Err(_) => Ok(DeviceResourceCloseOutcome::confirmed(1)),
-                        };
-                        let _ = response.send(result);
-                        break;
+                            return result.map(|_| ());
+                        }
                     }
                 }
+                Err(DeviceError::fatal("Nemu IPC command channel disconnected"))
+            }))
+            .unwrap_or_else(|_| {
+                Err(
+                    DeviceError::fatal("Nemu IPC worker panicked").with_resource_close_cause(
+                        DeviceResourceKind::InProcessWorker,
+                        DeviceResourceClosePhase::WorkerJoin,
+                        "nemu_ipc",
+                        None,
+                        Some(instance_id),
+                        DeviceResourceQuiescence::Unconfirmed,
+                        1,
+                    ),
+                )
+            });
+            let result = if closed {
+                result
+            } else {
+                let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker_state_result(&mut state, |state| {
+                        state.close(DeviceCloseAuthority::LocalOnly)
+                    })
+                }))
+                .unwrap_or_else(|_| {
+                    Err(DeviceError::fatal("Nemu IPC worker close panicked")
+                        .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
+                });
+                match (result, cleanup) {
+                    (Ok(()), Ok(_)) => Ok(()),
+                    (Err(primary), Ok(_)) => Err(primary),
+                    (Ok(()), Err(cleanup)) => Err(cleanup),
+                    (Err(primary), Err(cleanup)) => Err(primary.merge_resource_cleanup(cleanup)),
+                }
+            };
+            if result.as_ref().is_err_and(|error| {
+                error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+            }) {
+                std::mem::forget(state);
             }
+            result
         });
-
         Self {
             tx,
             handle: Some(handle),
@@ -1683,21 +1693,25 @@ impl NemuIpcWorker {
                         DeviceResourceQuiescence::Unconfirmed,
                         1,
                     )
-            })
+            })?
     }
 }
 
 impl Drop for NemuIpcWorker {
     fn drop(&mut self) {
-        if self.close_result.is_none()
-            && let Err(error) = self.shutdown_once(DeviceCloseAuthority::LocalOnly)
-            && !thread::panicking()
-        {
-            panic!("{error}");
+        let first_close = self.close_result.is_none();
+        if let Err(error) = self.shutdown_once(DeviceCloseAuthority::LocalOnly) {
+            if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                && let Some(owned) = self.handle.take()
+            {
+                std::mem::forget(owned);
+            }
+            if first_close && !thread::panicking() {
+                panic!("{error}");
+            }
         }
     }
 }
-
 struct NemuIpcWorkerState {
     library: Option<Library>,
     stdio_session: Option<VendorStdioSession>,
@@ -1719,63 +1733,9 @@ impl NemuIpcWorkerState {
         display_id: i32,
     ) -> DeviceResult<Self> {
         let nemu_folder = nul_terminated_utf16_path(&nemu_folder)?;
-        let mut stdio_session = VendorStdioSession::start()?;
-        let library = match unsafe { Library::new(&dll_path) } {
-            Ok(library) => library,
-            Err(error) => {
-                let primary = DeviceError::fatal(format!(
-                    "Nemu IPC unavailable: failed to load {}: {error}",
-                    dll_path.display()
-                ));
-                return match stdio_session.finish() {
-                    Ok(_) => Err(primary),
-                    Err(cleanup) => {
-                        let unconfirmed = cleanup.resource_quiescence()
-                            == Some(DeviceResourceQuiescence::Unconfirmed);
-                        let error = primary.merge_resource_cleanup(cleanup);
-                        if unconfirmed {
-                            std::mem::forget(stdio_session);
-                        }
-                        Err(error)
-                    }
-                };
-            }
-        };
-        let mut vendor_stdio = Vec::new();
-        let load_stdio = match stdio_session.snapshot() {
-            Ok(capture) => capture,
-            Err(primary) => {
-                let stdio_result = stdio_session.finish();
-                let library_result = library.close().map_err(|error| {
-                    DeviceError::fatal(format!(
-                        "failed to unload Nemu IPC library after stdio snapshot failure: {error}"
-                    ))
-                    .with_resource_close_cause(
-                        DeviceResourceKind::Library,
-                        DeviceResourceClosePhase::AcquisitionCleanup,
-                        "nemu_ipc",
-                        None,
-                        Some(instance_id),
-                        DeviceResourceQuiescence::Unconfirmed,
-                        1,
-                    )
-                });
-                let mut error = primary;
-                if let Err(cleanup) = stdio_result {
-                    error = error.merge_resource_cleanup(cleanup);
-                }
-                if let Err(cleanup) = library_result {
-                    error = error.merge_resource_cleanup(cleanup);
-                }
-                return Err(error);
-            }
-        };
-        if !load_stdio.is_empty() {
-            vendor_stdio.push(load_stdio);
-        }
-        Ok(Self {
-            library: Some(library),
-            stdio_session: Some(stdio_session),
+        let mut state = Self {
+            library: None,
+            stdio_session: None,
             nemu_folder,
             instance_id,
             display_id,
@@ -1783,10 +1743,45 @@ impl NemuIpcWorkerState {
             raw_buffer: Vec::new(),
             frame_width: 0,
             frame_height: 0,
-            vendor_stdio,
-        })
+            vendor_stdio: Vec::new(),
+        };
+        let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.stdio_session = Some(VendorStdioSession::start()?);
+            state.library = Some(unsafe { Library::new(&dll_path) }.map_err(|error| {
+                DeviceError::fatal(format!(
+                    "Nemu IPC unavailable: failed to load {}: {error}",
+                    dll_path.display()
+                ))
+            })?);
+            state.record_vendor_stdio_snapshot()
+        }))
+        .unwrap_or_else(|_| Err(DeviceError::fatal("Nemu IPC initialization panicked")));
+        match acquired {
+            Ok(()) => Ok(state),
+            Err(primary) => {
+                let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    state.close(DeviceCloseAuthority::LocalOnly)
+                }))
+                .unwrap_or_else(|_| {
+                    Err(
+                        DeviceError::fatal("Nemu IPC initialization cleanup panicked")
+                            .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1),
+                    )
+                });
+                let error = match cleanup {
+                    Ok(outcome) => primary.with_resource_summary(
+                        DeviceResourceQuiescence::Confirmed,
+                        outcome.resource_count(),
+                    ),
+                    Err(cleanup) => primary.merge_resource_cleanup(cleanup),
+                };
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(state);
+                }
+                Err(error)
+            }
+        }
     }
-
     fn connect(&mut self) -> DeviceResult<()> {
         if self.connect_id > 0 {
             return Ok(());
@@ -1795,13 +1790,13 @@ impl NemuIpcWorkerState {
         let nemu_folder = self.nemu_folder.as_ptr();
         let instance_id = self.instance_id;
         let connect_id = unsafe { connect(nemu_folder, instance_id) };
+        self.connect_id = connect_id;
         self.record_vendor_stdio_snapshot()?;
         if connect_id == 0 {
             return Err(DeviceError::fatal(
                 "Nemu IPC connect returned 0; check MuMu path and running instance",
             ));
         }
-        self.connect_id = connect_id;
         Ok(())
     }
 
@@ -1965,9 +1960,21 @@ impl NemuIpcWorkerState {
             })?;
         let connect_id = self.connect_id;
         unsafe { disconnect(connect_id) };
-        self.connect_id = 0;
-        self.record_vendor_stdio_snapshot().map_err(|error| {
-            error.with_resource_close_cause(
+        let primary = DeviceError::fatal(
+            "Nemu IPC void disconnect has no independent termination acknowledgement",
+        )
+        .with_resource_close_cause(
+            DeviceResourceKind::ProviderConnection,
+            DeviceResourceClosePhase::DisconnectCall,
+            "nemu_ipc",
+            None,
+            Some(self.instance_id),
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        );
+        Err(match self.record_vendor_stdio_snapshot() {
+            Ok(()) => primary,
+            Err(cleanup) => primary.merge_resource_cleanup(cleanup.with_resource_close_cause(
                 DeviceResourceKind::VendorStdio,
                 DeviceResourceClosePhase::SnapshotRead,
                 "nemu_ipc",
@@ -1975,7 +1982,7 @@ impl NemuIpcWorkerState {
                 Some(self.instance_id),
                 DeviceResourceQuiescence::Unconfirmed,
                 1,
-            )
+            )),
         })
     }
 
@@ -1987,13 +1994,21 @@ impl NemuIpcWorkerState {
             .saturating_add(u16::from(self.stdio_session.is_some()))
             .saturating_add(u16::from(self.library.is_some()));
         self.disconnect(authority)?;
+        let mut failure = None;
         if let Some(stdio) = self.stdio_session.as_mut() {
-            let outcome = stdio.finish()?;
-            resource_count = resource_count.max(outcome.resource_count());
+            match stdio.finish() {
+                Ok(outcome) => resource_count = resource_count.max(outcome.resource_count()),
+                Err(error)
+                    if error.resource_quiescence() == Some(DeviceResourceQuiescence::Confirmed) =>
+                {
+                    failure = Some(error)
+                }
+                Err(error) => return Err(error),
+            }
         }
         self.stdio_session.take();
-        if let Some(library) = self.library.take() {
-            library.close().map_err(|error| {
+        if let Some(library) = self.library.take()
+            && let Err(error) = library.close().map_err(|error| {
                 DeviceError::fatal(format!("failed to unload Nemu IPC library: {error}"))
                     .with_resource_close_cause(
                         DeviceResourceKind::Library,
@@ -2004,9 +2019,20 @@ impl NemuIpcWorkerState {
                         DeviceResourceQuiescence::Unconfirmed,
                         1,
                     )
-            })?;
+            })
+        {
+            return Err(match failure {
+                Some(primary) => primary.merge_resource_cleanup(error),
+                None => error,
+            });
         }
-        Ok(DeviceResourceCloseOutcome::confirmed(resource_count))
+        failure.map_or(
+            Ok(DeviceResourceCloseOutcome::confirmed(resource_count)),
+            |error| {
+                Err(error
+                    .with_resource_summary(DeviceResourceQuiescence::Confirmed, resource_count))
+            },
+        )
     }
 }
 
@@ -3577,7 +3603,12 @@ mod tests {
     }
 
     fn rgb8_red_ids(pixels: &[u8]) -> Vec<u8> {
-        pixels.chunks_exact(3).map(|chunk| chunk[0]).collect()
+        pixels
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|chunk| chunk[0])
+            .collect()
     }
 
     fn rgba_contract_pixels() -> Vec<u8> {

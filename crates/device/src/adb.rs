@@ -300,10 +300,6 @@ impl Adb {
         self.run(&["-s", serial, "forward", local, remote])
     }
 
-    pub fn remove_forward(&self, serial: &str, local: &str) -> DeviceResult<CommandOutput> {
-        self.run(&["-s", serial, "forward", "--remove", local])
-    }
-
     pub fn shell_spawn(&self, serial: &str, args: &[&str]) -> DeviceResult<Child> {
         validate_adb_path(&self.config.adb_path)?;
         Command::new(&self.config.adb_path)
@@ -439,77 +435,164 @@ fn run_raw_with_timeout(
             DeviceError::fatal(format!("failed to spawn adb {}: {err}", args.join(" ")))
         })?;
 
-    let stdout = child.stdout.take().ok_or_else(|| {
-        DeviceError::fatal(format!("failed to open adb {} stdout", args.join(" ")))
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        DeviceError::fatal(format!("failed to open adb {} stderr", args.join(" ")))
-    })?;
-    let stdout_thread = spawn_pipe_reader(stdout);
-    let stderr_thread = spawn_pipe_reader(stderr);
-
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().map_err(|err| {
-            DeviceError::fatal(format!(
-                "failed to poll adb {} process: {err}",
-                args.join(" ")
-            ))
-        })? {
-            return collect_raw_output(status, stdout_thread, stderr_thread);
-        }
-        if started.elapsed() >= timeout {
-            let stop_result = stop_child(&mut child, Duration::from_millis(500), "adb");
-            if let Err(cleanup) = stop_result {
-                return Err(DeviceError::fatal(format!(
-                    "adb {} timed out after {:?}; adb process close was not clean and pipe reader threads were detached to avoid a shutdown hang",
-                    args.join(" "),
-                    timeout
-                ))
-                .merge_resource_cleanup(cleanup));
+    let acquired_count = 1 + u16::from(child.stdout.is_some()) + u16::from(child.stderr.is_some());
+    let mut stdout_thread = None;
+    let mut stderr_thread = None;
+    let execution = (|| {
+        let stdout = child.stdout.take().ok_or_else(|| {
+            DeviceError::fatal(format!("failed to open adb {} stdout", args.join(" ")))
+        })?;
+        stdout_thread = Some(spawn_pipe_reader(stdout)?);
+        let stderr = child.stderr.take().ok_or_else(|| {
+            DeviceError::fatal(format!("failed to open adb {} stderr", args.join(" ")))
+        })?;
+        stderr_thread = Some(spawn_pipe_reader(stderr)?);
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return Ok(status),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(DeviceError::fatal(format!(
+                        "failed to poll adb {} process: {error}",
+                        args.join(" ")
+                    )));
+                }
             }
-            let stdout = join_pipe_reader(stdout_thread, "stdout")?;
-            let stderr = join_pipe_reader(stderr_thread, "stderr")?;
-            let stdout = String::from_utf8_lossy(&stdout);
-            let stderr = String::from_utf8_lossy(&stderr);
-            return Err(DeviceError::fatal(format!(
-                "adb {} timed out after {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-                args.join(" "),
-                timeout
-            )));
+            if started.elapsed() >= timeout {
+                return Err(DeviceError::fatal(format!(
+                    "adb {} timed out after {timeout:?}",
+                    args.join(" ")
+                )));
+            }
+            thread::sleep(Duration::from_millis(25));
         }
-        thread::sleep(Duration::from_millis(25));
+    })();
+    let (status, mut failure) = match execution {
+        Ok(status) => (Some(status), None),
+        Err(error) => (None, Some(error)),
+    };
+    let close_deadline = Instant::now() + Duration::from_millis(500);
+    let mut child_confirmed = status.is_some();
+    if !child_confirmed {
+        match stop_child(&mut child, Duration::from_millis(500), "adb") {
+            Ok(_) => child_confirmed = true,
+            Err(error) => {
+                child_confirmed =
+                    error.resource_quiescence() == Some(DeviceResourceQuiescence::Confirmed);
+                failure = Some(
+                    failure
+                        .take()
+                        .expect("command failure")
+                        .merge_resource_cleanup(error),
+                );
+            }
+        }
     }
-}
-
-fn collect_raw_output(
-    status: ExitStatus,
-    stdout_thread: JoinHandle<io::Result<Vec<u8>>>,
-    stderr_thread: JoinHandle<io::Result<Vec<u8>>>,
-) -> DeviceResult<RawCommandOutput> {
+    let stdout = join_pipe_reader(&mut stdout_thread, "stdout", close_deadline);
+    let stderr = join_pipe_reader(&mut stderr_thread, "stderr", close_deadline);
+    let readers_confirmed = stdout_thread.is_none() && stderr_thread.is_none();
+    let mut output = [None, None];
+    for (index, result) in [stdout, stderr].into_iter().enumerate() {
+        match result {
+            Ok(bytes) => output[index] = Some(bytes),
+            Err(error) => {
+                failure = Some(match failure.take() {
+                    Some(primary) => primary.merge_resource_cleanup(error),
+                    None => error,
+                })
+            }
+        }
+    }
+    if !child_confirmed {
+        std::mem::forget(child);
+    }
+    if let Some(reader) = stdout_thread {
+        std::mem::forget(reader);
+    }
+    if let Some(reader) = stderr_thread {
+        std::mem::forget(reader);
+    }
+    if let Some(error) = failure {
+        return Err(error.with_resource_summary(
+            if child_confirmed && readers_confirmed {
+                DeviceResourceQuiescence::Confirmed
+            } else {
+                DeviceResourceQuiescence::Unconfirmed
+            },
+            acquired_count,
+        ));
+    }
     Ok(RawCommandOutput {
-        status,
-        stdout: join_pipe_reader(stdout_thread, "stdout")?,
-        stderr: join_pipe_reader(stderr_thread, "stderr")?,
+        status: status.expect("successful command status"),
+        stdout: output[0].take().expect("successful stdout reader"),
+        stderr: output[1].take().expect("successful stderr reader"),
     })
 }
 
-fn spawn_pipe_reader(mut reader: impl Read + Send + 'static) -> JoinHandle<io::Result<Vec<u8>>> {
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })
+fn spawn_pipe_reader(
+    mut reader: impl Read + Send + 'static,
+) -> DeviceResult<JoinHandle<io::Result<Vec<u8>>>> {
+    thread::Builder::new()
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })
+        .map_err(|error| DeviceError::fatal(format!("failed to start adb pipe reader: {error}")))
 }
 
 fn join_pipe_reader(
-    thread: JoinHandle<io::Result<Vec<u8>>>,
-    stream_name: &str,
+    reader: &mut Option<JoinHandle<io::Result<Vec<u8>>>>,
+    stream_name: &'static str,
+    deadline: Instant,
 ) -> DeviceResult<Vec<u8>> {
-    thread
+    let Some(handle) = reader.as_ref() else {
+        return Ok(Vec::new());
+    };
+    while !handle.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let backend = if stream_name == "stdout" {
+        "adb_stdout"
+    } else {
+        "adb_stderr"
+    };
+    if !handle.is_finished() {
+        return Err(DeviceError::fatal(format!(
+            "adb {stream_name} reader remains open at close deadline"
+        ))
+        .with_resource_close_cause(
+            DeviceResourceKind::PipeReader,
+            DeviceResourceClosePhase::WorkerJoin,
+            backend,
+            None,
+            None,
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        ));
+    }
+    reader
+        .take()
+        .expect("acquired reader")
         .join()
-        .map_err(|_| DeviceError::fatal(format!("adb {stream_name} reader thread panicked")))?
-        .map_err(|err| DeviceError::fatal(format!("failed to read adb {stream_name}: {err}")))
+        .map_err(|_| DeviceError::fatal(format!("adb {stream_name} reader thread panicked")))
+        .and_then(|result| {
+            result.map_err(|error| {
+                DeviceError::fatal(format!("failed to read adb {stream_name}: {error}"))
+            })
+        })
+        .map_err(|error| {
+            error.with_resource_close_cause(
+                DeviceResourceKind::PipeReader,
+                DeviceResourceClosePhase::WorkerJoin,
+                backend,
+                None,
+                None,
+                DeviceResourceQuiescence::Confirmed,
+                1,
+            )
+        })
 }
 
 struct DecodedAdbText {
@@ -589,12 +672,30 @@ pub fn stop_child(
                 ));
             }
             Ok(None) => {}
-            Err(error) => errors.push(child_close_error(
-                backend,
-                DeviceResourceClosePhase::ExitPoll,
-                error,
-                DeviceResourceQuiescence::Unconfirmed,
-            )),
+            Err(error) => {
+                let observation = child_close_error(
+                    backend,
+                    DeviceResourceClosePhase::ExitPoll,
+                    error,
+                    DeviceResourceQuiescence::Unconfirmed,
+                );
+                if let Some(current) = errors.iter_mut().find(|error| {
+                    error
+                        .resource_close_causes()
+                        .first()
+                        .is_some_and(|cause| cause.phase() == DeviceResourceClosePhase::ExitPoll)
+                }) {
+                    if let Err(capacity) = current.fold_resource_observation(observation) {
+                        errors.push(capacity);
+                        return Err(aggregate_child_close_errors(
+                            errors,
+                            DeviceResourceQuiescence::Unconfirmed,
+                        ));
+                    }
+                } else {
+                    errors.push(observation);
+                }
+            }
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -655,6 +756,34 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // Defect regression D14: PR298 review 5120590779, Workflow #257 C1B9 v16.
+    #[test]
+    fn c1b9_d14_child_occurrence_folding() {
+        let mut first = child_close_error(
+            "adb",
+            DeviceResourceClosePhase::ExitPoll,
+            io::Error::other("first"),
+            DeviceResourceQuiescence::Unconfirmed,
+        );
+        for detail in ["middle", "last"] {
+            first
+                .fold_resource_observation(child_close_error(
+                    "adb",
+                    DeviceResourceClosePhase::ExitPoll,
+                    io::Error::other(detail),
+                    DeviceResourceQuiescence::Unconfirmed,
+                ))
+                .expect("bounded observation");
+        }
+        let merged = first.clone().merge_resource_cleanup(first);
+        assert_eq!(merged.resource_close_causes().len(), 1);
+        let cause = &merged.resource_close_causes()[0];
+        assert!(cause.detail().ends_with("first"));
+        assert!(cause.last_detail().expect("last detail").ends_with("last"));
+        assert_eq!(cause.observation_count(), 3);
+        assert_eq!(cause.dropped_count(), 1);
+    }
 
     #[test]
     fn mumu_adb_candidates_prefer_nx_main_before_device_shells() {
@@ -761,7 +890,12 @@ mod tests {
             panic!("injected reader panic");
         });
 
-        let err = join_pipe_reader(reader, "stdout").expect_err("reader panic must be fatal");
+        let err = join_pipe_reader(
+            &mut Some(reader),
+            "stdout",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect_err("reader panic must be fatal");
 
         assert_eq!(err.severity(), crate::DeviceErrorSeverity::Fatal);
         assert!(err.message().contains("stdout reader thread panicked"));

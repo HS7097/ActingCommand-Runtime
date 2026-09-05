@@ -42,6 +42,8 @@ pub(crate) struct OwnerGuard {
     record: OwnerRecord,
     closed: bool,
     retained_unconfirmed: bool,
+    retention_result: Option<RuntimeHostResult<()>>,
+    close_result: Option<RuntimeHostResult<()>>,
 }
 
 impl OwnerGuard {
@@ -136,6 +138,8 @@ impl OwnerGuard {
                 record,
                 closed: false,
                 retained_unconfirmed: false,
+                retention_result: None,
+                close_result: None,
             },
             owner_epoch,
             takeover_instances,
@@ -153,16 +157,18 @@ impl OwnerGuard {
         if self.record.active_instances == active_instances {
             return Ok(());
         }
-        self.record.revision = self.record.revision.checked_add(1).ok_or_else(|| {
+        let mut record = self.record.clone();
+        record.revision = record.revision.checked_add(1).ok_or_else(|| {
             RuntimeHostError::fatal(
                 "owner_revision_overflow",
                 "update_owner_file",
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        self.record.active_instances = active_instances;
-        let record = self.record.clone();
-        append_record(self.file_mut("update_owner_file")?, &record)
+        record.active_instances = active_instances;
+        append_record(self.file_mut("update_owner_file")?, &record)?;
+        self.record = record;
+        Ok(())
     }
 
     pub(crate) fn set_resource_disposition(
@@ -172,23 +178,24 @@ impl OwnerGuard {
         if self.record.resource_disposition == Some(disposition) {
             return Ok(());
         }
-        self.record.revision = self.record.revision.checked_add(1).ok_or_else(|| {
+        let mut record = self.record.clone();
+        record.revision = record.revision.checked_add(1).ok_or_else(|| {
             RuntimeHostError::fatal(
                 "owner_revision_overflow",
                 "update_owner_resource_disposition",
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        self.record.resource_disposition = Some(disposition);
-        let record = self.record.clone();
-        append_record(self.file_mut("update_owner_resource_disposition")?, &record)
+        record.resource_disposition = Some(disposition);
+        append_record(self.file_mut("update_owner_resource_disposition")?, &record)?;
+        self.record = record;
+        Ok(())
     }
 
     pub(crate) fn retain_unconfirmed(&mut self) -> RuntimeHostResult<()> {
-        if self.retained_unconfirmed {
-            return Ok(());
+        if let Some(result) = &self.retention_result {
+            return result.clone();
         }
-        self.set_resource_disposition(OwnerResourceDisposition::Unconfirmed)?;
         let file = self.file.take().ok_or_else(|| {
             RuntimeHostError::fatal(
                 "owner_file_missing",
@@ -196,46 +203,71 @@ impl OwnerGuard {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        std::mem::forget(file);
+        let file = Box::leak(Box::new(file));
         self.retained_unconfirmed = true;
-        Ok(())
+        let result = (|| {
+            let mut record = self.record.clone();
+            record.revision = record.revision.checked_add(1).ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "owner_revision_overflow",
+                    "update_owner_resource_disposition",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            record.resource_disposition = Some(OwnerResourceDisposition::Unconfirmed);
+            append_record(file, &record)?;
+            self.record = record;
+            Ok(())
+        })();
+        self.retention_result = Some(result.clone());
+        result
     }
 
     pub(crate) fn close(&mut self, closed_at_unix_ms: u64) -> RuntimeHostResult<()> {
-        if self.closed {
-            return Ok(());
+        if let Some(result) = &self.close_result {
+            return result.clone();
         }
-        if self.retained_unconfirmed {
-            return Err(RuntimeHostError::fatal(
-                "owner_resource_unconfirmed",
-                "close_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
+        let result = (|| {
+            if self.retained_unconfirmed {
+                return Err(RuntimeHostError::fatal(
+                    "owner_resource_unconfirmed",
+                    "close_owner_file",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            let mut record = self.record.clone();
+            record.revision = record.revision.checked_add(1).ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "owner_revision_overflow",
+                    "close_owner_file",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            record.active = false;
+            record.active_instances.clear();
+            record.closed_at_unix_ms = Some(closed_at_unix_ms);
+            record.resource_disposition = Some(OwnerResourceDisposition::None);
+            append_record(self.file_mut("close_owner_file")?, &record)?;
+            self.record = record;
+            self.file_mut("close_owner_file")?.unlock().map_err(|_| {
+                RuntimeHostError::fatal(
+                    "owner_unlock_failed",
+                    "close_owner_file",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            self.closed = true;
+            Ok(())
+        })();
+        if result.is_err()
+            && let Some(file) = self.file.take()
+        {
+            Box::leak(Box::new(file));
+            self.retained_unconfirmed = true;
         }
-        self.record.revision = self.record.revision.checked_add(1).ok_or_else(|| {
-            RuntimeHostError::fatal(
-                "owner_revision_overflow",
-                "close_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
-        self.record.active = false;
-        self.record.active_instances.clear();
-        self.record.closed_at_unix_ms = Some(closed_at_unix_ms);
-        self.record.resource_disposition = Some(OwnerResourceDisposition::None);
-        let record = self.record.clone();
-        append_record(self.file_mut("close_owner_file")?, &record)?;
-        self.file_mut("close_owner_file")?.unlock().map_err(|_| {
-            RuntimeHostError::fatal(
-                "owner_unlock_failed",
-                "close_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
-        self.closed = true;
-        Ok(())
+        self.close_result = Some(result.clone());
+        result
     }
-
     fn file_mut(&mut self, operation: &'static str) -> RuntimeHostResult<&mut File> {
         self.file.as_mut().ok_or_else(|| {
             RuntimeHostError::fatal(
@@ -411,6 +443,43 @@ fn invalid_owner_record(operation: &'static str) -> RuntimeHostError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Defect regression D10: PR298 review 5120590779, Workflow #257 C1B9 v16.
+    #[test]
+    fn c1b9_d10_owner_persist_failure() {
+        let root = tempfile::tempdir().expect("owner root");
+        let issuer = IdentifierIssuer::new().expect("issuer");
+        let mut owner = OwnerGuard::acquire(root.path(), &issuer, 1)
+            .expect("owner")
+            .guard;
+        drop(owner.file.take());
+        let file = OpenOptions::new()
+            .read(true)
+            .open(root.path().join(OWNER_FILE_NAME))
+            .expect("read-only journal");
+        file.try_lock().expect("actual owner lock");
+        owner.file = Some(file);
+        let error = owner
+            .retain_unconfirmed()
+            .expect_err("journal cannot be written");
+        assert_eq!(error.code(), "owner_write_failed");
+        assert!(owner.retained_unconfirmed);
+        assert_eq!(
+            owner
+                .retain_unconfirmed()
+                .expect_err("cached failure")
+                .code(),
+            error.code()
+        );
+        drop(owner);
+        assert_eq!(
+            OwnerGuard::acquire(root.path(), &issuer, 2)
+                .err()
+                .expect("lock retained after persistence failure")
+                .code(),
+            "owner_conflict"
+        );
+    }
 
     // Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
     #[test]

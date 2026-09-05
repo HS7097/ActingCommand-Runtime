@@ -187,6 +187,14 @@ fn resource_quiescence_causes_roundtrip_and_project() {
             "resource_close_unconfirmed",
             CleanupCauseSeverity::Fatal,
         )
+        .with_native_detail(crate::LifecycleNativeDetail::new(
+            "first close detail",
+            false,
+        ))
+        .with_last_native_detail(Some(crate::LifecycleNativeDetail::new(
+            "last close detail",
+            false,
+        )))
         .with_resource_context(
             RuntimeResourceKind::ProviderConnection,
             RuntimeResourceClosePhase::DisconnectCall,
@@ -253,12 +261,15 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     );
     assert_eq!(cause.observation_count(), Some(3));
     assert_eq!(cause.dropped_count(), Some(0));
+    assert!(cause.last_native_detail().is_some());
 
     let full = serde_json::to_string(&ProjectionPayload::Full(Box::new(restored.clone())))
         .expect("full projection");
     let public = serde_json::to_string(&restored.public_projection()).expect("public projection");
     assert!(full.contains("native_instance"));
     assert!(!public.contains("native_instance"));
+    assert!(full.contains("last close detail"));
+    assert!(!public.contains("last close detail"));
     for categorical in [
         "provider_connection",
         "disconnect_call",

@@ -6,8 +6,8 @@ use actingcommand_contract::{
     ResourceQuiescence, RuntimeResourceClosePhase, RuntimeResourceKind, Sensitivity,
 };
 use actingcommand_device::{
-    DeviceClosePhase, DeviceError, DeviceErrorSensitivity, DeviceErrorSeverity,
-    DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence,
+    DeviceCloseOccurrence, DeviceClosePhase, DeviceError, DeviceErrorSensitivity,
+    DeviceErrorSeverity, DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence,
 };
 use std::error::Error;
 use std::fmt;
@@ -19,6 +19,7 @@ pub type ExecutionKernelResult<T> = Result<T, ExecutionKernelError>;
 pub struct ExecutionLifecycleCause {
     pub cause: LifecycleCauseDraft,
     pub recorded_event: Arc<OnceLock<EventId>>,
+    source_occurrence: Option<Arc<DeviceCloseOccurrence>>,
 }
 
 #[derive(Clone)]
@@ -69,6 +70,7 @@ impl ExecutionKernelError {
             .close_causes()
             .iter()
             .map(|cause| ExecutionLifecycleCause {
+                source_occurrence: Some(Arc::clone(&cause.occurrence)),
                 cause: LifecycleCauseDraft::new(
                     match cause.phase {
                         DeviceClosePhase::Reset => LifecycleFailurePhase::Reset,
@@ -88,11 +90,12 @@ impl ExecutionKernelError {
                     &cause.detail,
                     cause.detail_truncated,
                 )),
-                recorded_event: Arc::new(OnceLock::new()),
+                recorded_event: cause.occurrence.recorded_event::<EventId>(),
             })
             .collect::<Vec<_>>();
         causes.extend(error.resource_close_causes().iter().map(|cause| {
             ExecutionLifecycleCause {
+                source_occurrence: Some(Arc::clone(cause.occurrence())),
                 cause: LifecycleCauseDraft::new(
                     LifecycleFailurePhase::ResourceClose,
                     cause.backend(),
@@ -103,6 +106,9 @@ impl ExecutionKernelError {
                     cause.detail(),
                     cause.detail_truncated(),
                 ))
+                .with_last_native_detail(cause.last_detail().map(|detail| {
+                    LifecycleNativeDetail::new(detail, cause.last_detail_truncated())
+                }))
                 .with_resource_context(
                     runtime_resource_kind(cause.resource()),
                     runtime_resource_phase(cause.phase()),
@@ -121,7 +127,7 @@ impl ExecutionKernelError {
                     cause.observation_count(),
                     cause.dropped_count(),
                 ),
-                recorded_event: Arc::new(OnceLock::new()),
+                recorded_event: cause.occurrence().recorded_event::<EventId>(),
             }
         }));
         Self {
@@ -142,12 +148,13 @@ impl ExecutionKernelError {
     pub(crate) fn merge(mut primary: Self, mut secondary: Self) -> Self {
         let mut added_resource_cause = false;
         for cause in std::mem::take(&mut secondary.lifecycle.causes) {
-            if primary
-                .lifecycle
-                .causes
-                .iter()
-                .any(|current| Arc::ptr_eq(&current.recorded_event, &cause.recorded_event))
-            {
+            if primary.lifecycle.causes.iter().any(|current| {
+                Arc::ptr_eq(&current.recorded_event, &cause.recorded_event)
+                    || match (&current.source_occurrence, &cause.source_occurrence) {
+                        (Some(current), Some(incoming)) => Arc::ptr_eq(current, incoming),
+                        _ => false,
+                    }
+            }) {
                 continue;
             }
             added_resource_cause |= cause.cause.resource().is_some();
@@ -203,6 +210,7 @@ impl ExecutionKernelError {
 
     pub(crate) fn merge_retirement(mut primary: Self, secondary: Self) -> Self {
         primary.lifecycle.causes.push(ExecutionLifecycleCause {
+            source_occurrence: None,
             cause: LifecycleCauseDraft::new(
                 LifecycleFailurePhase::Retirement,
                 "execution_kernel",
