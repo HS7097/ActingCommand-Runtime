@@ -223,7 +223,7 @@ pub struct RepairReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenReport {
-    pub storage_snapshot: GlobalLedgerStorageSnapshot,
+    pub storage_snapshot: Box<GlobalLedgerStorageSnapshot>,
     pub latest_sequence: u64,
     pub event_count: usize,
     pub listed_through_segment: Option<u64>,
@@ -717,7 +717,7 @@ fn valid_correlation_id(value: &str) -> bool {
 
 fn open_report(snapshot: &GlobalLedgerReadOnly) -> OpenReport {
     OpenReport {
-        storage_snapshot: snapshot.storage_snapshot().clone(),
+        storage_snapshot: Box::new(snapshot.storage_snapshot().clone()),
         latest_sequence: snapshot.latest_sequence(),
         event_count: snapshot.events().len(),
         listed_through_segment: snapshot.listed_through_segment(),
