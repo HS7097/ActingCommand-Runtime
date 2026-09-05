@@ -10,6 +10,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `sqlite/schema.sql` — authoritative versioned Runtime state, migration, and release-set schema.
 - `runtime-project-interface.md` — versioned read-only project projection and compatibility matrix.
 - `ledger-performance-export.md` — read-only, raw-event-paginated stutter and clock-jump export.
+- `page-projection.md` — package annotations and the shared bounded single-frame page projection.
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.

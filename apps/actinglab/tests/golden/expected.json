@@ -2141,32 +2141,58 @@
         "backend": "scene_file",
         "frame_path": "observe.png",
         "observation": {
+          "content_sha256": "9831c6fd4e717c4fa491a366c398724e9e3995a6882d991acea92eea9af391fc",
           "elements": [
             {
-              "actionable": true,
+              "actionable": false,
               "availability": "available",
-              "blocked_reason": null,
+              "blocked_reason": "invalid_frame_geometry",
               "id": "[\"navigate\",\"\",\"navigation\",\"home_to_target\"]",
+              "input": null,
               "label": "home_to_target",
+              "purpose": "home_to_target",
+              "recognition_basis": "matched_page_declaration",
+              "recognized": true,
               "resource_id": "home_to_target",
               "role": "navigate",
-              "safety": "unclassified"
+              "safety": "unclassified",
+              "safety_source": null,
+              "scope": "page",
+              "source": "navigation",
+              "target_id": null,
+              "task_id": "<TASK_ID>"
             }
           ],
+          "fields": [],
+          "frame": {
+            "height": 1,
+            "kind": "rgb8",
+            "sha256": "7fa54a42524916a1648ec76ce75d295024840b7a3a4f4bbaf3e43155d0014767",
+            "width": 1
+          },
           "matched": true,
           "metrics": {
             "emitted_count": 1,
+            "empty_list": false,
             "entry_count": 1,
             "matched_page_count": 1,
+            "missing_count": 0,
+            "omitted_count": 0,
             "recognized_count": 1,
-            "sample_scope": "single_offline_observation"
+            "sample_scope": "single_offline_observation",
+            "unscoped_control_count": 0
           },
+          "missing": [],
           "omitted_count": 0,
+          "output_truncated": false,
           "page": "arknights/home",
           "page_window_completeness": "unknown",
-          "schema_version": "actingcommand.lab.offline_observation.v1",
+          "schema_version": "actingcommand.page-projection.v1",
           "standby": false,
-          "truncated": false
+          "state": "recognized",
+          "truncated": false,
+          "unscoped_controls": [],
+          "window": null
         },
         "page": "arknights/home",
         "projection_schema_version": "actingcommand.projection.v0.1",

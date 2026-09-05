@@ -223,6 +223,7 @@ dependencies = [
 name = "actingcommand-pack-containment"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
