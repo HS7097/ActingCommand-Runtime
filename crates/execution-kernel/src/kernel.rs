@@ -112,15 +112,19 @@ impl ExecutionKernel {
             std::mem::take(&mut state.sessions)
         };
         let mut failure = None;
-        for session in sessions.into_values() {
+        let mut closed_sessions = Vec::new();
+        for (instance_id, session) in sessions {
             if let Err(error) = session.close() {
+                closed_sessions.push((instance_id, error.clone()));
                 failure = Some(match failure {
                     Some(primary) => ExecutionKernelError::merge(primary, error),
                     None => error,
                 });
             }
         }
-        failure.map_or(Ok(()), Err)
+        failure.map_or(Ok(()), |error| {
+            Err(error.with_closed_sessions(closed_sessions))
+        })
     }
 
     fn session(&self, instance_alias: &str) -> ExecutionKernelResult<Arc<ExecutionSession>> {
@@ -155,11 +159,11 @@ impl ExecutionKernel {
     ) -> ExecutionKernelResult<T> {
         let error = match result {
             Ok(value) => return Ok(value),
-            Err(error) => error,
+            Err(error) => error.with_instance_id(session.resolved().instance_id()),
         };
         match self.retire_failed_session(session) {
             Ok(()) => Err(error),
-            Err(cleanup) => Err(ExecutionKernelError::merge(error, cleanup)),
+            Err(cleanup) => Err(ExecutionKernelError::merge_retirement(error, cleanup)),
         }
     }
 

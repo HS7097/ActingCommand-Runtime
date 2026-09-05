@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{DeviceError, DeviceResult};
+use crate::{
+    DeviceError, DeviceResult, NemuConfiguredAdbClass, NemuResolutionContext,
+    NemuResolutionCountKind, NemuResolutionReason,
+};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const NEMU_IPC_DLL_NAME: &str = "external_renderer_ipc.dll";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MumuInstallSource {
+pub enum MumuInstallSource {
     ExplicitFolder,
     ConfiguredBackendPath,
     RunningProcess,
@@ -90,6 +93,7 @@ pub(crate) fn resolve_mumu_adb(installation: &MumuInstallation) -> DeviceResult<
     resolve_existing_candidate(
         installation,
         "ADB executable",
+        NemuResolutionCountKind::AdbExecutables,
         mumu_adb_candidates(&installation.root)?,
     )
 }
@@ -98,6 +102,7 @@ pub(crate) fn resolve_mumu_capture_dll(installation: &MumuInstallation) -> Devic
     resolve_existing_candidate(
         installation,
         "Nemu capture DLL",
+        NemuResolutionCountKind::CaptureDllFiles,
         mumu_capture_dll_candidates(&installation.root)?,
     )
 }
@@ -112,6 +117,7 @@ fn resolve_mumu_adb_for_capture_dll(
     resolve_existing_candidate(
         installation,
         "ADB executable matching configured Nemu capture DLL version",
+        NemuResolutionCountKind::AdbExecutables,
         vec![
             version_dir.join("shell").join("adb.exe"),
             installation.root.join("nx_main").join("adb.exe"),
@@ -127,6 +133,7 @@ fn resolve_mumu_capture_dll_for_adb(
         return resolve_existing_candidate(
             installation,
             "Nemu capture DLL matching configured ADB version",
+            NemuResolutionCountKind::CaptureDllFiles,
             vec![
                 version_dir
                     .join("shell")
@@ -138,7 +145,12 @@ fn resolve_mumu_capture_dll_for_adb(
 
     let candidates = mumu_capture_dll_candidates(&installation.root)?;
     if candidates.first().is_some_and(|path| path.is_file()) {
-        return resolve_existing_candidate(installation, "Nemu capture DLL", candidates);
+        return resolve_existing_candidate(
+            installation,
+            "Nemu capture DLL",
+            NemuResolutionCountKind::CaptureDllFiles,
+            candidates,
+        );
     }
     let version_candidates = candidates
         .iter()
@@ -152,7 +164,11 @@ fn resolve_mumu_capture_dll_for_adb(
             adb_path.display(),
             installation.root.display(),
             display_paths(&version_candidates)
-        )));
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::SharedAdbMultipleDllVersions)
+                .with_count(NemuResolutionCountKind::DllVersions, version_candidates.len(), false)
+                .with_source(installation.source),
+        ));
     }
     resolve_mumu_capture_dll(installation)
 }
@@ -160,6 +176,7 @@ fn resolve_mumu_capture_dll_for_adb(
 fn ensure_mumu_backend_version_matches(
     adb_path: &Path,
     capture_dll_path: &Path,
+    source: MumuInstallSource,
 ) -> DeviceResult<()> {
     let Some(adb_version) = mumu_version_dir_from_path(adb_path) else {
         return Ok(());
@@ -170,7 +187,9 @@ fn ensure_mumu_backend_version_matches(
             adb_path.display(),
             adb_version.display(),
             capture_dll_path.display()
-        )));
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::DllVersionMissing).with_source(source),
+        ));
     };
     if path_key(&adb_version) == path_key(&dll_version) {
         return Ok(());
@@ -181,10 +200,26 @@ fn ensure_mumu_backend_version_matches(
         adb_version.display(),
         capture_dll_path.display(),
         dll_version.display()
-    )))
+    )).with_nemu_resolution_context_if_absent(
+        NemuResolutionContext::new(NemuResolutionReason::VersionMismatch).with_source(source),
+    ))
 }
 
 pub(crate) fn resolve_mumu_backend_paths(
+    configured_adb: Option<PathBuf>,
+    explicit_root: Option<PathBuf>,
+    explicit_dll: Option<PathBuf>,
+) -> DeviceResult<Option<MumuBackendPaths>> {
+    let adb_class = configured_adb
+        .as_deref()
+        .map(|path| nemu_configured_adb_class(Some(path)));
+    let has_root = explicit_root.is_some();
+    let has_dll = explicit_dll.is_some();
+    resolve_mumu_backend_paths_inner(configured_adb, explicit_root, explicit_dll)
+        .map_err(|error| error.with_nemu_resolution_provenance(adb_class, has_root, has_dll))
+}
+
+fn resolve_mumu_backend_paths_inner(
     configured_adb: Option<PathBuf>,
     explicit_root: Option<PathBuf>,
     explicit_dll: Option<PathBuf>,
@@ -237,7 +272,10 @@ pub(crate) fn resolve_mumu_backend_paths(
                     "configured ADB {} does not identify the selected MuMu installation root {}; ADB and Nemu capture must share one installation identity",
                     path.display(),
                     installation.root.display()
-                ))
+                )).with_nemu_resolution_context_if_absent(
+                    NemuResolutionContext::new(NemuResolutionReason::ConfiguredAdbIdentityUnrecognized)
+                        .with_source(installation.source),
+                )
             })?;
             ensure_same_install_root("configured ADB", &root, &installation)?;
             path
@@ -251,7 +289,11 @@ pub(crate) fn resolve_mumu_backend_paths(
                     "configured Nemu IPC DLL {} is outside selected MuMu installation root {}",
                     path.display(),
                     installation.root.display()
-                )));
+                ))
+                .with_nemu_resolution_context_if_absent(
+                    NemuResolutionContext::new(NemuResolutionReason::DllOutsideRoot)
+                        .with_source(installation.source),
+                ));
             }
             if let Some(root) = dll_root {
                 ensure_same_install_root("configured Nemu IPC DLL", &root, &installation)?;
@@ -260,7 +302,7 @@ pub(crate) fn resolve_mumu_backend_paths(
         }
         None => resolve_mumu_capture_dll_for_adb(&installation, &adb_path)?,
     };
-    ensure_mumu_backend_version_matches(&adb_path, &capture_dll_path)?;
+    ensure_mumu_backend_version_matches(&adb_path, &capture_dll_path, installation.source)?;
 
     Ok(Some(MumuBackendPaths {
         installation,
@@ -277,7 +319,14 @@ pub(crate) fn resolve_mumu_backend_paths_for_running_target(
     explicit_dll: Option<PathBuf>,
 ) -> DeviceResult<MumuBackendPaths> {
     let executable =
-        crate::discovery::running_mumu_executable_for_target(target_serial, explicit_instance_id)?;
+        crate::discovery::running_mumu_executable_for_target(target_serial, explicit_instance_id)
+            .map_err(|error| {
+            error.with_nemu_resolution_provenance(
+                Some(nemu_configured_adb_class(Some(&configured_adb))),
+                explicit_root.is_some(),
+                explicit_dll.is_some(),
+            )
+        })?;
     resolve_mumu_backend_paths_for_running_executable(
         configured_adb,
         executable,
@@ -292,6 +341,24 @@ fn resolve_mumu_backend_paths_for_running_executable(
     explicit_root: Option<PathBuf>,
     explicit_dll: Option<PathBuf>,
 ) -> DeviceResult<MumuBackendPaths> {
+    let adb_class = Some(nemu_configured_adb_class(Some(&configured_adb)));
+    let has_root = explicit_root.is_some();
+    let has_dll = explicit_dll.is_some();
+    resolve_mumu_backend_paths_for_running_executable_inner(
+        configured_adb,
+        running_executable,
+        explicit_root,
+        explicit_dll,
+    )
+    .map_err(|error| error.with_nemu_resolution_provenance(adb_class, has_root, has_dll))
+}
+
+fn resolve_mumu_backend_paths_for_running_executable_inner(
+    configured_adb: PathBuf,
+    running_executable: PathBuf,
+    explicit_root: Option<PathBuf>,
+    explicit_dll: Option<PathBuf>,
+) -> DeviceResult<MumuBackendPaths> {
     let configured_adb = canonicalize_backend_file(&configured_adb, "configured ADB executable")?;
     let running_executable =
         canonicalize_backend_file(&running_executable, "selected running MuMu executable")?;
@@ -299,7 +366,10 @@ fn resolve_mumu_backend_paths_for_running_executable(
         DeviceError::fatal(format!(
             "selected running MuMu executable has invalid topology and does not identify an installation root: {}",
             running_executable.display()
-        ))
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::RunningExecutableTopologyInvalid)
+                .with_source(MumuInstallSource::RunningProcess),
+        )
     })?;
     let installation = explicit_installation(running_root, MumuInstallSource::RunningProcess)?;
 
@@ -316,14 +386,21 @@ fn resolve_mumu_backend_paths_for_running_executable(
                     "configured Nemu IPC DLL {} is outside selected MuMu installation root {}",
                     path.display(),
                     installation.root.display()
-                )));
+                ))
+                .with_nemu_resolution_context_if_absent(
+                    NemuResolutionContext::new(NemuResolutionReason::DllOutsideRoot)
+                        .with_source(installation.source),
+                ));
             }
             let dll_root = mumu_root_from_capture_dll(&path).ok_or_else(|| {
                 DeviceError::fatal(format!(
                     "configured Nemu IPC DLL has invalid topology under selected MuMu installation root {}: {}",
                     installation.root.display(),
                     path.display()
-                ))
+                )).with_nemu_resolution_context_if_absent(
+                    NemuResolutionContext::new(NemuResolutionReason::DllVersionMissing)
+                        .with_source(installation.source),
+                )
             })?;
             ensure_same_install_root("configured Nemu IPC DLL", &dll_root, &installation)?;
             path
@@ -333,11 +410,15 @@ fn resolve_mumu_backend_paths_for_running_executable(
                 DeviceError::fatal(format!(
                     "selected running MuMu executable has invalid topology and no nx_device/<version> identity: {}",
                     running_executable.display()
-                ))
+                )).with_nemu_resolution_context_if_absent(
+                    NemuResolutionContext::new(NemuResolutionReason::RunningVersionMissing)
+                        .with_source(installation.source),
+                )
             })?;
             resolve_existing_candidate(
                 &installation,
                 "Nemu capture DLL matching selected running MuMu version",
+                NemuResolutionCountKind::CaptureDllFiles,
                 vec![
                     version_dir
                         .join("shell")
@@ -364,7 +445,10 @@ fn ensure_running_mumu_version_matches(
         DeviceError::fatal(format!(
             "selected running MuMu executable has invalid topology and no nx_device/<version> identity: {}",
             running_executable.display()
-        ))
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::RunningVersionMissing)
+                .with_source(MumuInstallSource::RunningProcess),
+        )
     })?;
     let dll_version = mumu_version_dir_from_path(capture_dll_path).ok_or_else(|| {
         DeviceError::fatal(format!(
@@ -372,7 +456,10 @@ fn ensure_running_mumu_version_matches(
             running_executable.display(),
             running_version.display(),
             capture_dll_path.display()
-        ))
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::DllVersionMissing)
+                .with_source(MumuInstallSource::RunningProcess),
+        )
     })?;
     if path_key(&running_version) == path_key(&dll_version) {
         return Ok(());
@@ -383,7 +470,21 @@ fn ensure_running_mumu_version_matches(
         running_version.display(),
         capture_dll_path.display(),
         dll_version.display()
-    )))
+    )).with_nemu_resolution_context_if_absent(
+        NemuResolutionContext::new(NemuResolutionReason::VersionMismatch)
+            .with_source(MumuInstallSource::RunningProcess),
+    ))
+}
+
+pub(crate) fn nemu_configured_adb_class(path: Option<&Path>) -> NemuConfiguredAdbClass {
+    match path.filter(|path| !path.as_os_str().is_empty()) {
+        None => NemuConfiguredAdbClass::Absent,
+        Some(path) if mumu_version_dir_from_path(path).is_some() => {
+            NemuConfiguredAdbClass::VersionedMumu
+        }
+        Some(path) if mumu_root_from_path(path).is_some() => NemuConfiguredAdbClass::SharedMumu,
+        Some(_) => NemuConfiguredAdbClass::Generic,
+    }
 }
 
 pub(crate) fn mumu_adb_candidates(root: &Path) -> DeviceResult<Vec<PathBuf>> {
@@ -462,6 +563,7 @@ pub(crate) fn path_is_within_mumu_root(path: &Path, root: &Path) -> bool {
 fn resolve_existing_candidate(
     installation: &MumuInstallation,
     label: &str,
+    count_kind: NemuResolutionCountKind,
     candidates: Vec<PathBuf>,
 ) -> DeviceResult<PathBuf> {
     if let Some(path) = candidates.iter().find(|path| path.is_file()) {
@@ -472,7 +574,11 @@ fn resolve_existing_candidate(
                 "MuMu {label} resolved outside selected installation root {}: {}",
                 root.display(),
                 path.display()
-            )));
+            ))
+            .with_nemu_resolution_context_if_absent(
+                NemuResolutionContext::new(NemuResolutionReason::CandidateOutsideRoot)
+                    .with_source(installation.source),
+            ));
         }
         return Ok(path);
     }
@@ -481,7 +587,11 @@ fn resolve_existing_candidate(
         installation.source.as_str(),
         installation.root.display(),
         display_paths(&candidates)
-    )))
+    )).with_nemu_resolution_context_if_absent(
+        NemuResolutionContext::new(NemuResolutionReason::CandidateAbsent)
+            .with_count(count_kind, 0, false)
+            .with_source(installation.source),
+    ))
 }
 
 fn select_unique_installation(
@@ -498,7 +608,15 @@ fn select_unique_installation(
             "MuMu installation discovery is ambiguous for source={}: {}; configure ACTINGCOMMAND_NEMU_FOLDER, ACTINGCOMMAND_ADB_PATH, or an explicit backend path",
             source.as_str(),
             display_paths(&roots)
-        )));
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(if roots.is_empty() {
+                NemuResolutionReason::InstallationAbsent
+            } else {
+                NemuResolutionReason::InstallationAmbiguous
+            })
+                .with_count(NemuResolutionCountKind::InstallationRoots, roots.len(), false)
+                .with_source(source),
+        ));
     }
     let root = roots.into_iter().next().expect("one root");
     Ok(MumuInstallation { root, source })
@@ -535,7 +653,9 @@ fn ensure_same_install_root(
         "{label} belongs to MuMu installation root {}, not selected root {}; ADB and Nemu capture must share one installation identity",
         root.display(),
         installation.root.display()
-    )))
+    )).with_nemu_resolution_context_if_absent(
+        NemuResolutionContext::new(NemuResolutionReason::RootMismatch).with_source(installation.source),
+    ))
 }
 
 fn canonicalize_backend_file(path: &Path, label: &str) -> DeviceResult<PathBuf> {
@@ -717,6 +837,178 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn nemu_resolution_diagnostic_preserves_reason_count_and_source() {
+        let temp = TempRoot::new("resolution-context");
+        let root = temp.path().join("MuMuPlayer-One");
+        let other = temp.path().join("MuMuPlayer-Two");
+        let shared_adb = root.join("nx_main/adb.exe");
+        let versioned_adb = root.join("nx_device/15.0/shell/adb.exe");
+        let old_dll = root.join("nx_device/12.0/shell/sdk/external_renderer_ipc.dll");
+        let new_dll = root.join("nx_device/15.0/shell/sdk/external_renderer_ipc.dll");
+        let executable = root.join("nx_device/15.0/shell/MuMuNxDevice.exe");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        for file in [
+            &shared_adb,
+            &versioned_adb,
+            &old_dll,
+            &new_dll,
+            &executable,
+            &generic_adb,
+        ] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+        fs::create_dir_all(&other).expect("other installation");
+
+        let shared = resolve_mumu_backend_paths(Some(shared_adb.clone()), None, None)
+            .expect_err("multiple DLL versions");
+        assert!(shared.message().contains("ambiguous for shared ADB"));
+        assert_eq!(
+            shared.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::SharedAdbMultipleDllVersions)
+                    .with_count(NemuResolutionCountKind::DllVersions, 2, false)
+                    .with_source(MumuInstallSource::ConfiguredBackendPath)
+                    .with_provenance(Some(NemuConfiguredAdbClass::SharedMumu), false, false),
+            )
+        );
+        let roots = select_unique_installation(
+            vec![root.clone(), other.clone()],
+            MumuInstallSource::VendorEnumeration,
+        )
+        .expect_err("multiple installation roots");
+        assert_eq!(
+            roots.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::InstallationAmbiguous)
+                    .with_count(NemuResolutionCountKind::InstallationRoots, 2, false)
+                    .with_source(MumuInstallSource::VendorEnumeration),
+            )
+        );
+        let mismatch = resolve_mumu_backend_paths(Some(shared_adb), Some(other.clone()), None)
+            .expect_err("configured root mismatch");
+        assert!(mismatch.message().contains("not selected root"));
+        assert_eq!(
+            mismatch.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::RootMismatch)
+                    .with_source(MumuInstallSource::ExplicitFolder)
+                    .with_provenance(Some(NemuConfiguredAdbClass::SharedMumu), true, false),
+            )
+        );
+        let version = resolve_mumu_backend_paths(Some(versioned_adb), None, Some(old_dll.clone()))
+            .expect_err("configured version mismatch");
+        assert_eq!(
+            version.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::VersionMismatch)
+                    .with_source(MumuInstallSource::ConfiguredBackendPath)
+                    .with_provenance(Some(NemuConfiguredAdbClass::VersionedMumu), false, true),
+            )
+        );
+        let identity = resolve_mumu_backend_paths(
+            Some(generic_adb.clone()),
+            Some(root.clone()),
+            Some(new_dll),
+        )
+        .expect_err("configured identity mismatch");
+        assert_eq!(
+            identity.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::ConfiguredAdbIdentityUnrecognized)
+                    .with_source(MumuInstallSource::ExplicitFolder)
+                    .with_provenance(Some(NemuConfiguredAdbClass::Generic), true, true),
+            )
+        );
+        let target = resolve_mumu_backend_paths_for_running_executable(
+            generic_adb,
+            executable.clone(),
+            None,
+            Some(old_dll),
+        )
+        .expect_err("selected running version mismatch");
+        assert_eq!(
+            target.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::VersionMismatch)
+                    .with_source(MumuInstallSource::RunningProcess)
+                    .with_provenance(Some(NemuConfiguredAdbClass::Generic), false, true),
+            )
+        );
+        let missing = crate::discovery::running_mumu_executable_for_target_from_processes(
+            "127.0.0.1:16448",
+            None,
+            &[],
+        )
+        .expect_err("missing selected process");
+        assert_eq!(
+            missing.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::TargetProcessAbsent)
+                    .with_count(NemuResolutionCountKind::MatchedTargetProcesses, 0, false)
+                    .with_source(MumuInstallSource::RunningProcess),
+            )
+        );
+        let processes = (1..=3)
+            .map(|process_id| crate::DeviceDiscoveryProcess {
+                process_id,
+                name: "MuMuNxDevice.exe".to_string(),
+                executable_path: Some(executable.clone()),
+                command_line: Some("MuMuNxDevice.exe -v 2".to_string()),
+            })
+            .collect::<Vec<_>>();
+        let ambiguous = crate::discovery::running_mumu_executable_for_target_from_processes(
+            "127.0.0.1:16448",
+            None,
+            &processes,
+        )
+        .expect_err("ambiguous selected process");
+        assert_eq!(
+            ambiguous.nemu_resolution_context(),
+            Some(
+                NemuResolutionContext::new(NemuResolutionReason::TargetProcessAmbiguous)
+                    .with_count(NemuResolutionCountKind::MatchedTargetProcesses, 2, true)
+                    .with_source(MumuInstallSource::RunningProcess),
+            )
+        );
+        for error in [
+            &shared, &roots, &mismatch, &version, &identity, &target, &missing, &ambiguous,
+        ] {
+            let message = error
+                .diagnostic_message()
+                .expect("typed diagnostic rendering");
+            assert!(message.len() <= 1_024);
+            assert!(!message.contains(['/', '\\', ':']));
+            assert!(!message.chars().any(char::is_control));
+            assert_eq!(error.severity(), crate::DeviceErrorSeverity::Fatal);
+            assert!(!error.is_fallback_eligible());
+        }
+        assert!(
+            mismatch
+                .diagnostic_message()
+                .expect("message")
+                .contains("count=unavailable")
+        );
+        let original = DeviceError::fatal("complete lower detail")
+            .with_diagnostic(crate::DeviceErrorCategory::Native, "nemu.native.failure")
+            .with_diagnostic_context(
+                "nemu_ipc",
+                "capture",
+                crate::DeviceErrorSensitivity::Sensitive,
+            );
+        let preserved = original.clone().with_nemu_resolution_context_if_absent(
+            shared.nemu_resolution_context().expect("context"),
+        );
+        assert_eq!(preserved.message(), original.message());
+        assert_eq!(preserved.diagnostic(), original.diagnostic());
+        assert_eq!(
+            preserved.diagnostic_context(),
+            original.diagnostic_context()
+        );
+        assert_eq!(preserved.diagnostic_message(), None);
     }
 
     #[test]

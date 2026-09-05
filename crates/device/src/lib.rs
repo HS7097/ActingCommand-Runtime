@@ -8,6 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod adb;
+mod adb_bounds_diagnostic;
 pub mod capture;
 pub mod discovery;
 pub mod emulator;
@@ -16,11 +17,13 @@ pub mod input;
 pub mod maatouch;
 pub mod minitouch;
 mod mumu;
+mod nemu_diagnostic;
 pub mod replay;
 pub mod touch;
 mod vendor_stdio;
 
 pub use adb::*;
+pub use adb_bounds_diagnostic::*;
 pub use capture::*;
 pub use discovery::*;
 pub use emulator::*;
@@ -28,6 +31,8 @@ pub use error::*;
 pub use input::*;
 pub use maatouch::*;
 pub use minitouch::*;
+pub use mumu::MumuInstallSource;
+pub use nemu_diagnostic::*;
 pub use replay::*;
 pub use touch::*;
 pub use vendor_stdio::vendor_stdio_session_diagnostic;

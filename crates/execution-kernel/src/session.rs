@@ -431,7 +431,7 @@ fn close_after_failure(
 ) -> ExecutionKernelError {
     match close_input(input) {
         Ok(()) => primary,
-        Err(secondary) => ExecutionKernelError::merge(primary, secondary),
+        Err(secondary) => ExecutionKernelError::merge_cleanup(primary, secondary),
     }
 }
 

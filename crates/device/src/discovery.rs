@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::mumu::{mumu_adb_candidates, mumu_root_from_path};
-use crate::{DeviceError, DeviceResult};
+use crate::{
+    DeviceError, DeviceResult, MumuInstallSource, NemuResolutionContext, NemuResolutionCountKind,
+    NemuResolutionReason,
+};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
@@ -194,7 +197,7 @@ pub(crate) fn running_mumu_executable_for_target(
     )
 }
 
-fn running_mumu_executable_for_target_from_processes(
+pub(crate) fn running_mumu_executable_for_target_from_processes(
     target_serial: &str,
     explicit_instance_id: Option<i32>,
     processes: &[DeviceDiscoveryProcess],
@@ -249,7 +252,11 @@ fn running_mumu_executable_for_target_from_processes(
         return Err(DeviceError::fatal(format!(
             "running MuMu process selection is ambiguous for target serial={target_serial} instance_id={target_instance_id}; matches: {}",
             bounded_process_diagnostics(&details)
-        )));
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::TargetProcessAmbiguous)
+                .with_count(NemuResolutionCountKind::MatchedTargetProcesses, matches.len(), true)
+                .with_source(MumuInstallSource::RunningProcess),
+        ));
     }
 
     if let Some(process) = matches.into_iter().next() {
@@ -257,7 +264,11 @@ fn running_mumu_executable_for_target_from_processes(
             DeviceError::fatal(format!(
                 "running MuMu process has invalid topology for target serial={target_serial} instance_id={target_instance_id}: process_id={} has no executable path",
                 process.process_id
-            ))
+            )).with_nemu_resolution_context_if_absent(
+                NemuResolutionContext::new(NemuResolutionReason::TargetExecutableMissing)
+                    .with_count(NemuResolutionCountKind::MatchedTargetProcesses, 1, false)
+                    .with_source(MumuInstallSource::RunningProcess),
+            )
         })?;
         return Ok(executable.clone());
     }
@@ -266,7 +277,11 @@ fn running_mumu_executable_for_target_from_processes(
     let invalid = bounded_process_diagnostics(&invalid);
     Err(DeviceError::fatal(format!(
         "no running MuMu process matches target serial={target_serial} instance_id={target_instance_id}; observed=[{observed}]; invalid=[{invalid}]"
-    )))
+    )).with_nemu_resolution_context_if_absent(
+        NemuResolutionContext::new(NemuResolutionReason::TargetProcessAbsent)
+            .with_count(NemuResolutionCountKind::MatchedTargetProcesses, 0, false)
+            .with_source(MumuInstallSource::RunningProcess),
+    ))
 }
 
 fn target_mumu_instance_id(
@@ -278,20 +293,26 @@ fn target_mumu_instance_id(
         return serial_instance_id.ok_or_else(|| {
             DeviceError::fatal(format!(
                 "MuMu target identity has invalid topology: cannot derive an instance id from serial {target_serial}"
-            ))
+            )).with_nemu_resolution_context_if_absent(
+                NemuResolutionContext::new(NemuResolutionReason::TargetIdentityUnavailable),
+            )
         });
     };
     let explicit_instance_id = u16::try_from(explicit_instance_id).map_err(|_| {
         DeviceError::fatal(format!(
             "MuMu target identity has invalid explicit instance id {explicit_instance_id} for serial {target_serial}"
-        ))
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::TargetIdentityInvalid),
+        )
     })?;
     if let Some(serial_instance_id) = serial_instance_id
         && serial_instance_id != explicit_instance_id
     {
         return Err(DeviceError::fatal(format!(
             "MuMu target identity conflicts: serial {target_serial} resolves to instance_id={serial_instance_id} but explicit instance_id={explicit_instance_id}"
-        )));
+        )).with_nemu_resolution_context_if_absent(
+            NemuResolutionContext::new(NemuResolutionReason::TargetIdentityMismatch),
+        ));
     }
     Ok(explicit_instance_id)
 }

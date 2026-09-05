@@ -566,11 +566,11 @@ fn retry_backoff_ms(task: &TaskSpec, attempt: u16) -> u64 {
         .min(task.next_run_clamp_ms)
 }
 
-const fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
-const fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 

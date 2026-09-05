@@ -86,7 +86,11 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         (None, None) => monitor(host),
         _ => {
             let error = ActingdError::process("policy_bootstrap_state_invalid");
-            match host.close() {
+            let recorded = error
+                .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
+            let closed = host.close();
+            recorded?;
+            match closed {
                 Ok(()) => Err(error),
                 Err(close_error) => Err(ActingdError::runtime(close_error)),
             }
@@ -335,14 +339,16 @@ fn validate_scheduled_execution_mode(
 fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
     loop {
         thread::sleep(HEALTH_POLL_INTERVAL);
-        match host.fatal_error().map_err(ActingdError::runtime)? {
-            Some(error) => {
+        match host.fatal_error() {
+            Ok(Some(error)) | Err(error) => {
+                let error = ActingdError::runtime(error);
+                let recorded = error
+                    .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
                 let close_error = host.close().err();
-                return Err(
-                    close_error.map_or_else(|| ActingdError::runtime(error), ActingdError::runtime)
-                );
+                recorded?;
+                return Err(close_error.map_or(error, ActingdError::runtime));
             }
-            None => continue,
+            Ok(None) => continue,
         }
     }
 }
@@ -443,6 +449,35 @@ fn monitor_policy(
     drop(client);
     drop(policy);
     drop(control);
+    finish_policy_closeout(
+        host,
+        monitor_result,
+        shutdown_result,
+        driver_result,
+        recorded,
+    )
+}
+
+fn finish_policy_closeout(
+    host: Arc<RuntimeHost>,
+    monitor_result: Result<(), ActingdError>,
+    shutdown_result: Result<(), ActingdError>,
+    driver_result: Result<(), ActingdError>,
+    mut recorded: Result<(), ActingdError>,
+) -> Result<(), ActingdError> {
+    for (stage, result) in [
+        (RuntimeLifecycleFailureStage::PolicyDriver, &driver_result),
+        (
+            RuntimeLifecycleFailureStage::PolicyControl,
+            &shutdown_result,
+        ),
+    ] {
+        if recorded.is_ok()
+            && let Err(error) = result
+        {
+            recorded = error.record_lifecycle_failure(&host, stage);
+        }
+    }
     let close_result = close_policy_host(host);
     let result = if close_result.as_ref().err().is_some_and(|error| {
         error
@@ -461,8 +496,12 @@ fn close_policy_host(host: Arc<RuntimeHost>) -> Result<(), ActingdError> {
     match Arc::try_unwrap(host) {
         Ok(host) => host.close().map_err(ActingdError::runtime),
         Err(host) => {
+            let error = ActingdError::process("policy_driver_reference_leaked");
+            let recorded = error
+                .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::RetainedReference);
             drop(host);
-            Err(ActingdError::process("policy_driver_reference_leaked"))
+            recorded?;
+            Err(error)
         }
     }
 }
@@ -1148,6 +1187,7 @@ struct ActingdError {
     code: &'static str,
     runtime: Option<Box<RuntimeHostError>>,
     client: Option<Box<RuntimeClientError>>,
+    recorded: std::sync::atomic::AtomicBool,
 }
 
 impl ActingdError {
@@ -1156,6 +1196,9 @@ impl ActingdError {
         host: &RuntimeHost,
         stage: RuntimeLifecycleFailureStage,
     ) -> Result<(), ActingdError> {
+        if self.recorded.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
         let failure = if let Some(error) = &self.runtime {
             RuntimeLifecycleFailure::Host(error)
         } else if let Some(error) = &self.client {
@@ -1169,7 +1212,10 @@ impl ActingdError {
             RuntimeLifecycleFailure::Process { code: self.code }
         };
         host.record_lifecycle_failure(stage, failure)
-            .map_err(ActingdError::runtime)
+            .map_err(ActingdError::runtime)?;
+        self.recorded
+            .store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
 
     const fn config(code: &'static str) -> Self {
@@ -1177,6 +1223,7 @@ impl ActingdError {
             code,
             runtime: None,
             client: None,
+            recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1185,6 +1232,7 @@ impl ActingdError {
             code,
             runtime: None,
             client: None,
+            recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1193,6 +1241,7 @@ impl ActingdError {
             code: error.code(),
             runtime: Some(Box::new(error)),
             client: None,
+            recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1201,6 +1250,7 @@ impl ActingdError {
             code: error.code(),
             runtime: None,
             client: Some(Box::new(error)),
+            recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -1248,6 +1298,98 @@ mod tests {
     use tempfile::TempDir;
     use zip::ZipWriter;
     use zip::write::FileOptions;
+
+    #[test]
+    fn policy_closeout_records_unrecorded_results_before_close() {
+        use actingcommand_contract::{EventPayload, EventType, RuntimePayload};
+        use actingcommand_ledger::{GlobalLedger, GlobalLedgerReadOnlyConfig};
+        let root = TempDir::new().expect("tempdir");
+        let ids = IdentifierIssuer::new().expect("issuer");
+        let host = Arc::new(
+            RuntimeHost::start(
+                RuntimeHostConfig::new(root.path(), b"policy-closeout-test-salt"),
+                Arc::new(RecordingDeviceProvider {
+                    instance_id: *ids.mint_instance_id().expect("instance").transport(),
+                    input_count: Arc::new(AtomicUsize::new(0)),
+                    capture_count: Arc::new(AtomicUsize::new(0)),
+                }),
+            )
+            .expect("host"),
+        );
+        let retained = Arc::clone(&host);
+        let monitor = ActingdError::process("policy_driver_stopped");
+        monitor
+            .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor)
+            .expect("monitor fact");
+        monitor
+            .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor)
+            .expect("same occurrence");
+        let result = finish_policy_closeout(
+            host,
+            Err(monitor),
+            Err(ActingdError::process("policy_control_shutdown_failed")),
+            Err(ActingdError::process("policy_driver_panicked")),
+            Ok(()),
+        );
+        assert_eq!(
+            result.expect_err("driver primary").code,
+            "policy_driver_panicked"
+        );
+        let ledger = GlobalLedger::open_read_only(
+            GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+            |_| None,
+        )
+        .expect("read-only before final close");
+        let events = ledger.query(&EventQuery::default());
+        let failures = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Runtime(RuntimePayload::Failed(payload)) => {
+                    Some(payload.lifecycle_failure().expect("typed lifecycle"))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(failures.len(), 4);
+        for code in [
+            "policy_driver_stopped",
+            "policy_control_shutdown_failed",
+            "policy_driver_panicked",
+            "policy_driver_reference_leaked",
+        ] {
+            assert_eq!(
+                failures
+                    .iter()
+                    .filter(|failure| failure.code() == code)
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event_type() != EventType::RuntimeLifecycleObserved)
+        );
+        drop(ledger);
+        Arc::try_unwrap(retained)
+            .ok()
+            .expect("sole retained host")
+            .close()
+            .expect("final close");
+        let ledger = GlobalLedger::open_read_only(
+            GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+            |_| None,
+        )
+        .expect("read-only after close");
+        assert_eq!(
+            ledger
+                .events()
+                .iter()
+                .filter(|event| event.event_type() == EventType::RuntimeFailed)
+                .count(),
+            4
+        );
+    }
 
     #[test]
     fn process_adapter_requires_exact_config_argument() {
