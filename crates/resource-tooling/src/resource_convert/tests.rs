@@ -1177,6 +1177,17 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
                         {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}},
                         {"id":"depot","template":"assets/DEPOT.png","region":{"mode":"rect","rect":{"x":5,"y":6,"width":7,"height":8}}}
                     ],
+                    "color_probes": [{
+                        "id": "color/selected",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
+                        "expected": [10, 20, 30]
+                    }],
+                    "verify_templates": [{
+                        "id": "template/selected",
+                        "template": "assets/SELECTED.png",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
+                        "threshold": 0.97
+                    }],
                     "entry_page": "home",
                     "target_page": "depot",
                     "operations": [
@@ -1196,9 +1207,10 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
                     "entry_page": "any",
                     "target_page": "home",
                     "page_rules": {
-                        "depot": {"forbidden": ["page/home", "page/recruit"]},
+                        "home": {"required": ["page/home", "color/selected", "template/selected"]},
+                        "depot": {"forbidden": ["page/home", "color/selected", "template/selected", "page/recruit", "color/nonresident", "template/nonresident"]},
                         "recruit": {"forbidden": ["page/home"]},
-                        "quickswitch_dropdown": {"optional": ["page/depot", "page/friends"]}
+                        "quickswitch_dropdown": {"optional": ["page/depot", "color/selected", "template/selected", "page/friends", "color/nonresident", "template/nonresident"]}
                     },
                     "operations": [
                         {"id":"open_quickswitch","from":"any","to":"quickswitch_dropdown"},
@@ -1227,6 +1239,10 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
 
     assert!(rules.get("recruit").is_none());
     assert_eq!(
+        rules.get("home").unwrap().get("required").unwrap(),
+        &json!(["page/home", "color/selected", "template/selected"])
+    );
+    assert_eq!(
         rules
             .get("depot")
             .unwrap()
@@ -1234,7 +1250,11 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
             .unwrap()
             .as_array()
             .unwrap(),
-        &vec![json!("page/home")]
+        &vec![
+            json!("page/home"),
+            json!("color/selected"),
+            json!("template/selected"),
+        ]
     );
     assert_eq!(
         rules
@@ -1244,7 +1264,11 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
             .unwrap()
             .as_array()
             .unwrap(),
-        &vec![json!("page/depot")]
+        &vec![
+            json!("page/depot"),
+            json!("color/selected"),
+            json!("template/selected"),
+        ]
     );
 }
 
