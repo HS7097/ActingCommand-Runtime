@@ -12381,7 +12381,7 @@ impl HostShared {
                     return Err(RequestFailure {
                         state: RuntimeReceiptState::Failed,
                         terminal: None,
-                        error: Box::new(error.error),
+                        error: Box::new(error.error.into_fatal()),
                         poison_runtime: true,
                         task_failure: error.task_failure.map(|evidence| *evidence),
                     });
@@ -12578,7 +12578,7 @@ impl HostShared {
                     return Err(RequestFailure {
                         state: RuntimeReceiptState::Failed,
                         terminal: None,
-                        error: Box::new(error.error),
+                        error: Box::new(error.error.into_fatal()),
                         poison_runtime: true,
                         task_failure: None,
                     });
@@ -12669,9 +12669,10 @@ impl HostShared {
         if error.lifecycle.resource_quiescence != Some(ResourceQuiescence::Unconfirmed) {
             return Ok(false);
         }
+        let error = error.clone().into_fatal();
         let lifecycle_result = self.append_lifecycle_failure(
             RuntimeLifecycleFailureStage::SessionClose,
-            RuntimeLifecycleFailure::Host(error),
+            RuntimeLifecycleFailure::Host(&error),
             links,
             None,
         );
@@ -12703,7 +12704,7 @@ impl HostShared {
             return Ok(());
         }
         lock(&self.scheduler, "begin_destructive_resource_close")?
-            .begin_destructive_step(token, connection_id, self.monotonic_ms()?)
+            .begin_resource_close(token, connection_id, self.monotonic_ms()?)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
                     "begin_destructive_resource_close",
@@ -16165,7 +16166,7 @@ impl RequestFailure {
         Self {
             state: RuntimeReceiptState::Failed,
             terminal,
-            error: Box::new(error),
+            error: Box::new(error.into_fatal()),
             poison_runtime: true,
             task_failure: None,
         }
@@ -16179,7 +16180,7 @@ impl RequestFailure {
         Self {
             state: RuntimeReceiptState::Failed,
             terminal: self.terminal,
-            error: Box::new(error),
+            error: Box::new(error.into_fatal()),
             poison_runtime: true,
             task_failure: self.task_failure,
         }
@@ -16267,6 +16268,7 @@ impl ActionFailure {
     }
 
     fn poison(error: RuntimeHostError) -> Self {
+        let error = error.into_fatal();
         Self {
             diagnostic: DiagnosticCode::RuntimeDiagnostic,
             effect: EffectDisposition::Indeterminate,

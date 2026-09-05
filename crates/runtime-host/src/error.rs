@@ -61,6 +61,11 @@ impl RuntimeHostError {
         &self.projection
     }
 
+    pub(crate) fn into_fatal(mut self) -> Self {
+        self.projection.fatal = true;
+        self
+    }
+
     pub(crate) fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
         self.lifecycle.diagnostic_detail.as_deref()
     }
@@ -124,7 +129,7 @@ impl RuntimeHostError {
             }
             _ => RuntimeErrorCode::RuntimeFatal,
         };
-        Self {
+        let runtime_error = Self {
             code: error.code(),
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
@@ -137,6 +142,11 @@ impl RuntimeHostError {
                 native_detail: None,
                 resource_quiescence: error.resource_quiescence(),
             }),
+        };
+        if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+            runtime_error.into_fatal()
+        } else {
+            runtime_error
         }
     }
 
