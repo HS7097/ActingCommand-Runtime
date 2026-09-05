@@ -1107,6 +1107,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         internal_dependencies(leaf),
         vec![
             "actingcommand-artifact-store".to_owned(),
+            "actingcommand-contract".to_owned(),
             "actingcommand-ledger".to_owned()
         ],
         "forensic leaf internal dependency boundary changed"

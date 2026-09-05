@@ -913,6 +913,234 @@ fn performance_pages_preserve_typed_facts_and_read_only_boundaries() {
     assert_eq!(tree_bytes(state_root), corrupt_before);
 }
 
+// Specification: #257-B8-STABILITY-READ-v1, leaf projection and bounded failures.
+#[test]
+fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
+    use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
+    use actingcommand_contract::{ArtifactIssuePolicy, ArtifactKind, ArtifactProducer};
+    use actingcommand_ledger_forensics::MAX_STABILITY_ARTIFACT_BYTES;
+    struct Sink<'a>(&'a GlobalLedger);
+    impl ArtifactEventSink for Sink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            self.0
+                .append(
+                    draft
+                        .sanitize(&Sha256SecretFingerprinter::new(b"stability-spec").expect("salt"))
+                        .expect("sanitize"),
+                )
+                .map(|_| ())
+                .map_err(|e| ArtifactStoreError::fatal(e.code(), "append_spec", "append failed"))
+        }
+    }
+    let ids = IdentifierIssuer::new().expect("ids");
+    let task = ids.mint_task_id().expect("task");
+    let run_id = ids.mint_run_id().expect("run");
+    let action = ids.mint_action_id().expect("action");
+    let previous = ids.mint_frame_id().expect("previous");
+    let current = ids.mint_frame_id().expect("current");
+    let fact = serde_json::json!({
+        "schema_version": "actingcommand.runtime.contained-task-stability-comparison.v1",
+        "task_id": task.transport(), "run_id": run_id.transport(), "action_id": action.transport(),
+        "step_index": 3, "operation_label": "neutral-step", "previous_frame_id": previous.transport(),
+        "current_frame_id": current.transport(), "region": {"x": 7, "y": 11, "width": 23, "height": 29},
+        "comparison_mode": "exact_pixels_v1", "comparison_parameters": {}, "result": "unchanged",
+        "prior_consecutive_unchanged": 1, "new_consecutive_unchanged": 2,
+        "consecutive_unchanged_threshold": 2, "terminal_reason": "consecutive_unchanged_threshold_reached"
+    });
+    let mut cases = vec![("valid".to_owned(), fact.clone(), None)];
+    let mut changed = fact.clone();
+    changed["result"] = "changed".into();
+    changed["new_consecutive_unchanged"] = 0.into();
+    changed["terminal_reason"] = serde_json::Value::Null;
+    cases.push(("changed".to_owned(), changed, None));
+    for field in fact
+        .as_object()
+        .expect("object")
+        .keys()
+        .filter(|key| *key != "schema_version")
+    {
+        let mut missing = fact.clone();
+        missing.as_object_mut().expect("object").remove(field);
+        cases.push((
+            format!("missing-{field}"),
+            missing,
+            Some("stability_fields_invalid"),
+        ));
+    }
+    for (name, field, value, code) in [
+        (
+            "version",
+            "schema_version",
+            serde_json::json!("actingcommand.runtime.contained-task-stability-comparison.v9"),
+            "stability_schema_unsupported",
+        ),
+        (
+            "schema",
+            "schema_version",
+            serde_json::Value::Null,
+            "diagnostic_schema_unavailable",
+        ),
+        (
+            "mode",
+            "comparison_mode",
+            serde_json::json!("unsupported"),
+            "stability_fields_invalid",
+        ),
+        (
+            "parameters",
+            "comparison_parameters",
+            serde_json::json!({"secret": "PRIVATE_DIAGNOSTIC"}),
+            "stability_fields_invalid",
+        ),
+        (
+            "links",
+            "run_id",
+            serde_json::json!(ids.mint_run_id().expect("other run").transport()),
+            "stability_source_links_mismatch",
+        ),
+    ] {
+        let mut value_fact = fact.clone();
+        value_fact[field] = value;
+        cases.push((name.to_owned(), value_fact, Some(code)));
+    }
+    cases.push(("unrelated".to_owned(), serde_json::json!({"schema_version":"another.diagnostic.v1", "private":"PRIVATE_DIAGNOSTIC"}), None));
+    for (name, code) in [
+        ("missing", "artifact_read_failed"),
+        ("directory", "artifact_read_failed"),
+        ("hash", "artifact_hash_mismatch"),
+        ("declared-large", "stability_artifact_too_large"),
+        ("stored-large", "stability_artifact_too_large"),
+        ("redaction", "artifact_redaction_pending"),
+        ("invalid-json", "diagnostic_json_invalid"),
+    ] {
+        cases.push((name.to_owned(), fact.clone(), Some(code)));
+    }
+    for (name, expected, error) in cases {
+        let temp = tempfile::tempdir().expect("state");
+        let root = temp.path();
+        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+            root.join("ledger"),
+            "stability-spec",
+        ))
+        .expect("ledger");
+        let prefix = ledger
+            .append(event(EventLinksDraft::default()))
+            .expect("prefix");
+        let store = ArtifactStore::open(root).expect("store");
+        let mut bytes = serde_json::to_vec(&expected).expect("JSON");
+        if name == "declared-large" {
+            bytes.resize(MAX_STABILITY_ARTIFACT_BYTES as usize + 1, b' ');
+        }
+        if name == "invalid-json" {
+            bytes = b"{PRIVATE_DIAGNOSTIC".to_vec();
+        }
+        let stored = store
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    &bytes,
+                    ArtifactWriteContext::new(
+                        ArtifactLinksDraft::default()
+                            .with_run_id(run_id)
+                            .with_frame_id(current),
+                        EventLinksDraft::default()
+                            .with_task_id(task)
+                            .with_run_id(run_id)
+                            .with_action_id(action)
+                            .with_frame_id(current),
+                        1_752_147_200_100,
+                    ),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CapturePipeline,
+                        RetentionClass::DebugFull,
+                        if name == "redaction" {
+                            ArtifactRedactionState::Pending
+                        } else {
+                            ArtifactRedactionState::NotRequired
+                        },
+                    ),
+                ),
+                &mut Sink(&ledger),
+            )
+            .expect("artifact");
+        ledger.close().expect("close");
+        if name == "missing" || name == "directory" {
+            fs::remove_file(stored.path()).expect("remove fixture object");
+        }
+        if name == "directory" {
+            fs::create_dir(stored.path()).expect("directory fixture");
+        }
+        if name == "hash" {
+            bytes[0] ^= 1;
+            fs::write(stored.path(), &bytes).expect("corrupt fixture");
+        }
+        if name == "stored-large" {
+            fs::write(
+                stored.path(),
+                vec![b' '; MAX_STABILITY_ARTIFACT_BYTES as usize + 1],
+            )
+            .expect("oversized fixture");
+        }
+        let before = tree_bytes(root);
+        let ForensicOutput::Machine(ForensicReport::Stability(report)) = run(
+            ForensicRequest::stability(root, ForensicEventsRequest::default()),
+        )
+        .expect("report") else {
+            panic!("stability report");
+        };
+        assert_eq!(tree_bytes(root), before, "{name}");
+        let serialized = serde_json::to_string(&report).expect("output");
+        assert!(!serialized.contains("PRIVATE_DIAGNOSTIC"), "{name}");
+        assert_eq!(report.artifact_byte_limit, MAX_STABILITY_ARTIFACT_BYTES);
+        if let Some(code) = error {
+            assert_eq!(report.failures[0].code, code, "{name}");
+            assert!(!report.window_complete, "{name}");
+            assert!(report.rows.is_empty(), "{name}");
+            assert_eq!(
+                report.failures[0].artifact,
+                stored.reference().project(true)
+            );
+            if [
+                "missing",
+                "directory",
+                "hash",
+                "declared-large",
+                "stored-large",
+            ]
+            .contains(&name.as_str())
+            {
+                assert!(report.corrupt_tail.is_some(), "{name}");
+                assert_eq!(report.scanned_through_sequence, prefix.sequence());
+                assert_eq!(report.failures[0].source_sequence, None);
+            } else {
+                assert_eq!(
+                    report.failures[0].source_sequence,
+                    Some(prefix.sequence() + 1)
+                );
+            }
+        } else if name == "unrelated" {
+            assert_eq!(report.matched_count, 0);
+            assert_eq!(report.scanned_diagnostic_count, 2);
+            assert!(report.rows.is_empty());
+            assert!(report.window_complete);
+        } else {
+            assert!(report.failures.is_empty(), "{name}");
+            assert_eq!(report.matched_count, 2);
+            assert_eq!(report.rows.len(), 2);
+            for (offset, row) in report.rows.iter().enumerate() {
+                assert_eq!(
+                    serde_json::to_value(&row.comparison).expect("comparison"),
+                    expected
+                );
+                assert_eq!(row.event.sequence(), prefix.sequence() + offset as u64 + 1);
+                assert_eq!(row.artifact, stored.reference().project(true));
+                assert_eq!(row.event.links().action_id(), Some(action.transport()));
+            }
+            assert!(report.window_complete);
+        }
+    }
+}
+
 fn event(links: EventLinksDraft) -> SanitizedEventDraft {
     EventDraft::new(
         event_id(),

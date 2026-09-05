@@ -3,7 +3,12 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_artifact_store::{
-    ArtifactStoreError, EvidenceManifest, verify_evidence_archive, verify_projected_read_only,
+    ArtifactStoreError, EvidenceManifest, read_projected_verified, verify_evidence_archive,
+    verify_projected_read_only,
+};
+use actingcommand_contract::{
+    ActionId, ArtifactKind, ArtifactRedactionState, FrameId, ProjectedArtifactReference, RunId,
+    TaskId,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerReadOnly,
@@ -11,7 +16,7 @@ use actingcommand_ledger::{
     GlobalLedgerWriterMetadataObservation, PerformanceLedgerSample, PerformanceProcessOwnership,
     PerformanceProcessSummary, PersistedEvent,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::error::Error;
 use std::fmt::{self, Write as _};
@@ -19,6 +24,9 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_FORENSIC_EVENTS: usize = 1_024;
 pub const MAX_FORENSIC_REPAIRS: usize = 1_024;
+pub const MAX_STABILITY_ARTIFACT_BYTES: u64 = 16 * 1_024;
+const STABILITY_SCHEMA: &str = "actingcommand.runtime.contained-task-stability-comparison.v1";
+const STABILITY_SCHEMA_PREFIX: &str = "actingcommand.runtime.contained-task-stability-comparison.";
 pub const EVIDENCE_ARCHIVE_VERIFIER: &str = "actingcommand_artifact_store::verify_evidence_archive";
 const MAX_REQUEST_ID_BYTES: usize = 256;
 
@@ -31,6 +39,7 @@ pub enum ForensicCommand {
     Repairs,
     Export,
     Performance,
+    Stability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +176,14 @@ impl ForensicRequest {
             events,
         }
     }
+
+    pub fn stability(state_root: impl AsRef<Path>, events: ForensicEventsRequest) -> Self {
+        Self {
+            state_root: state_root.as_ref().to_path_buf(),
+            command: ForensicCommand::Stability,
+            events,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -175,6 +192,7 @@ pub enum ForensicReport {
     Open(OpenReport),
     Events(EventsReport),
     Performance(Box<PerformanceReport>),
+    Stability(Box<StabilityReport>),
     Chain(ChainReport),
     Tail(TailReport),
     Repairs(RepairsReport),
@@ -258,6 +276,74 @@ pub struct PerformanceReport {
     pub window_complete: bool,
     pub corrupt_tail: Option<CorruptTailReport>,
     pub gaps: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StabilityReport {
+    pub after_sequence: u64,
+    pub through_sequence: u64,
+    pub limit: usize,
+    pub artifact_byte_limit: u64,
+    pub snapshot_latest_sequence: u64,
+    pub scanned_event_count: usize,
+    pub scanned_through_sequence: u64,
+    pub scanned_diagnostic_count: usize,
+    pub matched_count: usize,
+    pub rows: Vec<StabilityRow>,
+    pub failures: Vec<StabilityFailure>,
+    pub next_after_sequence: Option<u64>,
+    pub has_more: bool,
+    pub window_complete: bool,
+    pub corrupt_tail: Option<CorruptTailReport>,
+    pub gaps: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StabilityRow {
+    pub event: PersistedEvent,
+    pub artifact: ProjectedArtifactReference,
+    pub comparison: StabilityComparison,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StabilityFailure {
+    // Snapshot verification may fail before the source event is admitted.
+    pub source_sequence: Option<u64>,
+    pub artifact: ProjectedArtifactReference,
+    pub code: &'static str,
+    pub operation: &'static str,
+}
+
+/// Read-side representation of the existing v1 artifact, without derived values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StabilityComparison {
+    pub schema_version: String,
+    pub task_id: TaskId,
+    pub run_id: RunId,
+    pub action_id: ActionId,
+    pub step_index: u32,
+    pub operation_label: String,
+    pub previous_frame_id: FrameId,
+    pub current_frame_id: FrameId,
+    pub region: StabilityRegion,
+    pub comparison_mode: String,
+    pub comparison_parameters: serde_json::Map<String, serde_json::Value>,
+    pub result: String,
+    pub prior_consecutive_unchanged: u32,
+    pub new_consecutive_unchanged: u32,
+    pub consecutive_unchanged_threshold: u32,
+    #[serde(deserialize_with = "Option::<String>::deserialize")]
+    pub terminal_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StabilityRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -406,9 +492,32 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     }
 
     let artifact_root = request.state_root.clone();
+    let stability = request.command == ForensicCommand::Stability;
+    let mut artifact_failures = Vec::new();
     let snapshot = GlobalLedger::open_read_only(
         GlobalLedgerReadOnlyConfig::new(request.state_root.join("ledger")),
-        |reference| verify_projected_read_only(&artifact_root, reference).ok(),
+        |reference| {
+            let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
+                check_stability_artifact_size(&artifact_root, reference)
+                    .and_then(|()| verify_projected_read_only(&artifact_root, reference))
+            } else {
+                verify_projected_read_only(&artifact_root, reference)
+            };
+            match verified {
+                Ok(verified) => Some(verified),
+                Err(error) => {
+                    if stability {
+                        artifact_failures.push(StabilityFailure {
+                            source_sequence: None,
+                            artifact: reference.clone(),
+                            code: error.code(),
+                            operation: error.operation(),
+                        });
+                    }
+                    None
+                }
+            }
+        },
     )
     .map_err(map_ledger_error)?;
 
@@ -421,6 +530,14 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ))),
         ForensicCommand::Performance => Ok(ForensicOutput::Machine(ForensicReport::Performance(
             Box::new(performance_report(&snapshot, request.events)?),
+        ))),
+        ForensicCommand::Stability => Ok(ForensicOutput::Machine(ForensicReport::Stability(
+            Box::new(stability_report(
+                &snapshot,
+                &artifact_root,
+                request.events,
+                artifact_failures,
+            )?),
         ))),
         ForensicCommand::Chain { request_id } => {
             let query =
@@ -614,6 +731,203 @@ fn performance_report(
         corrupt_tail,
         gaps,
     })
+}
+
+fn check_stability_artifact_size(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+) -> Result<(), ArtifactStoreError> {
+    reference.validate().map_err(|_| {
+        ArtifactStoreError::fatal(
+            "artifact_reference_invalid",
+            "bound_stability_artifact",
+            "invalid reference",
+        )
+    })?;
+    if reference.byte_count > MAX_STABILITY_ARTIFACT_BYTES {
+        return Err(ArtifactStoreError::fatal(
+            "stability_artifact_too_large",
+            "bound_stability_artifact",
+            "declared bytes exceed limit",
+        ));
+    }
+    let key = reference.object_key().ok_or_else(|| {
+        ArtifactStoreError::fatal(
+            "artifact_object_key_missing",
+            "bound_stability_artifact",
+            "missing object key",
+        )
+    })?;
+    // ArtifactStore publishes immutable objects. Check actual size as well as the
+    // ledger declaration before its canonical reader allocates the object bytes.
+    let metadata = std::fs::metadata(root.join(key)).map_err(|_| {
+        ArtifactStoreError::fatal(
+            "artifact_read_failed",
+            "bound_stability_artifact",
+            "cannot inspect referenced object",
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(ArtifactStoreError::fatal(
+            "artifact_read_failed",
+            "bound_stability_artifact",
+            "referenced object is not a file",
+        ));
+    }
+    if metadata.len() > MAX_STABILITY_ARTIFACT_BYTES {
+        return Err(ArtifactStoreError::fatal(
+            "stability_artifact_too_large",
+            "bound_stability_artifact",
+            "stored bytes exceed limit",
+        ));
+    }
+    Ok(())
+}
+
+fn stability_report(
+    snapshot: &GlobalLedgerReadOnly,
+    root: &Path,
+    request: ForensicEventsRequest,
+    mut failures: Vec<StabilityFailure>,
+) -> ForensicResult<StabilityReport> {
+    let through_sequence = request
+        .through_sequence
+        .unwrap_or_else(|| snapshot.latest_sequence());
+    if request.after_sequence > through_sequence || request.filter != ForensicEventFilter::default()
+    {
+        return Err(ForensicError::new(
+            "invalid_event_page",
+            "validate_stability_page",
+            "stability pages require an ordered sequence range and no event filters",
+        ));
+    }
+    let events = snapshot.events();
+    let start = events.partition_point(|event| event.sequence() <= request.after_sequence);
+    let end = events.partition_point(|event| event.sequence() <= through_sequence);
+    let page_end = start + (end - start).min(request.limit);
+    let page = &events[start..page_end];
+    let scanned_through_sequence = page
+        .last()
+        .map_or(request.after_sequence, PersistedEvent::sequence);
+    let mut rows = Vec::new();
+    let mut scanned_diagnostic_count = 0;
+    let mut matched_count = 0;
+    for event in page {
+        for artifact in event
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+        {
+            scanned_diagnostic_count += 1;
+            let reference = artifact.project(true);
+            let result = project_stability(root, event, &reference, &mut matched_count);
+            match result {
+                Ok(Some(comparison)) => rows.push(StabilityRow {
+                    event: event.clone(),
+                    artifact: reference,
+                    comparison,
+                }),
+                Ok(None) => {}
+                Err(error) => failures.push(StabilityFailure {
+                    source_sequence: Some(event.sequence()),
+                    artifact: reference,
+                    code: error.code(),
+                    operation: error.operation(),
+                }),
+            }
+        }
+    }
+    let has_more = page_end < end;
+    let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
+    let mut gaps = Vec::new();
+    if !snapshot.storage_snapshot().read_complete {
+        gaps.push("storage_read_incomplete");
+    }
+    if corrupt_tail.is_some() {
+        gaps.push("corrupt_tail");
+    }
+    if through_sequence > snapshot.latest_sequence() {
+        gaps.push("through_sequence_unavailable");
+    }
+    if !failures.is_empty() {
+        gaps.push("artifact_projection_failed");
+    }
+    Ok(StabilityReport {
+        after_sequence: request.after_sequence,
+        through_sequence,
+        limit: request.limit,
+        artifact_byte_limit: MAX_STABILITY_ARTIFACT_BYTES,
+        snapshot_latest_sequence: snapshot.latest_sequence(),
+        scanned_event_count: page.len(),
+        scanned_through_sequence,
+        scanned_diagnostic_count,
+        matched_count,
+        rows,
+        failures,
+        next_after_sequence: has_more.then_some(scanned_through_sequence),
+        has_more,
+        window_complete: !has_more && gaps.is_empty(),
+        corrupt_tail,
+        gaps,
+    })
+}
+
+fn project_stability(
+    root: &Path,
+    event: &PersistedEvent,
+    reference: &ProjectedArtifactReference,
+    matched_count: &mut usize,
+) -> ForensicResult<Option<StabilityComparison>> {
+    let invalid = |code| {
+        ForensicError::new(
+            code,
+            "project_stability_artifact",
+            "diagnostic could not be projected; raw content withheld",
+        )
+    };
+    if reference.redaction_state == ArtifactRedactionState::Pending {
+        return Err(invalid("artifact_redaction_pending"));
+    }
+    check_stability_artifact_size(root, reference).map_err(map_artifact_store_error)?;
+    let bytes = read_projected_verified(root, reference).map_err(map_artifact_store_error)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| invalid("diagnostic_json_invalid"))?;
+    let schema = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| invalid("diagnostic_schema_unavailable"))?;
+    if !schema.starts_with(STABILITY_SCHEMA_PREFIX) {
+        return Ok(None);
+    }
+    *matched_count += 1;
+    if schema != STABILITY_SCHEMA {
+        return Err(invalid("stability_schema_unsupported"));
+    }
+    let comparison: StabilityComparison =
+        serde_json::from_value(value).map_err(|_| invalid("stability_fields_invalid"))?;
+    if comparison.comparison_mode != "exact_pixels_v1"
+        || !comparison.comparison_parameters.is_empty()
+        || !matches!(comparison.result.as_str(), "changed" | "unchanged")
+        || comparison.terminal_reason.as_deref().is_some_and(|value| {
+            !matches!(
+                value,
+                "consecutive_unchanged_threshold_reached" | "max_steps_reached"
+            )
+        })
+    {
+        return Err(invalid("stability_fields_invalid"));
+    }
+    let links = event.links();
+    if links.task_id() != Some(&comparison.task_id)
+        || links.run_id() != Some(&comparison.run_id)
+        || links.action_id() != Some(&comparison.action_id)
+        || links.frame_id() != Some(&comparison.current_frame_id)
+        || reference.run_id.as_ref() != Some(&comparison.run_id)
+        || reference.frame_id.as_ref() != Some(&comparison.current_frame_id)
+    {
+        return Err(invalid("stability_source_links_mismatch"));
+    }
+    Ok(Some(comparison))
 }
 
 fn event_matches_filter(

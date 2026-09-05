@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false, features = ["evidence-archive"] }
 actingcommand-ledger = { workspace = true }
 serde = { workspace = true }
