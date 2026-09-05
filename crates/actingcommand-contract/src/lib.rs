@@ -15,6 +15,7 @@ pub mod game_engine;
 pub mod interaction;
 pub mod lab;
 pub mod monitor;
+pub mod page_projection;
 pub mod performance;
 pub mod primitive;
 pub mod project;

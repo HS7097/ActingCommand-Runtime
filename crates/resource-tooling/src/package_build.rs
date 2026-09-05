@@ -510,6 +510,7 @@ fn build_task_outputs(
         navigation: selected.navigation,
         index: selected.index,
         primitives: selected.primitives,
+        projection_metadata: selected.projection_metadata,
     })
 }
 
@@ -804,6 +805,12 @@ fn add_generated_outputs(
         &format!("resources/navigation/{stem}.navigation.json"),
         outputs.navigation.clone(),
     )?;
+    if let Some(metadata) = &outputs.projection_metadata {
+        entries.add_json(
+            &format!("resources/navigation/{stem}.projection.json"),
+            metadata.clone(),
+        )?;
+    }
     entries.add_json(
         "resources/operations/operations.index.json",
         outputs.index.clone(),
@@ -1508,6 +1515,21 @@ fn validate_generated_package(
     } else {
         None
     };
+    if let Some(navigation) = &navigation {
+        actingcommand_pack_containment::validate_projection_resources(
+            &manifest,
+            resource_root,
+            &pack,
+            &pages,
+            navigation,
+            |path| match entries.files.get(path) {
+                Some(PackagePayload::Buffered { bytes, .. }) => Some(bytes.as_slice()),
+                _ => None,
+            },
+            entries.files.keys().map(String::as_str),
+        )
+        .map_err(containment_error)?;
+    }
 
     Ok(LabPackageValidationResponse {
         zip: path.display().to_string(),
@@ -4169,6 +4191,67 @@ mod tests {
     use zip::ZipArchive;
 
     #[test]
+    fn page_projection_conversion_and_package_preserve_validated_annotations() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write_fixture_repo(root);
+        for task in ["operator_task", "return_home"] {
+            let path = root.join(format!("operations/{task}/task.json"));
+            let mut data: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            data["game"] = json!("neutral");
+            data["server_scope"] = json!(["test"]);
+            fs::write(path, serde_json::to_vec(&data).unwrap()).unwrap();
+        }
+        fs::rename(
+            root.join("navigation/arknights.cn.navigation.json"),
+            root.join("navigation/neutral.test.navigation.json"),
+        )
+        .unwrap();
+        let converter = OperationConverter::load(root, None, None, None).unwrap();
+        let base = converter.build_all().unwrap();
+        let source = json!({"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":base.pack["targets"][0]["id"],"privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[{"page_id":base.pages["pages"][0]["id"],"completeness":"complete","scope":"declared panel","source":"neutral/spec","visible_rect":null}]});
+        let source_path = root.join("navigation/neutral.test.projection.json");
+        fs::write(&source_path, serde_json::to_vec(&source).unwrap()).unwrap();
+        let outputs = converter.build_all().unwrap();
+        assert_eq!(outputs.projection_metadata.as_ref(), Some(&source));
+        let selected = converter
+            .build_selected(&["return_home".to_string()])
+            .unwrap();
+        assert!(selected.projection_metadata.is_some());
+        let mut entries = PackageEntries::new(root, 64 * 1024 * 1024).unwrap();
+        add_generated_outputs(&mut entries, &converter, &outputs).unwrap();
+        entries.add_manifest("operator_task").unwrap();
+        let manifest = parse_buffered_json(&entries, "resources/manifest.json").unwrap();
+        let admitted = actingcommand_pack_containment::validate_projection_resources(
+            &manifest,
+            "resources",
+            "resources/recognition/neutral.test.pack.json",
+            "resources/recognition/neutral.test.pages.json",
+            "resources/navigation/neutral.test.navigation.json",
+            |path| match entries.files.get(path) {
+                Some(PackagePayload::Buffered { bytes, .. }) => Some(bytes.as_slice()),
+                _ => None,
+            },
+            entries.files.keys().map(String::as_str),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            admitted.target_privacy(source["targets"][0]["target_id"].as_str().unwrap()),
+            Some(actingcommand_contract::page_projection::Privacy::Personal)
+        );
+        let mut bad = source;
+        bad["targets"][0]["target_id"] = json!("unknown-target");
+        fs::write(source_path, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(converter.build_all().is_err());
+        assert!(
+            converter
+                .build_selected(&["return_home".to_string()])
+                .is_err()
+        );
+    }
+
+    #[test]
     fn task_timeout_and_max_steps_projection_are_bounded_and_byte_exact_when_absent() {
         let absent = control_json(
             "neutral.test.fixture",
@@ -5465,6 +5548,7 @@ mod tests {
     #[test]
     fn generated_environment_snapshot_covers_every_output_document() {
         let mut outputs = ConvertOutputs {
+            projection_metadata: None,
             pack: json!({"value": "{env:theme}"}),
             pages: json!({"value": "{env:theme}"}),
             navigation: json!({"value": "{env:theme}"}),

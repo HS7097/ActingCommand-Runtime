@@ -195,34 +195,13 @@ fn observe_success_projection_is_invariant_to_fixture_root_length() {
         short.envelope.pointer("/data/frame_path"),
         Some(&json!("observe.png"))
     );
+    let expected = read_goldens()
+        .into_iter()
+        .find(|case| case.name == "observe_success")
+        .expect("observe success golden");
     assert_eq!(
         short.envelope.pointer("/data/observation"),
-        Some(&json!({
-            "elements": [{
-                "actionable": true,
-                "availability": "available",
-                "blocked_reason": null,
-                "id": "[\"navigate\",\"\",\"navigation\",\"home_to_target\"]",
-                "label": "home_to_target",
-                "resource_id": "home_to_target",
-                "role": "navigate",
-                "safety": "unclassified"
-            }],
-            "matched": true,
-            "metrics": {
-                "emitted_count": 1,
-                "entry_count": 1,
-                "matched_page_count": 1,
-                "recognized_count": 1,
-                "sample_scope": "single_offline_observation"
-            },
-            "omitted_count": 0,
-            "page": "arknights/home",
-            "page_window_completeness": "unknown",
-            "schema_version": "actingcommand.lab.offline_observation.v1",
-            "standby": false,
-            "truncated": false
-        }))
+        expected.envelope.pointer("/data/observation")
     );
     assert_eq!(
         short.envelope.pointer("/data/actions"),
