@@ -7,8 +7,9 @@ use actingcommand_artifact_store::{
     verify_projected_read_only,
 };
 use actingcommand_contract::{
-    ActionId, ArtifactKind, ArtifactRedactionState, FrameId, ProjectedArtifactReference, RunId,
-    TaskId,
+    ActionId, ArtifactKind, ArtifactRedactionState, EFFECTIVE_CONFIGURATION_SCHEMA,
+    EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventType, FrameId,
+    MAX_EFFECTIVE_CONFIGURATION_BYTES, ProjectedArtifactReference, RunId, TaskId,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerReadOnly,
@@ -493,20 +494,25 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
 
     let artifact_root = request.state_root.clone();
     let stability = request.command == ForensicCommand::Stability;
+    let export = request.command == ForensicCommand::Export;
     let mut artifact_failures = Vec::new();
     let snapshot = GlobalLedger::open_read_only(
         GlobalLedgerReadOnlyConfig::new(request.state_root.join("ledger")),
         |reference| {
             let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
-                check_stability_artifact_size(&artifact_root, reference)
-                    .and_then(|()| verify_projected_read_only(&artifact_root, reference))
+                check_diagnostic_artifact_size(
+                    &artifact_root,
+                    reference,
+                    MAX_STABILITY_ARTIFACT_BYTES,
+                )
+                .and_then(|()| verify_projected_read_only(&artifact_root, reference))
             } else {
                 verify_projected_read_only(&artifact_root, reference)
             };
             match verified {
                 Ok(verified) => Some(verified),
                 Err(error) => {
-                    if stability {
+                    if stability || export {
                         artifact_failures.push(StabilityFailure {
                             source_sequence: None,
                             artifact: reference.clone(),
@@ -520,6 +526,14 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         },
     )
     .map_err(map_ledger_error)?;
+
+    if export && let Some(failure) = artifact_failures.first() {
+        return Err(ForensicError::new(
+            failure.code,
+            failure.operation,
+            "export artifact verification failed; raw content withheld",
+        ));
+    }
 
     match request.command {
         ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(open_report(
@@ -564,7 +578,10 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
                 repairs: repair_reports(&snapshot),
             },
         ))),
-        ForensicCommand::Export => Ok(ForensicOutput::Human(render_export(&snapshot)?)),
+        ForensicCommand::Export => Ok(ForensicOutput::Human(render_export(
+            &snapshot,
+            &artifact_root,
+        )?)),
     }
 }
 
@@ -733,9 +750,10 @@ fn performance_report(
     })
 }
 
-fn check_stability_artifact_size(
+fn check_diagnostic_artifact_size(
     root: &Path,
     reference: &ProjectedArtifactReference,
+    byte_limit: u64,
 ) -> Result<(), ArtifactStoreError> {
     reference.validate().map_err(|_| {
         ArtifactStoreError::fatal(
@@ -744,9 +762,13 @@ fn check_stability_artifact_size(
             "invalid reference",
         )
     })?;
-    if reference.byte_count > MAX_STABILITY_ARTIFACT_BYTES {
+    if reference.byte_count > byte_limit {
         return Err(ArtifactStoreError::fatal(
-            "stability_artifact_too_large",
+            if byte_limit == MAX_STABILITY_ARTIFACT_BYTES {
+                "stability_artifact_too_large"
+            } else {
+                "effective_configuration_too_large"
+            },
             "bound_stability_artifact",
             "declared bytes exceed limit",
         ));
@@ -774,9 +796,13 @@ fn check_stability_artifact_size(
             "referenced object is not a file",
         ));
     }
-    if metadata.len() > MAX_STABILITY_ARTIFACT_BYTES {
+    if metadata.len() > byte_limit {
         return Err(ArtifactStoreError::fatal(
-            "stability_artifact_too_large",
+            if byte_limit == MAX_STABILITY_ARTIFACT_BYTES {
+                "stability_artifact_too_large"
+            } else {
+                "effective_configuration_too_large"
+            },
             "bound_stability_artifact",
             "stored bytes exceed limit",
         ));
@@ -888,7 +914,8 @@ fn project_stability(
     if reference.redaction_state == ArtifactRedactionState::Pending {
         return Err(invalid("artifact_redaction_pending"));
     }
-    check_stability_artifact_size(root, reference).map_err(map_artifact_store_error)?;
+    check_diagnostic_artifact_size(root, reference, MAX_STABILITY_ARTIFACT_BYTES)
+        .map_err(map_artifact_store_error)?;
     let bytes = read_projected_verified(root, reference).map_err(map_artifact_store_error)?;
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| invalid("diagnostic_json_invalid"))?;
@@ -1092,7 +1119,7 @@ fn repair_report(repair: &GlobalLedgerRepairRecord) -> RepairReport {
     }
 }
 
-fn render_export(snapshot: &GlobalLedgerReadOnly) -> ForensicResult<String> {
+fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult<String> {
     let open = open_report(snapshot);
     let repairs = repair_reports(snapshot);
     let query = serde_json::from_value(json!({})).map_err(query_error)?;
@@ -1171,9 +1198,140 @@ fn render_export(snapshot: &GlobalLedgerReadOnly) -> ForensicResult<String> {
         .expect("write String");
     }
     writeln!(report, "events:").expect("write String");
-    for event in events {
+    for event in &events {
         let line = serde_json::to_string(&event).map_err(serialization_error)?;
         writeln!(report, "- {line}").expect("write String");
+    }
+    writeln!(report, "effective_configuration:").expect("write String");
+    for event in &events {
+        if event.event_type() != EventType::ArtifactVerified {
+            continue;
+        }
+        for artifact in event
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+        {
+            let reference = artifact.project(true);
+            let invalid = |code| {
+                ForensicError::new(
+                    code,
+                    "project_effective_configuration",
+                    "configuration could not be projected; raw content withheld",
+                )
+            };
+            if reference.redaction_state == ArtifactRedactionState::Pending {
+                return Err(invalid("artifact_redaction_pending"));
+            }
+            check_diagnostic_artifact_size(root, &reference, MAX_EFFECTIVE_CONFIGURATION_BYTES)
+                .map_err(map_artifact_store_error)?;
+            let bytes =
+                read_projected_verified(root, &reference).map_err(map_artifact_store_error)?;
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|_| invalid("diagnostic_json_invalid"))?;
+            let Some(schema) = value
+                .get("schema_version")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            if !schema.starts_with("actingcommand.runtime.effective-task-configuration.") {
+                continue;
+            }
+            if schema != EFFECTIVE_CONFIGURATION_SCHEMA {
+                return Err(invalid("effective_configuration_schema_unsupported"));
+            }
+            let record: EffectiveConfigurationRecord = serde_json::from_value(value)
+                .map_err(|_| invalid("effective_configuration_fields_invalid"))?;
+            let links = event.links();
+            if links.request_id() != Some(&record.request_id)
+                || links.task_id() != Some(&record.task_id)
+                || links.run_id() != Some(&record.run_id)
+                || links.frame_id() != record.frame_id.as_ref()
+                || links.action_id() != record.action_id.as_ref()
+                || reference.run_id.as_ref() != Some(&record.run_id)
+                || reference.frame_id.as_ref() != record.frame_id.as_ref()
+            {
+                return Err(invalid("effective_configuration_source_links_mismatch"));
+            }
+            match &record.facts {
+                EffectiveConfigurationFacts::Initial {
+                    capture_observed,
+                    input_observed,
+                    host_remaining_ms,
+                    host_deadline_monotonic_ms,
+                    observed_at_monotonic_ms,
+                    ..
+                } => {
+                    if *capture_observed
+                        || *input_observed
+                        || record.source_sequence.is_some()
+                        || record.frame_id.is_some()
+                        || record.action_id.is_some()
+                        || *host_remaining_ms
+                            != host_deadline_monotonic_ms.saturating_sub(*observed_at_monotonic_ms)
+                    {
+                        return Err(invalid("effective_configuration_fields_invalid"));
+                    }
+                }
+                EffectiveConfigurationFacts::EntryRecovery { package_sha256, .. } => {
+                    if package_sha256.len() != 64
+                        || !package_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        || record.source_sequence.is_some()
+                        || record.frame_id.is_some()
+                        || record.action_id.is_some()
+                    {
+                        return Err(invalid("effective_configuration_fields_invalid"));
+                    }
+                }
+                EffectiveConfigurationFacts::Capture { .. }
+                | EffectiveConfigurationFacts::Input { .. } => {
+                    let sequence = record
+                        .source_sequence
+                        .ok_or_else(|| invalid("effective_configuration_source_missing"))?;
+                    let source = snapshot
+                        .events()
+                        .iter()
+                        .find(|source| {
+                            source.sequence() == sequence && source.sequence() < event.sequence()
+                        })
+                        .ok_or_else(|| invalid("effective_configuration_source_missing"))?;
+                    let capture =
+                        matches!(record.facts, EffectiveConfigurationFacts::Capture { .. });
+                    if source.links().request_id() != Some(&record.request_id)
+                        || source.links().run_id() != Some(&record.run_id)
+                        || (capture
+                            && (record.frame_id.is_none()
+                                || source.event_type() != EventType::CaptureRequested
+                                || source.links().frame_id() != record.frame_id.as_ref()))
+                        || (!capture
+                            && (record.action_id.is_none()
+                                || source.event_type() != EventType::InputCommitted
+                                || source.links().action_id() != record.action_id.as_ref()))
+                    {
+                        return Err(invalid("effective_configuration_source_links_mismatch"));
+                    }
+                    if capture
+                        && !snapshot.events().iter().any(|frame| {
+                            frame.event_type() == EventType::ArtifactVerified
+                                && frame.sequence() > sequence
+                                && frame.sequence() < event.sequence()
+                                && frame.links().request_id() == Some(&record.request_id)
+                                && frame.links().run_id() == Some(&record.run_id)
+                                && frame.links().frame_id() == record.frame_id.as_ref()
+                                && frame
+                                    .artifacts()
+                                    .iter()
+                                    .any(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+                        })
+                    {
+                        return Err(invalid("effective_configuration_capture_evidence_missing"));
+                    }
+                }
+            }
+            let line = serde_json::to_string(&json!({"source_sequence":event.sequence(),"artifact":reference,"configuration":record})).map_err(serialization_error)?;
+            writeln!(report, "- {line}").expect("write String");
+        }
     }
     Ok(report)
 }

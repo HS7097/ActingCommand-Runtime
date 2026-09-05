@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct FakeState {
+    input_selection: Option<actingcommand_device::InputSelectionContext>,
+    capture_selection: Option<actingcommand_device::CaptureSelectionContext>,
     input_opens: usize,
     capture_opens: usize,
     input_calls: usize,
@@ -171,6 +173,10 @@ impl FakeInput {
 }
 
 impl InputBackend for FakeInput {
+    fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
+        self.state.lock().expect("state").input_selection.clone()
+    }
+
     fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
         self.execute()
     }
@@ -225,14 +231,17 @@ impl CaptureBackend for FakeCapture {
         if state.fail_capture {
             return Err(DeviceError::transient("private capture failure detail"));
         }
+        let selection = state.capture_selection.clone();
         drop(state);
-        Frame::from_pixels(
+        let mut frame = Frame::from_pixels(
             2,
             1,
             vec![1, 2, 3, 4, 5, 6],
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
-        )
+        )?;
+        frame.selection = selection;
+        Ok(frame)
     }
 }
 
@@ -257,6 +266,20 @@ fn kernel(state: Arc<Mutex<FakeState>>, instances: &[(&str, InstanceId, &str)]) 
 #[test]
 fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     let state = Arc::new(Mutex::new(FakeState::default()));
+    let input_selection = actingcommand_device::InputSelectionContext {
+        backend: actingcommand_device::TouchBackendName::AdbShellInput,
+        serial: "neutral-input-selected".to_owned(),
+    };
+    let capture_selection = actingcommand_device::CaptureSelectionContext {
+        requested: actingcommand_device::CaptureBackendChoice::Adb,
+        configured_adb: "configured-adb".to_owned(),
+        configured_serial: None,
+        resolved_adb: "resolved-adb".to_owned(),
+        selected_serial: "neutral-capture-selected".to_owned(),
+        mumu: None,
+    };
+    state.lock().unwrap().input_selection = Some(input_selection.clone());
+    state.lock().unwrap().capture_selection = Some(capture_selection.clone());
     let instance_id = instance();
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance_id, "private-a")]);
     assert_eq!(
@@ -265,9 +288,10 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     );
     assert_eq!(state.lock().expect("state").input_opens, 0);
 
-    kernel
-        .input("node.a", InputAction::Reset)
+    let selected = kernel
+        .input_prepared("node.a", kernel.prepare_input(InputAction::Reset).unwrap())
         .expect("first input");
+    assert_eq!(selected, Some(input_selection));
     kernel
         .input("node.a", InputAction::Tap { x: 1, y: 2 })
         .expect("second input");
@@ -275,6 +299,8 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     let second = kernel.capture("node.a").expect("second capture");
     assert_eq!((first.width, first.height), (2, 1));
     assert_eq!((second.width, second.height), (2, 1));
+    assert_eq!(first.selection, Some(capture_selection.clone()));
+    assert_eq!(second.selection, Some(capture_selection));
 
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_opens, 1);

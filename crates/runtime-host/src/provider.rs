@@ -161,10 +161,26 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
-        Some(ResolvedExecutionInstance::new(
-            entry.instance_id,
-            &entry.audit_endpoint,
-        ))
+        Some(
+            ResolvedExecutionInstance::new(entry.instance_id, &entry.audit_endpoint)
+                .with_configuration(actingcommand_contract::EffectiveDeviceConfiguration {
+                    input_backend: entry.input.requested.as_str().to_owned(),
+                    capture_backend: entry.capture.requested.as_str().to_owned(),
+                    input_adb: entry.input.adb_config.adb_path.clone(),
+                    capture_adb: entry.capture.adb_config.adb_path.clone(),
+                    configured_serial: entry.input.target.serial.clone(),
+                    resolved_serial: entry.input.target.resolved_serial(),
+                    input_command_timeout_ms: entry.input.adb_config.command_timeout.as_millis(),
+                    capture_command_timeout_ms: entry
+                        .capture
+                        .adb_config
+                        .command_timeout
+                        .as_millis(),
+                    capture_timeout_ms: entry.capture.capture_timeout.as_millis(),
+                    configured_mumu_root: entry.capture.nemu.nemu_folder.clone(),
+                    configured_capture_dll: entry.capture.nemu.dll_path.clone(),
+                }),
+        )
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
@@ -181,7 +197,8 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
-        create_capture_backend(entry.capture.clone()).map(|selected| selected.backend)
+        create_capture_backend(entry.capture.clone())
+            .map(|selected| Box::new(selected) as Box<dyn CaptureBackend>)
     }
 
     fn control_application(

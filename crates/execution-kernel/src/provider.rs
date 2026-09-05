@@ -526,12 +526,23 @@ pub enum ExecutionBackendProvenance {
     FixtureSimulation,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ResolvedExecutionInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
+    configuration: Option<actingcommand_contract::EffectiveDeviceConfiguration>,
 }
+
+impl PartialEq for ResolvedExecutionInstance {
+    fn eq(&self, other: &Self) -> bool {
+        self.instance_id == other.instance_id
+            && self.audit_endpoint == other.audit_endpoint
+            && self.provenance == other.provenance
+    }
+}
+
+impl Eq for ResolvedExecutionInstance {}
 
 impl ResolvedExecutionInstance {
     pub fn new(instance_id: InstanceId, audit_endpoint: impl Into<String>) -> Self {
@@ -539,6 +550,7 @@ impl ResolvedExecutionInstance {
             instance_id,
             audit_endpoint: audit_endpoint.into(),
             provenance: ExecutionBackendProvenance::PhysicalDevice,
+            configuration: None,
         }
     }
 
@@ -547,6 +559,7 @@ impl ResolvedExecutionInstance {
             instance_id,
             audit_endpoint: "fixture-simulation".to_owned(),
             provenance: ExecutionBackendProvenance::FixtureSimulation,
+            configuration: None,
         }
     }
 
@@ -560,6 +573,18 @@ impl ResolvedExecutionInstance {
 
     pub const fn provenance(&self) -> ExecutionBackendProvenance {
         self.provenance
+    }
+
+    pub fn with_configuration(
+        mut self,
+        configuration: actingcommand_contract::EffectiveDeviceConfiguration,
+    ) -> Self {
+        self.configuration = Some(configuration);
+        self
+    }
+
+    pub fn configuration(&self) -> Option<&actingcommand_contract::EffectiveDeviceConfiguration> {
+        self.configuration.as_ref()
     }
 }
 

@@ -25,6 +25,30 @@ use std::path::{Path, PathBuf};
 
 #[test]
 fn forensic_snapshot_commands_are_read_only_and_deterministic() {
+    use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
+    use actingcommand_contract::{
+        ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, InputPayloadDraft,
+    };
+    use serde_json::json;
+    struct ConfigurationSink<'a>(&'a GlobalLedger);
+    impl ArtifactEventSink for ConfigurationSink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            self.0
+                .append(
+                    draft
+                        .sanitize(&Sha256SecretFingerprinter::new(b"configuration-spec").unwrap())
+                        .unwrap(),
+                )
+                .map(|_| ())
+                .map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        error.code(),
+                        "configuration_spec",
+                        "ledger append failed",
+                    )
+                })
+        }
+    }
     let temp = tempfile::tempdir().expect("tempdir");
     let state_root = temp.path();
     let ledger_root = state_root.join("ledger");
@@ -48,6 +72,119 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
             EventLinksDraft::default().with_request_id(request_id),
         ))
         .expect("append second request event");
+    let configuration_request = identifiers.mint_request_id().unwrap();
+    let task = identifiers.mint_task_id().unwrap();
+    let run_id = identifiers.mint_run_id().unwrap();
+    let frame = identifiers.mint_frame_id().unwrap();
+    let action = identifiers.mint_action_id().unwrap();
+    let configuration_links = EventLinksDraft::default()
+        .with_request_id(configuration_request)
+        .with_task_id(task)
+        .with_run_id(run_id);
+    let origin = EventOrigin::new(
+        EventSource::Runtime,
+        OriginModule::Runtime,
+        EventActor::Runtime,
+    );
+    let capture_source = writer
+        .append(
+            EventDraft::new(
+                event_id(),
+                1_752_147_200_001,
+                EventSeverity::Info,
+                origin.clone(),
+                configuration_links.clone().with_frame_id(frame),
+                CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new())
+                    .into(),
+            )
+            .sanitize(&Sha256SecretFingerprinter::new(b"configuration-spec").unwrap())
+            .unwrap(),
+        )
+        .unwrap();
+    let store = ArtifactStore::open(state_root).unwrap();
+    store
+        .put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::CaptureFrame,
+                b"neutral frame bytes",
+                ArtifactWriteContext::new(
+                    ArtifactLinksDraft::default()
+                        .with_run_id(run_id)
+                        .with_frame_id(frame),
+                    configuration_links.clone().with_frame_id(frame),
+                    1_752_147_200_002,
+                ),
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::CaptureStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut ConfigurationSink(&writer),
+        )
+        .unwrap();
+    let input_source = writer
+        .append(
+            EventDraft::new(
+                event_id(),
+                1_752_147_200_003,
+                EventSeverity::Info,
+                origin,
+                configuration_links.clone().with_action_id(action),
+                InputPayloadDraft::committed(
+                    EventAction::InputTap,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&Sha256SecretFingerprinter::new(b"configuration-spec").unwrap())
+            .unwrap(),
+        )
+        .unwrap();
+    let mut configuration_artifacts = Vec::new();
+    for (facts, sequence, frame_id, action_id) in [
+        (
+            json!({"phase":"capture","backend":"nemu_ipc","selection":{"requested_backend":"nemu_ipc","configured_adb":"neutral-configured-adb","configured_serial":null,"resolved_adb":"neutral-resolved-adb","selected_serial":"neutral-selected-capture","mumu":{"root":"neutral-installation","adb_path":"neutral-installation/adb","capture_dll_path":"neutral-installation/capture.dll","source":"running_process"}}}),
+            capture_source.sequence(),
+            Some(frame),
+            None,
+        ),
+        (
+            json!({"phase":"input","selection":{"backend":"adb_shell_input","serial":"neutral-selected-input"}}),
+            input_source.sequence(),
+            Some(frame),
+            Some(action),
+        ),
+    ] {
+        let record = json!({"schema_version":actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA,"request_id":configuration_request.transport(),"task_id":task.transport(),"run_id":run_id.transport(),"frame_id":frame_id.map(|id| *id.transport()),"action_id":action_id.map(|id| *id.transport()),"source_sequence":sequence,"facts":facts});
+        let mut links = configuration_links.clone();
+        let mut artifact_links = ArtifactLinksDraft::default().with_run_id(run_id);
+        if let Some(id) = frame_id {
+            links = links.with_frame_id(id);
+            artifact_links = artifact_links.with_frame_id(id);
+        }
+        if let Some(id) = action_id {
+            links = links.with_action_id(id);
+        }
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let stored = store
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    &bytes,
+                    ArtifactWriteContext::new(artifact_links, links, 1_752_147_200_004),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::ArtifactStore,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut ConfigurationSink(&writer),
+            )
+            .unwrap();
+        configuration_artifacts.push((stored, bytes));
+    }
     writer.close().expect("close repair source");
     append_bytes(&latest_segment(&ledger_root), b"{\"repair\":true");
 
@@ -135,9 +272,47 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
             assert!(report.contains("corrupt_tail: corrupt_segment"));
             assert!(report.contains("repairs:"));
             assert!(report.contains("events:"));
+            assert!(report.contains("effective_configuration:"));
+            assert!(report.contains("neutral-selected-capture"));
+            assert!(report.contains("neutral-selected-input"));
+            assert!(report.contains("running_process"));
+            assert!(report.contains("neutral-installation/capture.dll"));
+            let rows = report
+                .split("effective_configuration:\n")
+                .nth(1)
+                .unwrap()
+                .lines()
+                .map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line.strip_prefix("- ").unwrap())
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(rows.len(), 2);
+            for (row, (stored, _)) in rows.iter().zip(&configuration_artifacts) {
+                assert_eq!(
+                    row["artifact"],
+                    serde_json::to_value(stored.reference().project(true)).unwrap()
+                );
+                assert!(
+                    row["source_sequence"].as_u64().unwrap()
+                        > row["configuration"]["source_sequence"].as_u64().unwrap()
+                );
+            }
         }
         output => panic!("unexpected export output: {output:?}"),
     }
+
+    let (stored, original_bytes) = &configuration_artifacts[0];
+    fs::write(stored.path(), b"corrupt configuration").unwrap();
+    let corrupted = tree_bytes(state_root);
+    assert!(run(ForensicRequest::new(state_root, ForensicCommand::Export)).is_err());
+    assert_eq!(tree_bytes(state_root), corrupted);
+    fs::remove_file(stored.path()).unwrap();
+    let missing = tree_bytes(state_root);
+    assert!(run(ForensicRequest::new(state_root, ForensicCommand::Export)).is_err());
+    assert_eq!(tree_bytes(state_root), missing);
+    fs::write(stored.path(), original_bytes).unwrap();
+    assert_eq!(tree_bytes(state_root), before);
 
     active_writer.close().expect("close active writer");
 }
