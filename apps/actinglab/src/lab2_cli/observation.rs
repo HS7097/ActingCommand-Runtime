@@ -282,8 +282,10 @@ pub(super) fn project(
     if verbose && request.verbosity == ProjectionVerbosity::Min {
         request.verbosity = ProjectionVerbosity::Normal;
     }
-    let requested_fields = request.fields.clone();
+    let mut requested_fields = request.fields.clone();
     if payload.get("facts").is_some() {
+        requested_fields.insert("arbitration".to_string());
+        request.fields.insert("arbitration".to_string());
         request
             .fields
             .extend(["facts", "projection_source", "terminal"].map(str::to_string));
