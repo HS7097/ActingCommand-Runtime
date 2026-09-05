@@ -20,7 +20,17 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
         Ok(output) => match write_output(&output) {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(()) => {
+                if output
+                    .get("official_ocr_fields_projection")
+                    .and_then(|p| p.get("failure"))
+                    .is_some_and(|failure| !failure.is_null())
+                {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                }
+            }
             Err(error) => {
                 eprintln!("FATAL actingctl: {error}");
                 ExitCode::FAILURE

@@ -2,7 +2,8 @@
 
 use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
 use actingcommand_contract::{
-    LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
+    LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
+    OcrFieldsDeclaration, SchedulingOutcomeDeclaration,
 };
 use actingcommand_pack_containment::validate_recognition_metadata;
 use actingcommand_recognition_pack::FsAssetResolver;
@@ -11,6 +12,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -848,10 +850,10 @@ impl OperationConverter {
             }
             if !matches!(
                 bundle.data.get("schema_version").and_then(Value::as_str),
-                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7")
+                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7" | "0.8")
             ) {
                 errors.push(format!(
-                    "{}: unsupported schema_version, expected 0.3, 0.4, 0.5, 0.6, or 0.7",
+                    "{}: unsupported schema_version, expected 0.3 through 0.8",
                     bundle.task_json_path().display()
                 ));
             }
@@ -1975,7 +1977,10 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
 }
 
 fn validate_segmented_swipe_source(bundle: &Bundle, click: &Map<String, Value>) -> CliOutcome<()> {
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(
             "single_touch_drag_with_vertical_brake_v1 requires schema_version '0.7'",
         ));
@@ -2238,7 +2243,7 @@ fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.6" | "0.7")
+        Some("0.6" | "0.7" | "0.8")
     ) {
         return Err(CliError::package_invalid(format!(
             "{}: ocr_targets requires schema_version '0.6' or '0.7'",
@@ -2377,7 +2382,10 @@ fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     let Some(value) = bundle.data.get("timeout_ms") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "{}: timeout_ms requires schema_version '0.7'",
             bundle.task_json_path().display()
@@ -2399,7 +2407,10 @@ fn validate_task_max_steps_bundle(bundle: &Bundle) -> CliOutcome<Option<u32>> {
     let Some(value) = bundle.data.get("max_steps") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "{}: max_steps requires schema_version '0.7'",
             bundle.task_json_path().display()
@@ -2453,7 +2464,10 @@ fn post_admission_ocr_page_ids(declaration: &Map<String, Value>) -> CliOutcome<V
             let page_ids = page_ids.as_array().ok_or_else(|| {
                 CliError::package_invalid("post_admission_ocr.page_ids must be an array")
             })?;
-            if page_ids.len() != 2 {
+            if page_ids.len() != 2
+                && !(declaration.get("mode").and_then(Value::as_str) == Some("fields_v1")
+                    && page_ids.len() == 1)
+            {
                 return Err(CliError::package_invalid(
                     "post_admission_ocr.page_ids must contain exactly two entries",
                 ));
@@ -2608,6 +2622,64 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let declaration = bundle.data.get("post_admission_ocr");
+    if schema == "0.8" {
+        let value = declaration
+            .ok_or_else(|| CliError::package_invalid("ocr_fields_declaration_missing"))?;
+        crate::package_build::validate_ocr_mode_declaration(
+            schema,
+            value,
+            bundle.data.get("scheduling_outcome"),
+        )?;
+        let fields: OcrFieldsDeclaration = serde_json::from_value(value.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        let targets = ocr_target_declarations(bundle)?;
+        let mut dictionary_bytes = 0_u64;
+        for field in &fields.fields {
+            let matching = targets
+                .iter()
+                .filter(|t| t.get("id").and_then(Value::as_str) == Some(&field.target_id))
+                .collect::<Vec<_>>();
+            let [target] = matching.as_slice() else {
+                return Err(CliError::package_invalid(
+                    "ocr_fields_target_missing_or_duplicate",
+                ));
+            };
+            validate_post_admission_ocr_target_region(bundle, &field.target_id, target)?;
+            if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
+                let path = bundle.dir.join(&dictionary.path);
+                let size = fs::metadata(&path)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?
+                    .len();
+                dictionary_bytes = dictionary_bytes.checked_add(size).ok_or_else(|| {
+                    CliError::package_invalid("ocr_fields_dictionary_limit_exceeded")
+                })?;
+                if dictionary_bytes > fields.limits.max_total_bytes {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_limit_exceeded",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                fs::File::open(&path)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?
+                    .take(size + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                if bytes.len() as u64 != size
+                    || format!("{:x}", Sha256::digest(&bytes)) != dictionary.sha256
+                {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_hash_mismatch",
+                    ));
+                }
+                let parsed: OcrFieldDictionary = serde_json::from_slice(&bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                parsed
+                    .validate(&fields.limits)
+                    .map_err(CliError::package_invalid)?;
+            }
+        }
+        return Ok(());
+    }
     match (schema, declaration) {
         ("0.7", Some(Value::Null) | None) => {
             return Err(CliError::package_invalid(format!(

@@ -10,15 +10,16 @@ use actingcommand_contract::{
     ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventId, EventPayload,
     EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
     InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, PackageDebugRequest,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
-    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
-    RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
-    RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest, RuntimeInfo,
-    RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
+    OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
+    OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest,
+    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent,
+    ProjectionPayload, ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE,
+    RequestId, ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
@@ -199,6 +200,35 @@ pub struct RuntimeFlowOutput {
     events: Vec<ProjectedEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     official_ocr_projection: Option<RuntimeOfficialOcrProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    official_ocr_fields_projection: Option<RuntimeOfficialOcrFieldsProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrFieldsProjection {
+    schema_version: &'static str,
+    run_id: RunId,
+    task_id: TaskId,
+    report_artifact: ProjectedArtifactReference,
+    report_created_event_id: EventId,
+    report_verified_event_id: EventId,
+    declaration: OcrFieldsDeclaration,
+    observations: Vec<RuntimeOfficialOcrObservation>,
+    records: Vec<RuntimeOfficialOcrFieldRecord>,
+    failure: Option<OcrFieldReason>,
+    provider_execution: Option<RuntimeOfficialOcrProviderExecution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrFieldRecord {
+    frame_id: FrameId,
+    frame_index: u32,
+    page_id: String,
+    group: String,
+    observation_artifact: ProjectedArtifactReference,
+    fields: Vec<OcrFieldResult>,
 }
 
 /// Authoritative OCR comparison and provider facts resolved from this run's durable artifacts.
@@ -510,6 +540,54 @@ impl RuntimeFlowOutput {
 
     pub const fn official_ocr_projection(&self) -> Option<&RuntimeOfficialOcrProjection> {
         self.official_ocr_projection.as_ref()
+    }
+
+    pub const fn official_ocr_fields_projection(
+        &self,
+    ) -> Option<&RuntimeOfficialOcrFieldsProjection> {
+        self.official_ocr_fields_projection.as_ref()
+    }
+}
+
+impl RuntimeOfficialOcrFieldsProjection {
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+    pub const fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+    pub fn declaration(&self) -> &OcrFieldsDeclaration {
+        &self.declaration
+    }
+    pub fn records(&self) -> &[RuntimeOfficialOcrFieldRecord] {
+        &self.records
+    }
+    pub const fn failure(&self) -> Option<OcrFieldReason> {
+        self.failure
+    }
+    pub fn report_artifact(&self) -> &ProjectedArtifactReference {
+        &self.report_artifact
+    }
+}
+
+impl RuntimeOfficialOcrFieldRecord {
+    pub const fn frame_id(&self) -> FrameId {
+        self.frame_id
+    }
+    pub const fn frame_index(&self) -> u32 {
+        self.frame_index
+    }
+    pub fn page_id(&self) -> &str {
+        &self.page_id
+    }
+    pub fn group(&self) -> &str {
+        &self.group
+    }
+    pub fn fields(&self) -> &[OcrFieldResult] {
+        &self.fields
+    }
+    pub fn observation_artifact(&self) -> &ProjectedArtifactReference {
+        &self.observation_artifact
     }
 }
 
@@ -1035,7 +1113,20 @@ impl RuntimeClient {
                     self.recover_contained_task_timeout(instance_alias, &runtime_request);
                 return Err(contained_task_recovery_outcome(error, recovery));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                if !error.is_fatal()
+                    && let Some(receipt) = error.committed_receipt()
+                {
+                    drop(connection);
+                    let output = self.flow_output(receipt.clone(), correlation_id)?;
+                    return if output.official_ocr_fields_projection.is_some() {
+                        Ok(output)
+                    } else {
+                        Err(error)
+                    };
+                }
+                return Err(error);
+            }
         };
         match receipt.result() {
             Some(RuntimeResult::ContainedTaskCompleted { .. }) => {}
@@ -1985,7 +2076,12 @@ impl RuntimeClient {
                 )));
             }
             if let Some(error) = receipt.error_projection() {
-                let error = RuntimeClientError::rejected(operation_name, error.clone());
+                let mut error = RuntimeClientError::rejected(operation_name, error.clone());
+                if matches!(operation, RuntimeOperation::RunContainedTask { .. })
+                    && receipt.terminal().is_some()
+                {
+                    error = error.with_committed_receipt(receipt.clone());
+                }
                 return Err(if error.is_fatal() {
                     connection.latch(error)
                 } else {
@@ -2067,11 +2163,13 @@ impl RuntimeClient {
                     error,
                 )
             })?;
+        let mut official_ocr_fields_projection = None;
         let official_ocr_projection = resolve_official_ocr_projection(
             &self.shared.state_root,
             &receipt,
             correlation_id,
             &events,
+            &mut official_ocr_fields_projection,
         )
         .map_err(|error| {
             RuntimeClientError::after_commit(
@@ -2085,6 +2183,7 @@ impl RuntimeClient {
             receipt,
             events,
             official_ocr_projection,
+            official_ocr_fields_projection,
         })
     }
 
@@ -2131,6 +2230,10 @@ struct OcrComparisonEnvelope {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OcrObservationPayload {
+    #[serde(default)]
+    page_id: Option<String>,
+    #[serde(default)]
+    personal: Option<bool>,
     #[serde(default)]
     target_id: Option<String>,
     #[serde(default)]
@@ -2184,16 +2287,67 @@ pub(crate) fn resolve_official_ocr_projection(
     receipt: &RuntimeReceipt,
     correlation_id: CorrelationId,
     events: &[ProjectedEvent],
+    fields_projection: &mut Option<RuntimeOfficialOcrFieldsProjection>,
 ) -> RuntimeClientResult<Option<RuntimeOfficialOcrProjection>> {
-    let Some(RuntimeResult::ContainedTaskCompleted {
-        run_id,
-        task_id,
-        outcome: TaskOutcome::Success,
-        ..
-    }) = receipt.result()
-    else {
-        return Ok(None);
+    *fields_projection = None;
+    if receipt.correlation_id() != correlation_id {
+        return Err(official_ocr_error(
+            "runtime_official_ocr_terminal_identity_mismatch",
+        ));
+    }
+    let (run_id, task_id) = match receipt.result() {
+        Some(RuntimeResult::ContainedTaskCompleted {
+            run_id,
+            task_id,
+            outcome: TaskOutcome::Success,
+            ..
+        }) => (*run_id, *task_id),
+        _ if receipt.error_projection().is_some() => {
+            let Some(terminal) = receipt.terminal() else {
+                return Ok(None);
+            };
+            let matching = events
+                .iter()
+                .filter(|event| {
+                    event.event_id == terminal.event_id
+                        && event.sequence == terminal.sequence
+                        && event.event_type == EventType::TaskFailed
+                        && event.links.correlation_id() == Some(&correlation_id)
+                })
+                .collect::<Vec<_>>();
+            let [event] = matching.as_slice() else {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_terminal_identity_mismatch",
+                ));
+            };
+            let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_terminal_payload_invalid",
+                ));
+            };
+            if !matches!(
+                payload.fact(),
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    ..
+                }
+            ) {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_terminal_payload_invalid",
+                ));
+            }
+            (
+                *event.links.run_id().ok_or_else(|| {
+                    official_ocr_error("runtime_official_ocr_terminal_identity_mismatch")
+                })?,
+                *event.links.task_id().ok_or_else(|| {
+                    official_ocr_error("runtime_official_ocr_terminal_identity_mismatch")
+                })?,
+            )
+        }
+        _ => return Ok(None),
     };
+    let (run_id, task_id) = (&run_id, &task_id);
     let marker_expected = official_ocr_marker_expected(events, run_id, task_id)?;
     let candidates = events
         .iter()
@@ -2232,6 +2386,7 @@ pub(crate) fn resolve_official_ocr_projection(
     let mut recognized_artifacts = 0_usize;
     let mut lifecycle = BTreeMap::new();
     let mut observations = Vec::new();
+    let mut raw_observations = BTreeMap::new();
     let mut provider_evidence = Vec::new();
     let mut comparison = None;
 
@@ -2247,7 +2402,10 @@ pub(crate) fn resolve_official_ocr_projection(
             || reference.run_id.as_ref() != Some(run_id)
             || reference.correlation_id.as_ref() != Some(&correlation_id)
             || reference.retention_class != RetentionClass::DebugFull
-            || reference.redaction_state != ArtifactRedactionState::NotRequired
+            || !matches!(
+                reference.redaction_state,
+                ArtifactRedactionState::NotRequired | ArtifactRedactionState::Pending
+            )
         {
             return Err(official_ocr_error(
                 "runtime_official_ocr_artifact_identity_mismatch",
@@ -2354,6 +2512,14 @@ pub(crate) fn resolve_official_ocr_projection(
                 }
                 let targets =
                     parse_official_ocr_observation(envelope.frame_index, &envelope.observation)?;
+                if raw_observations
+                    .insert(envelope.frame_index, envelope.observation)
+                    .is_some()
+                {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_observation_duplicate",
+                    ));
+                }
                 let mut target_ids = targets
                     .iter()
                     .map(|(_, target_id, _)| target_id.clone())
@@ -2439,6 +2605,72 @@ pub(crate) fn resolve_official_ocr_projection(
             ));
         }
     }
+    if comparison_value
+        .get("schema_version")
+        .and_then(Value::as_str)
+        == Some(OCR_FIELDS_REPORT_SCHEMA)
+    {
+        let records_report: OcrFieldsReport = serde_json::from_value(comparison_value)
+            .map_err(|_| official_ocr_error("runtime_official_ocr_fields_malformed"))?;
+        let failed = receipt.error_projection().is_some();
+        let personal = records_report
+            .declaration
+            .fields
+            .iter()
+            .any(|f| f.privacy == OcrFieldPrivacy::Personal);
+        let redaction = if personal {
+            ArtifactRedactionState::Pending
+        } else {
+            ArtifactRedactionState::NotRequired
+        };
+        if comparison_artifact.redaction_state != redaction
+            || observations
+                .iter()
+                .any(|o| o.artifact.redaction_state != redaction)
+        {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_fields_privacy_mismatch",
+            ));
+        }
+        if records_report.failure.is_some() != failed {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_fields_terminal_mismatch",
+            ));
+        }
+        let records = project_ocr_fields(&records_report, &observations, &raw_observations)?;
+        let provider_execution = if provider_evidence.is_empty() && failed {
+            None
+        } else {
+            Some(project_official_ocr_provider(provider_evidence)?)
+        };
+        *fields_projection = Some(RuntimeOfficialOcrFieldsProjection {
+            schema_version: "actingcommand.runtime.official-ocr-fields-projection.v1",
+            run_id: *run_id,
+            task_id: *task_id,
+            report_artifact: comparison_artifact,
+            report_created_event_id: comparison_artifact_created_event_id,
+            report_verified_event_id: comparison_artifact_verified_event_id,
+            declaration: records_report.declaration,
+            observations,
+            records,
+            failure: records_report.failure,
+            provider_execution,
+        });
+        return Ok(None);
+    }
+    if receipt.error_projection().is_some() {
+        return Ok(None);
+    }
+    if comparison_artifact.redaction_state != ArtifactRedactionState::NotRequired
+        || observations
+            .iter()
+            .any(|o| o.artifact.redaction_state != ArtifactRedactionState::NotRequired)
+        || raw_observations
+            .values()
+            .any(|v| v.get("page_id").is_some() || v.get("personal").is_some())
+    {
+        return Err(official_ocr_error("runtime_official_ocr_mode_mismatch"));
+    }
     let (summary, report) = parse_official_ocr_comparison(&comparison_value, &observations)?;
     let provider_execution = project_official_ocr_provider(provider_evidence)?;
     Ok(Some(RuntimeOfficialOcrProjection {
@@ -2457,6 +2689,181 @@ pub(crate) fn resolve_official_ocr_projection(
     }))
 }
 
+fn project_ocr_fields(
+    report: &OcrFieldsReport,
+    observations: &[RuntimeOfficialOcrObservation],
+    raw: &BTreeMap<u32, Value>,
+) -> RuntimeClientResult<Vec<RuntimeOfficialOcrFieldRecord>> {
+    let invalid = || official_ocr_error("runtime_official_ocr_fields_invalid");
+    report.declaration.validate().map_err(|_| invalid())?;
+    let declaration = &report.declaration;
+    if report.schema_version != OCR_FIELDS_REPORT_SCHEMA
+        || report.frames_collected == 0
+        || report.frames_collected > declaration.limits.max_frames
+        || observations.len() != report.frames_collected as usize
+        || report.items_collected > declaration.limits.max_items
+        || report.total_observed_utf8_bytes > declaration.limits.max_total_bytes
+    {
+        return Err(invalid());
+    }
+    let mut groups = Vec::new();
+    for field in &declaration.fields {
+        if !groups.contains(&field.group) {
+            groups.push(field.group.clone());
+        }
+    }
+    if report.records.len() != observations.len() * groups.len() {
+        return Err(invalid());
+    }
+    let mut output = Vec::new();
+    let mut items = 0_u32;
+    let mut bytes = 0_u64;
+    let mut failure_required = false;
+    for (index, observation) in observations.iter().enumerate() {
+        let payload: OcrObservationPayload = serde_json::from_value(
+            raw.get(&observation.frame_index)
+                .ok_or_else(invalid)?
+                .clone(),
+        )
+        .map_err(|_| invalid())?;
+        let page = payload.page_id.ok_or_else(invalid)?;
+        if payload.personal
+            != Some(
+                declaration
+                    .fields
+                    .iter()
+                    .any(|f| f.privacy == OcrFieldPrivacy::Personal),
+            )
+        {
+            return Err(invalid());
+        }
+        if !declaration
+            .page_ids
+            .iter()
+            .any(|p| p == &page || page.ends_with(&format!("/{p}")))
+            || payload.target_id.is_some()
+        {
+            return Err(invalid());
+        }
+        let targets = payload.targets.ok_or_else(invalid)?;
+        items = items
+            .checked_add(targets.len() as u32)
+            .ok_or_else(invalid)?;
+        for target in &targets {
+            if !declaration
+                .fields
+                .iter()
+                .any(|f| f.target_id == target.target_id)
+                || target.text.len() > declaration.limits.max_string_bytes as usize
+            {
+                return Err(invalid());
+            }
+            bytes = bytes
+                .checked_add(target.text.len() as u64)
+                .ok_or_else(invalid)?;
+            let blocks = target.blocks.as_array().ok_or_else(invalid)?;
+            for block in blocks {
+                let text = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(invalid)?;
+                if text.len() > declaration.limits.max_string_bytes as usize {
+                    return Err(invalid());
+                }
+                bytes = bytes.checked_add(text.len() as u64).ok_or_else(invalid)?;
+            }
+        }
+        for (group_index, group) in groups.iter().enumerate() {
+            let record = &report.records[index * groups.len() + group_index];
+            let expected = declaration
+                .fields
+                .iter()
+                .filter(|f| &f.group == group)
+                .collect::<Vec<_>>();
+            if record.frame_index != observation.frame_index
+                || record.page_id != page
+                || &record.group != group
+                || record.fields.len() != expected.len()
+            {
+                return Err(invalid());
+            }
+            let mut fields = record.fields.clone();
+            for (field, declared) in fields.iter_mut().zip(expected) {
+                if let Some(detail) = &field.detail {
+                    if field.reason != OcrFieldReason::ProviderFailed
+                        || detail.len() > declaration.limits.max_string_bytes as usize
+                    {
+                        return Err(invalid());
+                    }
+                    bytes = bytes.checked_add(detail.len() as u64).ok_or_else(invalid)?;
+                }
+                let target = targets.iter().find(|t| t.target_id == declared.target_id);
+                if field.field_id != declared.id
+                    || field.target_id != declared.target_id
+                    || field.redacted
+                    || field.raw_text.as_deref() != target.map(|t| t.text.as_str())
+                    || (field.reason == OcrFieldReason::Resolved) != field.value.is_some()
+                {
+                    return Err(invalid());
+                }
+                match (&declared.value, &field.value) {
+                    (
+                        OcrFieldType::UnsignedInteger { min, max },
+                        Some(OcrFieldValue::UnsignedInteger(value)),
+                    ) if value >= min && value <= max => {}
+                    (
+                        OcrFieldType::DictionaryEntry { .. },
+                        Some(OcrFieldValue::DictionaryEntry(value)),
+                    ) if !value.is_empty()
+                        && value.len() <= declaration.limits.max_string_bytes as usize => {}
+                    (_, None) => {}
+                    _ => return Err(invalid()),
+                }
+                if matches!(
+                    field.reason,
+                    OcrFieldReason::LimitExceeded
+                        | OcrFieldReason::ProviderFailed
+                        | OcrFieldReason::NotCollected
+                ) || (declared.required && field.reason != OcrFieldReason::Resolved)
+                {
+                    failure_required = true;
+                }
+                if !matches!(
+                    field.reason,
+                    OcrFieldReason::LimitExceeded
+                        | OcrFieldReason::ProviderFailed
+                        | OcrFieldReason::NotCollected
+                ) && field.normalized_text.as_deref() != field.raw_text.as_deref().map(str::trim)
+                {
+                    return Err(invalid());
+                }
+                if declared.privacy == OcrFieldPrivacy::Personal {
+                    field.raw_text = None;
+                    field.normalized_text = None;
+                    field.value = None;
+                    field.detail = None;
+                    field.redacted = true;
+                }
+            }
+            output.push(RuntimeOfficialOcrFieldRecord {
+                frame_id: observation.frame_id,
+                frame_index: observation.frame_index,
+                page_id: page.clone(),
+                group: group.clone(),
+                observation_artifact: observation.artifact.clone(),
+                fields,
+            });
+        }
+    }
+    if items != report.items_collected
+        || bytes != report.total_observed_utf8_bytes
+        || failure_required != report.failure.is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(output)
+}
+
 fn official_ocr_marker_expected(
     events: &[ProjectedEvent],
     run_id: &RunId,
@@ -2464,8 +2871,10 @@ fn official_ocr_marker_expected(
 ) -> RuntimeClientResult<bool> {
     let mut expected = false;
     for event in events.iter().filter(|event| {
-        event.event_type == EventType::TaskCompleted
-            && event.links.run_id() == Some(run_id)
+        matches!(
+            event.event_type,
+            EventType::TaskCompleted | EventType::TaskFailed
+        ) && event.links.run_id() == Some(run_id)
             && event.links.task_id() == Some(task_id)
     }) {
         let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
@@ -2479,7 +2888,18 @@ fn official_ocr_marker_expected(
             ..
         } = payload.fact()
         {
-            expected |= disposition.outcome_key() == "comparison_recorded";
+            expected |= matches!(
+                disposition.outcome_key(),
+                "comparison_recorded" | "fields_recorded"
+            );
+        }
+        if let TaskSemanticFact::TerminalCommitted {
+            outcome: TaskOutcome::Failure,
+            failure_code: Some(code),
+            ..
+        } = payload.fact()
+        {
+            expected |= code == "contained_task_ocr_fields_unresolved";
         }
     }
     Ok(expected)
@@ -2510,7 +2930,9 @@ fn parse_official_ocr_observation(
             validate_official_ocr_target(&target_id, &execution)?;
             Ok(vec![(frame_index, target_id, execution)])
         }
-        (false, Some(targets)) if !targets.is_empty() && targets.len() <= 32 => {
+        (false, Some(targets))
+            if targets.len() <= 32 && (!targets.is_empty() || payload.page_id.is_some()) =>
+        {
             let mut seen = BTreeSet::new();
             targets
                 .into_iter()
