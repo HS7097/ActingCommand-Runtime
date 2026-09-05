@@ -22,9 +22,9 @@ pub struct EffectiveDeviceConfiguration {
     pub capture_adb: String,
     pub configured_serial: Option<String>,
     pub resolved_serial: String,
-    pub input_command_timeout_ms: u128,
-    pub capture_command_timeout_ms: u128,
-    pub capture_timeout_ms: u128,
+    pub input_command_timeout_ms: u64,
+    pub capture_command_timeout_ms: u64,
+    pub capture_timeout_ms: u64,
     pub configured_mumu_root: Option<std::path::PathBuf>,
     pub configured_capture_dll: Option<std::path::PathBuf>,
 }
