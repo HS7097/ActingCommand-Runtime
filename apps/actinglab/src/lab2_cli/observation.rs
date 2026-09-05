@@ -51,6 +51,9 @@ pub(super) fn detect(
                         role,
                         passed: target.passed,
                         message: target.message,
+                        group_index: target.actual.group_index,
+                        target_index: target.actual.target_index,
+                        evaluation: target.actual.evaluation,
                     })
                 })
                 .collect::<CliOutcome<Vec<_>>>()?;
@@ -279,7 +282,14 @@ pub(super) fn project(
     if verbose && request.verbosity == ProjectionVerbosity::Min {
         request.verbosity = ProjectionVerbosity::Normal;
     }
-    let requested_fields = request.fields.clone();
+    let mut requested_fields = request.fields.clone();
+    if payload.get("facts").is_some() {
+        requested_fields.insert("arbitration".to_string());
+        request.fields.insert("arbitration".to_string());
+        request
+            .fields
+            .extend(["facts", "projection_source", "terminal"].map(str::to_string));
+    }
     request.fields.extend(
         [
             "observation",
@@ -308,6 +318,12 @@ pub(super) fn project(
         if !requested_fields.contains("frame_source") {
             object.remove("frame_source");
         }
+        if let Some(source) = object.get_mut("projection_source")
+            && source["kind"] == "runtime_global_ledger"
+            && source.get("artifact").is_some()
+        {
+            source["artifact"] = json!({"artifact_id":source["artifact"]["artifact_id"], "sha256":source["artifact"]["sha256"]});
+        }
     }
     loop {
         payload["observation"] = serde_json::to_value(&observation)
@@ -321,6 +337,17 @@ pub(super) fn project(
             || bytes <= actingcommand_ledger::MIN_PROJECTION_SOFT_LIMIT_BYTES
         {
             return Ok(projected);
+        }
+        if let Some(facts) = payload.get_mut("facts")
+            && facts["rows"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+        {
+            facts["rows"] = json!([]);
+            facts["omitted_count"] = facts["item_count"].clone();
+            facts["omitted_target_evaluation_count"] = facts["target_evaluation_count"].clone();
+            facts["truncated"] = json!(true);
+            continue;
         }
         if observation.reduce_for_min()? {
             continue;

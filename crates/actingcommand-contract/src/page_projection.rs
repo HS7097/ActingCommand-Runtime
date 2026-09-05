@@ -104,7 +104,7 @@ pub struct FieldAnnotation {
     pub source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageWindow {
     pub page_id: String,
@@ -375,22 +375,47 @@ impl VerifiedProjectionMetadata {
     }
 
     pub fn target_privacy(&self, target: &str) -> Option<Privacy> {
-        self.declaration
-            .targets
-            .iter()
-            .find(|e| e.target_id == target)
-            .map(|e| e.privacy)
+        if !self.catalog.targets.contains(target) {
+            return None;
+        }
+        let personal =
+            self.declaration
+                .targets
+                .iter()
+                .any(|entry| entry.target_id == target && entry.privacy == Privacy::Personal)
+                || self.declaration.fields.iter().any(|entry| {
+                    entry.field.target_id == target && entry.privacy == Privacy::Personal
+                })
+                || self.catalog.field_privacy.iter().any(|(field, privacy)| {
+                    field.target_id == target && *privacy == Privacy::Personal
+                });
+        Some(if personal {
+            Privacy::Personal
+        } else {
+            Privacy::Public
+        })
+    }
+
+    pub fn catalog(&self) -> &ProjectionCatalog {
+        &self.catalog
+    }
+
+    pub fn field_privacy(&self, field: &FieldKey) -> Option<Privacy> {
+        if !self.catalog.fields.contains(field) {
+            return None;
+        }
+        self.target_privacy(&field.target_id)
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Point {
     pub x: u32,
     pub y: u32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rect {
     pub x: u32,
@@ -435,7 +460,7 @@ pub enum Geometry {
 }
 
 impl Geometry {
-    fn validate(&self, width: u32, height: u32) -> LabResult<()> {
+    pub fn validate(&self, width: u32, height: u32) -> LabResult<()> {
         let endpoint = |rect: Rect, point: Point| -> LabResult<()> {
             rect.validate(width, height)?;
             if !rect.contains(point) {
@@ -463,7 +488,7 @@ impl Geometry {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameIdentity {
     /// The digest covers decoded row-major RGB8 bytes or a separately verified frame artifact.
     pub kind: FrameKind,
@@ -472,7 +497,7 @@ pub struct FrameIdentity {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FrameKind {
     Rgb8,
@@ -490,6 +515,9 @@ pub enum ElementResolution {
     NotEvaluated {
         target_id: String,
         reason: NotEvaluatedReason,
+    },
+    Ambiguous {
+        target_id: String,
     },
 }
 
@@ -537,20 +565,20 @@ pub struct ProjectionInput {
     pub fields: Vec<FieldInput>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageProjection {
-    pub schema_version: &'static str,
+    pub schema_version: String,
     pub page: String,
-    pub state: &'static str,
+    pub state: String,
     pub matched: bool,
     pub standby: bool,
     pub frame: FrameIdentity,
     pub elements: Vec<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unscoped_controls: Vec<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Value>,
     pub truncated: bool,
     pub output_truncated: bool,
@@ -562,18 +590,18 @@ pub struct PageProjection {
     pub content_sha256: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectionMetrics {
-    pub sample_scope: &'static str,
+    pub sample_scope: String,
     pub matched_page_count: usize,
     pub recognized_count: usize,
     pub missing_count: usize,
     pub unscoped_control_count: usize,
     pub entry_count: usize,
     pub emitted_count: usize,
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub omitted_count: usize,
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub empty_list: bool,
 }
 
@@ -584,6 +612,30 @@ fn serialized_len(value: &impl Serialize) -> LabResult<usize> {
 }
 
 impl PageProjection {
+    /// Verify transported content using the same canonical content hash owner.
+    pub fn verify_transport(&mut self) -> LabResult<()> {
+        if self.schema_version != PROJECTION_SCHEMA
+            || serialized_len(self)? > BYTE_LIMIT
+            || self.elements.len()
+                + self.unscoped_controls.len()
+                + self.missing.len()
+                + self.fields.len()
+                > ENTRY_LIMIT
+            || self.metrics.entry_count
+                < self.elements.len()
+                    + self.unscoped_controls.len()
+                    + self.missing.len()
+                    + self.fields.len()
+        {
+            return Err(invalid("invalid transported page projection"));
+        }
+        let expected = serde_json::to_value(&self).map_err(|e| invalid(e.to_string()))?;
+        self.refresh()?;
+        if expected != serde_json::to_value(&self).map_err(|e| invalid(e.to_string()))? {
+            return Err(invalid("page projection content hash mismatch"));
+        }
+        Ok(())
+    }
     /// Min keeps one resolvable element when its soft budget cannot fit the full view.
     pub fn reduce_for_min(&mut self) -> LabResult<bool> {
         if self.fields.is_empty()
@@ -675,6 +727,14 @@ pub fn project(
     input: ProjectionInput,
     metadata: &VerifiedProjectionMetadata,
 ) -> LabResult<PageProjection> {
+    project_observation(input, metadata, true)
+}
+
+pub fn project_observation(
+    input: ProjectionInput,
+    metadata: &VerifiedProjectionMetadata,
+    evaluation_complete: bool,
+) -> LabResult<PageProjection> {
     if input.frame.sha256.len() != 64
         || !input.frame.sha256.bytes().all(|b| b.is_ascii_hexdigit())
         || input.frame.width != metadata.catalog.width
@@ -687,7 +747,7 @@ pub fn project(
     if input.elements.len() + input.missing.len() + input.fields.len() > INPUT_ENTRY_LIMIT {
         return Err(invalid("projection exceeds 4096 input facts"));
     }
-    let matched = input.matched_pages.len() == 1;
+    let matched = evaluation_complete && input.matched_pages.len() == 1;
     let page = if matched {
         input.matched_pages[0].clone()
     } else {
@@ -709,15 +769,18 @@ pub fn project(
         FrameKind::Artifact => "single_frame",
     };
     let mut output = PageProjection {
-        schema_version: PROJECTION_SCHEMA,
+        schema_version: PROJECTION_SCHEMA.to_string(),
         page,
-        state: if matched {
+        state: if !evaluation_complete {
+            "partial"
+        } else if matched {
             "recognized"
         } else if input.matched_pages.is_empty() {
             "unknown"
         } else {
             "conflict"
-        },
+        }
+        .to_string(),
         matched,
         standby: !matched,
         frame: input.frame,
@@ -731,7 +794,7 @@ pub fn project(
         page_window_completeness: window.as_ref().map(|w| w.completeness).unwrap_or_default(),
         window,
         metrics: ProjectionMetrics {
-            sample_scope,
+            sample_scope: sample_scope.to_string(),
             matched_page_count: input.matched_pages.len(),
             ..ProjectionMetrics::default()
         },
@@ -789,6 +852,13 @@ pub fn project(
                     NotEvaluatedReason::ClickOnly => "target_not_recognizable",
                     NotEvaluatedReason::Unscoped => "target_not_evaluated",
                 }),
+                None,
+            ),
+            ElementResolution::Ambiguous { target_id } => (
+                false,
+                Some(target_id),
+                "multiple_target_evaluations",
+                Some("target_evaluation_ambiguous"),
                 None,
             ),
         };
@@ -909,6 +979,79 @@ pub fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn online_projection_privacy_union_transport_and_budgets() {
+        for companion in [false, true] {
+            for personal in [false, true] {
+                let mut references = catalog();
+                references.add_operation_fields(&json!({"task_id":"second","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"raw","target_id":"value","privacy":if personal {"personal"} else {"public"}}]}})).unwrap();
+                let metadata = if companion {
+                    declaration().validate(references).unwrap()
+                } else {
+                    VerifiedProjectionMetadata::unannotated(references)
+                };
+                assert_eq!(
+                    metadata.target_privacy("value"),
+                    Some(if personal {
+                        Privacy::Personal
+                    } else {
+                        Privacy::Public
+                    })
+                );
+                assert_eq!(metadata.target_privacy("unknown"), None);
+                let mut source = input();
+                source.fields.push(FieldInput {
+                    target_id: "value".into(),
+                    field: None,
+                    parsed: false,
+                    raw_text: Some("private-original".into()),
+                    value: Some(json!({"text":"private-original"})),
+                    detail: Some("private-original".into()),
+                    privacy: None,
+                });
+                let output = project(source, &metadata).unwrap();
+                assert_eq!(output.fields[0]["redacted"], personal);
+                assert_eq!(
+                    serde_json::to_string(&output)
+                        .unwrap()
+                        .contains("private-original"),
+                    !personal
+                );
+                let mut transported: PageProjection =
+                    serde_json::from_value(serde_json::to_value(&output).unwrap()).unwrap();
+                transported.verify_transport().unwrap();
+                transported.metrics.emitted_count += 1;
+                assert!(transported.verify_transport().is_err());
+            }
+        }
+        let metadata = declaration().validate(catalog()).unwrap();
+        let mut source = input();
+        source.fields.push(FieldInput {
+            target_id: "value".into(),
+            field: None,
+            parsed: false,
+            raw_text: Some("x".repeat(64 * 1024)),
+            value: None,
+            detail: None,
+            privacy: None,
+        });
+        let output = project(source, &metadata).unwrap();
+        assert!(output.truncated);
+        assert_eq!(output.omitted_count, 1);
+        assert!(serialized_len(&output).unwrap() <= BYTE_LIMIT);
+        let mut facts = crate::ObservationFacts::default();
+        for _ in 0..257 {
+            facts.push(json!({"kind":"actual"}), 2).unwrap();
+        }
+        facts.validate().unwrap();
+        assert_eq!(facts.rows.len(), 256);
+        assert_eq!(facts.omitted_count, 1);
+        assert_eq!(facts.omitted_target_evaluation_count, 2);
+        facts.push(json!({"raw":"x".repeat(64 * 1024)}), 3).unwrap();
+        facts.validate().unwrap();
+        assert_eq!(facts.omitted_target_evaluation_count, 5);
+    }
 
     fn catalog() -> ProjectionCatalog {
         let mut catalog = ProjectionCatalog::from_resources(

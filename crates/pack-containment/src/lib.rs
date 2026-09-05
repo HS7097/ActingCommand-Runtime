@@ -205,6 +205,26 @@ impl Containment {
         task_zip_bytes: &[u8],
         expected: &Sha256Hash,
     ) -> ContainmentResult<&LoadedBundle> {
+        self.load_for(instance, task_zip_bytes, expected, false)
+    }
+
+    /// Admits the existing Lab resource layout without requiring an executable operation.
+    pub fn load_observation(
+        &mut self,
+        instance: &InstanceId,
+        zip_bytes: &[u8],
+        expected: &Sha256Hash,
+    ) -> ContainmentResult<&LoadedBundle> {
+        self.load_for(instance, zip_bytes, expected, true)
+    }
+
+    fn load_for(
+        &mut self,
+        instance: &InstanceId,
+        task_zip_bytes: &[u8],
+        expected: &Sha256Hash,
+        observation: bool,
+    ) -> ContainmentResult<&LoadedBundle> {
         if task_zip_bytes.len() as u64 > self.limits.max_compressed_bytes {
             return Err(ContainmentError::CompressedTooLarge {
                 instance: instance.clone(),
@@ -225,6 +245,7 @@ impl Containment {
             package,
             actual,
             self.vision_provider.as_ref().map(Arc::clone),
+            observation,
         )?;
         let bench = self
             .benches
@@ -387,9 +408,14 @@ impl LoadedBundle {
         package: MemoryPackage,
         verified: Sha256Hash,
         vision_provider: Option<Arc<dyn VisionProvider>>,
+        observation: bool,
     ) -> ContainmentResult<Self> {
         let entries = Arc::new(package.entries);
-        let metadata = PackageMetadata::from_entries(&entries)?;
+        let metadata = if observation {
+            PackageMetadata::from_observation_entries(&entries)?
+        } else {
+            PackageMetadata::from_entries(&entries)?
+        };
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
         let projection_metadata = if let (Some(pack), Some(pages), Some(navigation)) = (
             &metadata.recognition_pack_path,
@@ -675,6 +701,31 @@ impl PackageMetadata {
     }
 
     fn from_lab_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        Self::from_lab_entries_for(entries, false)
+    }
+
+    fn from_observation_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        // The observation path has the Lab recognition pipeline, never Module task ingress.
+        let metadata = Self::from_lab_entries_for(entries, true)?;
+        for path in [
+            &metadata.recognition_pack_path,
+            &metadata.pages_path,
+            &metadata.navigation_path,
+        ] {
+            if path.is_none() {
+                return Err(ContainmentError::JsonParse {
+                    path: "control.json".to_string(),
+                    message: "observation requires Lab pack/pages/navigation resources".to_string(),
+                });
+            }
+        }
+        Ok(metadata)
+    }
+
+    fn from_lab_entries_for(
+        entries: &BTreeMap<String, Vec<u8>>,
+        observation: bool,
+    ) -> ContainmentResult<Self> {
         let control: LabControl = read_json_entry(entries, "control.json")?;
         let control_value = read_json_value_entry(entries, "control.json")?;
         let resource_root = match control.resource_root {
@@ -700,7 +751,11 @@ impl PackageMetadata {
         let task_id = TaskId::new(control.entry_task_id)?;
         let operation_path =
             prefixed_path(&resource_root, &format!("operations/{task_id}/task.json"));
-        let operation = read_json_value_entry(entries, &operation_path)?;
+        let operation = if observation && !entries.contains_key(&operation_path) {
+            Value::Null
+        } else {
+            read_json_value_entry(entries, &operation_path)?
+        };
         let stem = format!("{}.{}", control.game, control.server);
         let recognition_pack_path =
             prefixed_path(&resource_root, &format!("recognition/{stem}.pack.json"));
@@ -1476,9 +1531,7 @@ pub fn validate_projection_resources<'a>(
             "projection declaration must use the matching navigation stem".to_string(),
         ));
     }
-    let Some(bytes) = read(&projection_path) else {
-        return Ok(None);
-    };
+    let declaration_bytes = read(&projection_path);
     let hashes: ManifestHashes =
         serde_json::from_value(manifest.clone()).map_err(|e| fail(e.to_string()))?;
     let verified_bytes = |path: &str| -> ContainmentResult<&'a [u8]> {
@@ -1515,9 +1568,16 @@ pub fn validate_projection_resources<'a>(
         }
         Ok(bytes)
     };
-    verified_bytes(&projection_path)?;
+    if declaration_bytes.is_some() {
+        verified_bytes(&projection_path)?;
+    }
     let parse = |path| -> ContainmentResult<Value> {
-        serde_json::from_slice(verified_bytes(path)?).map_err(|e| fail(e.to_string()))
+        let bytes = if declaration_bytes.is_some() {
+            verified_bytes(path)?
+        } else {
+            read(path).ok_or_else(|| fail(format!("missing catalog resource {path}")))?
+        };
+        serde_json::from_slice(bytes).map_err(|e| fail(e.to_string()))
     };
     let mut catalog = ProjectionCatalog::from_resources(
         &parse(pack_path)?,
@@ -1533,12 +1593,17 @@ pub fn validate_projection_resources<'a>(
         )
         .map_err(|e| fail(e.to_string()))?;
         if operation["post_admission_ocr"]["mode"] == "fields_v1" {
-            verified_bytes(path)?;
+            if declaration_bytes.is_some() {
+                verified_bytes(path)?;
+            }
             catalog
                 .add_operation_fields(&operation)
                 .map_err(|e| fail(e.to_string()))?;
         }
     }
+    let Some(bytes) = declaration_bytes else {
+        return Ok(Some(VerifiedProjectionMetadata::unannotated(catalog)));
+    };
     let declaration = ProjectionMetadata::parse(bytes).map_err(|e| fail(e.to_string()))?;
     let verified = declaration
         .validate(catalog)
@@ -1776,6 +1841,57 @@ mod tests {
     use actingcommand_recognition::{Scene, ScenePixelFormat};
     use std::io::{self, Write};
     use zip::write::FileOptions;
+
+    #[test]
+    fn online_observation_admission_without_task_and_with_operation_catalog() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        entries.insert(
+            "resources/navigation/neutral.test.navigation.json".into(),
+            br#"{"navigation":[]}"#.to_vec(),
+        );
+        let operation_path = "resources/operations/task_a/task.json";
+        entries.remove(operation_path);
+        entries.insert(
+            "resources/manifest.json".into(),
+            br#"{"entry_task_id":"task_a"}"#.to_vec(),
+        );
+        let instance = InstanceId::new("neutral-observation").unwrap();
+        let bytes = zip_from_map(entries.clone());
+        let expected = Sha256Hash::digest(&bytes);
+        let mut containment = Containment::new();
+        let loaded = containment
+            .load_observation(&instance, &bytes, &expected)
+            .unwrap();
+        assert_eq!(loaded.layout(), PackageLayout::Lab);
+        assert!(loaded.operation().is_null());
+        assert!(loaded.projection_metadata().is_some());
+        assert!(
+            Containment::new()
+                .load(&instance, &bytes, &expected)
+                .is_err()
+        );
+        assert!(matches!(
+            Containment::new().load_observation(&instance, b"invalid zip", &expected),
+            Err(ContainmentError::HashMismatch { .. })
+        ));
+        let module = zip_with_entries(&[("manifest.json", br#"{"entry_task_id":"task_a"}"#)]);
+        assert!(
+            Containment::new()
+                .load_observation(&instance, &module, &Sha256Hash::digest(&module))
+                .is_err()
+        );
+        entries.insert(operation_path.into(), br#"{"task_id":"task_a","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"home_color","privacy":"personal"}]}}"#.to_vec());
+        let bytes = zip_from_map(entries);
+        let loaded = containment
+            .load_observation(&instance, &bytes, &Sha256Hash::digest(&bytes))
+            .unwrap();
+        let metadata = loaded.projection_metadata().unwrap();
+        assert_eq!(metadata.catalog().fields.len(), 1);
+        assert_eq!(
+            metadata.target_privacy("home_color"),
+            Some(actingcommand_contract::page_projection::Privacy::Personal)
+        );
+    }
 
     #[test]
     fn load_single_lab_package_and_evaluate_from_capability() {

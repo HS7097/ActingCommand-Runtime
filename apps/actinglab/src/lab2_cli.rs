@@ -125,44 +125,92 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "observe")?;
     let instance = lab2_instance(global, flags);
-    let resources = super::contained_resources::load(flags, "observe")?;
-    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
-    let graph = super::contained_resources::navigation_graph(&resources)?;
+    let logical_path = super::contained_resources::explicit_path(flags, "--zip")?;
+    let expected = super::contained_resources::explicit_hash(flags)?;
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
+    let reader = actingcommand_resource_tooling::open_published_package(&logical_path)?;
     let result = (|| -> CliOutcome<Value> {
-        let loaded_scene = load_runtime_lab2_scene(&session, &instance)?;
-        let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
-        let frame_path = write_frame_if_requested(flags, &loaded_scene)?;
-        let targets = observe_targets(&evaluator, &loaded_scene.scene, flags, &outcome)?;
-        let actions = observe_actions(&graph, &outcome);
+        let path = reader
+            .path()
+            .canonicalize()
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        let request = actingcommand_contract::ContainedObservationRequest::new(
+            path.to_str()
+                .ok_or_else(|| CliError::package_invalid("package path is not UTF-8"))?,
+            expected.hash().to_string(),
+            target_list(flags),
+        )
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        let verified = match session.observe_contained_page(&instance, request) {
+            Ok(value) => value,
+            Err(error) => {
+                // A ledger/artifact fatal is already terminal; do not append recursively.
+                if !error.is_fatal() {
+                    session
+                        .record_event(RuntimeDebugEvent::failed(
+                            RuntimeDebugOperation::Observe,
+                            EffectDisposition::NotPerformed,
+                        ))
+                        .map_err(|ledger| {
+                            CliError::device(format!(
+                                "{error}; Runtime terminal ledger append failed: {ledger}"
+                            ))
+                        })?;
+                }
+                return Err(CliError::device(error.to_string()));
+            }
+        };
+        let observed = verified.observation();
         let mut payload = json!({
-            "req_id": session.correlation_id(),
-            "state": if outcome.matched { "observed" } else { "unknown" },
+            "req_id": verified.receipt().request_id(),
+            "state": observed.status,
             "instance": instance,
-            "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
-            "matched": outcome.matched,
-            "standby": outcome.standby,
-            "frame_age_ms": loaded_scene.frame_age_ms,
-            "backend": loaded_scene.backend,
-            "frame_source": loaded_scene.source,
-            "targets": targets,
-            "actions": actions,
+            "page": observed.projection.page,
+            "matched": observed.projection.matched,
+            "standby": observed.projection.standby,
+            "frame_source": observed.frame.artifact(),
+            "facts": observed.facts,
+            "projection_source": {
+                "kind": "runtime_global_ledger", "correlation_id": session.correlation_id(),
+                "artifact": observed.artifact, "projection_sequence": observed.projection_sequence,
+                "projection_event_id": observed.projection_event_id,
+                "content_sha256": observed.projection.content_sha256,
+                "expected_package_sha256": observed.expected_package_sha256,
+                "actual_package_sha256": observed.actual_package_sha256,
+            },
+            "terminal": verified.receipt().terminal(),
             "arbitration": runtime_scheduler_projection(false),
         });
-        if !outcome.matched {
-            payload["candidates"] = json!(lab2_page_candidates(&outcome));
-        }
-        if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
-            payload["suspicion"] = suspicion;
-        }
-        if let Some(path) = frame_path {
+        if let Some(path) = flags.optional_path("--with-frame") {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent).map_err(|error| CliError::device(error.to_string()))?;
+            }
+            fs::write(&path, verified.png())
+                .map_err(|error| CliError::device(error.to_string()))?;
             payload["frame_path"] = json!(path.display().to_string());
         }
-        attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
-        Ok(payload)
+        let terminal =
+            if observed.status == actingcommand_contract::PageObservationStatus::Recognized {
+                RuntimeDebugEvent::completed(
+                    RuntimeDebugOperation::Observe,
+                    EffectDisposition::NotPerformed,
+                )
+            } else {
+                RuntimeDebugEvent::failed(
+                    RuntimeDebugOperation::Observe,
+                    EffectDisposition::NotPerformed,
+                )
+            };
+        session
+            .record_event(terminal)
+            .map_err(|error| CliError::device(error.to_string()))?;
+        observation::project(payload, observed.projection.clone(), flags, global.verbose)
     })();
-    finish_runtime_debug_result(&session, RuntimeDebugOperation::Observe, flags, result)
+    super::contained_resources::finish_package_use(result, reader.close())
 }
 
 fn run_runtime_do(
@@ -1616,15 +1664,6 @@ fn observe_targets(
         }
     }
     Ok(targets)
-}
-
-fn observe_actions(graph: &NavigationGraph, outcome: &PageDetectionOutcome) -> Vec<Value> {
-    graph
-        .edges
-        .iter()
-        .filter(|edge| outcome.matched && edge.from_page == outcome.page)
-        .map(navigation_edge_json)
-        .collect::<Vec<_>>()
 }
 
 fn lab2_page_candidates(outcome: &PageDetectionOutcome) -> Vec<Value> {
