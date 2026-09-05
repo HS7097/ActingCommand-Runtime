@@ -1623,38 +1623,80 @@ fn selected_build_retains_required_ocr_target_closure() {
 
 #[test]
 fn build_pack_includes_verify_template_targets() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let converter = OperationConverter {
-        root: root.clone(),
-        game: "arknights".to_string(),
-        server: "cn".to_string(),
-        locale: "zh-CN".to_string(),
+    let root = write_error_page_fixture();
+    let bundle_dir = root.path().join("operations/error-page-check");
+    let mut converter = OperationConverter {
+        root: root.path().to_path_buf(),
+        game: "neutral".to_string(),
+        server: "test".to_string(),
+        locale: "en-US".to_string(),
         coordinate_space: json!({"width":1280,"height":720}),
-        defaults: json!({"template_threshold":0.95}),
+        defaults: json!({"template_threshold":0.95,"color_max_distance":20.0}),
         resource_ids: HashSet::new(),
-        bundles: vec![Bundle {
-            task_id: "daily-check".to_string(),
-            dir: root.join("operations/daily-check"),
-            data: json!({
-                "schema_version": "0.3",
-                "task_id": "daily-check",
-                "anchors": [],
-                "verify_templates": [{
-                    "id": "template/mail-ready",
-                    "template": "assets/VERIFY_MAIL_READY.png",
-                    "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
-                    "threshold": 0.97
-                }],
-                "operations": []
-            }),
-        }],
+        bundles: vec![
+            Bundle {
+                task_id: "daily-check".to_string(),
+                dir: bundle_dir.clone(),
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "daily-check",
+                    "game": "neutral",
+                    "server_scope": ["test"],
+                    "defaults": {"template_threshold":0.95},
+                    "anchors": [{
+                        "id":"shared-page","template":"assets/HOME.png",
+                        "region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}
+                    }],
+                    "verify_templates": [{
+                        "id": "template/mail-ready",
+                        "template": "assets/HOME.png",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
+                        "threshold": 0.97
+                    }],
+                    "entry_page": "shared-page",
+                    "target_page": "shared-page",
+                    "operations": [{
+                        "id":"check-shared","from":"shared-page","to":"shared-page",
+                        "click":{"kind":"point","x":0,"y":0},
+                        "verify_template":"assets/ALTERNATE.png"
+                    }]
+                }),
+            },
+            Bundle {
+                task_id: "local-check".to_string(),
+                dir: bundle_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "local-check",
+                    "game": "neutral",
+                    "server_scope": ["test"],
+                    "defaults": {"template_threshold":0.9},
+                    "anchors": [{
+                        "id":"local-page","template":"assets/SUCCESS.png",
+                        "region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}
+                    }],
+                    "verify_templates": [{
+                        "id":"template/local-ready","template":"assets/SUCCESS.png",
+                        "region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}
+                    }],
+                    "entry_page": "local-page",
+                    "target_page": "local-page",
+                    "operations": [{
+                        "id":"check-local","from":"local-page","to":"local-page",
+                        "click":{"kind":"point","x":0,"y":0},
+                        "verify_template":"assets/FAILURE.png"
+                    }]
+                }),
+            },
+        ],
         existing_navigation: None,
         maa_task_overlays: HashMap::new(),
     };
 
     let pack = converter.build_pack().unwrap();
-    let target_value = pack
-        .pointer("/targets/0")
+    let target_value = array_field(&pack, "targets")
+        .iter()
+        .find(|target| target["id"] == "template/mail-ready")
         .expect("verify-template target value");
     let target = target_value.as_object().expect("verify-template target");
     assert_eq!(target.get("type").and_then(Value::as_str), Some("template"));
@@ -1664,7 +1706,7 @@ fn build_pack_includes_verify_template_targets() {
     );
     assert_eq!(
         target.get("template_path").and_then(Value::as_str),
-        Some("operations/daily-check/assets/VERIFY_MAIL_READY.png")
+        Some("operations/error-page-check/assets/HOME.png")
     );
     assert_eq!(
         target_value.pointer("/region/y").and_then(Value::as_i64),
@@ -1674,6 +1716,164 @@ fn build_pack_includes_verify_template_targets() {
         target_value.pointer("/threshold").and_then(Value::as_f64),
         Some(0.97)
     );
+
+    let expected = [
+        ("page/shared-page", 0.95),
+        ("template/mail-ready", 0.97),
+        ("template/alternate", 0.95),
+        ("page/local-page", 0.9),
+        ("template/local-ready", 0.9),
+        ("template/failure", 0.9),
+    ];
+    assert_eq!(pack["defaults"], converter.defaults);
+    assert_eq!(array_field(&pack, "targets").len(), expected.len());
+    for (target, (id, threshold)) in array_field(&pack, "targets").iter().zip(expected) {
+        assert_eq!(target["id"], id);
+        assert_eq!(target["threshold"], json!(threshold));
+    }
+    for task_id in ["daily-check", "local-check"] {
+        let selected = converter.build_selected(&[task_id.to_string()]).unwrap();
+        assert_eq!(selected.pack["defaults"], pack["defaults"]);
+        assert_eq!(array_field(&selected.pack, "targets").len(), 3);
+        for target in array_field(&selected.pack, "targets") {
+            let original = array_field(&pack, "targets")
+                .iter()
+                .find(|original| original["id"] == target["id"])
+                .expect("selected target is resident in the full pack");
+            assert_eq!(target, original);
+        }
+    }
+
+    let local_bundle = converter.bundles[1].clone();
+    let local_ids = [
+        "page/local-page",
+        "template/local-ready",
+        "template/failure",
+    ];
+    for source_id in ["local-page", "template/local-ready", "check-local"] {
+        converter
+            .maa_task_overlays
+            .insert(source_id.to_string(), json!({"templThreshold":0.93}));
+    }
+    for explicit in [true, false] {
+        converter.bundles[1] = local_bundle.clone();
+        if explicit {
+            for field in ["anchors", "verify_templates", "operations"] {
+                converter.bundles[1].data[field][0]["threshold"] = json!(0.98);
+            }
+        }
+        let enriched = converter.build_pack().unwrap();
+        for id in local_ids {
+            let target = array_field(&enriched, "targets")
+                .iter()
+                .find(|target| target["id"] == id)
+                .unwrap();
+            assert_eq!(
+                target["threshold"],
+                json!(if explicit { 0.98 } else { 0.93 })
+            );
+        }
+    }
+    converter.maa_task_overlays.clear();
+
+    for defaults in [Some(json!({})), None] {
+        converter.bundles[1] = local_bundle.clone();
+        match defaults {
+            Some(defaults) => converter.bundles[1].data["defaults"] = defaults,
+            None => {
+                converter.bundles[1]
+                    .data
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("defaults");
+            }
+        }
+        let fallback = converter.build_pack().unwrap();
+        for id in local_ids {
+            let target = array_field(&fallback, "targets")
+                .iter()
+                .find(|target| target["id"] == id)
+                .unwrap();
+            assert_eq!(target["threshold"], json!(0.95));
+        }
+    }
+    for invalid in [
+        Value::Null,
+        json!("0.9"),
+        json!(false),
+        json!([]),
+        json!({}),
+    ] {
+        converter.bundles[1] = local_bundle.clone();
+        converter.bundles[1].data["defaults"]["template_threshold"] = invalid.clone();
+        assert!(
+            converter
+                .build_pack()
+                .unwrap_err()
+                .message
+                .contains("threshold must be a number")
+        );
+        for field in ["anchors", "verify_templates", "operations"] {
+            converter.bundles[1] = local_bundle.clone();
+            converter.bundles[1].data[field][0]["threshold"] = invalid.clone();
+            assert!(
+                converter
+                    .build_pack()
+                    .unwrap_err()
+                    .message
+                    .contains("threshold must be a number")
+            );
+        }
+        converter.bundles[1] = local_bundle.clone();
+        converter.bundles[1].data["defaults"] = json!({});
+        converter.defaults["template_threshold"] = invalid;
+        assert!(
+            converter
+                .build_pack()
+                .unwrap_err()
+                .message
+                .contains("threshold must be a number")
+        );
+        converter.defaults["template_threshold"] = json!(0.95);
+    }
+    converter.bundles[1] = local_bundle.clone();
+    converter.bundles[1].data["defaults"] = Value::Null;
+    assert!(
+        converter
+            .build_pack()
+            .unwrap_err()
+            .message
+            .contains("defaults must be an object")
+    );
+    converter.bundles[1].data["defaults"] = json!({});
+    converter
+        .defaults
+        .as_object_mut()
+        .unwrap()
+        .remove("template_threshold");
+    assert!(
+        converter
+            .build_pack()
+            .unwrap_err()
+            .message
+            .contains("missing field template_threshold")
+    );
+    converter.defaults["template_threshold"] = json!(0.95);
+
+    for invalid in [-0.1, 1.1] {
+        converter.bundles[1] = local_bundle.clone();
+        converter.bundles[1].data["defaults"]["template_threshold"] = json!(invalid);
+        let invalid_pack = converter.build_pack().unwrap();
+        let error = validate_recognition_metadata(
+            "recognition/generated.pack.json",
+            &invalid_pack.to_string(),
+            "recognition/generated.pages.json",
+            r#"{"schema_version":"0.6","pages":[]}"#,
+            Arc::new(FsAssetResolver::new(root.path().to_path_buf())),
+        )
+        .expect_err("the formal recognition validator rejects out-of-range target thresholds");
+        assert!(error.to_string().contains("threshold"));
+    }
 }
 
 fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
