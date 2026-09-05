@@ -228,12 +228,14 @@ fn zero_input_fields_build_and_declaration_boundaries() {
         .build(&AuthoringEnvironmentSnapshot::default())
     };
     build(&task, "navigable_route", "fields").expect("official zero-input build-task");
+    let bytes = open_published_package(&temp.path().join("fields.zip"))
+        .unwrap()
+        .read_all()
+        .unwrap();
     let validated = validate_package(PackageValidateRequest {
         zip_path: temp.path().join("fields.zip"),
         include_entries: true,
-        expected_input_sha256: Some(actingcommand_pack_containment::Sha256Hash::digest(
-            &fs::read(temp.path().join("fields.zip")).unwrap(),
-        )),
+        expected_input_sha256: Some(actingcommand_pack_containment::Sha256Hash::digest(&bytes)),
     })
     .expect("hash-bound package validation");
     assert_eq!(validated.status, "valid");
