@@ -9857,6 +9857,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
 
 // Authorized D01 callback regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
 // Zero-input Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553542252
+// ZIF-D01: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5554095550
 #[test]
 fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     use actingcommand_recognition_pack::{
@@ -10157,7 +10158,12 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         }
     }
 
-    for declared_page in ["home", "terminal"] {
+    for (declared_page, explicit_home, starts_home) in [
+        ("home", false, true),
+        ("terminal", false, true),
+        ("home", true, true),
+        ("home", true, false),
+    ] {
         let mut files = zero_input_files.clone();
         let mut task = task.clone();
         task["operations"] = json!([]);
@@ -10168,6 +10174,24 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             "resources/operations/task/task.json".into(),
             serde_json::to_vec(&task).unwrap(),
         );
+        if explicit_home {
+            let pack_path = "resources/recognition/neutral.test.pack.json";
+            let mut pack: Value = serde_json::from_slice(&files[pack_path]).unwrap();
+            for (id, color) in [
+                ("home/green_anchor", [0, 255, 0]),
+                ("home/alternate_anchor", [255, 255, 255]),
+            ] {
+                pack["targets"].as_array_mut().unwrap().push(json!({
+                    "type":"color","id":id,"region":{"x":1,"y":0,"width":1,"height":1},
+                    "expected":color
+                }));
+            }
+            files.insert(pack_path.into(), serde_json::to_vec(&pack).unwrap());
+            let pages_path = "resources/recognition/neutral.test.pages.json";
+            let mut pages: Value = serde_json::from_slice(&files[pages_path]).unwrap();
+            pages["pages"][0]["any_of"] = json!([["home/green_anchor", "home/alternate_anchor"]]);
+            files.insert(pages_path.into(), serde_json::to_vec(&pages).unwrap());
+        }
         let mut package = ZipWriter::new(Cursor::new(Vec::new()));
         for (path, bytes) in files {
             package
@@ -10184,6 +10208,17 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         let package_path = root.path().join("zero-input-fields.zip");
         fs::write(&package_path, &bytes).unwrap();
         let state = Arc::new(FakeState::default());
+        if explicit_home {
+            state.fail_capture_on.store(2, Ordering::Release);
+            state
+                .transient_capture_failure
+                .store(true, Ordering::Release);
+            if !starts_home {
+                state
+                    .transition_capture_after_capture
+                    .store(1, Ordering::Release);
+            }
+        }
         let vision = Arc::new(FakeVisionProvider::default());
         let host = RuntimeHost::start(
             config(&root),
@@ -10210,8 +10245,44 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
         assert_eq!(
             vision.ocr_calls.load(Ordering::Acquire),
-            u64::from(declared_page == "home")
+            u64::from(declared_page == "home" && starts_home)
         );
+        if explicit_home {
+            let facts = events
+                .iter()
+                .filter_map(|event| match event.payload() {
+                    EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                facts
+                    .iter()
+                    .filter(|fact| matches!(fact,
+                        TaskSemanticFact::EntryRecognition {
+                            phase: TaskEntryRecognitionPhase::Initial, required_page, matched,
+                        } if required_page == "neutral/home" && *matched == starts_home
+                    ))
+                    .count(),
+                1
+            );
+            assert!(facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecoveryDecision { required: false }
+            )));
+            assert!(!facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecoveryPackageAdmitted { .. }
+                    | TaskSemanticFact::EntryRecoveryCompleted { .. }
+                    | TaskSemanticFact::StepStarted { .. }
+            )));
+            assert!(facts.iter().any(|fact| matches!(fact,
+                TaskSemanticFact::EntryTargetDisposition { disposition, failure_code }
+                    if (*disposition == TaskEntryTargetDisposition::Started && starts_home && failure_code.is_none())
+                        || (*disposition == TaskEntryTargetDisposition::FailClosed && !starts_home
+                            && failure_code.as_deref() == Some("contained_task_home_entry_not_matched"))
+            )));
+        }
         let terminals = events
             .iter()
             .filter_map(|event| match event.payload() {
@@ -10223,7 +10294,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             })
             .collect::<Vec<_>>();
         assert_eq!(terminals.len(), 1, "exactly one terminal: {result:?}");
-        if declared_page == "home" {
+        if declared_page == "home" && starts_home {
             let output = result.expect("official zero-input fields receipt");
             assert!(
                 matches!(output.receipt().result(), Some(RuntimeResult::ContainedTaskCompleted {
@@ -10244,6 +10315,28 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert_eq!(projection.failure(), None);
             assert_eq!(projection.records().len(), 1);
             assert_eq!(terminals[0].0.links().run_id(), Some(&projection.run_id()));
+            let summary_event = events
+                .iter()
+                .find(|event| event.event_type() == EventType::CaptureSummaryCommitted)
+                .expect("terminal capture summary");
+            assert_eq!(
+                summary_event.links().run_id(),
+                terminals[0].0.links().run_id()
+            );
+            assert!(summary_event.sequence() < terminals[0].0.sequence());
+            let EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) =
+                summary_event.payload()
+            else {
+                panic!("typed terminal capture summary");
+            };
+            assert_eq!(summary.summary().frames().len(), 1);
+            assert_eq!(
+                summary.summary().frames()[0].artifact().frame_id(),
+                Some(&projection.records()[0].frame_id())
+            );
+            assert!(summary.summary().pinned().iter().any(|pin| {
+                pin.reason() == PinnedFrameReason::Terminal && pin.frame_index() == Some(0)
+            }));
             let value = serde_json::to_value(projection).unwrap();
             assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
             assert_eq!(

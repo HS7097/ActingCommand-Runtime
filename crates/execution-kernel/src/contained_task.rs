@@ -1295,6 +1295,10 @@ pub enum ContainedTaskTrace {
         package_sha256: String,
     },
     RunStarted,
+    EntryRecognition {
+        required_page: String,
+        matched: bool,
+    },
     CaptureCompleted {
         width: u32,
         height: u32,
@@ -1589,7 +1593,7 @@ impl PreparedContainedTask {
     }
 
     pub fn maximum_executed_steps(&self) -> u32 {
-        if self.control.execution_mode == "recognize_only" {
+        if self.control.execution_mode == "recognize_only" || self.program.operations.is_empty() {
             0
         } else {
             self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS)
@@ -2414,6 +2418,22 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        if self.program.operations.is_empty()
+            && let Some(required_page) = self.required_home_entry_page()
+        {
+            let matched = page.as_deref() == Some(required_page);
+            runtime
+                .record(ContainedTaskTrace::EntryRecognition {
+                    required_page: required_page.to_owned(),
+                    matched,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            if !matched {
+                return Err(
+                    ContainedTaskError::new("contained_task_home_entry_not_matched").into(),
+                );
+            }
+        }
         let Some(page_label) = page else {
             return Ok(None);
         };

@@ -51,6 +51,13 @@ a declared terminal page produces the ordinary verified report and successful re
 with zero executed steps and zero input calls. A different admitted page cannot advance
 an empty task and fails without fields success or input.
 
+For an explicit required Home entry using `any_of`, the zero-input task confirms that
+entry within the interpreter's first capture, before collecting fields. The Host records
+the existing entry-recognition, no-recovery and target-disposition facts from that decision.
+An unmatched required entry fails on that frame without fields or recovery. The report
+and observation share its FrameId; the run's terminal capture summary pins that same frame.
+Tasks with actions retain the Host's entry preflight and recovery behavior.
+
 `package dry-run` admits both nonempty and zero-input `0.8` packages through the typed
 Runtime validator, including field, dictionary, privacy and outcome declarations. It
 uses the existing production interpreter with OCR disabled for offline simulation;
