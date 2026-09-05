@@ -1072,63 +1072,175 @@ mod tests {
     }
 
     #[test]
-    fn page_projection_private_and_unmarked_values_never_escape() {
-        for mode in 0..5 {
-            let mut declaration = declaration();
-            if mode == 1 {
-                declaration.targets[0].privacy = Privacy::Personal;
-            }
-            if mode == 2 {
-                declaration.fields[0].privacy = Privacy::Personal;
-            }
-            if mode == 3 {
-                declaration.targets.clear();
-            }
-            if mode == 4 {
-                declaration.fields.clear();
-            }
-            let metadata = declaration.validate(catalog()).unwrap();
-            let mut facts = input();
-            facts.fields.push(FieldInput {
-                target_id: "value".into(),
-                field: Some(FieldKey {
-                    task_id: "task".into(),
-                    field_id: "amount".into(),
+    fn page_projection_operation_privacy_controls_field_visibility() {
+        let mut hashes = BTreeMap::new();
+        for companion in 0..4 {
+            for personal_source in 0..5 {
+                let mut annotations = declaration();
+                if companion & 1 == 0 && personal_source != 1 {
+                    annotations.targets.clear();
+                }
+                if companion & 2 == 0 && personal_source != 2 {
+                    annotations.fields.clear();
+                }
+                if personal_source == 1 {
+                    annotations.targets[0].privacy = Privacy::Personal;
+                }
+                if personal_source == 2 {
+                    annotations.fields[0].privacy = Privacy::Personal;
+                }
+                let mut references = catalog();
+                references.fields.clear();
+                references.field_privacy.clear();
+                references.add_operation_fields(&json!({
+                    "task_id":"task", "post_admission_ocr":{
+                        "mode":"fields_v1", "fields":[{
+                            "id":"amount", "target_id":"value",
+                            "privacy":if personal_source == 3 { "personal" } else { "public" }
+                        }]
+                    }
+                })).unwrap();
+                let metadata = if companion == 0 && personal_source == 0 {
+                    VerifiedProjectionMetadata::unannotated(references)
+                } else {
+                    annotations.validate(references).unwrap()
+                };
+                let mut facts = input();
+                facts.fields.push(FieldInput {
                     target_id: "value".into(),
-                }),
-                parsed: true,
-                raw_text: Some("private text".into()),
-                value: Some(json!("private value")),
-                detail: Some("private detail".into()),
-                privacy: None,
-            });
-            let projected = project(facts, &metadata).unwrap();
-            assert_eq!(projected.fields[0]["redacted"], mode != 0);
-            if mode != 0 {
-                assert!(
-                    !serde_json::to_string(&projected)
-                        .unwrap()
-                        .contains("private ")
-                );
+                    field: Some(FieldKey {
+                        task_id: "task".into(),
+                        field_id: "amount".into(),
+                        target_id: "value".into(),
+                    }),
+                    parsed: true,
+                    raw_text: Some("sample raw".into()),
+                    value: Some(json!("sample value")),
+                    detail: Some("sample detail".into()),
+                    privacy: Some(if personal_source == 4 {
+                        Privacy::Personal
+                    } else {
+                        Privacy::Public
+                    }),
+                });
+                let projected = project(facts, &metadata).unwrap();
+                let personal = personal_source != 0;
+                let field = &projected.fields[0];
+                assert_eq!(field["redacted"], personal, "companion={companion}, source={personal_source}");
+                assert_eq!(field["privacy"], if personal { "personal" } else { "public" });
+                assert_eq!(field["parsed"], true);
+                if personal {
+                    for key in ["raw_text", "value", "detail"] {
+                        assert!(field[key].is_null());
+                    }
+                    assert!(!serde_json::to_string(&projected).unwrap().contains("sample "));
+                } else {
+                    assert_eq!(field["raw_text"], "sample raw");
+                    assert_eq!(field["value"], "sample value");
+                    assert_eq!(field["detail"], "sample detail");
+                }
+                if let Some(expected) = hashes.get(&personal) {
+                    assert_eq!(&projected.content_sha256, expected);
+                } else {
+                    hashes.insert(personal, projected.content_sha256);
+                }
             }
         }
-        let metadata = declaration().validate(catalog()).unwrap();
+    }
+
+    #[test]
+    fn page_projection_catalog_identity_controls_unannotated_values() {
+        let unannotated = VerifiedProjectionMetadata::unannotated(catalog());
+        let annotated = declaration().validate(catalog()).unwrap();
+        for oversized in [false, true] {
+            let mut hashes = Vec::new();
+            for metadata in [&unannotated, &annotated] {
+                let mut facts = input();
+                facts.fields.push(FieldInput {
+                    target_id: "value".into(),
+                    field: None,
+                    parsed: true,
+                    raw_text: Some("sample raw".into()),
+                    value: Some(json!(if oversized { "x".repeat(BYTE_LIMIT + 1) } else { "sample value".into() })),
+                    detail: Some("sample detail".into()),
+                    privacy: None,
+                });
+                let projected = project(facts, metadata).unwrap();
+                assert_eq!(projected.metrics.entry_count, 1);
+                assert_eq!(projected.output_truncated, oversized);
+                assert_eq!(projected.omitted_count, usize::from(oversized));
+                assert!(serialized_len(&projected).unwrap() <= BYTE_LIMIT);
+                if oversized {
+                    assert!(projected.fields.is_empty());
+                } else {
+                    assert_eq!(projected.fields[0]["redacted"], false);
+                    assert_eq!(projected.fields[0]["privacy"], "public");
+                    assert_eq!(projected.fields[0]["raw_text"], "sample raw");
+                    assert_eq!(projected.fields[0]["value"], "sample value");
+                    assert_eq!(projected.fields[0]["detail"], "sample detail");
+                }
+                let mut content = serde_json::to_value(&projected).unwrap();
+                content.as_object_mut().unwrap().remove("content_sha256");
+                assert_eq!(projected.content_sha256, format!("{:x}", Sha256::digest(serde_json::to_vec(&content).unwrap())));
+                hashes.push(projected.content_sha256);
+            }
+            assert_eq!(hashes[0], hashes[1]);
+        }
+        for personal_source in 0..2 {
+            let mut annotations = declaration();
+            if personal_source == 0 {
+                annotations.targets[0].privacy = Privacy::Personal;
+            }
+            let metadata = annotations.validate(catalog()).unwrap();
+            let mut facts = input();
+            facts.fields.push(FieldInput {
+                target_id: "value".into(), field: None, parsed: false,
+                raw_text: Some("personal raw".into()), value: Some(json!("personal value")),
+                detail: Some("personal detail".into()),
+                privacy: Some(if personal_source == 1 { Privacy::Personal } else { Privacy::Public }),
+            });
+            let projected = project(facts, &metadata).unwrap();
+            assert_eq!(projected.fields[0]["privacy"], "personal");
+            assert_eq!(projected.fields[0]["redacted"], true);
+            assert_eq!(projected.fields[0]["parsed"], false);
+            assert!(!serde_json::to_string(&projected).unwrap().contains("personal "));
+        }
+        for invalid_source in 0..6 {
+            let mut facts = input();
+            let mut field = FieldInput {
+                target_id: "value".into(), field: None, parsed: true,
+                raw_text: Some("unbound raw".into()), value: Some(json!("unbound value")),
+                detail: Some("unbound detail".into()), privacy: Some(Privacy::Public),
+            };
+            match invalid_source {
+                0 => field.target_id = "unknown".into(),
+                1..=3 => field.field = Some(FieldKey {
+                    task_id: if invalid_source == 1 { "unknown" } else { "task" }.into(),
+                    field_id: if invalid_source == 2 { "unknown" } else { "amount" }.into(),
+                    target_id: if invalid_source == 3 { "anchor" } else { "value" }.into(),
+                }),
+                4 => facts.frame.width += 1,
+                _ => facts.frame.sha256 = "unbound".into(),
+            }
+            facts.fields.push(field);
+            assert!(project(facts, &annotated).is_err());
+        }
+        let key = FieldKey { task_id: "task".into(), field_id: "unbound".into(), target_id: "value".into() };
+        let mut references = catalog();
+        references.fields.insert(key.clone());
+        let mut annotations = declaration();
+        annotations.fields.push(FieldAnnotation { field: key.clone(), privacy: Privacy::Public, source: "neutral/spec".into() });
+        let metadata = annotations.validate(references).unwrap();
         let mut facts = input();
         facts.fields.push(FieldInput {
-            target_id: "value".into(),
-            field: None,
-            parsed: true,
-            raw_text: Some("private text".into()),
-            value: None,
-            detail: Some("private detail".into()),
-            privacy: Some(Privacy::Personal),
+            target_id: "value".into(), field: Some(key), parsed: true,
+            raw_text: Some("unbound raw".into()), value: Some(json!("unbound value")),
+            detail: Some("unbound detail".into()), privacy: Some(Privacy::Public),
         });
         let projected = project(facts, &metadata).unwrap();
-        assert!(
-            !serde_json::to_string(&projected)
-                .unwrap()
-                .contains("private ")
-        );
+        assert!(projected.fields[0]["privacy"].is_null());
+        assert_eq!(projected.fields[0]["redacted"], true);
+        assert!(!serde_json::to_string(&projected).unwrap().contains("unbound "));
     }
 
     #[test]
