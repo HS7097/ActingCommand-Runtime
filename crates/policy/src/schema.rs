@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
 pub const SCHEDULING_SCHEMA_VERSION: &str = "actingcommand.scheduling.v1";
+pub const SCHEDULING_SCHEMA_VERSION_V2: &str = "actingcommand.scheduling.v2";
 pub const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 pub const MAX_CATALOG_BYTES: usize = 4_194_304;
 pub const MAX_ID_BYTES: usize = 128;
@@ -157,10 +158,12 @@ pub struct CatalogBundle {
 
 impl CatalogBundle {
     pub fn descriptors_match(&self) -> bool {
-        self.tasks.schema_version == SCHEDULING_SCHEMA_VERSION
-            && self.pools.schema_version == SCHEDULING_SCHEMA_VERSION
-            && self.activity.schema_version == SCHEDULING_SCHEMA_VERSION
-            && self.timeline.schema_version == SCHEDULING_SCHEMA_VERSION
+        matches!(
+            self.tasks.schema_version.as_str(),
+            SCHEDULING_SCHEMA_VERSION | SCHEDULING_SCHEMA_VERSION_V2
+        ) && self.pools.schema_version == self.tasks.schema_version
+            && self.activity.schema_version == self.tasks.schema_version
+            && self.timeline.schema_version == self.tasks.schema_version
             && self.tasks.catalog == self.pools.catalog
             && self.tasks.catalog == self.activity.catalog
             && self.tasks.catalog == self.timeline.catalog
@@ -294,6 +297,9 @@ pub enum PredicateSpec {
     },
     Clock {
         schedule: ClockSchedule,
+    },
+    TimelineActive {
+        event_id: String,
     },
     ResourceProjection {
         pool_id: String,
@@ -539,6 +545,29 @@ pub struct TimelineEvent {
     pub schedule: ClockSchedule,
     pub duration_ms: u64,
     pub invalidates_fact_prefixes: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_timeline_validity"
+    )]
+    pub validity: Option<TimelineValidity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineValidity {
+    pub from_unix_ms: u64,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub until_unix_ms: RequiredNullable<u64>,
+}
+
+fn deserialize_timeline_validity<'de, D>(
+    deserializer: D,
+) -> Result<Option<TimelineValidity>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    TimelineValidity::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

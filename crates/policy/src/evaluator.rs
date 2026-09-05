@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec,
-    ResourceEffectSpec, ScopeSelector, TaskSpec, TaskTerminalState,
+    ResourceEffectSpec, ScopeSelector, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -333,9 +333,35 @@ pub fn evaluate(
         .collect();
 
     let mut next_wake = None;
+    let timeline_events: BTreeMap<&str, &TimelineEvent> = catalog_bundle
+        .timeline
+        .events
+        .iter()
+        .map(|event| (event.id.as_str(), event))
+        .collect();
     for event in &catalog_bundle.timeline.events {
-        next_wake = min_wake(next_wake, next_schedule_occurrence(&event.schedule, time)?);
+        let wake = if event.validity.is_some() {
+            timeline_window(event, time)?.next_wake
+        } else {
+            next_schedule_occurrence(&event.schedule, time)?
+        };
+        next_wake = min_wake(next_wake, wake);
     }
+    // Admission's existing freshness ceiling is inclusive; V2 boundaries are exclusive.
+    let timeline_fresh_until =
+        if catalog_bundle.timeline.schema_version == crate::SCHEDULING_SCHEMA_VERSION_V2 {
+            next_wake
+                .map(|boundary| {
+                    boundary.checked_sub(1).ok_or_else(|| {
+                        PolicyEvaluationError::overflow(
+                            "timeline boundary has no preceding Unix millisecond",
+                        )
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        };
     let mut preload_hint = None;
     let placement_context = PlacementContext {
         profiles: catalog_bundle.activity.profiles.as_slice(),
@@ -372,6 +398,7 @@ pub fn evaluate(
             let decision_scope = ScopeSelector::Instance {
                 instance_id: instance.instance_id.clone(),
             };
+            let mut task_work = TaskWork::new(task.id.clone(), instance.instance_id.clone());
             let trigger = evaluate_predicate(
                 &task.trigger,
                 state,
@@ -380,6 +407,8 @@ pub fn evaluate(
                 &pool_specs,
                 &pool_values,
                 time,
+                &timeline_events,
+                &mut task_work.reasons,
             )?;
             next_wake = min_wake(next_wake, trigger.next_wake_unix_ms);
             if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
@@ -398,7 +427,6 @@ pub fn evaluate(
                 );
             }
 
-            let mut task_work = TaskWork::new(task.id.clone(), instance.instance_id.clone());
             match trigger.truth {
                 PredicateTruth::False => {
                     task_work.eligibility = EligibilityState::False;
@@ -424,6 +452,8 @@ pub fn evaluate(
                         &pool_specs,
                         &pool_values,
                         time,
+                        &timeline_events,
+                        &mut task_work.reasons,
                     )?;
                     next_wake = min_wake(next_wake, stop.next_wake_unix_ms);
                     match stop.truth {
@@ -449,8 +479,10 @@ pub fn evaluate(
                                 "eligible",
                                 "trigger passed and feedback stop did not fire",
                             ));
-                            let facts_fresh_until_unix_ms =
-                                min_wake(trigger.fresh_until_unix_ms, stop.fresh_until_unix_ms);
+                            let facts_fresh_until_unix_ms = min_wake(
+                                min_wake(trigger.fresh_until_unix_ms, stop.fresh_until_unix_ms),
+                                timeline_fresh_until,
+                            );
                             let cooldown_until = state
                                 .and_then(|state| state.last_dispatched_unix_ms)
                                 .map(|last| {
@@ -1097,6 +1129,7 @@ impl PredicateEvaluation {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_predicate(
     predicate: &PredicateSpec,
     task_state: Option<&TaskRuntimeSnapshot>,
@@ -1105,6 +1138,8 @@ fn evaluate_predicate(
     pool_specs: &BTreeMap<&str, &PoolSpec>,
     pool_values: &BTreeMap<&str, &PoolValueSnapshot>,
     time: EvaluationTime,
+    timeline_events: &BTreeMap<&str, &TimelineEvent>,
+    reasons: &mut Vec<DecisionReason>,
 ) -> PolicyEvaluationResult<PredicateEvaluation> {
     match predicate {
         PredicateSpec::All { predicates } => {
@@ -1121,6 +1156,8 @@ fn evaluate_predicate(
                     pool_specs,
                     pool_values,
                     time,
+                    timeline_events,
+                    reasons,
                 )?;
                 next_wake = min_wake(next_wake, result.next_wake_unix_ms);
                 fresh_until = min_wake(fresh_until, result.fresh_until_unix_ms);
@@ -1159,6 +1196,8 @@ fn evaluate_predicate(
                     pool_specs,
                     pool_values,
                     time,
+                    timeline_events,
+                    reasons,
                 )?;
                 next_wake = min_wake(next_wake, result.next_wake_unix_ms);
                 match result.truth {
@@ -1197,6 +1236,8 @@ fn evaluate_predicate(
                 pool_specs,
                 pool_values,
                 time,
+                timeline_events,
+                reasons,
             )?;
             result.truth = match result.truth {
                 PredicateTruth::True => PredicateTruth::False,
@@ -1211,6 +1252,40 @@ fn evaluate_predicate(
             let due = latest
                 .is_some_and(|occurrence| last_dispatched.is_none_or(|last| last < occurrence));
             Ok(PredicateEvaluation::known(due, next))
+        }
+        PredicateSpec::TimelineActive { event_id } => {
+            let event = timeline_events.get(event_id.as_str()).ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "compiled timeline reference '{event_id}' is missing"
+                ))
+            })?;
+            let applicable = facts.instances.iter().any(|instance| {
+                scope_matches_instance(decision_scope, instance)
+                    && scope_matches_instance(&event.scope, instance)
+            });
+            if !applicable || event.duration_ms == 0 {
+                reasons.push(reason(
+                    "timeline_unavailable",
+                    format!("event '{event_id}' has no positive applicable interval"),
+                ));
+                let mut result = PredicateEvaluation::known(false, None);
+                result.truth = PredicateTruth::Unknown;
+                return Ok(result);
+            }
+            let TimelineWindow {
+                active: window,
+                next_wake: next,
+            } = timeline_window(event, time)?;
+            reasons.push(reason(
+                "timeline_active",
+                format!(
+                    "event '{event_id}' at {}: interval {window:?}; next boundary {next:?}",
+                    time.unix_ms
+                ),
+            ));
+            let mut result = PredicateEvaluation::known(window.is_some(), next);
+            result.fresh_until_unix_ms = next;
+            Ok(result)
         }
         PredicateSpec::ResourceProjection {
             pool_id,
@@ -1655,6 +1730,69 @@ pub(crate) fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceS
         ScopeSelector::Server { server_id } => server_id == &instance.server_id,
         ScopeSelector::Game { game_id } => game_id == &instance.game_id,
     }
+}
+
+/// Resolves a V2 event on the same clock path as clock predicates. All boundaries
+/// are Unix milliseconds, including the clipped interval carried into admission.
+struct TimelineWindow {
+    active: Option<(u64, u64)>,
+    next_wake: Option<u64>,
+}
+
+fn timeline_window(
+    event: &TimelineEvent,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<TimelineWindow> {
+    let validity = event.validity.as_ref().ok_or_else(|| {
+        PolicyEvaluationError::invalid("timeline_active requires explicit V2 validity")
+    })?;
+    if event.duration_ms == 0
+        || validity
+            .until_unix_ms
+            .0
+            .is_some_and(|until| time.unix_ms >= until)
+    {
+        return Ok(TimelineWindow {
+            active: None,
+            next_wake: None,
+        });
+    }
+    let (latest, next) = schedule_occurrences(&event.schedule, time)?;
+    if next.is_none() && !matches!(event.schedule, ClockSchedule::At { .. }) {
+        return Err(PolicyEvaluationError::overflow(
+            "timeline next occurrence is outside Unix time",
+        ));
+    }
+    let mut wake = (validity.from_unix_ms > time.unix_ms).then_some(validity.from_unix_ms);
+    wake = min_wake(wake, validity.until_unix_ms.0);
+    wake = min_wake(
+        wake,
+        next.filter(|next| {
+            *next >= validity.from_unix_ms
+                && validity.until_unix_ms.0.is_none_or(|until| *next < until)
+        }),
+    );
+    let mut active = None;
+    if let Some(occurrence) = latest {
+        let end = occurrence.checked_add(event.duration_ms).ok_or_else(|| {
+            PolicyEvaluationError::overflow(format!(
+                "timeline event '{}' duration overflowed",
+                event.id
+            ))
+        })?;
+        let start = occurrence.max(validity.from_unix_ms);
+        let end = validity.until_unix_ms.0.map_or(end, |until| end.min(until));
+        if start < end && time.unix_ms < end {
+            wake = min_wake(wake, Some(end));
+            if time.unix_ms >= start {
+                active = Some((start, end));
+            }
+        }
+    }
+    Ok(TimelineWindow {
+        active,
+        next_wake: wake,
+    })
 }
 
 fn schedule_occurrences(
@@ -2232,6 +2370,349 @@ mod tests {
     use crate::{CatalogDocumentSource, CatalogSources, compile_catalog};
 
     const NOW: u64 = 3_600_000;
+
+    // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
+    #[test]
+    fn timeline_v2_weekly_tables_follow_four_hour_boundaries() {
+        const DAY: u64 = 86_400_000;
+        let monday = 4 * DAY - 4 * 3_600_000;
+        for days in [vec![1_u8, 3, 5], vec![2_u8, 4, 6]] {
+            let mut docs = example_documents();
+            for doc in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+                doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+            }
+            docs.3["events"] = serde_json::json!(days.iter().map(|day| serde_json::json!({
+                "id": format!("neutral.day-{day}"), "scope": {"kind":"server","server_id":"fixture-server-a"},
+                "event_kind":"activity", "schedule":{"kind":"weekly","weekday":day,"minute_of_day":240,
+                    "clock_source":{"kind":"server","timezone_id":"fixed/plus-eight","utc_offset_minutes":480,"dst_offset_minutes":0,"maintenance_drift_ms":0}},
+                "duration_ms":DAY, "invalidates_fact_prefixes":[], "validity":{"from_unix_ms":0,"until_unix_ms":null}
+            })).collect::<Vec<_>>());
+            docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"any","predicates":days.iter().map(|day|
+                serde_json::json!({"kind":"timeline_active","event_id":format!("neutral.day-{day}")})).collect::<Vec<_>>()});
+            docs.0["tasks"][0]["feedback_stop"] = false_fact();
+            let compiled = compile_documents(docs);
+            for day in 1..=7_u8 {
+                let start = monday + u64::from(day - 1) * DAY;
+                for (now, expected) in [
+                    (
+                        start - 60_000,
+                        days.contains(&(if day == 1 { 7 } else { day - 1 })),
+                    ),
+                    (start, days.contains(&day)),
+                    (start + 20 * 3_600_000, days.contains(&day)),
+                    (start + DAY - 1, days.contains(&day)),
+                ] {
+                    let result = evaluate(
+                        &compiled,
+                        &base_facts(),
+                        &base_resources(),
+                        EvaluationTime {
+                            unix_ms: now,
+                            monotonic_ms: now,
+                        },
+                        7,
+                    )
+                    .expect("weekly evaluation");
+                    assert_eq!(
+                        !result.dispatch_intents.is_empty(),
+                        expected,
+                        "days={days:?}, now={now}"
+                    );
+                    assert!(result.next_wake_unix_ms.is_some_and(|wake| wake > now));
+                }
+            }
+        }
+    }
+
+    // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
+    #[test]
+    fn timeline_v2_at_window_clips_validity_and_wakes_at_end() {
+        let mut docs = example_documents();
+        for doc in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+            doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+        }
+        docs.0["tasks"][0]["trigger"] =
+            serde_json::json!({"kind":"timeline_active","event_id":"neutral.window"});
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        docs.3["events"] = serde_json::json!([{
+            "id":"neutral.window","scope":{"kind":"server","server_id":"fixture-server-a"},"event_kind":"activity",
+            "schedule":{"kind":"at","at_ms":NOW+100,"clock_source":{"kind":"reveal","reveal_source":"evidence:neutral",
+                "timezone_id":"fixed/utc","utc_offset_minutes":0,"dst_offset_minutes":0,"maintenance_drift_ms":0}},
+            "duration_ms":1000,"invalidates_fact_prefixes":[],"validity":{"from_unix_ms":NOW+200,"until_unix_ms":NOW+900}
+        }]);
+        for (from, until, open, close) in [
+            (NOW + 200, Some(NOW + 900), NOW + 200, NOW + 900),
+            (0, None, NOW + 100, NOW + 1100),
+        ] {
+            docs.3["events"][0]["validity"] =
+                serde_json::json!({"from_unix_ms":from,"until_unix_ms":until});
+            let compiled = compile_documents(docs.clone());
+            for (now, active) in [
+                (open - 1, false),
+                (open, true),
+                (close - 1, true),
+                (close, false),
+            ] {
+                let result = evaluate(
+                    &compiled,
+                    &base_facts(),
+                    &base_resources(),
+                    EvaluationTime {
+                        unix_ms: now,
+                        monotonic_ms: now,
+                    },
+                    7,
+                )
+                .expect("bounded evaluation");
+                assert_eq!(!result.dispatch_intents.is_empty(), active);
+                assert_eq!(
+                    result.next_wake_unix_ms,
+                    if now < open {
+                        Some(open)
+                    } else if active {
+                        Some(close)
+                    } else {
+                        None
+                    }
+                );
+                if active {
+                    assert_eq!(
+                        result.dispatch_intents[0]
+                            .prerequisites
+                            .facts_fresh_until_unix_ms,
+                        Some(close - 1)
+                    );
+                }
+            }
+        }
+    }
+
+    // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
+    #[test]
+    fn timeline_v2_scope_and_expired_instance_windows_do_not_dispatch() {
+        let mut docs = example_documents();
+        for doc in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+            doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+        }
+        docs.0["tasks"][0]["trigger"] =
+            serde_json::json!({"kind":"timeline_active","event_id":"neutral.instance"});
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        docs.3["events"] = serde_json::json!([{"id":"neutral.instance","scope":{"kind":"instance","instance_id":"fixture-instance-a"},
+            "event_kind":"activity","schedule":{"kind":"at","at_ms":NOW,"clock_source":{"kind":"server","timezone_id":"fixed/utc",
+                "utc_offset_minutes":0,"dst_offset_minutes":0,"maintenance_drift_ms":0}},"duration_ms":1000,
+            "invalidates_fact_prefixes":[],"validity":{"from_unix_ms":NOW,"until_unix_ms":NOW+1000}}]);
+        for (scope, allowed) in [
+            (
+                serde_json::json!({"kind":"instance","instance_id":"fixture-instance-a"}),
+                true,
+            ),
+            (
+                serde_json::json!({"kind":"instance","instance_id":"fixture-instance-b"}),
+                false,
+            ),
+            (
+                serde_json::json!({"kind":"server","server_id":"fixture-server-a"}),
+                true,
+            ),
+            (
+                serde_json::json!({"kind":"server","server_id":"other-server"}),
+                false,
+            ),
+        ] {
+            docs.3["events"][0]["scope"] = scope;
+            let compiled = compile_documents(docs.clone());
+            for (now, active) in [(NOW, allowed), (NOW + 1000, false)] {
+                let result = evaluate(
+                    &compiled,
+                    &base_facts(),
+                    &base_resources(),
+                    EvaluationTime {
+                        unix_ms: now,
+                        monotonic_ms: now,
+                    },
+                    7,
+                )
+                .expect("scope evaluation");
+                assert_eq!(!result.dispatch_intents.is_empty(), active);
+            }
+        }
+        let compiled = compile_documents(docs.clone());
+        let mut facts = base_facts();
+        facts.instances.clear();
+        facts.facts.clear();
+        assert!(
+            evaluate(
+                &compiled,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW
+                },
+                7
+            )
+            .expect("no instance")
+            .dispatch_intents
+            .is_empty()
+        );
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"not","predicate":{"kind":"timeline_active","event_id":"neutral.instance"}});
+        let compiled = compile_documents(docs);
+        assert!(
+            evaluate(
+                &compiled,
+                &base_facts(),
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW
+                },
+                7
+            )
+            .expect("unknown scope stays unknown")
+            .dispatch_intents
+            .is_empty()
+        );
+    }
+
+    // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
+    #[test]
+    fn timeline_v2_zero_duration_and_overflow_fail_closed() {
+        let mut docs = example_documents();
+        for doc in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+            doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+        }
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"not","predicate":{"kind":"timeline_active","event_id":"neutral.zero"}});
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        docs.3["events"] = serde_json::json!([{"id":"neutral.zero","scope":{"kind":"server","server_id":"fixture-server-a"},"event_kind":"activity",
+            "schedule":{"kind":"interval","every_ms":1,"anchor_ms":0,"clock_source":{"kind":"local"}},"duration_ms":0,
+            "invalidates_fact_prefixes":[],"validity":{"from_unix_ms":0,"until_unix_ms":null}}]);
+        let compiled = compile_documents(docs.clone());
+        assert!(
+            evaluate(
+                &compiled,
+                &base_facts(),
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW
+                },
+                7
+            )
+            .expect("zero stays unknown")
+            .dispatch_intents
+            .is_empty()
+        );
+        docs.3["events"][0]["duration_ms"] = serde_json::json!(100);
+        let compiled = compile_documents(docs);
+        for now in [u64::MAX - 50, u64::MAX] {
+            let error = evaluate(
+                &compiled,
+                &base_facts(),
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: now,
+                    monotonic_ms: now,
+                },
+                7,
+            )
+            .expect_err("overflow must fail visibly");
+            assert_eq!(error.code(), "policy_evaluation_numeric_overflow");
+        }
+        let event = &compiled.catalog().timeline.events[0];
+        let result = timeline_window(
+            event,
+            EvaluationTime {
+                unix_ms: 0,
+                monotonic_ms: 0,
+            },
+        )
+        .expect("Unix epoch");
+        assert_eq!(result.active, Some((0, 100)));
+    }
+
+    // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
+    #[test]
+    fn timeline_v2_generation_and_reason_chain_bind_actual_consumption() {
+        let mut docs = example_documents();
+        for doc in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+            doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+        }
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"all","predicates":[due_clock(),
+            {"kind":"any","predicates":[{"kind":"timeline_active","event_id":"neutral.window"}, false_fact()]}]});
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        docs.3["events"] = serde_json::json!([{"id":"neutral.window","scope":{"kind":"server","server_id":"fixture-server-a"},"event_kind":"activity",
+            "schedule":{"kind":"at","at_ms":NOW,"clock_source":{"kind":"server","timezone_id":"fixed/utc",
+                "utc_offset_minutes":0,"dst_offset_minutes":0,"maintenance_drift_ms":0}},"duration_ms":1000,
+            "invalidates_fact_prefixes":[],"validity":{"from_unix_ms":0,"until_unix_ms":NOW+500}}]);
+        let first = compile_documents(docs.clone());
+        let result = evaluate(
+            &first,
+            &base_facts(),
+            &base_resources(),
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
+            7,
+        )
+        .expect("same evaluator");
+        assert_eq!(result.dispatch_intents.len(), 1);
+        assert_eq!(
+            result.dispatch_intents[0].catalog_hash,
+            first.catalog_hash()
+        );
+        assert_eq!(
+            result.dispatch_intents[0]
+                .prerequisites
+                .facts_fresh_until_unix_ms,
+            Some(NOW + 499)
+        );
+        assert!(
+            result.reason_chains[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "timeline_active"
+                    && reason.detail.contains("neutral.window"))
+        );
+        docs.3["events"][0]["validity"]["from_unix_ms"] = serde_json::json!(NOW + 1);
+        let second = compile_documents(docs.clone());
+        assert_ne!(first.catalog_hash(), second.catalog_hash());
+        assert!(
+            evaluate(
+                &second,
+                &base_facts(),
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW
+                },
+                7
+            )
+            .expect("changed validity")
+            .dispatch_intents
+            .is_empty()
+        );
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"any","predicates":[due_clock(),{"kind":"timeline_active","event_id":"neutral.window"}]});
+        let compiled = compile_documents(docs);
+        let result = evaluate(
+            &compiled,
+            &base_facts(),
+            &base_resources(),
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
+            7,
+        )
+        .expect("short circuit still wakes");
+        assert_eq!(result.next_wake_unix_ms, Some(NOW + 1));
+        assert_eq!(
+            result.dispatch_intents[0]
+                .prerequisites
+                .facts_fresh_until_unix_ms,
+            Some(NOW)
+        );
+    }
 
     #[test]
     fn same_inputs_produce_byte_stable_decisions() {

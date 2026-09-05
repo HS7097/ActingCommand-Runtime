@@ -1,5 +1,8 @@
 # Scheduling Catalog Contract
 
+The versioned [V2 contract](v2/README.md) adds explicit timeline availability
+through the same compiler and evaluator. This document specifies V1.
+
 The scheduling catalog is a four-document, data-only contract. It cannot contain executable code, scripts, network requests, device actions, or implicit defaults.
 
 ## Frozen V1 Documents

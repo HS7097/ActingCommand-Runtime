@@ -141,6 +141,7 @@ fn collect_predicate_outcome_keys(
             keys.insert(outcome_key.clone());
         }
         PredicateSpec::Clock { .. }
+        | PredicateSpec::TimelineActive { .. }
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
         | PredicateSpec::RecordDeadline { .. }
@@ -541,6 +542,103 @@ mod tests {
         assert_eq!(report["diagnostic_statistics"]["total"], 0);
         assert_eq!(report["diagnostic_statistics"]["errors"], 0);
         assert_eq!(report["diagnostic_statistics"]["warnings"], 0);
+    }
+
+    // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
+    #[test]
+    fn timeline_v2_versions_fields_and_references_are_closed() {
+        let v1 = example_sources();
+        let original = compile_catalog(&v1).expect("V1 retains its identity");
+        assert_eq!(
+            original.catalog_hash(),
+            "sha256:24dc8c0b4d63c03ad77ebe8a57e91186070ee0d379f17a3374060207cc3f257c"
+        );
+        let mut v2 = v1.clone();
+        for source in [
+            &mut v2.tasks,
+            &mut v2.pools,
+            &mut v2.activity,
+            &mut v2.timeline,
+        ] {
+            let mut doc: serde_json::Value =
+                serde_json::from_slice(&source.bytes).expect("neutral document");
+            doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+            if let Some(events) = doc["events"].as_array_mut() {
+                for event in events {
+                    event["validity"] = serde_json::json!({"from_unix_ms":0,"until_unix_ms":null});
+                }
+            }
+            source.bytes = serde_json::to_vec(&doc).expect("V2 bytes");
+        }
+        let timeline: serde_json::Value =
+            serde_json::from_slice(&v2.timeline.bytes).expect("timeline");
+        let event_id = timeline["events"][0]["id"].clone();
+        let mut tasks: serde_json::Value = serde_json::from_slice(&v2.tasks.bytes).expect("tasks");
+        tasks["tasks"][0]["trigger"] =
+            serde_json::json!({"kind":"timeline_active","event_id":event_id});
+        v2.tasks.bytes = serde_json::to_vec(&tasks).expect("tasks bytes");
+        let compiled = compile_catalog(&v2).expect("V2 compiles through the existing compiler");
+        assert_eq!(
+            compiled.summary().schema_version,
+            crate::SCHEDULING_SCHEMA_VERSION_V2
+        );
+        assert_ne!(compiled.catalog_hash(), original.catalog_hash());
+        for version in [
+            crate::SCHEDULING_SCHEMA_VERSION,
+            "actingcommand.scheduling.v3",
+        ] {
+            let mut sources = v2.clone();
+            let mut pools: serde_json::Value =
+                serde_json::from_slice(&sources.pools.bytes).expect("pools");
+            pools["schema_version"] = serde_json::json!(version);
+            sources.pools.bytes = serde_json::to_vec(&pools).expect("pools bytes");
+            assert!(
+                compile_catalog(&sources).is_err(),
+                "mixed/unknown version {version}"
+            );
+        }
+        for event_id in [serde_json::json!("missing.event"), serde_json::json!(42)] {
+            let mut sources = v2.clone();
+            let mut tasks = tasks.clone();
+            tasks["tasks"][0]["trigger"]["event_id"] = event_id;
+            sources.tasks.bytes = serde_json::to_vec(&tasks).expect("tasks bytes");
+            assert!(compile_catalog(&sources).is_err());
+        }
+        for validity in [
+            serde_json::json!(null),
+            serde_json::json!({"from_unix_ms":10}),
+            serde_json::json!({"from_unix_ms":10,"until_unix_ms":10}),
+            serde_json::json!({"from_unix_ms":10,"until_unix_ms":9}),
+            serde_json::json!({"from_unix_ms":-1,"until_unix_ms":null}),
+            serde_json::json!({"from_unix_ms":0,"until_unix_ms":null,"extra":true}),
+            serde_json::json!({"from_unix_ms":9007199254740992_u64,"until_unix_ms":null}),
+        ] {
+            let mut sources = v2.clone();
+            let mut timeline = timeline.clone();
+            timeline["events"][0]["validity"] = validity;
+            sources.timeline.bytes = serde_json::to_vec(&timeline).expect("timeline bytes");
+            assert!(compile_catalog(&sources).is_err());
+        }
+        let mut missing = v2.clone();
+        let mut no_validity = timeline.clone();
+        no_validity["events"][0]
+            .as_object_mut()
+            .expect("event")
+            .remove("validity");
+        missing.timeline.bytes = serde_json::to_vec(&no_validity).expect("timeline bytes");
+        assert!(compile_catalog(&missing).is_err());
+        for with_predicate in [false, true] {
+            let mut sources = v1.clone();
+            if with_predicate {
+                tasks["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION);
+                sources.tasks.bytes = serde_json::to_vec(&tasks).expect("tasks bytes");
+            } else {
+                let mut timeline = timeline.clone();
+                timeline["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION);
+                sources.timeline.bytes = serde_json::to_vec(&timeline).expect("timeline bytes");
+            }
+            assert!(compile_catalog(&sources).is_err(), "V1 rejects V2 fields");
+        }
     }
 
     #[test]

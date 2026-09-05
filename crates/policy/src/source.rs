@@ -43,6 +43,7 @@ pub(crate) struct SourceMap {
     kind: SchedulingDocumentKind,
     source_uri: String,
     positions: BTreeMap<String, Position>,
+    pub(crate) schema_version: Option<String>,
 }
 
 impl SourceMap {
@@ -66,7 +67,7 @@ impl SourceMap {
                 column: position.column,
             },
             reason: bounded_reason(reason.into()),
-            schema_version: RequiredNullable(Some(crate::SCHEDULING_SCHEMA_VERSION.to_owned())),
+            schema_version: RequiredNullable(self.schema_version.clone()),
             catalog_id: RequiredNullable(descriptor.map(|(id, _)| id.to_owned())),
             catalog_version: RequiredNullable(descriptor.map(|(_, version)| version)),
         }
@@ -118,8 +119,8 @@ pub(crate) fn parse_document<T: DeserializeOwned>(
         )
     })?;
 
-    if let Err(error) = serde_json::from_str::<serde_json::Value>(text) {
-        return Err(Box::new(basic_diagnostic(
+    let document = serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
+        Box::new(basic_diagnostic(
             source,
             kind,
             CatalogDiagnosticCode::InvalidJson,
@@ -127,10 +128,10 @@ pub(crate) fn parse_document<T: DeserializeOwned>(
             error.line() as u32,
             error.column() as u32,
             error.to_string(),
-        )));
-    }
+        ))
+    })?;
 
-    let source_map = JsonScanner::new(text, kind, source.source_uri.clone())
+    let mut source_map = JsonScanner::new(text, kind, source.source_uri.clone())
         .scan()
         .map_err(|error| match error {
             ScanError::DuplicateKey {
@@ -161,6 +162,10 @@ pub(crate) fn parse_document<T: DeserializeOwned>(
             ),
         })?;
 
+    source_map.schema_version = document
+        .get("schema_version")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
     let value = serde_json::from_str::<T>(text).map_err(|error| {
         let line = error.line() as u32;
         let column = error.column() as u32;
@@ -286,6 +291,7 @@ impl<'a> JsonScanner<'a> {
             kind: self.kind,
             source_uri: self.source_uri,
             positions: self.positions,
+            schema_version: None,
         })
     }
 
