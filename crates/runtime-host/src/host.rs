@@ -741,7 +741,15 @@ impl RuntimeHost {
     }
 
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
-        self.shared_ref("read_runtime_health")?.fatal.current()
+        let shared = self.shared_ref("read_runtime_health")?;
+        if let Err(error) = shared.ledger.check_writer_health() {
+            shared.fatal.mark(RuntimeHostError::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::LedgerFailure,
+            ))?;
+        }
+        shared.fatal.current()
     }
 
     pub fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
