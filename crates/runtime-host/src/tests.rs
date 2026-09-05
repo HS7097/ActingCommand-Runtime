@@ -5,6 +5,7 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::{ArtifactStore, read_projected_verified};
+use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
