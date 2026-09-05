@@ -2,7 +2,7 @@
 
 //! Typed performance facts shared by Runtime monitoring and failure records.
 
-use crate::{EventId, SanitizationError};
+use crate::{CorrelationId, EventId, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -146,6 +146,10 @@ pub struct PerformanceProcessSummary {
     pub ownership: PerformanceProcessOwnership,
     pub cpu_basis_points: u16,
     pub working_set_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_working_set_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_created_at_windows_100ns: Option<u64>,
     pub io_bytes_per_second: u64,
 }
 
@@ -324,6 +328,12 @@ impl PerformanceProcessSummary {
             || self.process_name.len() > MAX_PROCESS_NAME_BYTES
             || self.process_name.chars().any(char::is_control)
             || self.cpu_basis_points > 10_000
+            || self.peak_working_set_bytes.is_some()
+                != self.process_created_at_windows_100ns.is_some()
+            || self.process_created_at_windows_100ns == Some(0)
+            || self
+                .peak_working_set_bytes
+                .is_some_and(|peak| peak < self.working_set_bytes)
         {
             return Err(SanitizationError::new(
                 "invalid_performance_process",
@@ -356,6 +366,79 @@ pub struct PerformanceSummaryEventData {
     pub foreground: Option<PerformanceForegroundSummary>,
     pub owned_processes: Vec<PerformanceProcessSummary>,
     pub third_party_high_load: Vec<PerformanceProcessSummary>,
+    pub ledger_commits: Option<PerformanceLedgerSample>,
+}
+
+/// A window wider than one hour does not describe the periodic sampling cadence.
+pub const MAX_LEDGER_SAMPLE_WINDOW_NS: u64 = 3_600_000_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceLedgerUnavailable {
+    NoBaseline,
+    Busy,
+    CounterOverflow,
+    WriterChanged,
+    NonPositiveWindow,
+    WindowTooWide,
+    CounterReset,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PerformanceLedgerSample {
+    Available {
+        window: PerformanceLedgerWindow,
+    },
+    Unavailable {
+        reason: PerformanceLedgerUnavailable,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceLedgerWindow {
+    /// Informational identity minted once for this writer lifetime.
+    pub writer_id: CorrelationId,
+    pub start_monotonic_ns: u64,
+    pub end_monotonic_ns: u64,
+    pub first_sequence: Option<u64>,
+    pub last_sequence: Option<u64>,
+    pub successful_commits: u64,
+    pub write_sync_total_ns: u64,
+    pub writer_lifetime_write_sync_max_ns: u64,
+    pub commits_per_second_milli: u64,
+}
+
+impl PerformanceLedgerWindow {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        let duration = self.end_monotonic_ns.checked_sub(self.start_monotonic_ns);
+        let sequence_count = match (self.first_sequence, self.last_sequence) {
+            (None, None) if self.successful_commits == 0 => Some(0),
+            (Some(first), Some(last)) if first > 0 => {
+                last.checked_sub(first).and_then(|n| n.checked_add(1))
+            }
+            _ => None,
+        };
+        let expected_rate = duration.filter(|n| *n > 0).and_then(|n| {
+            u64::try_from(u128::from(self.successful_commits) * 1_000_000_000_000 / u128::from(n))
+                .ok()
+        });
+        if !duration.is_some_and(|n| n > 0 && n <= MAX_LEDGER_SAMPLE_WINDOW_NS)
+            || sequence_count != Some(self.successful_commits)
+            || expected_rate != Some(self.commits_per_second_milli)
+            || (self.successful_commits == 0 && self.write_sync_total_ns != 0)
+            || u128::from(self.write_sync_total_ns)
+                > u128::from(self.successful_commits)
+                    * u128::from(self.writer_lifetime_write_sync_max_ns)
+        {
+            return Err(SanitizationError::new(
+                "invalid_performance_ledger_window",
+                "ledger_commits",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,6 +468,9 @@ pub(crate) fn validate_performance_summary(
     data: &PerformanceSummaryEventData,
 ) -> Result<(), SanitizationError> {
     data.context.validate()?;
+    if let Some(PerformanceLedgerSample::Available { window }) = &data.ledger_commits {
+        window.validate()?;
+    }
     if data.owned_processes.len() > MAX_PROCESS_SUMMARIES
         || data.third_party_high_load.len() > MAX_PROCESS_SUMMARIES
     {

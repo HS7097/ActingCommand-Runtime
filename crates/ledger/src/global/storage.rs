@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult, Sha256SecretFingerprinter,
-    is_identifier, projection::EventIndexes,
+    CommitStatistics, GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult,
+    Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
 };
 use crate::PersistedEvent;
 use crate::fact::StoredEventRecord;
@@ -25,7 +25,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const WRITER_SCHEMA_VERSION: &str = "actingcommand.ledger-writer.v2";
 const REPAIR_SCHEMA_VERSION: &str = "actingcommand.ledger-repair.v1";
@@ -35,7 +36,118 @@ pub(super) const LINE_TYPE: &str = "event";
 type ArtifactVerifier<'a> =
     dyn FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + 'a;
 
+// Specification criterion 2: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
+#[cfg(test)]
+#[test]
+fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
+    use super::GlobalLedgerCommitObservation;
+    let temp = tempfile::tempdir().expect("ledger root");
+    let mut store = SegmentStore::open(GlobalLedgerConfig::new(temp.path(), "neutral-writer"))
+        .expect("open store");
+    let ids = IdentifierIssuer::new().expect("identifiers");
+    let draft = |timestamp| {
+        EventDraft::new(
+            ids.mint_event_id().expect("event id"),
+            timestamp,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default(),
+            actingcommand_contract::CommandPayloadDraft::received(
+                EventAction::RuntimeStart,
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&Sha256SecretFingerprinter::new(b"neutral-statistics").expect("fingerprinter"))
+        .expect("draft")
+    };
+    let GlobalLedgerCommitObservation::Available(initial) =
+        store.commit_statistics.sample().expect("initial")
+    else {
+        panic!("available");
+    };
+    assert_eq!(
+        (
+            initial.successful_commits,
+            initial.through_sequence,
+            initial.write_sync_total_ns
+        ),
+        (0, 0, 0)
+    );
+    let first = store.append(draft(9_000_000)).expect("first durable event");
+    let second = store
+        .append(draft(1_000))
+        .expect("draft time is not commit time");
+    let GlobalLedgerCommitObservation::Available(committed) =
+        store.commit_statistics.sample().expect("committed")
+    else {
+        panic!("available");
+    };
+    assert_eq!(committed.writer_id, initial.writer_id);
+    assert_eq!(committed.successful_commits, 2);
+    assert_eq!(committed.through_sequence, second.sequence());
+    assert_eq!(second.sequence(), first.sequence() + 1);
+    assert!(committed.sampled_at_monotonic_ns >= initial.sampled_at_monotonic_ns);
+    assert!(committed.write_sync_max_ns <= committed.write_sync_total_ns);
+    let read_only = File::open(segment_path(&store.segments_dir, store.active_index))
+        .expect("read-only handle");
+    let writable = std::mem::replace(&mut store.active_file, read_only);
+    let error = store.append(draft(42_000)).expect_err("write failure");
+    assert!(error.is_fatal());
+    assert_eq!(
+        (error.code(), error.operation()),
+        ("ledger_io", "append_event")
+    );
+    let GlobalLedgerCommitObservation::Available(failed) =
+        store.commit_statistics.sample().expect("failure snapshot")
+    else {
+        panic!("available");
+    };
+    assert_eq!(failed.successful_commits, committed.successful_commits);
+    assert_eq!(failed.through_sequence, committed.through_sequence);
+    assert_eq!(failed.write_sync_total_ns, committed.write_sync_total_ns);
+    store.active_file = writable;
+    {
+        let held = store
+            .commit_statistics
+            .totals
+            .lock()
+            .expect("hold only statistics");
+        assert_eq!(
+            store.commit_statistics.sample().expect("nonblocking"),
+            GlobalLedgerCommitObservation::Unavailable(
+                actingcommand_contract::PerformanceLedgerUnavailable::Busy
+            )
+        );
+        drop(held);
+    }
+    store
+        .commit_statistics
+        .totals
+        .lock()
+        .expect("totals")
+        .as_mut()
+        .expect("available")
+        .successful_commits = u64::MAX;
+    store
+        .commit_statistics
+        .record_success(second.sequence() + 1, Some(1))
+        .expect("overflow recorded as unavailable");
+    assert_eq!(
+        store.commit_statistics.sample().expect("overflow"),
+        GlobalLedgerCommitObservation::Unavailable(
+            actingcommand_contract::PerformanceLedgerUnavailable::CounterOverflow
+        )
+    );
+    store.close().expect("close");
+}
+
 pub(super) struct SegmentStore {
+    pub(super) commit_statistics: Arc<CommitStatistics>,
     root: PathBuf,
     segments_dir: PathBuf,
     ownership: WriterOwnership,
@@ -109,7 +221,16 @@ impl SegmentStore {
             .metadata()
             .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_segment", &error))?
             .len();
+        let commit_statistics =
+            match CommitStatistics::new(events.last().map_or(0, PersistedEvent::sequence)) {
+                Ok(statistics) => Arc::new(statistics),
+                Err(error) => {
+                    ownership.close()?;
+                    return Err(error);
+                }
+            };
         let mut store = Self {
+            commit_statistics,
             root: config.root.clone(),
             segments_dir,
             ownership,
@@ -965,16 +1086,22 @@ impl SegmentStore {
         {
             self.rotate()?;
         }
+        let write_started = Instant::now();
         self.active_file
             .write_all(&bytes)
             .map_err(|error| GlobalLedgerError::io("ledger_io", "append_event", &error))?;
         self.active_file
             .sync_all()
             .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_event", &error))?;
+        let write_sync_ns = Instant::now()
+            .checked_duration_since(write_started)
+            .and_then(|value| u64::try_from(value.as_nanos()).ok());
         self.active_bytes = self.active_bytes.saturating_add(bytes.len() as u64);
         self.next_sequence = following_sequence;
         self.indexes.insert(&event, self.events.len());
         self.events.push(event.clone());
+        self.commit_statistics
+            .record_success(event.sequence(), write_sync_ns)?;
         Ok(event)
     }
 
