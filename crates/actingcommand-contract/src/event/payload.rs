@@ -824,6 +824,63 @@ pub enum LifecycleFailurePhase {
     StderrReaderJoin,
     UnexpectedStderr,
     Retirement,
+    ResourceClose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResourceKind {
+    CaptureBackend,
+    InputBackend,
+    ProviderConnection,
+    VendorStdio,
+    ExternalChild,
+    InProcessWorker,
+    Library,
+    FileDescriptor,
+    TemporaryPath,
+    PipeReader,
+    FactoryCandidate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResourceClosePhase {
+    Close,
+    AcquisitionCleanup,
+    DisconnectSymbol,
+    DisconnectCall,
+    WorkerSend,
+    WorkerReceive,
+    WorkerJoin,
+    InitialPoll,
+    Kill,
+    ExitPoll,
+    Deadline,
+    RestoreFlush,
+    RestoreWin32,
+    RestoreCrt,
+    SnapshotFlush,
+    SnapshotRead,
+    FileDescriptorClose,
+    Unlink,
+    LibraryUnload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceQuiescence {
+    Confirmed,
+    Unconfirmed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerResourceDisposition {
+    None,
+    InUse,
+    ConfirmedClosed,
+    Unconfirmed,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -899,6 +956,15 @@ pub struct LifecycleCauseDraft {
     severity: CleanupCauseSeverity,
     detail: Option<DiagnosticDetailDraft>,
     native_detail: Option<LifecycleNativeDetail>,
+    last_native_detail: Option<LifecycleNativeDetail>,
+    resource: Option<RuntimeResourceKind>,
+    resource_phase: Option<RuntimeResourceClosePhase>,
+    candidate_index: Option<u8>,
+    native_instance: Option<i32>,
+    quiescence: Option<ResourceQuiescence>,
+    owner_disposition: Option<OwnerResourceDisposition>,
+    observation_count: Option<u16>,
+    dropped_count: Option<u16>,
 }
 
 impl LifecycleCauseDraft {
@@ -915,6 +981,15 @@ impl LifecycleCauseDraft {
             severity,
             detail: None,
             native_detail: None,
+            last_native_detail: None,
+            resource: None,
+            resource_phase: None,
+            candidate_index: None,
+            native_instance: None,
+            quiescence: None,
+            owner_disposition: None,
+            observation_count: None,
+            dropped_count: None,
         }
     }
     pub fn with_detail(mut self, detail: Option<DiagnosticDetailDraft>) -> Self {
@@ -925,11 +1000,40 @@ impl LifecycleCauseDraft {
         self.native_detail = Some(detail);
         self
     }
+    pub fn with_last_native_detail(mut self, detail: Option<LifecycleNativeDetail>) -> Self {
+        self.last_native_detail = detail;
+        self
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_resource_context(
+        mut self,
+        resource: RuntimeResourceKind,
+        resource_phase: RuntimeResourceClosePhase,
+        candidate_index: Option<u8>,
+        native_instance: Option<i32>,
+        quiescence: ResourceQuiescence,
+        owner_disposition: OwnerResourceDisposition,
+        observation_count: u16,
+        dropped_count: u16,
+    ) -> Self {
+        self.resource = Some(resource);
+        self.resource_phase = Some(resource_phase);
+        self.candidate_index = candidate_index;
+        self.native_instance = native_instance;
+        self.quiescence = Some(quiescence);
+        self.owner_disposition = Some(owner_disposition);
+        self.observation_count = Some(observation_count);
+        self.dropped_count = Some(dropped_count);
+        self
+    }
     pub const fn severity(&self) -> CleanupCauseSeverity {
         self.severity
     }
     pub const fn phase(&self) -> LifecycleFailurePhase {
         self.phase
+    }
+    pub const fn resource(&self) -> Option<RuntimeResourceKind> {
+        self.resource
     }
     fn sanitize(self) -> Result<LifecycleCauseRecord, SanitizationError> {
         let record = LifecycleCauseRecord {
@@ -942,6 +1046,15 @@ impl LifecycleCauseDraft {
                 .map(DiagnosticDetailDraft::sanitize)
                 .transpose()?,
             native_detail: self.native_detail,
+            last_native_detail: self.last_native_detail,
+            resource: self.resource,
+            resource_phase: self.resource_phase,
+            candidate_index: self.candidate_index,
+            native_instance: self.native_instance,
+            quiescence: self.quiescence,
+            owner_disposition: self.owner_disposition,
+            observation_count: self.observation_count,
+            dropped_count: self.dropped_count,
         };
         record.validate()?;
         Ok(record)
@@ -959,9 +1072,30 @@ pub struct LifecycleCauseRecord {
     detail: Option<DiagnosticDetailRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_detail: Option<LifecycleNativeDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_native_detail: Option<LifecycleNativeDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource: Option<RuntimeResourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_phase: Option<RuntimeResourceClosePhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    candidate_index: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_instance: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quiescence: Option<ResourceQuiescence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner_disposition: Option<OwnerResourceDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observation_count: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dropped_count: Option<u16>,
 }
 
 impl LifecycleCauseRecord {
+    pub const fn last_native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.last_native_detail.as_ref()
+    }
     pub const fn phase(&self) -> LifecycleFailurePhase {
         self.phase
     }
@@ -980,6 +1114,30 @@ impl LifecycleCauseRecord {
     pub const fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
         self.native_detail.as_ref()
     }
+    pub const fn resource(&self) -> Option<RuntimeResourceKind> {
+        self.resource
+    }
+    pub const fn resource_phase(&self) -> Option<RuntimeResourceClosePhase> {
+        self.resource_phase
+    }
+    pub const fn candidate_index(&self) -> Option<u8> {
+        self.candidate_index
+    }
+    pub const fn native_instance(&self) -> Option<i32> {
+        self.native_instance
+    }
+    pub const fn quiescence(&self) -> Option<ResourceQuiescence> {
+        self.quiescence
+    }
+    pub const fn owner_disposition(&self) -> Option<OwnerResourceDisposition> {
+        self.owner_disposition
+    }
+    pub const fn observation_count(&self) -> Option<u16> {
+        self.observation_count
+    }
+    pub const fn dropped_count(&self) -> Option<u16> {
+        self.dropped_count
+    }
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_diagnostic_detail_token(&self.source, "lifecycle_source")?;
         validate_diagnostic_detail_token(&self.code, "lifecycle_code")?;
@@ -988,6 +1146,20 @@ impl LifecycleCauseRecord {
         }
         if let Some(detail) = &self.native_detail {
             detail.validate()?;
+        }
+        if let Some(detail) = &self.last_native_detail {
+            detail.validate()?;
+        }
+        if self.resource.is_some() != self.resource_phase.is_some()
+            || self.resource.is_some() != self.quiescence.is_some()
+            || self.resource.is_some() != self.owner_disposition.is_some()
+            || self.resource.is_some() != self.observation_count.is_some()
+            || self.resource.is_some() != self.dropped_count.is_some()
+        {
+            return Err(SanitizationError::new(
+                "incomplete_resource_close_context",
+                "lifecycle_cause",
+            ));
         }
         Ok(())
     }
@@ -1205,6 +1377,8 @@ impl RuntimeLifecycleFailureRecord {
         if let Some(cause) = &mut result.cause {
             cause.detail = None;
             cause.native_detail = None;
+            cause.last_native_detail = None;
+            cause.native_instance = None;
         }
         result
     }
@@ -1307,10 +1481,20 @@ pub struct DiagnosticOutcomePayload {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
     PolicyForwardEntered,
-    PolicyForwardReturned { entered_event_id: EventId },
+    PolicyForwardReturned {
+        entered_event_id: EventId,
+    },
     StrategicReportEntered,
-    StrategicReportReturned { entered_event_id: EventId },
+    StrategicReportReturned {
+        entered_event_id: EventId,
+    },
     ShutdownRequested,
+    ResourceQuiescence {
+        instance_id: InstanceId,
+        resource_count: u16,
+        quiescence: ResourceQuiescence,
+        owner_disposition: OwnerResourceDisposition,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

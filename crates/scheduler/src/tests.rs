@@ -1023,6 +1023,42 @@ fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
             .expect_err("safe boundary must yield"),
         SchedulerError::TransferNotSafe
     );
+    assert_eq!(
+        scheduler
+            .begin_resource_close(&current, connection(2), 3)
+            .expect_err("close remains connection fenced"),
+        SchedulerError::ConnectionMismatch
+    );
+    scheduler
+        .begin_resource_close(&current, connection(1), 3)
+        .expect("current owner may close before yielding");
+    assert!(matches!(
+        scheduler
+            .prepare_transfer(
+                &current,
+                connection(1),
+                LeaseTransferReason::Preempted,
+                None,
+                3
+            )
+            .expect("prepare while closing"),
+        TransferPreparation::Deferred
+    ));
+    scheduler
+        .finish_destructive_step(&current, connection(1))
+        .expect("resource close finished");
+    assert_eq!(
+        scheduler
+            .begin_destructive_step(&current, connection(1), 3)
+            .expect_err("ordinary work still yields"),
+        SchedulerError::TransferNotSafe
+    );
+    assert_eq!(
+        scheduler
+            .begin_resource_close(&current, connection(1), current.expires_at_monotonic_ms())
+            .expect_err("close requires an unexpired lease"),
+        SchedulerError::LeaseExpired
+    );
 }
 
 #[test]

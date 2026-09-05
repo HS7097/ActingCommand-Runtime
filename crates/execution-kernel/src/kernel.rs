@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult, ExecutionSession,
-    PreparedInputAction, ResolvedExecutionInstance,
+    ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
+    ExecutionResourceCloseOutcome, ExecutionSession, PreparedInputAction,
+    ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, InputAction, InstanceId, MonitorObservation,
 };
-use actingcommand_device::Frame;
+use actingcommand_device::{DeviceCloseAuthority, Frame};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -15,6 +16,8 @@ use std::thread;
 struct KernelState {
     sessions: BTreeMap<InstanceId, Arc<ExecutionSession>>,
     closed: bool,
+    close_result: Option<ExecutionKernelResult<()>>,
+    instance_closes: BTreeMap<InstanceId, ExecutionKernelResult<ExecutionResourceCloseOutcome>>,
 }
 
 /// Resident daemon authority for production execution backend sessions.
@@ -30,6 +33,8 @@ impl ExecutionKernel {
             state: Mutex::new(KernelState {
                 sessions: BTreeMap::new(),
                 closed: false,
+                close_result: None,
+                instance_closes: BTreeMap::new(),
             }),
         }
     }
@@ -74,6 +79,28 @@ impl ExecutionKernel {
         self.finish_session_operation(&session, result)
     }
 
+    /// Host retains the session while deciding whether a real close lease is available.
+    pub fn capture_retained(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
+        let session = self.session(instance_alias)?;
+        session
+            .capture_retained()
+            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
+    }
+
+    pub fn finish_failed_capture(
+        &self,
+        primary: ExecutionKernelError,
+        authority: DeviceCloseAuthority,
+    ) -> ExecutionKernelError {
+        let Some(instance) = primary.instance_id() else {
+            return primary;
+        };
+        match self.close_instance(instance, authority) {
+            Ok(_) => primary,
+            Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
+        }
+    }
+
     pub fn control_application(
         &self,
         instance_alias: &str,
@@ -103,18 +130,30 @@ impl ExecutionKernel {
     }
 
     pub fn close(&self) -> ExecutionKernelResult<()> {
+        let mut state = self.lock_state()?;
+        if let Some(result) = &state.close_result {
+            return result.clone();
+        }
         let sessions = {
-            let mut state = self.lock_state()?;
-            if state.closed {
-                return Ok(());
-            }
             state.closed = true;
             std::mem::take(&mut state.sessions)
         };
         let mut failure = None;
         let mut closed_sessions = Vec::new();
+        for (instance, result) in &state.instance_closes {
+            if let Err(error) = result
+                && error.resource_quiescence()
+                    == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+            {
+                closed_sessions.push((*instance, error.clone()));
+                failure = Some(match failure {
+                    None => error.clone(),
+                    Some(primary) => ExecutionKernelError::merge(primary, error.clone()),
+                });
+            }
+        }
         for (instance_id, session) in sessions {
-            if let Err(error) = session.close() {
+            if let Err(error) = session.close_with_authority(DeviceCloseAuthority::LocalOnly) {
                 closed_sessions.push((instance_id, error.clone()));
                 failure = Some(match failure {
                     Some(primary) => ExecutionKernelError::merge(primary, error),
@@ -122,9 +161,51 @@ impl ExecutionKernel {
                 });
             }
         }
-        failure.map_or(Ok(()), |error| {
+        let result = failure.map_or(Ok(()), |error| {
             Err(error.with_closed_sessions(closed_sessions))
-        })
+        });
+        state.close_result = Some(result.clone());
+        result
+    }
+
+    pub fn close_instance(
+        &self,
+        instance_id: InstanceId,
+        authority: DeviceCloseAuthority,
+    ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+        let mut state = self.lock_state()?;
+        let session = {
+            if state.closed {
+                return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+            }
+            if let Some(result) = state.instance_closes.get(&instance_id) {
+                return result.clone();
+            }
+            state.sessions.remove(&instance_id)
+        };
+        let Some(session) = session else {
+            return Ok(ExecutionResourceCloseOutcome::confirmed(0));
+        };
+        let result = session
+            .close_with_authority(authority)
+            .map_err(|error| error.with_instance_id(instance_id));
+        state.instance_closes.insert(instance_id, result.clone());
+        result
+    }
+
+    pub fn has_session(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
+        Ok(self.lock_state()?.sessions.contains_key(&instance_id))
+    }
+
+    pub fn has_sessions(&self) -> ExecutionKernelResult<bool> {
+        let state = self.lock_state()?;
+        Ok(!state.sessions.is_empty()
+            || state.instance_closes.values().any(|result| {
+                result.as_ref().is_err_and(|error| {
+                    error.resource_quiescence()
+                        == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+                })
+            }))
     }
 
     fn session(&self, instance_alias: &str) -> ExecutionKernelResult<Arc<ExecutionSession>> {
@@ -141,6 +222,13 @@ impl ExecutionKernel {
             }
             return Ok(Arc::clone(session));
         }
+        if let Some(Err(error)) = state.instance_closes.get(&resolved.instance_id())
+            && error.resource_quiescence()
+                == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+        {
+            return Err(error.clone());
+        }
+        state.instance_closes.remove(&resolved.instance_id());
         let session = Arc::new(ExecutionSession::start(
             Arc::clone(&self.provider),
             instance_alias.to_string(),
@@ -161,6 +249,13 @@ impl ExecutionKernel {
             Ok(value) => return Ok(value),
             Err(error) => error.with_instance_id(session.resolved().instance_id()),
         };
+        if error.resource_quiescence()
+            == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+        {
+            self.lock_state()?
+                .instance_closes
+                .insert(session.resolved().instance_id(), Err(error.clone()));
+        }
         match self.retire_failed_session(session) {
             Ok(()) => Err(error),
             Err(cleanup) => Err(ExecutionKernelError::merge_retirement(error, cleanup)),
@@ -229,6 +324,13 @@ impl ExecutionKernel {
 impl Drop for ExecutionKernel {
     fn drop(&mut self) {
         if thread::panicking() {
+            return;
+        }
+        if self
+            .state
+            .get_mut()
+            .is_ok_and(|state| state.close_result.is_some())
+        {
             return;
         }
         if let Err(error) = self.close() {

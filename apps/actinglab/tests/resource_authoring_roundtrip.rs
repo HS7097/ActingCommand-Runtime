@@ -69,8 +69,13 @@ impl InputBackend for SealedInput {
         Err(DeviceError::fatal("unexpected sealed authoring reset"))
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
-        Ok(())
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
     }
 }
 
@@ -82,6 +87,14 @@ impl CaptureBackend for SealedCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         self.state.captures.fetch_add(1, Ordering::AcqRel);
         frame(self.state.mail_visible.load(Ordering::Acquire))
+    }
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
     }
 }
 

@@ -247,8 +247,11 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
         Ok(())
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
-        self.inner.close()
+    fn close_once(
+        &mut self,
+        authority: crate::DeviceCloseAuthority,
+    ) -> DeviceResult<crate::DeviceResourceCloseOutcome> {
+        self.inner.close_once(authority)
     }
 }
 
@@ -307,8 +310,12 @@ mod tests {
             self.record("reset")
         }
 
-        fn close(&mut self) -> DeviceResult<()> {
-            self.record("close")
+        fn close_once(
+            &mut self,
+            _authority: crate::DeviceCloseAuthority,
+        ) -> DeviceResult<crate::DeviceResourceCloseOutcome> {
+            self.record("close")?;
+            Ok(crate::DeviceResourceCloseOutcome::confirmed(1))
         }
     }
 
