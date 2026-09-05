@@ -3477,6 +3477,18 @@ impl PerformanceStutterPayload {
     pub const fn frame_gap_ms(&self) -> u64 {
         self.frame_gap_ms
     }
+
+    pub const fn capture_latency_ms(&self) -> Option<u64> {
+        self.capture_latency_ms
+    }
+
+    pub const fn recognition_latency_ms(&self) -> Option<u64> {
+        self.recognition_latency_ms
+    }
+
+    pub const fn action_effect_latency_ms(&self) -> Option<u64> {
+        self.action_effect_latency_ms
+    }
 }
 
 impl PerformanceSummaryPayload {
@@ -3514,6 +3526,14 @@ impl PerformanceControlPayload {
 
     pub const fn reason(&self) -> PerformanceControlReason {
         self.reason
+    }
+
+    pub const fn host_responsiveness_basis_points(&self) -> Option<u16> {
+        self.host_responsiveness_basis_points
+    }
+
+    pub const fn third_party_pressure_basis_points(&self) -> Option<u16> {
+        self.third_party_pressure_basis_points
     }
 
     pub const fn deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
@@ -8331,6 +8351,15 @@ impl EventPayloadDraft {
 }
 
 impl EventPayload {
+    pub fn performance_stutter(&self) -> Option<&PerformanceStutterPayload> {
+        performance_stutter(self)
+    }
+
+    pub fn performance_clock_jump(&self) -> Option<&PerformanceControlPayload> {
+        performance_control(self)
+            .filter(|value| value.reason() == PerformanceControlReason::ClockJump)
+    }
+
     pub fn event_type(&self) -> EventType {
         self.family_payload().event_type()
     }

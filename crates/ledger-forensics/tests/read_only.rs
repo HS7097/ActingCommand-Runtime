@@ -640,6 +640,279 @@ fn replays_a_sealed_archive_through_the_canonical_verifier() {
     assert_eq!(tree_bytes(temp.path()), corrupt_before);
 }
 
+#[test]
+fn performance_pages_preserve_typed_facts_and_read_only_boundaries() {
+    use actingcommand_contract::{
+        PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
+        PerformancePayloadDraft, PerformanceStutterEventData,
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state_root = temp.path();
+    let ledger_root = state_root.join("ledger");
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let request_id = identifiers.mint_request_id().expect("request id");
+    let writer = GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "performance-fixture"))
+        .expect("open ledger");
+    let mut facts = vec![
+        writer
+            .append(event(EventLinksDraft::default()))
+            .expect("unrelated fact"),
+    ];
+    let control = PerformanceControlEventData {
+        observed_at_unix_ms: 1_752_147_201_000,
+        instance_id: None,
+        previous_level: PerformanceControlLevel::Normal,
+        level: PerformanceControlLevel::Normal,
+        reason: PerformanceControlReason::ClockJump,
+        host_responsiveness_basis_points: None,
+        third_party_pressure_basis_points: None,
+        recovery: false,
+        deadline_disposition: None,
+    };
+    let stutter = PerformanceStutterEventData {
+        instance_id: "instance:fixture-a".to_owned(),
+        observed_at_unix_ms: 1_752_147_202_000,
+        frame_gap_ms: 1_500,
+        capture_latency_ms: None,
+        recognition_latency_ms: None,
+        action_effect_latency_ms: None,
+    };
+    let payloads: [EventPayloadDraft; 5] = [
+        PerformancePayloadDraft::stutter_detected(stutter.clone(), AuditInput::new()).into(),
+        PerformancePayloadDraft::balance_changed(
+            PerformanceControlEventData {
+                level: PerformanceControlLevel::DispatchPaused,
+                reason: PerformanceControlReason::ThirdPartyContention,
+                third_party_pressure_basis_points: Some(3_000),
+                ..control.clone()
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        PerformancePayloadDraft::balance_changed(control.clone(), AuditInput::new()).into(),
+        PerformancePayloadDraft::stutter_detected(
+            PerformanceStutterEventData {
+                capture_latency_ms: Some(120),
+                recognition_latency_ms: Some(80),
+                action_effect_latency_ms: Some(250),
+                ..stutter
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        PerformancePayloadDraft::balance_changed(
+            PerformanceControlEventData {
+                instance_id: Some("instance:fixture-a".to_owned()),
+                host_responsiveness_basis_points: Some(9_000),
+                third_party_pressure_basis_points: Some(3_000),
+                ..control
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    ];
+    for payload in payloads {
+        let draft = EventDraft::new(
+            identifiers.mint_event_id().expect("event id"),
+            1_752_147_203_000,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::PerformanceMonitor,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default().with_request_id(request_id),
+            payload,
+        )
+        .sanitize(
+            &Sha256SecretFingerprinter::new(b"performance-fixture-salt").expect("fingerprinter"),
+        )
+        .expect("sanitize performance fact");
+        facts.push(writer.append(draft).expect("append performance fact"));
+    }
+    let before = tree_bytes(state_root);
+    let first = run(ForensicRequest::performance(
+        state_root,
+        ForensicEventsRequest::new(ForensicEventFilter::default(), 0, None, 1).expect("first page"),
+    ))
+    .expect("first report");
+    let ForensicOutput::Machine(ForensicReport::Performance(first)) = first else {
+        panic!("expected performance report");
+    };
+    assert_eq!(tree_bytes(state_root), before);
+    assert!(first.rows.is_empty());
+    assert_eq!(first.scanned_event_count, 1);
+    assert_eq!(first.next_after_sequence, Some(facts[0].sequence()));
+    assert_eq!((first.stutter_count, first.clock_jump_count), (0, 0));
+    assert!(first.has_more);
+    assert!(!first.window_complete);
+    let through = first.through_sequence;
+    assert_eq!(through, facts[5].sequence());
+
+    writer
+        .append(event(EventLinksDraft::default()))
+        .expect("later fact outside frozen range");
+    let before = tree_bytes(state_root);
+    let mut after = first
+        .next_after_sequence
+        .expect("empty matching page advances");
+    let mut rows = Vec::new();
+    for fact in &facts[1..] {
+        let output = run(ForensicRequest::performance(
+            state_root,
+            ForensicEventsRequest::new(ForensicEventFilter::default(), after, Some(through), 1)
+                .expect("bounded page"),
+        ))
+        .expect("bounded report");
+        let ForensicOutput::Machine(ForensicReport::Performance(page)) = output else {
+            panic!("expected performance report");
+        };
+        assert_eq!(page.after_sequence, after);
+        assert_eq!(page.through_sequence, through);
+        assert_eq!(page.scanned_event_count, 1);
+        assert_eq!(page.scanned_through_sequence, fact.sequence());
+        assert_eq!(page.stutter_count + page.clock_jump_count, page.rows.len());
+        assert_eq!(page.has_more, fact.sequence() < through);
+        assert_eq!(
+            page.next_after_sequence,
+            (fact.sequence() < through).then_some(fact.sequence())
+        );
+        assert_eq!(page.window_complete, fact.sequence() == through);
+        assert!(page.corrupt_tail.is_none());
+        assert!(page.gaps.is_empty());
+        after = page.scanned_through_sequence;
+        rows.extend(page.rows);
+    }
+    assert_eq!(tree_bytes(state_root), before);
+    assert_eq!(rows.len(), 4);
+    for (row, fact) in rows
+        .iter()
+        .zip([&facts[1], &facts[3], &facts[4], &facts[5]])
+    {
+        assert_eq!(&row.event, fact);
+        assert!(row.thread_identity.is_none());
+    }
+    let json = serde_json::to_value(&rows).expect("rows JSON");
+    assert_eq!(json[0]["observation"]["kind"], "stutter");
+    assert_eq!(json[0]["observation"]["frame_gap_ms"], 1_500);
+    for field in [
+        "capture_latency_ms",
+        "recognition_latency_ms",
+        "action_effect_latency_ms",
+    ] {
+        assert_eq!(
+            json[0]["observation"].get(field),
+            Some(&serde_json::Value::Null)
+        );
+    }
+    assert_eq!(json[2]["observation"]["capture_latency_ms"], 120);
+    assert_eq!(json[2]["observation"]["recognition_latency_ms"], 80);
+    assert_eq!(json[2]["observation"]["action_effect_latency_ms"], 250);
+    assert_eq!(json[1]["observation"]["kind"], "clock_jump");
+    for field in [
+        "magnitude_ms",
+        "instance_id",
+        "host_responsiveness_basis_points",
+        "third_party_pressure_basis_points",
+    ] {
+        assert_eq!(
+            json[1]["observation"].get(field),
+            Some(&serde_json::Value::Null)
+        );
+    }
+    assert_eq!(json[3]["observation"]["instance_id"], "instance:fixture-a");
+    assert_eq!(
+        json[3]["observation"]["host_responsiveness_basis_points"],
+        9_000
+    );
+    assert_eq!(
+        json[3]["observation"]["third_party_pressure_basis_points"],
+        3_000
+    );
+    assert_eq!(
+        json[3]["observation"].get("magnitude_ms"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        json[3].get("thread_identity"),
+        Some(&serde_json::Value::Null)
+    );
+
+    writer.close().expect("close fixture writer");
+    let segment = latest_segment(&ledger_root);
+    let contents = fs::read_to_string(&segment).expect("segment text");
+    let mut unknown: serde_json::Value =
+        serde_json::from_str(contents.lines().last().expect("stored fact")).expect("stored JSON");
+    unknown["event"]["unexpected_metric"] = serde_json::json!(42);
+    let mut unknown_bytes = serde_json::to_vec(&unknown).expect("unknown field JSON");
+    unknown_bytes.push(b'\n');
+    append_bytes(&segment, &unknown_bytes);
+    let corrupt_before = tree_bytes(state_root);
+    for (after, requested_through, expected_count) in [(0, through, 6), (through, through + 2, 1)] {
+        let output = run(ForensicRequest::performance(
+            state_root,
+            ForensicEventsRequest::new(
+                ForensicEventFilter::default(),
+                after,
+                Some(requested_through),
+                1_024,
+            )
+            .expect("tail page"),
+        ))
+        .expect("corrupt prefix report");
+        let ForensicOutput::Machine(ForensicReport::Performance(page)) = output else {
+            panic!("expected performance report");
+        };
+        assert_eq!(page.scanned_event_count, expected_count);
+        assert!(!page.has_more);
+        assert_eq!(page.next_after_sequence, None);
+        assert!(!page.window_complete);
+        assert!(page.gaps.contains(&"corrupt_tail"));
+        let tail = page
+            .corrupt_tail
+            .expect("unknown field is visible corruption");
+        assert_eq!(tail.code, "corrupt_segment");
+        assert_eq!(tail.dangling_byte_count, unknown_bytes.len() as u64);
+        assert_eq!(tail.byte_offset, contents.len() as u64);
+        assert!(tail.tail_sha256.starts_with("sha256:"));
+        assert_eq!(tail.tail_sha256.len(), 71);
+        if after == 0 {
+            assert_eq!((page.stutter_count, page.clock_jump_count), (2, 2));
+            assert_eq!(page.rows, rows);
+        } else {
+            assert!(page.rows.is_empty());
+            assert!(page.gaps.contains(&"through_sequence_unavailable"));
+        }
+    }
+    assert_eq!(tree_bytes(state_root), corrupt_before);
+    for (after, through, limit) in [(0, Some(6), 0), (0, None, 1_025), (7, Some(6), 1)] {
+        assert!(
+            ForensicEventsRequest::new(ForensicEventFilter::default(), after, through, limit)
+                .is_err()
+        );
+    }
+    for options in [
+        ForensicEventsRequest::new(ForensicEventFilter::default(), u64::MAX, None, 1)
+            .expect("deferred through"),
+        ForensicEventsRequest::new(
+            ForensicEventFilter::new(Some("runtime".to_owned()), None, None, None).expect("filter"),
+            0,
+            None,
+            1,
+        )
+        .expect("filtered page"),
+    ] {
+        assert_eq!(
+            run(ForensicRequest::performance(state_root, options))
+                .expect_err("invalid performance page")
+                .code(),
+            "invalid_event_page"
+        );
+    }
+    assert_eq!(tree_bytes(state_root), corrupt_before);
+}
+
 fn event(links: EventLinksDraft) -> SanitizedEventDraft {
     EventDraft::new(
         event_id(),
