@@ -33,6 +33,65 @@ fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
         .with_ingress_capacity(8)
 }
 
+#[test]
+fn idle_writer_health_needs_no_command_sender_or_new_fact() {
+    let temp = TempDir::new().expect("temp");
+    let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let before = ledger.latest_sequence().expect("initial sequence");
+    let sender = ledger.sender.take().expect("retain writer sender");
+
+    ledger
+        .check_writer_health()
+        .expect("idle writer is healthy");
+
+    ledger.sender = Some(sender);
+    assert_eq!(ledger.latest_sequence().expect("final sequence"), before);
+    ledger
+        .close()
+        .expect("normal close retains writer ownership");
+}
+
+#[test]
+fn idle_writer_health_reports_exit_without_business_commands() {
+    let temp = TempDir::new().expect("temp");
+    let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestTerminalFailure {
+            error: terminal.clone(),
+        })
+        .expect("inject terminal failure");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !ledger.writer.as_ref().expect("writer handle").is_finished() {
+        assert!(
+            Instant::now() < deadline,
+            "writer must exit within one second"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let error = ledger.check_writer_health().expect_err("writer has exited");
+    assert!(error.is_fatal());
+    assert_eq!(error.code(), "writer_unavailable");
+    assert_eq!(error.operation(), "read_writer_health");
+    assert_eq!(error.detail(), None);
+    assert_eq!(ledger.check_writer_health(), Err(error));
+
+    ledger.sender.take();
+    assert_eq!(
+        ledger
+            .writer
+            .take()
+            .expect("health read preserves writer handle")
+            .join()
+            .expect("writer must not panic"),
+        Err(terminal)
+    );
+}
+
 fn identifiers() -> IdentifierIssuer {
     IdentifierIssuer::new().expect("identifier issuer")
 }
