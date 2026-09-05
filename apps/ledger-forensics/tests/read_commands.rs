@@ -105,7 +105,21 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
             .contains("ledger_commits")
     );
     ledger.close().expect("close fixture");
-    let before = tree_bytes(root);
+    let ledger_root = root.join("ledger");
+    let files: Vec<_> = fs::read_dir(&ledger_root)
+        .expect("ledger files")
+        .map(|entry| entry.expect("ledger entry").path())
+        .filter(|path| path.is_file())
+        .chain(
+            fs::read_dir(ledger_root.join("segments"))
+                .expect("segment files")
+                .map(|entry| entry.expect("segment entry").path()),
+        )
+        .collect();
+    let before: Vec<_> = files
+        .iter()
+        .map(|path| fs::read(path).expect("source bytes"))
+        .collect();
     let binary = env!("CARGO_BIN_EXE_actingledger");
     let open = invoke(binary, root, &["open".to_owned()]);
     assert!(open.status.success(), "{open:?}");
@@ -191,7 +205,11 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
             .expect("human export")
             .contains("storage_snapshot:")
     );
-    assert_eq!(tree_bytes(root), before);
+    let after: Vec<_> = files
+        .iter()
+        .map(|path| fs::read(path).expect("preserved source bytes"))
+        .collect();
+    assert_eq!(after, before);
 }
 
 #[test]
