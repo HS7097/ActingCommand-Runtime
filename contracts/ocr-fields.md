@@ -39,6 +39,32 @@ The following is the `post_admission_ocr` member of an operation, not a complete
 scheduling mapping must bind it. It also lets the existing terminal fact require the OCR
 artifacts without adding a Global event family or changing the Global event schema.
 
+A `0.8` fields task may declare `operations: []` in `navigable_route` mode with
+`stop_on_confirmation` omitted or true. Its nonempty target-page set, fields-page set
+and sole `fields_recorded` mapping's terminal-page set must coincide under the existing
+game-prefix page normalization, with no duplicate aliases. The mapping has
+`no_designated_effect`, no designated operation, and the task has no recovery or stability
+declaration. Build-task and Runtime admission apply the same contract predicate; the
+offline package consumer delegates fields-package deep validation to Runtime admission.
+The first frame is page-admitted before fields are read from that same frame. Reaching
+a declared terminal page produces the ordinary verified report and successful receipt
+with zero executed steps and zero input calls. A different admitted page cannot advance
+an empty task and fails without fields success or input.
+
+For an explicit required Home entry using `any_of`, the zero-input task confirms that
+entry within the interpreter's first capture, before collecting fields. The Host records
+the existing entry-recognition, no-recovery and target-disposition facts from that decision.
+An unmatched required entry fails on that frame without fields or recovery. The report
+and observation share its FrameId; the run's terminal capture summary pins that same frame.
+Tasks with actions retain the Host's entry preflight and recovery behavior.
+
+`package dry-run` admits both nonempty and zero-input `0.8` packages through the typed
+Runtime validator, including field, dictionary, privacy and outcome declarations. It
+uses the existing production interpreter with OCR disabled for offline simulation;
+`post_admission_ocr` reports `declared: true`, `executed: false` and
+`pending_real_execution: true`. The local Lab execution loader and its validation entry
+retain their `0.3` through `0.7` version boundary. Fields execution uses Runtime task-run.
+
 There are one or two unique admitted pages and 1–32 ordered fields. Each field has a unique
 ID and OCR target; its group ID associates fields within one admitted frame only. IDs are
 1–128 ASCII alphanumeric characters or `_-/.:`. Each target must be a bounded OCR ROI and

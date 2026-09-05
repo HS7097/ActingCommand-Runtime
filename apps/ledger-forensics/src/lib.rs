@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use actingcommand_ledger_forensics::{
     ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
-    ForensicReplayRequest, ForensicRequest, MAX_FORENSIC_EVENTS,
+    ForensicReplayRequest, ForensicReport, ForensicRequest, MAX_FORENSIC_EVENTS,
 };
 
 enum CliRequest {
@@ -61,6 +61,7 @@ where
         CliRequest::Replay(request) => actingcommand_ledger_forensics::replay(request),
     }
     .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
+    let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -73,7 +74,15 @@ where
             }
         }
     }
-    output.flush().map_err(output_error)
+    output.flush().map_err(output_error)?;
+    if stability_incomplete {
+        return Err(CliError::new(
+            "stability_export_incomplete",
+            "export_stability",
+            "see structured gaps and failures in the report",
+        ));
+    }
+    Ok(())
 }
 
 pub fn run_env() -> Result<(), CliError> {
@@ -106,7 +115,10 @@ where
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
         "open" => ForensicCommand::Open,
-        "events" => return parse_events(state_root, args, false).map(CliRequest::StateRoot),
+        "events" => {
+            return parse_events(state_root, args, ForensicCommand::Events)
+                .map(CliRequest::StateRoot);
+        }
         "chain" => {
             require_utf8(args.next(), "--req")?;
             let request_id = require_utf8(args.next(), "request id")?;
@@ -119,8 +131,15 @@ where
         "repairs" => ForensicCommand::Repairs,
         "export" => {
             if let Some(option) = args.next() {
-                require_utf8(Some(option), "--performance")?;
-                return parse_events(state_root, args, true).map(CliRequest::StateRoot);
+                let option = option
+                    .into_string()
+                    .map_err(|_| invalid_arguments("export mode is not valid UTF-8"))?;
+                let mode = match option.as_str() {
+                    "--performance" => ForensicCommand::Performance,
+                    "--stability" => ForensicCommand::Stability,
+                    _ => return Err(invalid_arguments("unsupported export mode")),
+                };
+                return parse_events(state_root, args, mode).map(CliRequest::StateRoot);
             }
             ForensicCommand::Export
         }
@@ -173,7 +192,7 @@ where
 fn parse_events<I>(
     state_root: PathBuf,
     mut args: I,
-    performance: bool,
+    command: ForensicCommand,
 ) -> Result<ForensicRequest, CliError>
 where
     I: Iterator<Item = OsString>,
@@ -189,9 +208,11 @@ where
         let option = option
             .into_string()
             .map_err(|_| invalid_arguments("event option is not valid UTF-8"))?;
-        if performance && !matches!(option.as_str(), "--after" | "--through" | "--limit") {
+        if command != ForensicCommand::Events
+            && !matches!(option.as_str(), "--after" | "--through" | "--limit")
+        {
             return Err(invalid_arguments(format!(
-                "unsupported performance option {option}"
+                "unsupported export page option {option}"
             )));
         }
         let value = next_value(&mut args, &option)?;
@@ -225,10 +246,10 @@ where
         limit.unwrap_or(MAX_FORENSIC_EVENTS),
     )
     .map_err(|error| invalid_arguments(error.to_string()))?;
-    Ok(if performance {
-        ForensicRequest::performance(state_root, events)
-    } else {
-        ForensicRequest::events(state_root, events)
+    Ok(match command {
+        ForensicCommand::Performance => ForensicRequest::performance(state_root, events),
+        ForensicCommand::Stability => ForensicRequest::stability(state_root, events),
+        _ => ForensicRequest::events(state_root, events),
     })
 }
 

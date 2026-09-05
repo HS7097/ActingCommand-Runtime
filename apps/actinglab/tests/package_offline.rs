@@ -156,6 +156,137 @@ fn package_dry_run_defers_declared_ocr_without_provider_and_reports_it_explicitl
     assert_deferred_post_admission_ocr(&terminal_record["simulation"]["post_admission_ocr"]);
 }
 
+// Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553755777
+#[test]
+fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation() {
+    let source = package(PackageOptions {
+        operation_schema: "0.7",
+        post_admission_ocr: true,
+        ..PackageOptions::default()
+    });
+    let mut archive = ZipArchive::new(Cursor::new(source)).unwrap();
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_owned();
+        let value: Value = serde_json::from_reader(&mut entry).unwrap();
+        entries.push((name, value));
+    }
+    let task_index = entries
+        .iter()
+        .position(|(name, _)| name == "resources/operations/task/task.json")
+        .unwrap();
+    let pack_index = entries
+        .iter()
+        .position(|(name, _)| name == "resources/recognition/neutral.test.pack.json")
+        .unwrap();
+    let mut count_target = entries[pack_index].1["targets"][3].clone();
+    count_target["id"] = json!("fixture/count");
+    entries[pack_index].1["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(count_target);
+    let task = &mut entries[task_index].1;
+    let dictionary = task["post_admission_ocr"]["truth_set"].clone();
+    task["schema_version"] = json!("0.8");
+    task["post_admission_ocr"] = json!({
+        "mode": "fields_v1", "page_ids": ["home", "terminal"],
+        "fields": [
+            {"id":"name","group":"item","target_id":"fixture/ocr","required":true,
+             "privacy":"personal","trim":"whitespace_v1",
+             "value":{"type":"dictionary_entry","dictionary":dictionary}},
+            {"id":"count","group":"item","target_id":"fixture/count","required":true,
+             "privacy":"public","trim":"whitespace_v1",
+             "value":{"type":"unsigned_integer","min":0,"max":u64::MAX}}
+        ],
+        "limits":{"max_frames":2,"max_items":16,"max_string_bytes":64,
+                  "max_total_bytes":4096,"max_truth_entries":16},
+        "outcome_key":"fields_recorded"
+    });
+    task["scheduling_outcome"] = json!({"mappings":[{
+        "outcome_key":"fields_recorded","effect":"no_designated_effect",
+        "terminal_pages":["terminal"]
+    }]});
+    let encode = |entries: &[(String, Value)]| {
+        zip_entries(
+            &entries
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone()))
+                .collect::<Vec<_>>(),
+        )
+    };
+    for (zero_input, at_terminal, decision) in [
+        (false, false, "would_click"),
+        (false, true, "would_complete"),
+        (true, false, "would_complete"),
+    ] {
+        let mut valid = entries.clone();
+        if zero_input {
+            let task = &mut valid[task_index].1;
+            task["operations"] = json!([]);
+            task["target_page"] = json!("home");
+            task["post_admission_ocr"]["page_ids"] = json!(["home"]);
+            task["scheduling_outcome"]["mappings"][0]["terminal_pages"] = json!(["home"]);
+        }
+        let frame = if at_terminal {
+            terminal_frame()
+        } else {
+            home_frame(true)
+        };
+        let fixture = TestFixture::from_bytes(encode(&valid), frame);
+        let output = fixture.run(&[], "fields.result.zip");
+        assert_success(&output, decision);
+        assert_deferred_post_admission_ocr(&envelope_data(&output)["post_admission_ocr"]);
+        let record = read_result_record(&fixture.temp.path().join("fields.result.zip"));
+        assert_deferred_post_admission_ocr(&record["simulation"]["post_admission_ocr"]);
+        assert_eq!(record["loaded"]["validation"]["status"], "valid");
+        assert_eq!(record["loaded"]["validation"]["externally_verified"], true);
+        assert_eq!(
+            record["loaded"]["validation"]["resources"]["operation_count"],
+            usize::from(!zero_input)
+        );
+        assert_eq!(record["simulation"]["capture_count"], 1);
+        assert_eq!(record["executed"], false);
+        assert_eq!(record["production_global_ledger_written"], false);
+        assert!(record.get("official_ocr_fields_projection").is_none());
+    }
+    for case in 0..10 {
+        let mut invalid = entries.clone();
+        let task = &mut invalid[task_index].1;
+        match case {
+            0 => task["post_admission_ocr"]["fields"][0]["target_id"] = json!("missing"),
+            1 => {
+                task["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
+                    json!("0".repeat(64));
+            }
+            2 => {
+                task["post_admission_ocr"]["fields"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("privacy");
+            }
+            3 => task["post_admission_ocr"]["fields"][0]["privacy"] = json!("unknown"),
+            4 => {
+                task.as_object_mut().unwrap().remove("post_admission_ocr");
+            }
+            5 => task["post_admission_ocr"]["unexpected"] = json!(true),
+            6 => {
+                task.as_object_mut().unwrap().remove("scheduling_outcome");
+            }
+            7 => task["operations"] = json!([]),
+            8 => task["scheduling_outcome"]["designated_operation"] = json!("missing"),
+            _ => {
+                task["post_admission_ocr"]["fields"][1]["value"] =
+                    json!({"type":"unsigned_integer","min":2,"max":1});
+            }
+        }
+        let fixture = TestFixture::from_bytes(encode(&invalid), home_frame(true));
+        let output = fixture.run(&[], "invalid-fields.zip");
+        assert_error_code(&output, "package_invalid");
+        assert!(!fixture.temp.path().join("invalid-fields.zip").exists());
+    }
+}
+
 #[test]
 fn package_adapter_accepts_legacy_drag_field_aliases() {
     let bytes = package(PackageOptions {
