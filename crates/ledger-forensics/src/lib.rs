@@ -5,10 +5,13 @@
 use actingcommand_artifact_store::{
     ArtifactStoreError, EvidenceManifest, verify_evidence_archive, verify_projected_read_only,
 };
+use actingcommand_contract::{
+    PerformanceLedgerSample, PerformanceProcessOwnership, PerformanceProcessSummary,
+};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerReadOnly,
-    GlobalLedgerReadOnlyConfig, GlobalLedgerRepairRecord, GlobalLedgerWriterMetadataObservation,
-    PersistedEvent,
+    GlobalLedgerReadOnlyConfig, GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot,
+    GlobalLedgerWriterMetadataObservation, PersistedEvent,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -220,6 +223,7 @@ pub struct RepairReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenReport {
+    pub storage_snapshot: GlobalLedgerStorageSnapshot,
     pub latest_sequence: u64,
     pub event_count: usize,
     pub listed_through_segment: Option<u64>,
@@ -249,6 +253,7 @@ pub struct PerformanceReport {
     pub scanned_through_sequence: u64,
     pub stutter_count: usize,
     pub clock_jump_count: usize,
+    pub summary_count: usize,
     pub rows: Vec<PerformanceRow>,
     pub next_after_sequence: Option<u64>,
     pub has_more: bool,
@@ -267,6 +272,13 @@ pub struct PerformanceRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PerformanceObservation {
+    ResourceSample {
+        sampled_at_unix_ms: u64,
+        ledger_commits: Option<PerformanceLedgerSample>,
+        foreground: Option<PerformanceProcessMemory>,
+        owned_processes: Vec<PerformanceProcessMemory>,
+        third_party_high_load: Vec<PerformanceProcessMemory>,
+    },
     Stutter {
         frame_gap_ms: u64,
         capture_latency_ms: Option<u64>,
@@ -279,6 +291,29 @@ pub enum PerformanceObservation {
         host_responsiveness_basis_points: Option<u16>,
         third_party_pressure_basis_points: Option<u16>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PerformanceProcessMemory {
+    pub pid: u32,
+    pub process_name: String,
+    pub ownership: PerformanceProcessOwnership,
+    pub process_created_at_windows_100ns: Option<u64>,
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: Option<u64>,
+}
+
+impl From<&PerformanceProcessSummary> for PerformanceProcessMemory {
+    fn from(value: &PerformanceProcessSummary) -> Self {
+        Self {
+            pid: value.pid,
+            process_name: value.process_name.clone(),
+            ownership: value.ownership,
+            process_created_at_windows_100ns: value.process_created_at_windows_100ns,
+            working_set_bytes: value.working_set_bytes,
+            peak_working_set_bytes: value.peak_working_set_bytes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -512,6 +547,7 @@ fn performance_report(
     let mut rows = Vec::new();
     let mut stutter_count = 0;
     let mut clock_jump_count = 0;
+    let mut summary_count = 0;
     for event in page {
         let observation = if let Some(stutter) = event.payload().performance_stutter() {
             stutter_count += 1;
@@ -529,6 +565,19 @@ fn performance_report(
                 host_responsiveness_basis_points: control.host_responsiveness_basis_points(),
                 third_party_pressure_basis_points: control.third_party_pressure_basis_points(),
             }
+        } else if let Some(summary) = event.payload().performance_summary() {
+            summary_count += 1;
+            PerformanceObservation::ResourceSample {
+                sampled_at_unix_ms: summary.context().window_end_unix_ms,
+                ledger_commits: summary.ledger_commits().cloned(),
+                foreground: summary.foreground().map(|value| (&value.process).into()),
+                owned_processes: summary.owned_processes().iter().map(Into::into).collect(),
+                third_party_high_load: summary
+                    .third_party_high_load()
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            }
         } else {
             continue;
         };
@@ -541,6 +590,9 @@ fn performance_report(
     let has_more = page_end < end;
     let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
     let mut gaps = Vec::new();
+    if !snapshot.storage_snapshot().read_complete {
+        gaps.push("storage_read_incomplete");
+    }
     if corrupt_tail.is_some() {
         gaps.push("corrupt_tail");
     }
@@ -556,6 +608,7 @@ fn performance_report(
         scanned_through_sequence,
         stutter_count,
         clock_jump_count,
+        summary_count,
         rows,
         next_after_sequence: has_more.then_some(scanned_through_sequence),
         has_more,
@@ -664,6 +717,7 @@ fn valid_correlation_id(value: &str) -> bool {
 
 fn open_report(snapshot: &GlobalLedgerReadOnly) -> OpenReport {
     OpenReport {
+        storage_snapshot: snapshot.storage_snapshot().clone(),
         latest_sequence: snapshot.latest_sequence(),
         event_count: snapshot.events().len(),
         listed_through_segment: snapshot.listed_through_segment(),
@@ -737,6 +791,18 @@ fn render_export(snapshot: &GlobalLedgerReadOnly) -> ForensicResult<String> {
     writeln!(report, "ActingCommand ledger forensic export").expect("write String");
     writeln!(report, "latest_sequence: {}", open.latest_sequence).expect("write String");
     writeln!(report, "event_count: {}", open.event_count).expect("write String");
+    writeln!(
+        report,
+        "storage_snapshot: {}",
+        serde_json::to_string(&open.storage_snapshot).map_err(|error| {
+            ForensicError::new(
+                "report_serialization_failed",
+                "render_storage_snapshot",
+                error.to_string(),
+            )
+        })?
+    )
+    .expect("write String");
     writeln!(
         report,
         "listed_through_segment: {}",

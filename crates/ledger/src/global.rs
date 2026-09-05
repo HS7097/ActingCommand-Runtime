@@ -8,15 +8,17 @@ mod storage;
 
 pub use read_only::{
     GlobalLedgerCorruptTail, GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig,
-    GlobalLedgerRepairRecord, GlobalLedgerWriterMetadata, GlobalLedgerWriterMetadataObservation,
+    GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot, GlobalLedgerWriterMetadata,
+    GlobalLedgerWriterMetadataObservation,
 };
 
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    EventQuery, EventType, PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionProfile, SanitizationError, SanitizedEventDraft, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, SecretField, SecretFingerprinter, Sha256Fingerprint,
-    SubscriptionCursor, VerifiedArtifactReference,
+    CorrelationId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
+    PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    SanitizationError, SanitizedEventDraft, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
+    SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
+    VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -24,11 +26,11 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Weak,
+    Arc, Mutex, TryLockError, Weak,
     mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use storage::SegmentStore;
 
@@ -342,6 +344,122 @@ enum WriterCommand {
 pub struct GlobalLedger {
     sender: Option<SyncSender<WriterCommand>>,
     writer: Option<JoinHandle<GlobalLedgerResult<()>>>,
+    commit_statistics: Arc<CommitStatistics>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalLedgerCommitSnapshot {
+    pub writer_id: CorrelationId,
+    pub sampled_at_monotonic_ns: u64,
+    pub successful_commits: u64,
+    pub through_sequence: u64,
+    pub write_sync_total_ns: u64,
+    pub write_sync_max_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlobalLedgerCommitObservation {
+    Available(GlobalLedgerCommitSnapshot),
+    Unavailable(PerformanceLedgerUnavailable),
+}
+
+#[derive(Clone, Copy)]
+struct CommitTotals {
+    successful_commits: u64,
+    through_sequence: u64,
+    write_sync_total_ns: u64,
+    write_sync_max_ns: u64,
+}
+
+struct CommitStatistics {
+    writer_id: CorrelationId,
+    started: Instant,
+    totals: Mutex<Option<CommitTotals>>,
+}
+
+impl CommitStatistics {
+    fn new(through_sequence: u64) -> GlobalLedgerResult<Self> {
+        let issuer = IdentifierIssuer::new().map_err(|_| {
+            GlobalLedgerError::fatal(
+                "ledger_statistics_identity_failed",
+                "start_commit_statistics",
+            )
+        })?;
+        let writer_id = *issuer
+            .mint_correlation_id()
+            .map_err(|_| {
+                GlobalLedgerError::fatal(
+                    "ledger_statistics_identity_failed",
+                    "start_commit_statistics",
+                )
+            })?
+            .transport();
+        Ok(Self {
+            writer_id,
+            started: Instant::now(),
+            totals: Mutex::new(Some(CommitTotals {
+                successful_commits: 0,
+                through_sequence,
+                write_sync_total_ns: 0,
+                write_sync_max_ns: 0,
+            })),
+        })
+    }
+
+    /// The statistics lock is acquired only after file I/O has completed.
+    fn record_success(&self, sequence: u64, elapsed_ns: Option<u64>) -> GlobalLedgerResult<()> {
+        let mut totals = self.totals.lock().map_err(|_| {
+            GlobalLedgerError::fatal("ledger_statistics_poisoned", "record_commit_statistics")
+        })?;
+        *totals = totals.and_then(|previous| {
+            let elapsed = elapsed_ns?;
+            if previous.through_sequence.checked_add(1) != Some(sequence) {
+                return None;
+            }
+            Some(CommitTotals {
+                successful_commits: previous.successful_commits.checked_add(1)?,
+                through_sequence: sequence,
+                write_sync_total_ns: previous.write_sync_total_ns.checked_add(elapsed)?,
+                write_sync_max_ns: previous.write_sync_max_ns.max(elapsed),
+            })
+        });
+        Ok(())
+    }
+
+    fn sample(&self) -> GlobalLedgerResult<GlobalLedgerCommitObservation> {
+        let totals = match self.totals.try_lock() {
+            Ok(totals) => totals,
+            Err(TryLockError::WouldBlock) => {
+                return Ok(GlobalLedgerCommitObservation::Unavailable(
+                    PerformanceLedgerUnavailable::Busy,
+                ));
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(GlobalLedgerError::fatal(
+                    "ledger_statistics_poisoned",
+                    "sample_commit_statistics",
+                ));
+            }
+        };
+        let elapsed = Instant::now()
+            .checked_duration_since(self.started)
+            .and_then(|value| u64::try_from(value.as_nanos()).ok());
+        let (Some(totals), Some(sampled_at_monotonic_ns)) = (*totals, elapsed) else {
+            return Ok(GlobalLedgerCommitObservation::Unavailable(
+                PerformanceLedgerUnavailable::CounterOverflow,
+            ));
+        };
+        Ok(GlobalLedgerCommitObservation::Available(
+            GlobalLedgerCommitSnapshot {
+                writer_id: self.writer_id,
+                sampled_at_monotonic_ns,
+                successful_commits: totals.successful_commits,
+                through_sequence: totals.through_sequence,
+                write_sync_total_ns: totals.write_sync_total_ns,
+                write_sync_max_ns: totals.write_sync_max_ns,
+            },
+        ))
+    }
 }
 
 pub struct LedgerSubscription {
@@ -519,6 +637,14 @@ impl fmt::Debug for GlobalLedger {
 }
 
 impl GlobalLedger {
+    /// Does not enqueue a writer command or wait for an I/O lock.
+    pub fn sample_commit_statistics(&self) -> GlobalLedgerResult<GlobalLedgerCommitObservation> {
+        self.check_writer_health()?;
+        let sample = self.commit_statistics.sample()?;
+        self.check_writer_health()?;
+        Ok(sample)
+    }
+
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
@@ -585,10 +711,12 @@ impl GlobalLedger {
                 return Err(store_error);
             }
         };
+        let commit_statistics = Arc::clone(&store.commit_statistics);
         match store_sender.send(store) {
             Ok(()) => Ok(Self {
                 sender: Some(sender),
                 writer: Some(writer),
+                commit_statistics,
             }),
             Err(mpsc::SendError(store)) => {
                 drop(sender);

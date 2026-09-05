@@ -11,6 +11,7 @@ use actingcommand_contract::{
     EventId, EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference,
     VerifiedArtifactReference,
 };
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -175,6 +176,18 @@ pub struct GlobalLedgerReadOnly {
     listed_through_segment: Option<u64>,
     repairs: Vec<GlobalLedgerRepairRecord>,
     corrupt_tail: Option<GlobalLedgerCorruptTail>,
+    storage_snapshot: GlobalLedgerStorageSnapshot,
+}
+
+/// Physical observations from the single listing and bounded per-file reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GlobalLedgerStorageSnapshot {
+    pub segment_count: u64,
+    pub observed_bytes: u64,
+    pub read_bytes: u64,
+    pub verified_prefix_bytes: u64,
+    pub read_complete: bool,
+    pub atomic: bool,
 }
 
 impl GlobalLedgerReadOnly {
@@ -205,7 +218,7 @@ impl GlobalLedgerReadOnly {
 
         let segments = list_segments(&root.join("segments"))?;
         let listed_through_segment = segments.last().map(|(index, _)| *index);
-        let segment_snapshots = read_segment_snapshots(&segments)?;
+        let (segment_snapshots, mut storage_snapshot) = read_segment_snapshots(&segments)?;
         let writer_metadata = read_writer_metadata(&root)?;
         let repairs = RepairJournal::load(&root)?
             .snapshots()
@@ -234,9 +247,27 @@ impl GlobalLedgerReadOnly {
                 &mut events,
                 &mut verify_artifact,
             )? {
+                storage_snapshot.verified_prefix_bytes = storage_snapshot
+                    .verified_prefix_bytes
+                    .checked_add(corruption.byte_offset)
+                    .ok_or_else(|| {
+                        GlobalLedgerError::fatal(
+                            "ledger_snapshot_overflow",
+                            "count_verified_prefix_bytes",
+                        )
+                    })?;
                 corrupt_tail = Some(corruption);
                 break;
             }
+            storage_snapshot.verified_prefix_bytes = storage_snapshot
+                .verified_prefix_bytes
+                .checked_add(snapshot.bytes.len() as u64)
+                .ok_or_else(|| {
+                    GlobalLedgerError::fatal(
+                        "ledger_snapshot_overflow",
+                        "count_verified_prefix_bytes",
+                    )
+                })?;
         }
         let indexes = EventIndexes::from_events(&events);
         Ok(Self {
@@ -246,11 +277,16 @@ impl GlobalLedgerReadOnly {
             listed_through_segment,
             repairs,
             corrupt_tail,
+            storage_snapshot,
         })
     }
 
     pub fn events(&self) -> &[PersistedEvent] {
         &self.events
+    }
+
+    pub const fn storage_snapshot(&self) -> &GlobalLedgerStorageSnapshot {
+        &self.storage_snapshot
     }
 
     pub fn query(&self, query: &EventQuery) -> Vec<PersistedEvent> {
@@ -304,8 +340,18 @@ struct ReadOnlySegmentSnapshot {
 
 fn read_segment_snapshots(
     segments: &[(u64, PathBuf)],
-) -> GlobalLedgerResult<Vec<ReadOnlySegmentSnapshot>> {
+) -> GlobalLedgerResult<(Vec<ReadOnlySegmentSnapshot>, GlobalLedgerStorageSnapshot)> {
     let mut snapshots = Vec::with_capacity(segments.len());
+    let mut storage = GlobalLedgerStorageSnapshot {
+        segment_count: u64::try_from(segments.len()).map_err(|_| {
+            GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_read_only_segments")
+        })?,
+        observed_bytes: 0,
+        read_bytes: 0,
+        verified_prefix_bytes: 0,
+        read_complete: true,
+        atomic: false,
+    };
     for (position, (index, path)) in segments.iter().enumerate() {
         let mut file = File::open(path).map_err(|error| {
             GlobalLedgerError::io("ledger_io", "open_read_only_segment", &error)
@@ -323,13 +369,27 @@ fn read_segment_snapshots(
             .map_err(|error| {
                 GlobalLedgerError::io("ledger_io", "read_read_only_segment", &error)
             })?;
+        let read_bytes = u64::try_from(bytes.len()).map_err(|_| {
+            GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_read_only_bytes")
+        })?;
+        storage.observed_bytes =
+            storage
+                .observed_bytes
+                .checked_add(byte_count)
+                .ok_or_else(|| {
+                    GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_observed_bytes")
+                })?;
+        storage.read_bytes = storage.read_bytes.checked_add(read_bytes).ok_or_else(|| {
+            GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_read_only_bytes")
+        })?;
+        storage.read_complete &= read_bytes == byte_count;
         snapshots.push(ReadOnlySegmentSnapshot {
             index: *index,
             bytes,
             is_final: position + 1 == segments.len(),
         });
     }
-    Ok(snapshots)
+    Ok((snapshots, storage))
 }
 
 fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<GlobalLedgerWriterMetadataObservation> {

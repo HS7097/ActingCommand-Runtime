@@ -9,12 +9,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false, features = ["evidence-archive"] }
 actingcommand-ledger = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-actingcommand-contract = { workspace = true }
 actingcommand-artifact-store = { path = "../artifact-store", features = ["capture"] }
 tempfile = "3"
