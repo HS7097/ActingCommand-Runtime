@@ -2858,7 +2858,6 @@ impl TaskProgram {
                     .any(|value| value == &control.server))
             || self.coordinate_space.width != control.resolution.width
             || self.coordinate_space.height != control.resolution.height
-            || self.operations.is_empty()
             || self.error_pages.iter().any(|value| value.trim().is_empty())
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
@@ -2867,6 +2866,27 @@ impl TaskProgram {
         self.validate_task_max_steps(control)?;
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
+        if self.operations.is_empty() {
+            if self.schema_version != "0.8" || self.recovery.is_some() {
+                return Err(ContainedTaskError::new("contained_task_program_invalid"));
+            }
+            let fields: OcrFieldsDeclaration =
+                serde_json::from_value(self.post_admission_ocr.clone().unwrap_or_default())
+                    .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
+            let scheduling = self
+                .scheduling_outcome
+                .as_ref()
+                .ok_or_else(|| ContainedTaskError::new("ocr_fields_outcome_invalid"))?;
+            fields
+                .validate_zero_input_task(
+                    &self.game,
+                    &control.execution_mode,
+                    control.stop_on_confirmation.unwrap_or(true),
+                    &target_pages,
+                    scheduling,
+                )
+                .map_err(ContainedTaskError::new)?;
+        }
         validate_page_references(&control.game, &target_pages, detector)?;
         validate_page_references(&control.game, &self.error_pages, detector)?;
         validate_page_set_overlap(&control.game, &target_pages, &self.error_pages, detector)?;

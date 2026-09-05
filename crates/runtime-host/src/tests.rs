@@ -9856,6 +9856,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
 }
 
 // Authorized D01 callback regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
+// Zero-input Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553542252
 #[test]
 fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     use actingcommand_recognition_pack::{
@@ -9979,6 +9980,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         "resources/manifest.json".into(),
         serde_json::to_vec(&manifest).unwrap(),
     );
+    let zero_input_files = files.clone();
     let mut package = ZipWriter::new(Cursor::new(Vec::new()));
     for (path, bytes) in files {
         package
@@ -10153,6 +10155,139 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(host.fatal_error().unwrap().is_none());
             host.close().expect("ordinary failure leaves host healthy");
         }
+    }
+
+    for declared_page in ["home", "terminal"] {
+        let mut files = zero_input_files.clone();
+        let mut task = task.clone();
+        task["operations"] = json!([]);
+        task["target_page"] = json!(declared_page);
+        task["post_admission_ocr"]["page_ids"] = json!([declared_page]);
+        task["scheduling_outcome"]["mappings"][0]["terminal_pages"] = json!([declared_page]);
+        files.insert(
+            "resources/operations/task/task.json".into(),
+            serde_json::to_vec(&task).unwrap(),
+        );
+        let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, bytes) in files {
+            package
+                .start_file(
+                    path,
+                    FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            package.write_all(&bytes).unwrap();
+        }
+        let bytes = package.finish().unwrap().into_inner();
+        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+        let root = TempDir::new().unwrap();
+        let package_path = root.path().join("zero-input-fields.zip");
+        fs::write(&package_path, &bytes).unwrap();
+        let state = Arc::new(FakeState::default());
+        let vision = Arc::new(FakeVisionProvider::default());
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("neutral.instance", instance_id(), state.clone())
+                    .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone()))),
+            ),
+        )
+        .expect("formal zero-input host");
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .expect("official client");
+        let result = client.run_contained_task(
+            "neutral.instance",
+            ContainedTaskRequest::new(package_path.display().to_string(), expected).unwrap(),
+        );
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .unwrap();
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        assert_eq!(
+            vision.ocr_calls.load(Ordering::Acquire),
+            u64::from(declared_page == "home")
+        );
+        let terminals = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                    fact @ TaskSemanticFact::TerminalCommitted { .. } => Some((event, fact)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminals.len(), 1, "exactly one terminal: {result:?}");
+        if declared_page == "home" {
+            let output = result.expect("official zero-input fields receipt");
+            assert!(
+                matches!(output.receipt().result(), Some(RuntimeResult::ContainedTaskCompleted {
+                outcome: TaskOutcome::Success, executed_steps: 0, final_page: Some(page), ..
+            }) if page == "neutral/home")
+            );
+            assert!(matches!(
+                terminals[0].1,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Success,
+                    executed_steps: 0,
+                    ..
+                }
+            ));
+            let projection = output
+                .official_ocr_fields_projection()
+                .expect("verified report projection");
+            assert_eq!(projection.failure(), None);
+            assert_eq!(projection.records().len(), 1);
+            assert_eq!(terminals[0].0.links().run_id(), Some(&projection.run_id()));
+            let value = serde_json::to_value(projection).unwrap();
+            assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
+            assert_eq!(
+                value["records"][0]["frame_id"],
+                value["observations"][0]["frame_id"]
+            );
+            let diagnostics = events
+                .iter()
+                .filter(|event| event.event_type() == EventType::ArtifactVerified)
+                .flat_map(|event| event.artifacts())
+                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .collect::<Vec<_>>();
+            assert_eq!(diagnostics.len(), 2, "one observation and one final report");
+            for artifact in diagnostics {
+                assert_eq!(artifact.run_id(), Some(&projection.run_id()));
+                assert_eq!(
+                    artifact.frame_id(),
+                    Some(&projection.records()[0].frame_id())
+                );
+            }
+        } else {
+            assert!(matches!(
+                terminals[0].1,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    executed_steps: 0,
+                    ..
+                }
+            ));
+            match result {
+                Ok(output) => {
+                    assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
+                    assert!(output.official_ocr_fields_projection().is_none());
+                }
+                Err(error) => assert!(!error.is_fatal(), "page mismatch is a contained failure"),
+            }
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| event.event_type() == EventType::TaskCompleted)
+            );
+        }
+        drop(client);
+        host.close().expect("zero-input run leaves host healthy");
     }
 }
 
