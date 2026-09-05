@@ -438,6 +438,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
                 foreground: None,
                 owned_processes: Vec::new(),
                 third_party_high_load: Vec::new(),
+                ledger_commits: None,
             },
             input(),
         )
