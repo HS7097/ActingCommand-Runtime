@@ -22,9 +22,9 @@ fn main() -> ExitCode {
         Ok(output) => match write_output(&output) {
             Ok(()) => {
                 if output
-                    .get("official_ocr_fields_projection")
-                    .and_then(|p| p.get("failure"))
-                    .is_some_and(|failure| !failure.is_null())
+                    .get("receipt")
+                    .and_then(|receipt| receipt.get("error"))
+                    .is_some_and(|error| !error.is_null())
                 {
                     ExitCode::FAILURE
                 } else {

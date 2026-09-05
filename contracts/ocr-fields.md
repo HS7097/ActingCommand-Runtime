@@ -87,6 +87,12 @@ to be read once. Provider or budget failures stop further calls and mark missing
 Optional unresolved fields remain visible in a successful report. Observation counts are
 not field values and provide no item identity or inventory coverage.
 
+Once at least one frame has been collected, ordinary task failures such as a guard
+refusal, task timeout or OCR provider failure save the accumulated bounded fields report
+once before returning the original task error. Parsed facts from earlier frames retain
+their declarations, groups and values. Report persistence errors propagate through the
+existing ledger/artifact boundary without another report attempt.
+
 The host saves raw observations and `actingcommand.runtime.post-admission-ocr-fields.v1`
 reports inside the existing created/verified `DiagnosticJson` artifact chain. The existing
 comparison envelope carries the versioned report. Task/run and minted FrameId links remain
@@ -102,8 +108,17 @@ observation binding and budgets before projecting. The collection-mode output ke
 shape remain unchanged.
 
 A fields failure retains the failed Runtime receipt and terminal in the returned flow.
-The CLI writes the structured JSON and exits nonzero. Other Runtime errors retain their
-existing error behavior. No field projection can turn a failed task into success.
+The report's `failure` describes field collection or parsing; it may be null when all
+collected fields resolved and a later ordinary task operation failed. The task outcome
+remains in the receipt. The CLI writes the structured JSON and uses the receipt's error
+to exit nonzero. No field projection can turn a failed task into success.
+
+For failed runs, the client establishes fields mode from verified observation markers,
+the typed report schema or the existing fields-failure terminal before requiring a
+fields report. Fields-mode missing, malformed, mismatched or unverified evidence fails
+explicitly. A 0.7 collection run with partial observations and a later ordinary provider
+failure retains its original nonfatal rejection and terminal; it does not require a
+final comparison report. Other Runtime errors retain their existing error behavior.
 
 `privacy` is mandatory and is either `public` or `personal`; omission is not public.
 For personal fields, the program-facing projection removes raw text, trimmed text,

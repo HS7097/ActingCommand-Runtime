@@ -2582,6 +2582,19 @@ pub(crate) fn resolve_official_ocr_projection(
     if recognized_artifacts > MAX_OFFICIAL_OCR_ARTIFACTS {
         return Err(official_ocr_limit_error());
     }
+    let failed = receipt.error_projection().is_some();
+    // Verified observation markers, report schema and the typed terminal establish
+    // whether a failed run requires a fields report before comparison is mandatory.
+    let fields_expected = (failed && marker_expected)
+        || raw_observations
+            .values()
+            .any(|value| value.get("page_id").is_some() || value.get("personal").is_some())
+        || comparison.as_ref().is_some_and(|(_, _, _, _, _, report)| {
+            report.get("schema_version").and_then(Value::as_str) == Some(OCR_FIELDS_REPORT_SCHEMA)
+        });
+    if failed && !fields_expected {
+        return Ok(None);
+    }
     let (
         comparison_artifact,
         comparison_artifact_created_sequence,
@@ -2612,7 +2625,6 @@ pub(crate) fn resolve_official_ocr_projection(
     {
         let records_report: OcrFieldsReport = serde_json::from_value(comparison_value)
             .map_err(|_| official_ocr_error("runtime_official_ocr_fields_malformed"))?;
-        let failed = receipt.error_projection().is_some();
         let personal = records_report
             .declaration
             .fields
@@ -2632,7 +2644,9 @@ pub(crate) fn resolve_official_ocr_projection(
                 "runtime_official_ocr_fields_privacy_mismatch",
             ));
         }
-        if records_report.failure.is_some() != failed {
+        if (records_report.failure.is_some() && !failed)
+            || (failed && marker_expected && records_report.failure.is_none())
+        {
             return Err(official_ocr_error(
                 "runtime_official_ocr_fields_terminal_mismatch",
             ));
@@ -2658,8 +2672,8 @@ pub(crate) fn resolve_official_ocr_projection(
         });
         return Ok(None);
     }
-    if receipt.error_projection().is_some() {
-        return Ok(None);
+    if fields_expected {
+        return Err(official_ocr_error("runtime_official_ocr_mode_mismatch"));
     }
     if comparison_artifact.redaction_state != ArtifactRedactionState::NotRequired
         || observations

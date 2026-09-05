@@ -55,7 +55,7 @@ use std::collections::BTreeSet;
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
 
-// Specifications 7 and 8: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
+// Authorized D02 regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#discussion_r3940629855
 #[test]
 fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
     for case in [
@@ -66,7 +66,28 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
         "run",
         "unverified",
         "frame",
+        "task_failed",
+        "personal_task_failed",
+        "legacy_provider_failed",
+        "task_failed_missing_report",
+        "failed_missing_report",
+        "failed_missing_all",
+        "failed_schema",
+        "failed_hash",
+        "failed_run",
+        "failed_unverified",
+        "failed_frame",
     ] {
+        let field_failed = case == "failed" || case.starts_with("failed_");
+        let failed = field_failed
+            || matches!(
+                case,
+                "task_failed"
+                    | "personal_task_failed"
+                    | "legacy_provider_failed"
+                    | "task_failed_missing_report"
+            );
+        let legacy = case == "legacy_provider_failed";
         let root = TempDir::new().unwrap();
         let path = root.path().to_path_buf();
         let server = scripted_runtime(&root, move |listener, owner_epoch| {
@@ -82,52 +103,71 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             let run = *ids.mint_run_id().unwrap().transport();
             let task = *ids.mint_task_id().unwrap().transport();
             let frame = *ids.mint_frame_id().unwrap().transport();
-            let personal = case == "personal";
+            let personal = matches!(case, "personal" | "personal_task_failed");
             let name = if personal { "PrivateFixture" } else { "EntryA" };
             let canonical = if personal {
                 "PrivateCanonical"
             } else {
                 "EntryA"
             };
-            let count = if case == "failed" { "invalid" } else { "0007" };
-            let observation = json!({"schema_version":OCR_OBSERVATION_SCHEMA,"task_id":task,"run_id":run,"frame_id":frame,"frame_index":0,
+            let count = if field_failed { "invalid" } else { "0007" };
+            let mut observation = json!({"schema_version":OCR_OBSERVATION_SCHEMA,"task_id":task,"run_id":run,"frame_id":frame,"frame_index":0,
                 "observation":{"page_id":"fixture/panel","personal":personal,"targets":[
                     {"target_id":"field/name","text":name,"confidence":0.9,"blocks":[],"execution":ocr_provider_fixture("name")},
                     {"target_id":"field/count","text":count,"confidence":0.9,"blocks":[],"execution":ocr_provider_fixture("count")} ]}});
+            if legacy {
+                let payload = observation["observation"].as_object_mut().unwrap();
+                payload.remove("page_id");
+                payload.remove("personal");
+            }
             let declaration = json!({"mode":"fields_v1","page_ids":["panel"],"fields":[
                 {"id":"name","group":"item","target_id":"field/name","required":true,"privacy":if personal {"personal"} else {"public"},
                     "trim":"whitespace_v1","value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"a".repeat(64)}}},
                 {"id":"count","group":"item","target_id":"field/count","required":true,"privacy":"public","trim":"whitespace_v1",
                     "value":{"type":"unsigned_integer","min":0,"max":100}}],
                 "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
-            let report = json!({"schema_version":OCR_COMPARISON_ENVELOPE_SCHEMA,"task_id":task,"run_id":run,"final_frame_id":frame,
+            let mut report = json!({"schema_version":OCR_COMPARISON_ENVELOPE_SCHEMA,"task_id":task,"run_id":run,"final_frame_id":frame,
                 "report":{"schema_version":actingcommand_contract::OCR_FIELDS_REPORT_SCHEMA,"declaration":declaration,
                     "frames_collected":1,"items_collected":2,"total_observed_utf8_bytes":name.len()+count.len(),
-                    "failure":if case == "failed" {json!("invalid_integer")} else {Value::Null},
-                    "records":[{"frame_index":if case == "frame" {1} else {0},"page_id":"fixture/panel","group":"item","fields":[
+                    "failure":if field_failed {json!("invalid_integer")} else {Value::Null},
+                    "records":[{"frame_index":if matches!(case, "frame" | "failed_frame") {1} else {0},"page_id":"fixture/panel","group":"item","fields":[
                         {"field_id":"name","target_id":"field/name","raw_text":name,"normalized_text":name,
                             "value":{"type":"dictionary_entry","value":canonical},"reason":"resolved","detail":null,"redacted":false},
                         {"field_id":"count","target_id":"field/count","raw_text":count,"normalized_text":count,
-                            "value":if case == "failed" {Value::Null} else {json!({"type":"unsigned_integer","value":7})},
-                            "reason":if case == "failed" {"invalid_integer"} else {"resolved"},"detail":null,"redacted":false}]}]}});
+                            "value":if field_failed {Value::Null} else {json!({"type":"unsigned_integer","value":7})},
+                            "reason":if field_failed {"invalid_integer"} else {"resolved"},"detail":null,"redacted":false}]}]}});
+            if legacy {
+                report = json!({"schema_version":"actingcommand.runtime.post-admission-ocr-failure.v1",
+                    "task_id":task,"run_id":run,"frame_id":frame,"failure_code":"contained_task_post_admission_ocr_failed",
+                    "detail":"fixture provider unavailable after first observation"});
+            }
+            if case == "failed_schema" {
+                report["report"]["schema_version"] = json!("unknown.fields.schema");
+            }
             let mut events = Vec::new();
             for (index, value) in [observation, report].into_iter().enumerate() {
+                if case == "failed_missing_all"
+                    || (index == 1
+                        && matches!(case, "task_failed_missing_report" | "failed_missing_report"))
+                {
+                    continue;
+                }
                 let mut reference =
                     persisted_ocr_diagnostic(&path, &ids, correlation, run, frame, &value);
                 if personal {
                     reference.redaction_state = ArtifactRedactionState::Pending;
                 }
-                if case == "run" {
+                if matches!(case, "run" | "failed_run") {
                     reference.run_id = Some(*ids.mint_run_id().unwrap().transport());
                 }
-                if case == "hash" && index == 1 {
+                if matches!(case, "hash" | "failed_hash") && index == 1 {
                     let file = path.join(reference.object_key().unwrap());
                     let mut bytes = fs::read(&file).unwrap();
                     bytes[0] = b'[';
                     fs::write(file, bytes).unwrap();
                 }
                 for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
-                    if case == "unverified"
+                    if matches!(case, "unverified" | "failed_unverified")
                         && index == 1
                         && event_type == EventType::ArtifactVerified
                     {
@@ -166,23 +206,23 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 EventLinksDraft::default(),
                 TaskPayloadDraft::semantic(
                     TaskSemanticFact::TerminalCommitted {
-                        outcome: if case == "failed" {
+                        outcome: if failed {
                             TaskOutcome::Failure
                         } else {
                             TaskOutcome::Success
                         },
                         final_page: Some("fixture/panel".into()),
                         executed_steps: 0,
-                        failure_code: if case == "failed" {
+                        failure_code: if field_failed {
                             Some("contained_task_ocr_fields_unresolved".into())
+                        } else if legacy {
+                            Some("contained_task_post_admission_ocr_failed".into())
+                        } else if failed {
+                            Some("contained_task_timeout".into())
                         } else {
                             None
                         },
-                        scheduling_disposition: if case == "failed" {
-                            None
-                        } else {
-                            Some(disposition)
-                        },
+                        scheduling_disposition: if failed { None } else { Some(disposition) },
                     },
                     AuditInput::new(),
                 )
@@ -206,7 +246,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 event_id: terminal.event_id,
             };
             events.push(terminal);
-            if case == "failed" {
+            if failed {
                 let receipt = RuntimeReceipt::error(
                     &request,
                     RuntimeReceiptState::Failed,
@@ -244,8 +284,44 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
         });
         let client = client(&root);
         let result = client.run_contained_task("node.a", contained_task_request());
-        if matches!(case, "hash" | "run" | "unverified" | "frame") {
+        if legacy {
+            let error = result.expect_err("legacy provider failure keeps its rejection");
+            assert_eq!(error.code(), "runtime_request_rejected");
+            assert!(!error.is_fatal());
+            assert_eq!(
+                error.projection().unwrap().code,
+                RuntimeErrorCode::BackendOperationFailed
+            );
+            let receipt = error.committed_receipt().expect("original failed terminal");
+            assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+            assert_eq!(receipt.terminal().unwrap().sequence, 5);
+            assert_eq!(receipt.error_projection(), error.projection());
+        } else if matches!(
+            case,
+            "hash"
+                | "run"
+                | "unverified"
+                | "frame"
+                | "task_failed_missing_report"
+                | "failed_missing_report"
+                | "failed_missing_all"
+                | "failed_schema"
+                | "failed_hash"
+                | "failed_run"
+                | "failed_unverified"
+                | "failed_frame"
+        ) {
             assert!(result.is_err(), "{case} must be rejected");
+            let error = result.unwrap_err();
+            assert!(
+                error.is_fatal(),
+                "invalid fields evidence cannot select collection mode: {case}"
+            );
+            assert_eq!(
+                error.code(),
+                "runtime_official_ocr_projection_failed_after_terminal"
+            );
+            assert!(error.committed_receipt().is_some());
         } else {
             let output = result.unwrap();
             let value = serde_json::to_value(&output).unwrap();
@@ -261,15 +337,29 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             );
             assert_eq!(
                 projection["records"][0]["fields"][1]["raw_text"],
-                if case == "failed" { "invalid" } else { "0007" }
+                if field_failed { "invalid" } else { "0007" }
             );
-            if case == "failed" {
+            if failed {
                 assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
+                assert_eq!(
+                    output.receipt().error_projection().unwrap().code,
+                    RuntimeErrorCode::BackendOperationFailed
+                );
+                assert!(!output.receipt().error_projection().unwrap().fatal);
+                assert!(output.receipt().terminal().is_some());
+                assert!(
+                    value["receipt"]
+                        .get("error")
+                        .is_some_and(|error| !error.is_null())
+                );
+            }
+            if field_failed {
                 assert_eq!(projection["failure"], "invalid_integer");
             } else {
                 assert_eq!(projection["records"][0]["fields"][1]["value"]["value"], 7);
+                assert_eq!(projection["failure"], Value::Null);
             }
-            if case == "personal" {
+            if matches!(case, "personal" | "personal_task_failed") {
                 let text = serde_json::to_string(&value).unwrap();
                 assert!(!text.contains("PrivateFixture") && !text.contains("PrivateCanonical"));
                 assert_eq!(projection["records"][0]["fields"][0]["redacted"], true);
