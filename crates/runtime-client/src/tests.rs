@@ -226,8 +226,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 report["report"]["records"][0]["fields"][1]["region"] = region;
                 if case == "relative_optional" {
                     observation["observation"]["targets"] = json!([]);
-                    let mut region =
-                        report["report"]["records"][0]["fields"][1]["region"].clone();
+                    let mut region = report["report"]["records"][0]["fields"][1]["region"].clone();
                     region["anchor_match"]["passed"] = json!(false);
                     region["anchor_match"]["score"] = json!(0.0);
                     region["roi"] = Value::Null;
