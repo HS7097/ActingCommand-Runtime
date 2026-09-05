@@ -3442,6 +3442,11 @@ fn selected_available_target_ids(bundles: &[Bundle]) -> CliOutcome<BTreeSet<Stri
                 targets.insert(anchor_target_id(anchor_id));
             }
         }
+        for field in ["color_probes", "verify_templates"] {
+            for declaration in array_field(&bundle.data, field) {
+                targets.insert(required_string(declaration, "id")?);
+            }
+        }
         for operation in array_field(&bundle.data, "operations") {
             if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                 targets.insert(template_target_id(template));
