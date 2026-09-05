@@ -89,9 +89,14 @@ not field values and provide no item identity or inventory coverage.
 
 Once at least one frame has been collected, ordinary task failures such as a guard
 refusal, task timeout or OCR provider failure save the accumulated bounded fields report
-once before returning the original task error. Parsed facts from earlier frames retain
-their declarations, groups and values. Report persistence errors propagate through the
-existing ledger/artifact boundary without another report attempt.
+once before returning the original task error. Capture, action-seed and input callback
+errors do the same only when their error owner explicitly classifies them as nonfatal.
+The production adapter uses `RuntimeHostError::is_fatal()`; an adapter without a declared
+classification defaults to unknown. The execution result retains the original error and
+distinguishes nonfatal operation failures from record failures. Parsed facts from earlier
+frames retain their declarations, groups and values. Fatal or unknown operation failures,
+all record failures, and artifact/ledger persistence failures propagate without another
+report attempt, including failure after a report was already saved.
 
 The host saves raw observations and `actingcommand.runtime.post-admission-ocr-fields.v1`
 reports inside the existing created/verified `DiagnosticJson` artifact chain. The existing

@@ -111,13 +111,25 @@ impl Error for ContainedTaskError {}
 
 #[derive(Debug)]
 pub enum ContainedTaskRunError<E> {
+    /// A record failure, or an operation failure without a nonfatal classification.
     Boundary(E),
+    /// The operation callback's original error, classified by its owner as nonfatal.
+    NonfatalOperation(E),
     Task(ContainedTaskError),
 }
 
 impl<E> ContainedTaskRunError<E> {
     pub fn task(code: &'static str) -> Self {
         Self::Task(ContainedTaskError::new(code))
+    }
+
+    fn operation<R: ContainedTaskRuntime<Error = E>>(error: E) -> Self {
+        match R::classify_error(&error) {
+            ContainedTaskRuntimeErrorClass::Nonfatal => Self::NonfatalOperation(error),
+            ContainedTaskRuntimeErrorClass::Fatal | ContainedTaskRuntimeErrorClass::Unknown => {
+                Self::Boundary(error)
+            }
+        }
     }
 }
 
@@ -1364,9 +1376,21 @@ pub enum ContainedTaskGuardOutcome {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainedTaskRuntimeErrorClass {
+    Nonfatal,
+    Fatal,
+    Unknown,
+}
+
 /// Runtime boundary used by the semantic engine for device effects and durable facts.
 pub trait ContainedTaskRuntime {
     type Error;
+
+    /// Classification comes from the error owner. Unknown errors forbid further reporting.
+    fn classify_error(_error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+        ContainedTaskRuntimeErrorClass::Unknown
+    }
 
     fn capture(&mut self) -> Result<Frame, Self::Error>;
 
@@ -1579,7 +1603,9 @@ impl PreparedContainedTask {
         let page = self
             .required_home_entry_page()
             .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_required"))?;
-        let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
         self.control.resolution.validate_frame(&frame)?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
@@ -1679,10 +1705,12 @@ impl PreparedContainedTask {
             task_timeout,
             started,
         );
-        // Ordinary task failures retain the collected parsed facts. Boundary failures,
-        // including report persistence failures, propagate without another write attempt.
-        if matches!(&result, Err(ContainedTaskRunError::Task(_)))
-            && ocr_collector.frames_collected > 0
+        // Task and owner-classified nonfatal operation failures retain parsed facts.
+        // Record failures and fatal/unknown operation failures forbid another write.
+        if matches!(
+            &result,
+            Err(ContainedTaskRunError::Task(_) | ContainedTaskRunError::NonfatalOperation(_))
+        ) && ocr_collector.frames_collected > 0
             && let Some(report) = ocr_collector.fields_report()
         {
             runtime
@@ -1828,7 +1856,7 @@ impl PreparedContainedTask {
                         };
                         let action_seed = runtime
                             .action_seed(step_index, &operation_id)
-                            .map_err(ContainedTaskRunError::Boundary)?;
+                            .map_err(ContainedTaskRunError::operation::<R>)?;
                         let (action, sampling) = operation.click.input_action(
                             &self.control.resolution,
                             target.as_ref(),
@@ -1845,7 +1873,7 @@ impl PreparedContainedTask {
                             .map_err(ContainedTaskRunError::Boundary)?;
                         runtime
                             .input(action)
-                            .map_err(ContainedTaskRunError::Boundary)?;
+                            .map_err(ContainedTaskRunError::operation::<R>)?;
                         runtime
                             .record(ContainedTaskTrace::EffectCompleted {
                                 step_index,
@@ -2328,7 +2356,9 @@ impl PreparedContainedTask {
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
         self.control.resolution.validate_frame(&frame)?;
         let stability_sample = self
             .control
@@ -4953,15 +4983,98 @@ mod post_admission_ocr_tests {
     }
 
     // Authorized D01 regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#discussion_r3940629853
+    // Callback closure: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
     #[test]
     fn fields_v1_same_frame_pair_reaches_task_success_or_saved_failure() {
-        for (case, quantity) in [
-            ("success", "0042"),
-            ("unresolved", "invalid"),
-            ("guard", "0042"),
-            ("timeout", "0042"),
-            ("provider", "0042"),
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Callback {
+            Capture,
+            ActionSeed,
+            Input,
+            Record,
+            Report,
+            Finalizing,
+        }
+        struct CallbackRuntime {
+            inner: super::retry_wiring_tests::ScriptedRuntime,
+            failure: Option<(ContainedTaskRuntimeErrorClass, Callback)>,
+            report_attempts: usize,
+        }
+        impl ContainedTaskRuntime for CallbackRuntime {
+            type Error = (ContainedTaskRuntimeErrorClass, Callback);
+            fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+                error.0
+            }
+            fn capture(&mut self) -> Result<Frame, Self::Error> {
+                if self.inner.captures > 0
+                    && let Some(error @ (_, Callback::Capture)) = self.failure
+                {
+                    return Err(error);
+                }
+                Ok(self.inner.capture().expect("scripted capture"))
+            }
+            fn action_seed(
+                &mut self,
+                _step: u32,
+                _operation: &str,
+            ) -> Result<Option<u64>, Self::Error> {
+                if let Some(error @ (_, Callback::ActionSeed)) = self.failure {
+                    return Err(error);
+                }
+                Ok(None)
+            }
+            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+                if let Some(error @ (_, Callback::Input)) = self.failure {
+                    return Err(error);
+                }
+                self.inner.input(action).expect("scripted input");
+                Ok(())
+            }
+            fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+                if matches!(&trace, ContainedTaskTrace::PostAdmissionOcrFields { .. }) {
+                    self.report_attempts += 1;
+                }
+                if let Some(error @ (_, callback)) = self.failure
+                    && matches!(
+                        (callback, &trace),
+                        (Callback::Record, ContainedTaskTrace::StepStarted { .. })
+                            | (
+                                Callback::Report,
+                                ContainedTaskTrace::PostAdmissionOcrFields { .. }
+                            )
+                            | (Callback::Finalizing, ContainedTaskTrace::Finalizing { .. })
+                    )
+                {
+                    return Err(error);
+                }
+                self.inner.record(trace).expect("scripted record");
+                Ok(())
+            }
+        }
+        let mut cases = vec![
+            ("success", "0042", None),
+            ("unresolved", "invalid", None),
+            ("guard", "0042", None),
+            ("timeout", "0042", None),
+            ("provider", "0042", None),
+        ];
+        for callback in [
+            Callback::Capture,
+            Callback::ActionSeed,
+            Callback::Input,
+            Callback::Record,
+            Callback::Report,
+            Callback::Finalizing,
         ] {
+            for class in [
+                ContainedTaskRuntimeErrorClass::Nonfatal,
+                ContainedTaskRuntimeErrorClass::Fatal,
+                ContainedTaskRuntimeErrorClass::Unknown,
+            ] {
+                cases.push(("callback", "0042", Some((class, callback))));
+            }
+        }
+        for (case, quantity, failure) in cases {
             let ids = vec!["fixture/ocr-00".to_string(), "fixture/ocr-01".to_string()];
             let provider = Arc::new(EvidenceProvider {
                 observations: Mutex::new(VecDeque::from([
@@ -4977,7 +5090,9 @@ mod post_admission_ocr_tests {
                 {"id":"quantity","group":"item","target_id":ids[1],"required":true,"privacy":"public","trim":"whitespace_v1",
                     "value":{"type":"unsigned_integer","min":0,"max":100}}],
                 "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
-            let terminal_page = if matches!(case, "success" | "unresolved") {
+            let terminal_page = if matches!(case, "success" | "unresolved")
+                || matches!(failure, Some((_, Callback::Report | Callback::Finalizing)))
+            {
                 "operator"
             } else {
                 "operator_end"
@@ -5051,15 +5166,41 @@ mod post_admission_ocr_tests {
                 actingcommand_device::CaptureBackendName::FixtureSimulation,
             )
             .unwrap();
-            let mut runtime = super::retry_wiring_tests::ScriptedRuntime {
-                frames: VecDeque::from([frame.clone()]),
-                last_frame: frame,
-                captures: 0,
-                inputs: 0,
-                traces: Vec::new(),
+            let mut runtime = CallbackRuntime {
+                inner: super::retry_wiring_tests::ScriptedRuntime {
+                    frames: VecDeque::from([frame.clone()]),
+                    last_frame: frame,
+                    captures: 0,
+                    inputs: 0,
+                    traces: Vec::new(),
+                },
+                failure,
+                report_attempts: 0,
             };
             let outcome = task.run(&mut runtime);
-            if case == "success" {
+            if let Some(error @ (class, callback)) = failure {
+                let ordinary = class == ContainedTaskRuntimeErrorClass::Nonfatal
+                    && matches!(
+                        callback,
+                        Callback::Capture | Callback::ActionSeed | Callback::Input
+                    );
+                if ordinary {
+                    assert!(
+                        matches!(outcome, Err(ContainedTaskRunError::NonfatalOperation(actual)) if actual == error)
+                    );
+                } else {
+                    assert!(
+                        matches!(outcome, Err(ContainedTaskRunError::Boundary(actual)) if actual == error)
+                    );
+                }
+                assert_eq!(
+                    runtime.report_attempts,
+                    usize::from(
+                        ordinary || matches!(callback, Callback::Report | Callback::Finalizing)
+                    ),
+                    "{failure:?}"
+                );
+            } else if case == "success" {
                 assert_eq!(outcome.unwrap().outcome, TaskOutcome::Success);
             } else {
                 let expected = match case {
@@ -5073,15 +5214,21 @@ mod post_admission_ocr_tests {
                 );
             }
             if case == "timeout" {
-                assert!(runtime.inputs <= 1);
+                assert!(runtime.inner.inputs <= 1);
             } else {
-                assert_eq!(runtime.inputs, usize::from(case == "provider"));
+                assert_eq!(
+                    runtime.inner.inputs,
+                    usize::from(
+                        case == "provider" || matches!(failure, Some((_, Callback::Capture)))
+                    )
+                );
             }
             assert_eq!(
                 provider.calls.load(Ordering::SeqCst),
                 if case == "provider" { 3 } else { 2 }
             );
             let reports = runtime
+                .inner
                 .traces
                 .iter()
                 .filter_map(|t| match t {
@@ -5089,7 +5236,29 @@ mod post_admission_ocr_tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(reports.len(), 1);
+            let report_saved = failure.is_none()
+                || matches!(
+                    failure,
+                    Some((
+                        ContainedTaskRuntimeErrorClass::Nonfatal,
+                        Callback::Capture | Callback::ActionSeed | Callback::Input
+                    )) | Some((_, Callback::Finalizing))
+                );
+            assert_eq!(reports.len(), usize::from(report_saved), "{failure:?}");
+            if !report_saved {
+                assert!(runtime.inner.traces.iter().any(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::PostAdmissionOcrObservation { .. }
+                )));
+                assert!(
+                    !runtime
+                        .inner
+                        .traces
+                        .iter()
+                        .any(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+                );
+                continue;
+            }
             assert_eq!(
                 reports[0].declaration,
                 task.post_admission_fields.as_ref().unwrap().declaration
@@ -5102,7 +5271,7 @@ mod post_admission_ocr_tests {
                 reports[0].records.len(),
                 reports[0].frames_collected as usize
             );
-            if matches!(case, "guard" | "timeout" | "success") {
+            if matches!(case, "guard" | "timeout" | "success" | "callback") {
                 assert_eq!(reports[0].failure, None);
             }
             if case == "provider" {
@@ -5134,17 +5303,20 @@ mod post_admission_ocr_tests {
             }
             assert_eq!(
                 runtime
+                    .inner
                     .traces
                     .iter()
                     .any(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. })),
                 case == "success"
             );
             let raw_position = runtime
+                .inner
                 .traces
                 .iter()
                 .position(|t| matches!(t, ContainedTaskTrace::PostAdmissionOcrObservation { .. }))
                 .unwrap();
             let report_position = runtime
+                .inner
                 .traces
                 .iter()
                 .position(|t| matches!(t, ContainedTaskTrace::PostAdmissionOcrFields { .. }))
@@ -6888,7 +7060,8 @@ mod retry_wiring_tests {
                 .expect_err("no-end path must pause")
             {
                 ContainedTaskRunError::Task(error) => error,
-                ContainedTaskRunError::Boundary(error) => {
+                ContainedTaskRunError::Boundary(error)
+                | ContainedTaskRunError::NonfatalOperation(error) => {
                     panic!("unexpected fixture boundary error: {error}")
                 }
             };
@@ -7027,7 +7200,8 @@ mod retry_wiring_tests {
     ) {
         let error = match result.expect_err("destination confirmation must fail") {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -7161,7 +7335,8 @@ mod retry_wiring_tests {
             .expect_err("insufficient delay budget must fail")
         {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -7481,7 +7656,8 @@ mod retry_wiring_tests {
             .expect_err("sixth failed attempt must stop")
         {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -7512,7 +7688,8 @@ mod retry_wiring_tests {
             .expect_err("unrecognized fresh observation must stop")
         {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -8530,7 +8707,8 @@ mod retry_wiring_tests {
 
         let error = match task.run(&mut runtime).expect_err("hard max must stop") {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };

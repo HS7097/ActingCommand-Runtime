@@ -84,11 +84,12 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
-    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace,
-    ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256,
-    PostAdmissionOcrObservation, PreparedContainedTask, PreparedInputAction,
-    RecognitionVisionProvider, StabilityComparisonResult, StabilityTerminalReason,
-    StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
+    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
+    ContainedTaskRuntimeErrorClass, ContainedTaskTrace, ExecutionBackendProvenance,
+    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
+    PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider,
+    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
+    decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -10775,7 +10776,10 @@ impl HostShared {
         drop(runtime);
         let outcome = match execution {
             Ok(outcome) => outcome,
-            Err(ContainedTaskRunError::Boundary(mut failure)) => {
+            Err(
+                ContainedTaskRunError::Boundary(mut failure)
+                | ContainedTaskRunError::NonfatalOperation(mut failure),
+            ) => {
                 if matches!(
                     failure.error.projection().code,
                     RuntimeErrorCode::ContainedTaskDeadlineExceeded
@@ -11152,6 +11156,10 @@ impl HostShared {
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
             recovery.run(&mut recovery_runtime)
         };
+        let nonfatal_operation = matches!(
+            &recovery_execution,
+            Err(ContainedTaskRunError::NonfatalOperation(_))
+        );
         let recovery_outcome = match recovery_execution {
             Ok(outcome) => outcome,
             Err(ContainedTaskRunError::Task(error)) => {
@@ -11163,7 +11171,10 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return fail_contained_task_entry(runtime, error.code());
             }
-            Err(ContainedTaskRunError::Boundary(failure)) => {
+            Err(
+                ContainedTaskRunError::Boundary(failure)
+                | ContainedTaskRunError::NonfatalOperation(failure),
+            ) => {
                 let code = failure.error.code();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
@@ -11177,7 +11188,11 @@ impl HostShared {
                         failure_code: Some(code.to_owned()),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
-                return Err(ContainedTaskRunError::Boundary(failure));
+                return Err(if nonfatal_operation {
+                    ContainedTaskRunError::NonfatalOperation(failure)
+                } else {
+                    ContainedTaskRunError::Boundary(failure)
+                });
             }
         };
         runtime.completed_entry_recovery_steps = recovery_outcome.executed_steps;
@@ -14456,6 +14471,10 @@ struct EntryRecoveryRuntime<'a, 'host> {
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
 
+    fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+        RuntimeContainedTask::classify_error(error)
+    }
+
     fn capture(&mut self) -> Result<Frame, Self::Error> {
         self.inner.capture()
     }
@@ -15323,6 +15342,14 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
+
+    fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+        if error.error.is_fatal() {
+            ContainedTaskRuntimeErrorClass::Fatal
+        } else {
+            ContainedTaskRuntimeErrorClass::Nonfatal
+        }
+    }
 
     fn capture(&mut self) -> Result<Frame, Self::Error> {
         self.ensure_active()?;
