@@ -2310,8 +2310,9 @@ mod tests {
             payload["device_error"]["severity"],
             format!("{:?}", error.severity())
         );
-        assert_eq!(payload["device_error"]["category"], "unclassified");
-        assert_eq!(payload["device_error"]["stage"], "unavailable");
+        // C1B9 v16 D04: PR298 review 5120590779; CI33961302177 preserves this first red.
+        assert_eq!(payload["device_error"]["category"], "native");
+        assert_eq!(payload["device_error"]["stage"], "adb.ensure_device.get_state");
         assert_eq!(payload["device_error"]["detail_truncated"], false);
         let device_error = payload["device_error"]["detail"]
             .as_str()
