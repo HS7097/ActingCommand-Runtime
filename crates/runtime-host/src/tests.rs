@@ -10105,13 +10105,18 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 error.projection().expect("typed fatal projection").code,
                 expected_code
             );
-            assert!(
-                host.fatal_error()
-                    .unwrap()
-                    .expect("fatal host state")
-                    .is_fatal()
-            );
-            assert!(host.close().expect_err("fatal host close").is_fatal());
+            if capture || fail_report {
+                assert!(
+                    host.fatal_error()
+                        .unwrap()
+                        .expect("fatal host state")
+                        .is_fatal()
+                );
+                assert!(host.close().expect_err("fatal host close").is_fatal());
+            } else {
+                assert!(host.fatal_error().unwrap().is_none());
+                host.close().expect("input failure remains contained");
+            }
         } else {
             let output = result.expect("ordinary callback failure keeps official fields output");
             assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
