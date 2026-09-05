@@ -2,7 +2,7 @@
 
 use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, InputAction, InstanceId, OwnerEpoch,
-    RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo, RuntimeMonitorPolicy,
+    RUNTIME_INFO_FILE, RuntimeInfo,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -165,7 +165,6 @@ impl ExecutionBackendProvider for FileProvider {
 
 struct RuntimeChild {
     child: Option<Child>,
-    stop_path: PathBuf,
 }
 
 impl RuntimeChild {
@@ -189,10 +188,7 @@ impl RuntimeChild {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn Runtime test process");
-        Self {
-            child: Some(child),
-            stop_path,
-        }
+        Self { child: Some(child) }
     }
 
     fn wait_for_runtime_info(
@@ -232,27 +228,6 @@ impl RuntimeChild {
             "hard-killed Runtime unexpectedly succeeded"
         );
         self.child = None;
-    }
-
-    fn stop_clean(&mut self) {
-        fs::write(&self.stop_path, b"stop").expect("write Runtime stop signal");
-        let started = Instant::now();
-        loop {
-            if let Some(status) = self.try_wait().expect("read child process state") {
-                let output = self.output();
-                assert!(status.success(), "Runtime clean stop failed: {output}");
-                self.child = None;
-                return;
-            }
-            if started.elapsed() >= Duration::from_secs(5) {
-                let child = self.child.as_mut().expect("live Runtime child");
-                child.kill().expect("kill timed-out Runtime child");
-                child.wait().expect("wait timed-out Runtime child");
-                self.child = None;
-                panic!("Runtime clean stop timed out");
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
     }
 
     fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
@@ -327,7 +302,7 @@ fn c3a_runtime_host_child_process() {
 }
 
 #[test]
-fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
+fn hard_kill_with_unconfirmed_owner_rejects_automatic_restart() {
     let root = TempDir::new().expect("tempdir");
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -341,36 +316,8 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
         first_client.health().expect("first Runtime health"),
         first_info.owner_epoch()
     );
-    let first_status = first_client.status().expect("first Runtime status");
-    assert_eq!(first_status.owner_epoch(), first_info.owner_epoch());
-    assert_eq!(first_status.instances().len(), 1);
-    assert_eq!(first_status.instances()[0].instance_alias(), "node.a");
-    assert!(!first_status.instances()[0].takeover_cooldown_active());
-    let monitor_policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("monitor policy");
-    first_client
-        .configure_monitor("node.a", monitor_policy.clone())
-        .expect("configure persistent monitor");
-    let monitor_wait = Instant::now();
-    let first_monitor_run_count = loop {
-        let status = first_client.monitor_status().expect("first monitor status");
-        let state = status.instances()[0]
-            .state()
-            .expect("configured monitor state");
-        let run_count = state.run_count();
-        if run_count > 0 {
-            assert_eq!(state.last_decision(), None);
-            assert_eq!(
-                state.last_error(),
-                Some(RuntimeErrorCode::RecognitionFailed)
-            );
-            break run_count;
-        }
-        assert!(
-            monitor_wait.elapsed() < Duration::from_secs(2),
-            "resident monitor did not execute before hard kill"
-        );
-        thread::sleep(Duration::from_millis(10));
-    };
+    let first_runtime_info =
+        fs::read(root.path().join(RUNTIME_INFO_FILE)).expect("read first runtime-info.json");
     let old_token = first_client.acquire_lease("node.a").expect("old lease");
     first_client
         .input(&old_token, InputAction::Reset)
@@ -381,69 +328,38 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     drop(first_client);
 
     let mut second = RuntimeChild::spawn(root.path(), instance_id, 2);
-    let second_info = second.wait_for_runtime_info(root.path(), Some(first_info.owner_epoch()));
-    assert_ne!(second_info.owner_epoch(), first_info.owner_epoch());
-    let second_client = client(root.path());
-    let takeover_status = second_client.status().expect("takeover Runtime status");
-    assert_eq!(takeover_status.owner_epoch(), second_info.owner_epoch());
-    assert!(takeover_status.instances()[0].takeover_cooldown_active());
-    let takeover_monitor = second_client
-        .monitor_status()
-        .expect("takeover monitor status");
-    assert_eq!(
-        takeover_monitor.instances()[0].policy(),
-        Some(&monitor_policy)
+    let started = Instant::now();
+    let second_status = loop {
+        if let Some(status) = second.try_wait().expect("read second child process state") {
+            break status;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "second Runtime rejection timed out"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(
+        !second_status.success(),
+        "second Runtime unexpectedly accepted unconfirmed resources"
+    );
+    let second_output = second.output();
+    assert!(
+        second_output.contains("owner_resource_unconfirmed"),
+        "second Runtime output omitted owner_resource_unconfirmed: {second_output}"
     );
     assert!(
-        takeover_monitor.instances()[0]
-            .state()
-            .is_some_and(|state| state.run_count() >= first_monitor_run_count)
+        second_output.contains("acquire_owner_file"),
+        "second Runtime output omitted acquire_owner_file: {second_output}"
     );
-    assert_eq!(
-        takeover_monitor.instances()[0]
-            .state()
-            .and_then(|state| state.last_error()),
-        Some(RuntimeErrorCode::RecognitionFailed)
-    );
-    let cooldown = second_client
-        .acquire_lease("node.a")
-        .expect_err("takeover cooldown must reject acquisition");
-    let cooldown = cooldown.projection().expect("cooldown projection");
-    assert_eq!(cooldown.code, RuntimeErrorCode::LeaseCooldown);
-    let retry_after_ms = cooldown.retry_after_ms.expect("cooldown retry delay");
 
-    let before_stale_inputs = backend_events(root.path());
-    for action in all_input_actions() {
-        let error = second_client
-            .input(&old_token, action)
-            .expect_err("old token input must be rejected");
-        assert_eq!(
-            error.projection().expect("stale-token projection").code,
-            RuntimeErrorCode::StaleOwnerEpoch
-        );
-    }
-    assert_eq!(backend_events(root.path()), before_stale_inputs);
-
-    thread::sleep(Duration::from_millis(retry_after_ms.saturating_add(100)));
-    let new_token = second_client
-        .acquire_lease("node.a")
-        .expect("lease after takeover cooldown");
-    let active_status = second_client.status().expect("active Runtime status");
-    assert!(active_status.instances()[0].lease_active());
-    assert!(!active_status.instances()[0].takeover_cooldown_active());
-    second_client
-        .input(&new_token, InputAction::Tap { x: 10, y: 20 })
-        .expect("new epoch input");
-    second_client
-        .release_lease(&new_token)
-        .expect("new epoch release");
-    drop(second_client);
-    second.stop_clean();
-
-    assert_eq!(
-        backend_events(root.path()),
-        vec!["open", "reset", "open", "tap", "close"]
-    );
+    let retained_runtime_info =
+        fs::read(root.path().join(RUNTIME_INFO_FILE)).expect("read retained runtime-info.json");
+    assert_eq!(retained_runtime_info, first_runtime_info);
+    let retained_info =
+        serde_json::from_slice::<RuntimeInfo>(&retained_runtime_info).expect("parse runtime info");
+    assert_eq!(retained_info.owner_epoch(), first_info.owner_epoch());
+    assert_eq!(backend_events(root.path()), vec!["open", "reset"]);
 }
 
 fn client(state_root: &Path) -> RuntimeClient {
@@ -461,29 +377,4 @@ fn backend_events(state_root: &Path) -> Vec<String> {
         .lines()
         .map(str::to_string)
         .collect()
-}
-
-fn all_input_actions() -> Vec<InputAction> {
-    vec![
-        InputAction::Tap { x: 10, y: 20 },
-        InputAction::LongTap {
-            x: 10,
-            y: 20,
-            duration_ms: 10,
-        },
-        InputAction::Swipe {
-            x1: 10,
-            y1: 20,
-            x2: 30,
-            y2: 40,
-            duration_ms: 10,
-        },
-        InputAction::Key {
-            key: "BACK".to_string(),
-        },
-        InputAction::Text {
-            text: "sealed-stale-input".to_string(),
-        },
-        InputAction::Reset,
-    ]
 }
