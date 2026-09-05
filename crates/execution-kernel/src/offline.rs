@@ -138,7 +138,10 @@ pub fn simulate_contained_task(
                     "offline_simulation_executed_step_invariant",
                 ));
             }
-            Err(ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)) => runtime
+            Err(
+                ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)
+                | ContainedTaskRunError::NonfatalOperation(OfflineBoundary::EffectIntercepted),
+            ) => runtime
                 .planned
                 .take()
                 .map(|planned| OfflineDecision::WouldClick {
@@ -149,13 +152,17 @@ pub fn simulate_contained_task(
                 .ok_or_else(|| {
                     OfflineSimulationError::new("offline_simulation_effect_intent_missing")
                 })?,
-            Err(ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)) => {
-                OfflineDecision::Refused {
-                    code: FIXTURE_EXHAUSTED_CODE.to_string(),
-                    detail: None,
-                }
-            }
-            Err(ContainedTaskRunError::Boundary(OfflineBoundary::Invariant(code))) => {
+            Err(
+                ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)
+                | ContainedTaskRunError::NonfatalOperation(OfflineBoundary::FixtureExhausted),
+            ) => OfflineDecision::Refused {
+                code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                detail: None,
+            },
+            Err(
+                ContainedTaskRunError::Boundary(OfflineBoundary::Invariant(code))
+                | ContainedTaskRunError::NonfatalOperation(OfflineBoundary::Invariant(code)),
+            ) => {
                 return Err(OfflineSimulationError::new(code));
             }
             Err(ContainedTaskRunError::Task(error)) => OfflineDecision::Refused {
@@ -827,9 +834,16 @@ mod tests {
         let outcome = task.run(&mut runtime);
         let (decision, recognition) = if let Some(planned) = runtime.first_effect.take() {
             match outcome {
-                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)) => {
-                }
-                Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
+                Err(
+                    ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)
+                    | ContainedTaskRunError::NonfatalOperation(
+                        EffectingBoundary::FirstEffectIntercepted,
+                    ),
+                ) => {}
+                Err(
+                    ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))
+                    | ContainedTaskRunError::NonfatalOperation(EffectingBoundary::Invariant(code)),
+                ) => {
                     panic!("unexpected effecting invariant after first effect: {code}")
                 }
                 other => panic!("effecting runtime did not stop at the first effect: {other:?}"),
@@ -865,16 +879,25 @@ mod tests {
                     code: error.code().to_string(),
                     detail: error.detail().map(str::to_string),
                 },
-                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FixtureExhausted)) => {
-                    OfflineDecision::Refused {
-                        code: FIXTURE_EXHAUSTED_CODE.to_string(),
-                        detail: None,
-                    }
-                }
-                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)) => {
+                Err(
+                    ContainedTaskRunError::Boundary(EffectingBoundary::FixtureExhausted)
+                    | ContainedTaskRunError::NonfatalOperation(EffectingBoundary::FixtureExhausted),
+                ) => OfflineDecision::Refused {
+                    code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                    detail: None,
+                },
+                Err(
+                    ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)
+                    | ContainedTaskRunError::NonfatalOperation(
+                        EffectingBoundary::FirstEffectIntercepted,
+                    ),
+                ) => {
                     panic!("effecting runtime intercepted input without an effect trace")
                 }
-                Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
+                Err(
+                    ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))
+                    | ContainedTaskRunError::NonfatalOperation(EffectingBoundary::Invariant(code)),
+                ) => {
                     panic!("unexpected effecting invariant: {code}")
                 }
             };

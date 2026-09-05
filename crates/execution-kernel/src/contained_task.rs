@@ -9,7 +9,9 @@ use crate::{
     select_run_operation,
 };
 use actingcommand_contract::{
-    InputAction, InputSamplingEvidence, InputSamplingRegion, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    InputAction, InputSamplingEvidence, InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA,
+    OcrFieldDictionary, OcrFieldReason, OcrFieldRecord, OcrFieldResult, OcrFieldType,
+    OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
     SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
     SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
@@ -109,13 +111,25 @@ impl Error for ContainedTaskError {}
 
 #[derive(Debug)]
 pub enum ContainedTaskRunError<E> {
+    /// A record failure, or an operation failure without a nonfatal classification.
     Boundary(E),
+    /// The operation callback's original error, classified by its owner as nonfatal.
+    NonfatalOperation(E),
     Task(ContainedTaskError),
 }
 
 impl<E> ContainedTaskRunError<E> {
     pub fn task(code: &'static str) -> Self {
         Self::Task(ContainedTaskError::new(code))
+    }
+
+    fn operation<R: ContainedTaskRuntime<Error = E>>(error: E) -> Self {
+        match R::classify_error(&error) {
+            ContainedTaskRuntimeErrorClass::Nonfatal => Self::NonfatalOperation(error),
+            ContainedTaskRuntimeErrorClass::Fatal | ContainedTaskRuntimeErrorClass::Unknown => {
+                Self::Boundary(error)
+            }
+        }
     }
 }
 
@@ -287,6 +301,10 @@ pub enum PostAdmissionOcrComparisonMode {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrObservation {
     #[serde(skip_serializing_if = "Option::is_none")]
+    page_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    personal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     target_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
@@ -302,6 +320,12 @@ pub struct PostAdmissionOcrObservation {
 
 // Observation confidences come only from the recognition owner's finite-score validation.
 impl Eq for PostAdmissionOcrObservation {}
+
+impl PostAdmissionOcrObservation {
+    pub fn contains_personal_fields(&self) -> bool {
+        self.personal == Some(true)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrTargetObservation {
@@ -480,6 +504,12 @@ struct PreparedPostAdmissionOcr {
     truth_schema_v2: bool,
 }
 
+#[derive(Debug, Clone)]
+struct PreparedOcrFields {
+    declaration: OcrFieldsDeclaration,
+    dictionaries: BTreeMap<String, OcrFieldDictionary>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct PostAdmissionOcrObservedAggregate {
     occurrences: u32,
@@ -488,6 +518,9 @@ struct PostAdmissionOcrObservedAggregate {
 
 #[derive(Debug, Default)]
 struct PostAdmissionOcrCollector<'a> {
+    fields: Option<&'a PreparedOcrFields>,
+    field_records: Vec<OcrFieldRecord>,
+    field_failure: Option<OcrFieldReason>,
     prepared: Option<&'a PreparedPostAdmissionOcr>,
     frames_collected: u32,
     items_collected: u32,
@@ -516,6 +549,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         page_label: &str,
         scene: &Scene,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        if self.fields.is_some() {
+            return self.observe_fields(game, evaluator, page_label, scene);
+        }
         let Some(prepared) = self.prepared else {
             return Ok(None);
         };
@@ -784,6 +820,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 ));
             };
             PostAdmissionOcrObservation {
+                page_id: None,
+                personal: None,
                 target_id: Some(observation.target_id.clone()),
                 text: Some(observation.text.clone()),
                 confidence: Some(observation.confidence),
@@ -793,6 +831,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             }
         } else {
             PostAdmissionOcrObservation {
+                page_id: None,
+                personal: None,
                 target_id: None,
                 text: None,
                 confidence: None,
@@ -802,6 +842,191 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             }
         };
         Ok(Some((frame_index, observation)))
+    }
+
+    fn observe_fields(
+        &mut self,
+        game: &str,
+        evaluator: &RecognitionEvaluator,
+        page_label: &str,
+        scene: &Scene,
+    ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        let prepared = self
+            .fields
+            .ok_or_else(|| ContainedTaskError::new("ocr_fields_missing"))?;
+        let declaration = &prepared.declaration;
+        if !declaration
+            .page_ids
+            .iter()
+            .any(|p| crate::page_anchor_matches(game, page_label, p))
+            || self.frames_collected >= declaration.limits.max_frames
+        {
+            return Ok(None);
+        }
+        let frame_index = self.frames_collected;
+        let mut targets = Vec::new();
+        let mut records: Vec<OcrFieldRecord> = Vec::new();
+        for field in &declaration.fields {
+            let mut result = OcrFieldResult {
+                field_id: field.id.clone(),
+                target_id: field.target_id.clone(),
+                raw_text: None,
+                normalized_text: None,
+                value: None,
+                reason: OcrFieldReason::NotCollected,
+                detail: None,
+                redacted: false,
+            };
+            if self.field_failure.is_none() {
+                if self.items_collected >= declaration.limits.max_items {
+                    self.field_failure = Some(OcrFieldReason::LimitExceeded);
+                    result.reason = OcrFieldReason::LimitExceeded;
+                } else {
+                    match evaluator.evaluate_ocr_observation(scene, &field.target_id) {
+                        Ok(mut evaluated) => {
+                            if evaluated.target_id != field.target_id
+                                || !self
+                                    .invocation_ids
+                                    .insert(evaluated.execution.invocation_id.clone())
+                                || self.stream_binding.as_ref().is_some_and(|binding| {
+                                    !same_ocr_stream_binding(binding, &evaluated.execution)
+                                })
+                            {
+                                return Err(ContainedTaskError::new(
+                                    "contained_task_post_admission_ocr_evidence_mismatch",
+                                ));
+                            }
+                            if self.stream_binding.is_none() {
+                                self.stream_binding = Some(evaluated.execution.clone());
+                            }
+                            self.items_collected += 1;
+                            let remaining = declaration
+                                .limits
+                                .max_total_bytes
+                                .saturating_sub(self.total_observed_utf8_bytes);
+                            let text_limit = (declaration.limits.max_string_bytes as usize)
+                                .min(remaining as usize);
+                            let bytes = evaluated
+                                .blocks
+                                .iter()
+                                .try_fold(evaluated.text.len(), |n, b| n.checked_add(b.text.len()));
+                            let exceeds = evaluated.text.len() > text_limit
+                                || evaluated.blocks.iter().any(|b| {
+                                    b.text.len() > declaration.limits.max_string_bytes as usize
+                                })
+                                || bytes.is_none_or(|n| n as u64 > remaining);
+                            if exceeds {
+                                let mut end = evaluated.text.len().min(text_limit);
+                                while !evaluated.text.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                evaluated.text.truncate(end);
+                                evaluated.blocks.clear();
+                                self.field_failure = Some(OcrFieldReason::LimitExceeded);
+                                result.reason = OcrFieldReason::LimitExceeded;
+                            }
+                            self.total_observed_utf8_bytes += evaluated.text.len() as u64
+                                + evaluated
+                                    .blocks
+                                    .iter()
+                                    .map(|b| b.text.len() as u64)
+                                    .sum::<u64>();
+                            result.raw_text = Some(evaluated.text.clone());
+                            if !exceeds {
+                                let normalized = evaluated.text.trim().to_string();
+                                let (value, reason) = parse_ocr_field(
+                                    &field.value,
+                                    &normalized,
+                                    prepared.dictionaries.get(&field.id),
+                                );
+                                result.normalized_text = Some(normalized);
+                                result.value = value;
+                                result.reason = reason;
+                            }
+                            targets.push(PostAdmissionOcrTargetObservation {
+                                target_id: evaluated.target_id,
+                                text: evaluated.text,
+                                confidence: evaluated.confidence,
+                                blocks: evaluated.blocks,
+                                execution: evaluated.execution,
+                            });
+                        }
+                        Err(error) => {
+                            result.reason = OcrFieldReason::ProviderFailed;
+                            let mut detail = error.to_string();
+                            let limit = (declaration.limits.max_string_bytes as usize).min(
+                                declaration
+                                    .limits
+                                    .max_total_bytes
+                                    .saturating_sub(self.total_observed_utf8_bytes)
+                                    as usize,
+                            );
+                            let mut end = detail.len().min(limit);
+                            while !detail.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            detail.truncate(end);
+                            self.total_observed_utf8_bytes += detail.len() as u64;
+                            result.detail = Some(detail);
+                            self.field_failure = Some(OcrFieldReason::ProviderFailed);
+                        }
+                    }
+                }
+            }
+            // Parse failures do not repeat OCR or omit the other fields of this frame.
+            if let Some(record) = records.iter_mut().find(|r| r.group == field.group) {
+                record.fields.push(result);
+            } else {
+                records.push(OcrFieldRecord {
+                    frame_index,
+                    page_id: page_label.to_string(),
+                    group: field.group.clone(),
+                    fields: vec![result],
+                });
+            }
+        }
+        for result in records.iter().flat_map(|r| &r.fields) {
+            if declaration
+                .fields
+                .iter()
+                .any(|f| f.id == result.field_id && f.required)
+                && result.reason != OcrFieldReason::Resolved
+            {
+                self.field_failure.get_or_insert(result.reason);
+            }
+        }
+        self.frames_collected += 1;
+        self.field_records.extend(records);
+        Ok(Some((
+            frame_index,
+            PostAdmissionOcrObservation {
+                page_id: Some(page_label.to_string()),
+                target_id: None,
+                text: None,
+                personal: Some(
+                    declaration
+                        .fields
+                        .iter()
+                        .any(|f| f.privacy == actingcommand_contract::OcrFieldPrivacy::Personal),
+                ),
+                confidence: None,
+                blocks: None,
+                execution: None,
+                targets: Some(targets),
+            },
+        )))
+    }
+
+    fn fields_report(&self) -> Option<OcrFieldsReport> {
+        self.fields.map(|prepared| OcrFieldsReport {
+            schema_version: OCR_FIELDS_REPORT_SCHEMA.to_string(),
+            declaration: prepared.declaration.clone(),
+            frames_collected: self.frames_collected,
+            items_collected: self.items_collected,
+            total_observed_utf8_bytes: self.total_observed_utf8_bytes,
+            records: self.field_records.clone(),
+            failure: self.field_failure,
+        })
     }
 
     fn finish(self) -> Result<Option<PostAdmissionOcrComparisonReport>, ContainedTaskError> {
@@ -878,6 +1103,61 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             unexpected,
             duplicates,
         }))
+    }
+}
+
+fn parse_ocr_field(
+    value_type: &OcrFieldType,
+    text: &str,
+    dictionary: Option<&OcrFieldDictionary>,
+) -> (Option<OcrFieldValue>, OcrFieldReason) {
+    if text.is_empty() {
+        return (None, OcrFieldReason::Empty);
+    }
+    match value_type {
+        OcrFieldType::UnsignedInteger { min, max } => {
+            if !text.bytes().all(|b| b.is_ascii_digit()) {
+                return (None, OcrFieldReason::InvalidInteger);
+            }
+            let Ok(value) = text.parse::<u64>() else {
+                return (None, OcrFieldReason::Overflow);
+            };
+            if value < *min || value > *max {
+                return (None, OcrFieldReason::OutOfRange);
+            }
+            (
+                Some(OcrFieldValue::UnsignedInteger(value)),
+                OcrFieldReason::Resolved,
+            )
+        }
+        OcrFieldType::DictionaryEntry { .. } => {
+            let Some(dictionary) = dictionary else {
+                return (None, OcrFieldReason::UnknownEntry);
+            };
+            let normalized = text.to_lowercase();
+            let mut candidates = BTreeSet::new();
+            for item in &dictionary.items {
+                if item.trim().to_lowercase() == normalized {
+                    candidates.insert(item.clone());
+                }
+            }
+            for alias in dictionary.aliases.iter().flatten() {
+                if alias.observed.trim().to_lowercase() == normalized {
+                    candidates.insert(alias.canonical.clone());
+                }
+            }
+            match candidates.len() {
+                0 => (None, OcrFieldReason::UnknownEntry),
+                1 => (
+                    candidates
+                        .into_iter()
+                        .next()
+                        .map(OcrFieldValue::DictionaryEntry),
+                    OcrFieldReason::Resolved,
+                ),
+                _ => (None, OcrFieldReason::AmbiguousEntry),
+            }
+        }
     }
 }
 
@@ -1077,6 +1357,9 @@ pub enum ContainedTaskTrace {
     PostAdmissionOcrComparison {
         report: PostAdmissionOcrComparisonReport,
     },
+    PostAdmissionOcrFields {
+        report: OcrFieldsReport,
+    },
     Finalizing {
         outcome: TaskOutcome,
     },
@@ -1093,9 +1376,21 @@ pub enum ContainedTaskGuardOutcome {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainedTaskRuntimeErrorClass {
+    Nonfatal,
+    Fatal,
+    Unknown,
+}
+
 /// Runtime boundary used by the semantic engine for device effects and durable facts.
 pub trait ContainedTaskRuntime {
     type Error;
+
+    /// Classification comes from the error owner. Unknown errors forbid further reporting.
+    fn classify_error(_error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+        ContainedTaskRuntimeErrorClass::Unknown
+    }
 
     fn capture(&mut self) -> Result<Frame, Self::Error>;
 
@@ -1128,6 +1423,7 @@ pub struct PreparedContainedTask {
     entry_page: Option<String>,
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
+    post_admission_fields: Option<PreparedOcrFields>,
     package_sha256: String,
     entry_count: usize,
     task_count: usize,
@@ -1226,6 +1522,8 @@ impl PreparedContainedTask {
             .filter(|page| detector.page_uses_any_of(page));
         let post_admission_ocr =
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
+        let post_admission_fields =
+            program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -1235,6 +1533,7 @@ impl PreparedContainedTask {
             entry_page,
             scheduling_outcome,
             post_admission_ocr,
+            post_admission_fields,
             package_sha256,
             entry_count,
             task_count,
@@ -1270,7 +1569,7 @@ impl PreparedContainedTask {
     }
 
     pub const fn has_post_admission_ocr(&self) -> bool {
-        self.post_admission_ocr.is_some()
+        self.post_admission_ocr.is_some() || self.post_admission_fields.is_some()
     }
 
     pub fn required_home_entry_page(&self) -> Option<&str> {
@@ -1286,6 +1585,7 @@ impl PreparedContainedTask {
         self.scheduling_outcome.is_none()
             && self.control.stability_termination.is_none()
             && self.post_admission_ocr.is_none()
+            && self.post_admission_fields.is_none()
     }
 
     pub fn maximum_executed_steps(&self) -> u32 {
@@ -1303,7 +1603,9 @@ impl PreparedContainedTask {
         let page = self
             .required_home_entry_page()
             .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_required"))?;
-        let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
         self.control.resolution.validate_frame(&frame)?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
@@ -1389,8 +1691,46 @@ impl PreparedContainedTask {
             PostAdmissionOcrExecution::DisabledForOfflineSimulation => None,
         };
         let mut ocr_collector = PostAdmissionOcrCollector::new(post_admission_ocr);
+        if matches!(
+            options.post_admission_ocr,
+            PostAdmissionOcrExecution::Enabled
+        ) {
+            ocr_collector.fields = self.post_admission_fields.as_ref();
+        }
+        let result = self.run_with_collector(
+            runtime,
+            &mut ocr_collector,
+            capture_interval,
+            step_timeout,
+            task_timeout,
+            started,
+        );
+        // Task and owner-classified nonfatal operation failures retain parsed facts.
+        // Record failures and fatal/unknown operation failures forbid another write.
+        if matches!(
+            &result,
+            Err(ContainedTaskRunError::Task(_) | ContainedTaskRunError::NonfatalOperation(_))
+        ) && ocr_collector.frames_collected > 0
+            && let Some(report) = ocr_collector.fields_report()
+        {
+            runtime
+                .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
+        result
+    }
+
+    fn run_with_collector<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        capture_interval: Duration,
+        step_timeout: Duration,
+        task_timeout: Duration,
+        started: Instant,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let mut observation =
-            self.capture_until_page(runtime, &mut ocr_collector, step_timeout, capture_interval)?;
+            self.capture_until_page(runtime, ocr_collector, step_timeout, capture_interval)?;
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -1438,7 +1778,7 @@ impl PreparedContainedTask {
                 RunDirective::AwaitPage => {
                     observation = self.capture_until_page(
                         runtime,
-                        &mut ocr_collector,
+                        ocr_collector,
                         step_timeout,
                         capture_interval,
                     )?;
@@ -1516,7 +1856,7 @@ impl PreparedContainedTask {
                         };
                         let action_seed = runtime
                             .action_seed(step_index, &operation_id)
-                            .map_err(ContainedTaskRunError::Boundary)?;
+                            .map_err(ContainedTaskRunError::operation::<R>)?;
                         let (action, sampling) = operation.click.input_action(
                             &self.control.resolution,
                             target.as_ref(),
@@ -1533,7 +1873,7 @@ impl PreparedContainedTask {
                             .map_err(ContainedTaskRunError::Boundary)?;
                         runtime
                             .input(action)
-                            .map_err(ContainedTaskRunError::Boundary)?;
+                            .map_err(ContainedTaskRunError::operation::<R>)?;
                         runtime
                             .record(ContainedTaskTrace::EffectCompleted {
                                 step_index,
@@ -1545,7 +1885,7 @@ impl PreparedContainedTask {
                         if destination_pages.is_empty() {
                             observation = self.capture_until_page(
                                 runtime,
-                                &mut ocr_collector,
+                                ocr_collector,
                                 step_timeout,
                                 capture_interval,
                             )?;
@@ -1583,7 +1923,7 @@ impl PreparedContainedTask {
                         );
                         let (failed_observation, hit_error_page) = match self.await_postcondition(
                             runtime,
-                            &mut ocr_collector,
+                            ocr_collector,
                             operation,
                             confirmation_timeout,
                             confirmation_interval,
@@ -1655,7 +1995,7 @@ impl PreparedContainedTask {
                                 thread::sleep(delay);
                                 match self.await_postcondition(
                                     runtime,
-                                    &mut ocr_collector,
+                                    ocr_collector,
                                     operation,
                                     confirmation_timeout,
                                     confirmation_interval,
@@ -1890,7 +2230,7 @@ impl PreparedContainedTask {
     fn finish_stability_termination<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-        ocr_collector: PostAdmissionOcrCollector<'_>,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         machine: &RunStateMachine,
         observation: &PageObservation,
         reason: StabilityTerminalReason,
@@ -1910,19 +2250,33 @@ impl PreparedContainedTask {
 
     fn finish_success<R: ContainedTaskRuntime>(
         runtime: &mut R,
-        ocr_collector: PostAdmissionOcrCollector<'_>,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         final_page: Option<String>,
         executed_steps: u32,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        let selected_scheduling_outcome = match ocr_collector.finish()? {
-            Some(report) => {
-                let outcome_key = report.outcome_key.clone();
-                runtime
-                    .record(ContainedTaskTrace::PostAdmissionOcrComparison { report })
-                    .map_err(ContainedTaskRunError::Boundary)?;
-                Some(outcome_key)
+        let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
+            let outcome_key = report.declaration.outcome_key.clone();
+            if report.frames_collected == 0 {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_observation_missing",
+                )
+                .into());
             }
-            None => None,
+            runtime
+                .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            Some(outcome_key)
+        } else {
+            match std::mem::take(ocr_collector).finish()? {
+                Some(report) => {
+                    let outcome_key = report.outcome_key.clone();
+                    runtime
+                        .record(ContainedTaskTrace::PostAdmissionOcrComparison { report })
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    Some(outcome_key)
+                }
+                None => None,
+            }
         };
         runtime
             .record(ContainedTaskTrace::Finalizing {
@@ -2002,7 +2356,9 @@ impl PreparedContainedTask {
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
         self.control.resolution.validate_frame(&frame)?;
         let stability_sample = self
             .control
@@ -2070,6 +2426,9 @@ impl PreparedContainedTask {
                     observation,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
+        }
+        if ocr_collector.field_failure.is_some() {
+            return Err(ContainedTaskError::new("contained_task_ocr_fields_unresolved").into());
         }
         Ok(Some(PageObservation {
             page_label,
@@ -2462,7 +2821,7 @@ struct TaskProgram {
     #[serde(default)]
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
-    post_admission_ocr: Option<PostAdmissionOcrDeclaration>,
+    post_admission_ocr: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
     #[serde(default)]
@@ -2481,7 +2840,12 @@ impl TaskProgram {
     ) -> Result<(), ContainedTaskError> {
         let schema_valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
-            "0.7" => self.post_admission_ocr.is_some(),
+            "0.7" => self.post_admission_ocr.as_ref().is_some_and(|value| {
+                serde_json::from_value::<PostAdmissionOcrDeclaration>(value.clone()).is_ok()
+            }),
+            "0.8" => self.post_admission_ocr.as_ref().is_some_and(|value| {
+                serde_json::from_value::<OcrFieldsDeclaration>(value.clone()).is_ok()
+            }),
             _ => false,
         };
         if !schema_valid
@@ -2567,7 +2931,7 @@ impl TaskProgram {
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
         let valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.timeout_ms.is_none(),
-            "0.7" => self
+            "0.7" | "0.8" => self
                 .timeout_ms
                 .is_none_or(|timeout_ms| control.timeout_ms == Some(timeout_ms)),
             _ => false,
@@ -2582,7 +2946,7 @@ impl TaskProgram {
     fn validate_task_max_steps(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
         let valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.max_steps.is_none(),
-            "0.7" => self.max_steps.is_none_or(|max_steps| {
+            "0.7" | "0.8" => self.max_steps.is_none_or(|max_steps| {
                 (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
             }),
             _ => false,
@@ -2601,9 +2965,14 @@ impl TaskProgram {
         detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<Option<PreparedPostAdmissionOcr>, ContainedTaskError> {
+        if self.schema_version != "0.7" {
+            return Ok(None);
+        }
         let Some(declaration) = &self.post_admission_ocr else {
             return Ok(None);
         };
+        let declaration: PostAdmissionOcrDeclaration = serde_json::from_value(declaration.clone())
+            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
         declaration.validate()?;
         let page_ids = declaration
             .page_ids()?
@@ -2737,6 +3106,87 @@ impl TaskProgram {
             truth_scalar_lengths,
             aliases,
             truth_schema_v2,
+        }))
+    }
+
+    fn prepare_ocr_fields(
+        &self,
+        control: &TaskControl,
+        bundle: &LoadedBundle,
+        detector: &PageDetector,
+        evaluator: &RecognitionEvaluator,
+    ) -> Result<Option<PreparedOcrFields>, ContainedTaskError> {
+        if self.schema_version != "0.8" {
+            return Ok(None);
+        }
+        let declaration: OcrFieldsDeclaration = serde_json::from_value(
+            self.post_admission_ocr
+                .clone()
+                .ok_or_else(|| ContainedTaskError::new("ocr_fields_declaration_missing"))?,
+        )
+        .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
+        declaration.validate().map_err(ContainedTaskError::new)?;
+        let target_ids = declaration
+            .fields
+            .iter()
+            .map(|f| f.target_id.clone())
+            .collect::<Vec<_>>();
+        validate_page_references(&control.game, &declaration.page_ids, detector)?;
+        validate_post_admission_ocr_page_gate(
+            control,
+            bundle,
+            evaluator,
+            &declaration.page_ids,
+            &target_ids,
+        )?;
+        for target in &target_ids {
+            validate_post_admission_ocr_target(control, evaluator, target)?;
+        }
+        if !self.scheduling_outcome.as_ref().is_some_and(|s| {
+            s.mappings()
+                .iter()
+                .filter(|m| m.outcome_key() == declaration.outcome_key)
+                .count()
+                == 1
+        }) {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_outcome_invalid",
+            ));
+        }
+        let mut dictionaries = BTreeMap::new();
+        let mut dictionary_bytes = 0_u64;
+        for field in &declaration.fields {
+            if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
+                let path = format!("operations/{}/{}", self.task_id, dictionary.path);
+                let expected = Sha256Hash::parse_hex(&dictionary.sha256).map_err(|_| {
+                    ContainedTaskError::new("ocr_fields_dictionary_reference_invalid")
+                })?;
+                let bytes = bundle
+                    .resource_entry(&path)
+                    .map_err(|_| ContainedTaskError::new("ocr_fields_dictionary_missing"))?;
+                dictionary_bytes = dictionary_bytes
+                    .checked_add(bytes.len() as u64)
+                    .ok_or_else(|| {
+                        ContainedTaskError::new("ocr_fields_dictionary_limit_exceeded")
+                    })?;
+                if manifest_entry_sha256(bundle, &path)? != expected
+                    || dictionary_bytes > declaration.limits.max_total_bytes
+                {
+                    return Err(ContainedTaskError::new(
+                        "ocr_fields_dictionary_hash_or_limit_mismatch",
+                    ));
+                }
+                let parsed: OcrFieldDictionary = serde_json::from_slice(bytes)
+                    .map_err(|_| ContainedTaskError::new("ocr_fields_dictionary_invalid"))?;
+                parsed
+                    .validate(&declaration.limits)
+                    .map_err(ContainedTaskError::new)?;
+                dictionaries.insert(field.id.clone(), parsed);
+            }
+        }
+        Ok(Some(PreparedOcrFields {
+            declaration,
+            dictionaries,
         }))
     }
 
@@ -3053,7 +3503,10 @@ fn validate_stability_contract(
                             .mappings()
                             .iter()
                             .filter(|mapping| {
-                                mapping.outcome_key() == post_admission_ocr.outcome_key
+                                Some(mapping.outcome_key())
+                                    == post_admission_ocr
+                                        .get("outcome_key")
+                                        .and_then(serde_json::Value::as_str)
                             })
                             .count()
                             == 1
@@ -3654,7 +4107,7 @@ impl TaskClick {
                 }
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if schema_version != "0.7"
+                if !matches!(schema_version, "0.7" | "0.8")
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()
@@ -4382,6 +4835,545 @@ mod post_admission_ocr_tests {
             .collect();
         prepared.truth_schema_v2 = true;
         prepared
+    }
+
+    // Specification 2: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
+    #[test]
+    fn fields_v1_dynamic_integer_snapshots_keep_raw_values() {
+        let fields = PreparedOcrFields { declaration: serde_json::from_value(json!({
+            "mode":"fields_v1","page_ids":["target"],"fields":[{"id":"count","group":"snapshot",
+                "target_id":"fixture/ocr","required":true,"privacy":"public","trim":"whitespace_v1",
+                "value":{"type":"unsigned_integer","min":0,"max":u64::MAX}}],
+            "limits":{"max_frames":3,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},
+            "outcome_key":"fields_recorded"})).unwrap(), dictionaries:BTreeMap::new() };
+        fields.declaration.validate().unwrap();
+        let raw = ["000", "17", " 24 "];
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(
+                raw.iter()
+                    .enumerate()
+                    .map(|(i, s)| provider_observation(&format!("call-{i}"), &[s.to_string()]))
+                    .collect(),
+            ),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(provider.clone());
+        let mut collector = PostAdmissionOcrCollector::new(None);
+        collector.fields = Some(&fields);
+        for (i, _) in raw.iter().enumerate() {
+            let (index, observation) = collector
+                .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+                .unwrap()
+                .unwrap();
+            assert_eq!(index, i as u32);
+            assert_eq!(observation.page_id.as_deref(), Some("neutral/target"));
+        }
+        let report = collector.fields_report().unwrap();
+        assert_eq!(report.records.len(), 3);
+        assert_eq!(
+            report
+                .records
+                .iter()
+                .map(|r| r.fields[0].value.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Some(OcrFieldValue::UnsignedInteger(0)),
+                Some(OcrFieldValue::UnsignedInteger(17)),
+                Some(OcrFieldValue::UnsignedInteger(24))
+            ]
+        );
+        assert_eq!(
+            report
+                .records
+                .iter()
+                .map(|r| r.fields[0].raw_text.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            raw
+        );
+        assert_eq!(report.failure, None);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
+    }
+
+    // Specification 3: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
+    #[test]
+    fn fields_v1_required_integer_failures_are_explicit_without_retry() {
+        for (text, reason) in [
+            ("1.2万", OcrFieldReason::InvalidInteger),
+            ("-2", OcrFieldReason::InvalidInteger),
+            ("3x", OcrFieldReason::InvalidInteger),
+            ("", OcrFieldReason::Empty),
+            ("18446744073709551616", OcrFieldReason::Overflow),
+            ("51", OcrFieldReason::OutOfRange),
+        ] {
+            let fields = PreparedOcrFields { declaration:serde_json::from_value(json!({"mode":"fields_v1","page_ids":["target"],
+                "fields":[{"id":"count","group":"snapshot","target_id":"fixture/ocr","required":true,
+                    "privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":50}}],
+                "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},
+                "outcome_key":"fields_recorded"})).unwrap(), dictionaries:BTreeMap::new() };
+            let provider = Arc::new(EvidenceProvider {
+                observations: Mutex::new(VecDeque::from([provider_observation(
+                    "call-0",
+                    &[text.to_string()],
+                )])),
+                requests: Mutex::new(Vec::new()),
+                calls: AtomicU32::new(0),
+            });
+            let evaluator = evaluator(provider.clone());
+            let mut collector = PostAdmissionOcrCollector::new(None);
+            collector.fields = Some(&fields);
+            collector
+                .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+                .unwrap()
+                .unwrap();
+            let report = collector.fields_report().unwrap();
+            assert_eq!(report.failure, Some(reason));
+            assert_eq!(report.records[0].fields[0].raw_text.as_deref(), Some(text));
+            assert_eq!(report.records[0].fields[0].value, None);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    // Specification 4: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
+    #[test]
+    fn fields_v1_dictionary_alias_preserves_canonical_and_rejects_ambiguity() {
+        let dictionary: OcrFieldDictionary =
+            serde_json::from_value(json!({"schema_version":"actingcommand.ocr-truth-set.v2",
+            "items":["TokenA","TokenB"],"aliases":[{"observed":"short","canonical":"TokenA"}]}))
+            .unwrap();
+        let limits = actingcommand_contract::OcrFieldsLimits {
+            max_frames: 1,
+            max_items: 8,
+            max_string_bytes: 64,
+            max_total_bytes: 4096,
+            max_truth_entries: 8,
+        };
+        dictionary.validate(&limits).unwrap();
+        let value_type: OcrFieldType = serde_json::from_value(json!({"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"c".repeat(64)}})).unwrap();
+        for text in ["tokena", "SHORT"] {
+            assert_eq!(
+                parse_ocr_field(&value_type, text, Some(&dictionary)),
+                (
+                    Some(OcrFieldValue::DictionaryEntry("TokenA".to_string())),
+                    OcrFieldReason::Resolved
+                )
+            );
+        }
+        assert_eq!(
+            parse_ocr_field(&value_type, "unknown", Some(&dictionary)),
+            (None, OcrFieldReason::UnknownEntry)
+        );
+        let mut ambiguous = dictionary.clone();
+        ambiguous
+            .aliases
+            .as_mut()
+            .unwrap()
+            .push(actingcommand_contract::OcrFieldDictionaryAlias {
+                observed: "short".into(),
+                canonical: "TokenB".into(),
+            });
+        assert_eq!(
+            ambiguous.validate(&limits),
+            Err("ocr_fields_dictionary_ambiguous")
+        );
+        assert_eq!(
+            parse_ocr_field(&value_type, "short", Some(&ambiguous)),
+            (None, OcrFieldReason::AmbiguousEntry)
+        );
+    }
+
+    // Authorized D01 regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#discussion_r3940629853
+    // Callback closure: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
+    #[test]
+    fn fields_v1_same_frame_pair_reaches_task_success_or_saved_failure() {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Callback {
+            Capture,
+            ActionSeed,
+            Input,
+            Record,
+            Report,
+            Finalizing,
+        }
+        struct CallbackRuntime {
+            inner: super::retry_wiring_tests::ScriptedRuntime,
+            failure: Option<(ContainedTaskRuntimeErrorClass, Callback)>,
+            report_attempts: usize,
+        }
+        impl ContainedTaskRuntime for CallbackRuntime {
+            type Error = (ContainedTaskRuntimeErrorClass, Callback);
+            fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+                error.0
+            }
+            fn capture(&mut self) -> Result<Frame, Self::Error> {
+                if self.inner.captures > 0
+                    && let Some(error @ (_, Callback::Capture)) = self.failure
+                {
+                    return Err(error);
+                }
+                Ok(self.inner.capture().expect("scripted capture"))
+            }
+            fn action_seed(
+                &mut self,
+                _step: u32,
+                _operation: &str,
+            ) -> Result<Option<u64>, Self::Error> {
+                if let Some(error @ (_, Callback::ActionSeed)) = self.failure {
+                    return Err(error);
+                }
+                Ok(None)
+            }
+            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+                if let Some(error @ (_, Callback::Input)) = self.failure {
+                    return Err(error);
+                }
+                self.inner.input(action).expect("scripted input");
+                Ok(())
+            }
+            fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+                if matches!(&trace, ContainedTaskTrace::PostAdmissionOcrFields { .. }) {
+                    self.report_attempts += 1;
+                }
+                if let Some(error @ (_, callback)) = self.failure
+                    && matches!(
+                        (callback, &trace),
+                        (Callback::Record, ContainedTaskTrace::StepStarted { .. })
+                            | (
+                                Callback::Report,
+                                ContainedTaskTrace::PostAdmissionOcrFields { .. }
+                            )
+                            | (Callback::Finalizing, ContainedTaskTrace::Finalizing { .. })
+                    )
+                {
+                    return Err(error);
+                }
+                self.inner.record(trace).expect("scripted record");
+                Ok(())
+            }
+        }
+        let mut cases = vec![
+            ("success", "0042", None),
+            ("unresolved", "invalid", None),
+            ("guard", "0042", None),
+            ("timeout", "0042", None),
+            ("provider", "0042", None),
+        ];
+        for callback in [
+            Callback::Capture,
+            Callback::ActionSeed,
+            Callback::Input,
+            Callback::Record,
+            Callback::Report,
+            Callback::Finalizing,
+        ] {
+            for class in [
+                ContainedTaskRuntimeErrorClass::Nonfatal,
+                ContainedTaskRuntimeErrorClass::Fatal,
+                ContainedTaskRuntimeErrorClass::Unknown,
+            ] {
+                cases.push(("callback", "0042", Some((class, callback))));
+            }
+        }
+        for (case, quantity, failure) in cases {
+            let ids = vec!["fixture/ocr-00".to_string(), "fixture/ocr-01".to_string()];
+            let provider = Arc::new(EvidenceProvider {
+                observations: Mutex::new(VecDeque::from([
+                    provider_observation("name", &["alias".into()]),
+                    provider_observation("quantity", &[quantity.into()]),
+                ])),
+                requests: Mutex::new(Vec::new()),
+                calls: AtomicU32::new(0),
+            });
+            let declaration = json!({"mode":"fields_v1","page_ids":["operator"],"fields":[
+                {"id":"name","group":"item","target_id":ids[0],"required":true,"privacy":"public","trim":"whitespace_v1",
+                    "value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"c".repeat(64)}}},
+                {"id":"quantity","group":"item","target_id":ids[1],"required":true,"privacy":"public","trim":"whitespace_v1",
+                    "value":{"type":"unsigned_integer","min":0,"max":100}}],
+                "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
+            let terminal_page = if matches!(case, "success" | "unresolved")
+                || matches!(failure, Some((_, Callback::Report | Callback::Finalizing)))
+            {
+                "operator"
+            } else {
+                "operator_end"
+            };
+            let mut operation = json!({"id":"collect","from":"operator","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true});
+            if case == "guard" {
+                operation["unguarded_trusted_coordinate"] = json!(false);
+                operation["guard"] = json!({"page_id":"operator","target_id":"page/operator_end",
+                    "expected_rect":{"x":1,"y":0,"width":1,"height":1},"color_probe":"page/operator_end"});
+            }
+            if case == "timeout" {
+                operation["post_delay_ms"] = json!(1_001);
+            }
+            let program: TaskProgram = serde_json::from_value(json!({"schema_version":"0.8","task_id":"task","game":"neutral","server_scope":["test"],
+                "coordinate_space":{"width":2,"height":1},"target_page":terminal_page,"timeout_ms":1_000,
+                "post_admission_ocr":declaration,
+                "scheduling_outcome":{"mappings":[{"outcome_key":"fields_recorded","effect":"no_designated_effect","terminal_pages":[terminal_page]}]},
+                "operations":[operation]})).unwrap();
+            let fields = PreparedOcrFields {
+                declaration: serde_json::from_value(declaration).unwrap(),
+                dictionaries: BTreeMap::from([(
+                    "name".to_string(),
+                    serde_json::from_value(
+                        json!({"schema_version":"actingcommand.ocr-truth-set.v2",
+                    "items":["TokenA"],"aliases":[{"observed":"alias","canonical":"TokenA"}]}),
+                    )
+                    .unwrap(),
+                )]),
+            };
+            fields.declaration.validate().unwrap();
+            let control: TaskControl = serde_json::from_value(json!({"schema_version":CONTROL_SCHEMA,"package_id":"neutral.test.task",
+                "execution_mode":"navigable_route","game":"neutral","server":"test","resolution":{"width":2,"height":1},"entry_task_id":"task","timeout_ms":1_000})).unwrap();
+            control.validate().unwrap();
+            program.validate_task_timeout(&control).unwrap();
+            program.operations[0]
+                .validate(&control, program.defaults, &program.schema_version)
+                .unwrap();
+            let evaluator = RecognitionEvaluator::with_vision_provider(
+                ordered_ocr_pack(&ids, 2),
+                Arc::new(FsAssetResolver::new(PathBuf::new())),
+                provider.clone(),
+            )
+            .unwrap();
+            let detector = PageDetector::new(
+                serde_json::from_value(json!({"schema_version":"0.3","pages":[
+                {"id":"neutral/operator","required":["page/operator"]},
+                {"id":"neutral/operator_end","required":["page/operator_end"]}]}))
+                .unwrap(),
+            )
+            .unwrap();
+            validate_page_references(&control.game, &program.target_pages().unwrap(), &detector)
+                .unwrap();
+            let task = PreparedContainedTask {
+                control,
+                scheduling_outcome: program.scheduling_outcome.clone(),
+                program,
+                evaluator,
+                detector,
+                entry_page: None,
+                post_admission_ocr: None,
+                post_admission_fields: Some(fields),
+                package_sha256: "fixture".into(),
+                entry_count: 1,
+                task_count: 1,
+            };
+            let frame = Frame::from_pixels(
+                2,
+                1,
+                vec![1, 1, 1, 0, 0, 0],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .unwrap();
+            let mut runtime = CallbackRuntime {
+                inner: super::retry_wiring_tests::ScriptedRuntime {
+                    frames: VecDeque::from([frame.clone()]),
+                    last_frame: frame,
+                    captures: 0,
+                    inputs: 0,
+                    traces: Vec::new(),
+                },
+                failure,
+                report_attempts: 0,
+            };
+            let outcome = task.run(&mut runtime);
+            if let Some(error @ (class, callback)) = failure {
+                let ordinary = class == ContainedTaskRuntimeErrorClass::Nonfatal
+                    && matches!(
+                        callback,
+                        Callback::Capture | Callback::ActionSeed | Callback::Input
+                    );
+                if ordinary {
+                    assert!(
+                        matches!(outcome, Err(ContainedTaskRunError::NonfatalOperation(actual)) if actual == error)
+                    );
+                } else {
+                    assert!(
+                        matches!(outcome, Err(ContainedTaskRunError::Boundary(actual)) if actual == error)
+                    );
+                }
+                assert_eq!(
+                    runtime.report_attempts,
+                    usize::from(
+                        ordinary || matches!(callback, Callback::Report | Callback::Finalizing)
+                    ),
+                    "{failure:?}"
+                );
+            } else if case == "success" {
+                assert_eq!(outcome.unwrap().outcome, TaskOutcome::Success);
+            } else {
+                let expected = match case {
+                    "guard" => "contained_task_guard_refused",
+                    "timeout" => "contained_task_timeout",
+                    _ => "contained_task_ocr_fields_unresolved",
+                };
+                assert!(
+                    matches!(outcome,Err(ContainedTaskRunError::Task(error)) if error.code() == expected),
+                    "{case} keeps its original task failure"
+                );
+            }
+            if case == "timeout" {
+                assert!(runtime.inner.inputs <= 1);
+            } else {
+                assert_eq!(
+                    runtime.inner.inputs,
+                    usize::from(
+                        case == "provider" || matches!(failure, Some((_, Callback::Capture)))
+                    )
+                );
+            }
+            assert_eq!(
+                provider.calls.load(Ordering::SeqCst),
+                if case == "provider" { 3 } else { 2 }
+            );
+            let reports = runtime
+                .inner
+                .traces
+                .iter()
+                .filter_map(|t| match t {
+                    ContainedTaskTrace::PostAdmissionOcrFields { report } => Some(report),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let report_saved = failure.is_none()
+                || matches!(
+                    failure,
+                    Some((
+                        ContainedTaskRuntimeErrorClass::Nonfatal,
+                        Callback::Capture | Callback::ActionSeed | Callback::Input
+                    )) | Some((_, Callback::Finalizing))
+                );
+            assert_eq!(reports.len(), usize::from(report_saved), "{failure:?}");
+            if !report_saved {
+                assert!(runtime.inner.traces.iter().any(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::PostAdmissionOcrObservation { .. }
+                )));
+                assert!(
+                    !runtime
+                        .inner
+                        .traces
+                        .iter()
+                        .any(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+                );
+                continue;
+            }
+            assert_eq!(
+                reports[0].declaration,
+                task.post_admission_fields.as_ref().unwrap().declaration
+            );
+            assert_eq!(
+                reports[0].frames_collected,
+                if case == "provider" { 2 } else { 1 }
+            );
+            assert_eq!(
+                reports[0].records.len(),
+                reports[0].frames_collected as usize
+            );
+            if matches!(case, "guard" | "timeout" | "success" | "callback") {
+                assert_eq!(reports[0].failure, None);
+            }
+            if case == "provider" {
+                assert_eq!(reports[0].failure, Some(OcrFieldReason::ProviderFailed));
+                assert_eq!(
+                    reports[0].records[1].fields[0].reason,
+                    OcrFieldReason::ProviderFailed
+                );
+                assert!(reports[0].records[1].fields[0].detail.is_some());
+            }
+            let record = &reports[0].records[0];
+            assert_eq!(record.frame_index, 0);
+            assert_eq!(record.page_id, "neutral/operator");
+            assert_eq!(record.group, "item");
+            assert_eq!(record.fields.len(), 2);
+            assert_eq!(record.fields[0].raw_text.as_deref(), Some("alias"));
+            assert_eq!(record.fields[0].normalized_text.as_deref(), Some("alias"));
+            assert_eq!(record.fields[0].reason, OcrFieldReason::Resolved);
+            assert_eq!(
+                record.fields[0].value,
+                Some(OcrFieldValue::DictionaryEntry("TokenA".into()))
+            );
+            assert_eq!(record.fields[1].raw_text.as_deref(), Some(quantity));
+            if quantity == "0042" {
+                assert_eq!(
+                    record.fields[1].value,
+                    Some(OcrFieldValue::UnsignedInteger(42))
+                );
+            }
+            assert_eq!(
+                runtime
+                    .inner
+                    .traces
+                    .iter()
+                    .any(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. })),
+                case == "success"
+            );
+            let raw_position = runtime
+                .inner
+                .traces
+                .iter()
+                .position(|t| matches!(t, ContainedTaskTrace::PostAdmissionOcrObservation { .. }))
+                .unwrap();
+            let report_position = runtime
+                .inner
+                .traces
+                .iter()
+                .position(|t| matches!(t, ContainedTaskTrace::PostAdmissionOcrFields { .. }))
+                .unwrap();
+            assert!(raw_position < report_position);
+        }
+    }
+
+    // Specification 6: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
+    #[test]
+    fn fields_v1_limits_preserve_partial_facts_and_stop_calls() {
+        for (max_items, max_string_bytes, max_total_bytes) in
+            [(1, 64, 4096), (8, 2, 4096), (8, 64, 3)]
+        {
+            let ids = vec!["fixture/ocr-00".to_string(), "fixture/ocr-01".to_string()];
+            let fields = PreparedOcrFields { declaration:serde_json::from_value(json!({"mode":"fields_v1","page_ids":["operator"],
+                "fields":ids.iter().enumerate().map(|(i,id)| json!({"id":format!("f{i}"),"group":"pair","target_id":id,
+                    "required":true,"privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":9999}})).collect::<Vec<_>>(),
+                "limits":{"max_frames":1,"max_items":max_items,"max_string_bytes":max_string_bytes,"max_total_bytes":max_total_bytes,"max_truth_entries":8},
+                "outcome_key":"fields_recorded"})).unwrap(), dictionaries:BTreeMap::new() };
+            let provider = Arc::new(EvidenceProvider {
+                observations: Mutex::new(VecDeque::from([
+                    provider_observation("first", &["123".into()]),
+                    provider_observation("second", &["456".into()]),
+                ])),
+                requests: Mutex::new(Vec::new()),
+                calls: AtomicU32::new(0),
+            });
+            let evaluator = RecognitionEvaluator::with_vision_provider(
+                ordered_ocr_pack(&ids, 2),
+                Arc::new(FsAssetResolver::new(PathBuf::new())),
+                provider.clone(),
+            )
+            .unwrap();
+            let scene =
+                Scene::from_pixels(2, 1, &[1, 1, 1, 0, 0, 0], ScenePixelFormat::Rgb8).unwrap();
+            let mut collector = PostAdmissionOcrCollector::new(None);
+            collector.fields = Some(&fields);
+            let (_, raw) = collector
+                .observe("neutral", &evaluator, "neutral/operator", &scene)
+                .unwrap()
+                .unwrap();
+            let report = collector.fields_report().unwrap();
+            assert_eq!(report.failure, Some(OcrFieldReason::LimitExceeded));
+            assert_eq!(report.records[0].fields.len(), 2);
+            assert!(report.records[0].fields[0].raw_text.is_some());
+            assert_eq!(raw.targets.unwrap().len(), 1);
+            assert!(report.total_observed_utf8_bytes <= max_total_bytes);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+            assert!(
+                collector
+                    .observe("neutral", &evaluator, "neutral/operator", &scene)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]
@@ -5382,6 +6374,7 @@ mod post_admission_ocr_tests {
             entry_page: None,
             scheduling_outcome,
             post_admission_ocr: Some(post_admission_ocr),
+            post_admission_fields: None,
             package_sha256: "fixture-sha256".to_string(),
             entry_count: 6,
             task_count: 1,
@@ -5977,6 +6970,7 @@ mod retry_wiring_tests {
             scheduling_outcome: None,
             post_admission_ocr: None,
             package_sha256: "fixture-sha256".to_string(),
+            post_admission_fields: None,
             entry_count: 5,
             task_count: 1,
         }
@@ -6011,12 +7005,12 @@ mod retry_wiring_tests {
         .expect("unrecognized fixture frame")
     }
 
-    struct ScriptedRuntime {
-        frames: VecDeque<Frame>,
-        last_frame: Frame,
-        captures: usize,
-        inputs: usize,
-        traces: Vec<ContainedTaskTrace>,
+    pub(super) struct ScriptedRuntime {
+        pub(super) frames: VecDeque<Frame>,
+        pub(super) last_frame: Frame,
+        pub(super) captures: usize,
+        pub(super) inputs: usize,
+        pub(super) traces: Vec<ContainedTaskTrace>,
     }
 
     impl ScriptedRuntime {
@@ -6066,7 +7060,8 @@ mod retry_wiring_tests {
                 .expect_err("no-end path must pause")
             {
                 ContainedTaskRunError::Task(error) => error,
-                ContainedTaskRunError::Boundary(error) => {
+                ContainedTaskRunError::Boundary(error)
+                | ContainedTaskRunError::NonfatalOperation(error) => {
                     panic!("unexpected fixture boundary error: {error}")
                 }
             };
@@ -6205,7 +7200,8 @@ mod retry_wiring_tests {
     ) {
         let error = match result.expect_err("destination confirmation must fail") {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -6339,7 +7335,8 @@ mod retry_wiring_tests {
             .expect_err("insufficient delay budget must fail")
         {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -6659,7 +7656,8 @@ mod retry_wiring_tests {
             .expect_err("sixth failed attempt must stop")
         {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -6690,7 +7688,8 @@ mod retry_wiring_tests {
             .expect_err("unrecognized fresh observation must stop")
         {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
@@ -7708,7 +8707,8 @@ mod retry_wiring_tests {
 
         let error = match task.run(&mut runtime).expect_err("hard max must stop") {
             ContainedTaskRunError::Task(error) => error,
-            ContainedTaskRunError::Boundary(error) => {
+            ContainedTaskRunError::Boundary(error)
+            | ContainedTaskRunError::NonfatalOperation(error) => {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };

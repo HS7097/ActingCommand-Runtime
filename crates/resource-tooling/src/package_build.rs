@@ -15,9 +15,10 @@ use crate::{
     UnsupportedRecognitionTargetResponse,
 };
 use actingcommand_contract::{
-    LabError as CliError, LabResult as CliOutcome, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SchedulingOutcomeDeclaration,
+    LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
+    OcrFieldsDeclaration, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    SchedulingOutcomeDeclaration,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
@@ -1546,6 +1547,63 @@ fn validate_generated_post_admission_ocr(
     let Some(declaration) = operation.post_admission_ocr.as_ref() else {
         return Ok(());
     };
+    if operation.schema_version == "0.8" {
+        let fields: OcrFieldsDeclaration = serde_json::from_value(declaration.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        fields.validate().map_err(CliError::package_invalid)?;
+        let mut archive = ZipArchive::new(
+            File::open(archive_path).map_err(|e| CliError::package_invalid(e.to_string()))?,
+        )
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        let mut total_bytes = 0_u64;
+        for field in &fields.fields {
+            if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
+                let path = format!(
+                    "resources/operations/{}/{}",
+                    control.entry_task_id, dictionary.path
+                );
+                let payload = entries
+                    .files
+                    .get(&path)
+                    .ok_or_else(|| CliError::package_invalid("ocr_fields_dictionary_missing"))?;
+                let mut entry = archive
+                    .by_name(&path)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                total_bytes = total_bytes.checked_add(entry.size()).ok_or_else(|| {
+                    CliError::package_invalid("ocr_fields_dictionary_limit_exceeded")
+                })?;
+                if payload.sha256() != dictionary.sha256
+                    || total_bytes > fields.limits.max_total_bytes
+                {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_hash_or_limit_mismatch",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .by_ref()
+                    .take(fields.limits.max_total_bytes + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                if bytes.len() as u64 > fields.limits.max_total_bytes
+                    || format!("{:x}", Sha256::digest(&bytes)) != dictionary.sha256
+                {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_hash_or_limit_mismatch",
+                    ));
+                }
+                let parsed: OcrFieldDictionary = serde_json::from_slice(&bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                parsed
+                    .validate(&fields.limits)
+                    .map_err(CliError::package_invalid)?;
+            }
+        }
+        return Ok(());
+    }
+    let declaration: PostAdmissionOcrPackageDeclaration =
+        serde_json::from_value(declaration.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
     let entry_path = format!(
         "resources/operations/{}/{}",
         control.entry_task_id, declaration.truth_set.path
@@ -2093,7 +2151,10 @@ fn validate_entry_task_timeout(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     let Some(value) = bundle.data.get("timeout_ms") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "task '{}' timeout_ms requires schema_version '0.7'",
             bundle.task_id
@@ -2118,7 +2179,10 @@ fn validate_entry_task_max_steps(
     let Some(value) = bundle.data.get("max_steps") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "task '{}' max_steps requires schema_version '0.7'",
             bundle.task_id
@@ -2179,7 +2243,7 @@ fn validate_entry_stability_termination(
                 .get("scheduling_outcome")
                 .filter(|value| !value.is_null())
             {
-                let post_admission_ocr: PostAdmissionOcrPackageDeclaration = bundle
+                let post_admission_ocr: Value = bundle
                     .data
                     .get("post_admission_ocr")
                     .filter(|value| !value.is_null())
@@ -2198,7 +2262,15 @@ fn validate_entry_stability_termination(
                             bundle.task_id
                         ))
                     })?;
-                post_admission_ocr.validate(Some(scheduling_outcome))?;
+                validate_ocr_mode_declaration(
+                    bundle
+                        .data
+                        .get("schema_version")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    &post_admission_ocr,
+                    Some(scheduling_outcome),
+                )?;
             }
         }
         (_, Some(_)) => {
@@ -2519,7 +2591,7 @@ struct OperationBundle {
     #[serde(default)]
     scheduling_outcome: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
-    post_admission_ocr: Option<PostAdmissionOcrPackageDeclaration>,
+    post_admission_ocr: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTermination>,
     #[serde(default)]
@@ -2535,6 +2607,43 @@ struct OperationBundle {
     operations: Vec<Operation>,
 }
 
+pub(crate) fn validate_ocr_mode_declaration(
+    schema: &str,
+    value: &Value,
+    scheduling: Option<&Value>,
+) -> CliOutcome<()> {
+    if schema == "0.7" {
+        let declaration: PostAdmissionOcrPackageDeclaration = serde_json::from_value(value.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        return declaration.validate(scheduling);
+    }
+    if schema != "0.8" {
+        return Err(CliError::package_invalid("ocr_mode_schema_mismatch"));
+    }
+    let declaration: OcrFieldsDeclaration = serde_json::from_value(value.clone())
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    declaration.validate().map_err(CliError::package_invalid)?;
+    let scheduling: SchedulingOutcomeDeclaration = serde_json::from_value(
+        scheduling
+            .cloned()
+            .ok_or_else(|| CliError::package_invalid("ocr_fields_outcome_missing"))?,
+    )
+    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    scheduling
+        .validate()
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    if scheduling
+        .mappings()
+        .iter()
+        .filter(|m| m.outcome_key() == declaration.outcome_key)
+        .count()
+        != 1
+    {
+        return Err(CliError::package_invalid("ocr_fields_outcome_invalid"));
+    }
+    Ok(())
+}
+
 impl OperationBundle {
     fn validate(
         &self,
@@ -2543,7 +2652,7 @@ impl OperationBundle {
     ) -> CliOutcome<()> {
         let schema_valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
-            "0.7" => self.post_admission_ocr.is_some(),
+            "0.7" | "0.8" => self.post_admission_ocr.is_some(),
             _ => false,
         };
         if !schema_valid {
@@ -2599,7 +2708,11 @@ impl OperationBundle {
             target_page.validate("operation bundle target_page")?;
         }
         if let Some(declaration) = &self.post_admission_ocr {
-            declaration.validate(self.scheduling_outcome.as_ref())?;
+            validate_ocr_mode_declaration(
+                &self.schema_version,
+                declaration,
+                self.scheduling_outcome.as_ref(),
+            )?;
         }
         for anchor in &self.anchors {
             if anchor.id.trim().is_empty() {
@@ -2704,7 +2817,7 @@ impl OperationBundle {
 
     fn validate_task_timeout(&self, control: &LabControl) -> CliOutcome<()> {
         match self.schema_version.as_str() {
-            "0.7" => {
+            "0.7" | "0.8" => {
                 if self
                     .timeout_ms
                     .is_some_and(|timeout_ms| !(1..=MAX_TASK_TIMEOUT_MS).contains(&timeout_ms))
@@ -2728,7 +2841,7 @@ impl OperationBundle {
 
     fn validate_task_max_steps(&self, control: &LabControl) -> CliOutcome<()> {
         match self.schema_version.as_str() {
-            "0.7" => {
+            "0.7" | "0.8" => {
                 let max_steps = self
                     .max_steps
                     .map(usize::try_from)
@@ -3249,7 +3362,7 @@ impl OperationClick {
                 Ok(())
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if schema_version != "0.7"
+                if !matches!(schema_version, "0.7" | "0.8")
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()
@@ -4329,12 +4442,8 @@ mod tests {
             .expect("generated truth closure");
 
         let mut mismatch = operation.clone();
-        mismatch
-            .post_admission_ocr
-            .as_mut()
-            .expect("declaration")
-            .truth_set
-            .sha256 = "0".repeat(64);
+        mismatch.post_admission_ocr.as_mut().expect("declaration")["truth_set"]["sha256"] =
+            json!("0".repeat(64));
         assert!(
             validate_generated_post_admission_ocr(&archive_path, &entries, &control, &mismatch,)
                 .expect_err("hash mismatch")

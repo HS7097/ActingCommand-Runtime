@@ -84,11 +84,12 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
-    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace,
-    ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256,
-    PostAdmissionOcrComparisonReport, PostAdmissionOcrObservation, PreparedContainedTask,
-    PreparedInputAction, RecognitionVisionProvider, StabilityComparisonResult,
-    StabilityTerminalReason, StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
+    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
+    ContainedTaskRuntimeErrorClass, ContainedTaskTrace, ExecutionBackendProvenance,
+    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
+    PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider,
+    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
+    decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -10776,7 +10777,10 @@ impl HostShared {
         drop(runtime);
         let outcome = match execution {
             Ok(outcome) => outcome,
-            Err(ContainedTaskRunError::Boundary(mut failure)) => {
+            Err(
+                ContainedTaskRunError::Boundary(mut failure)
+                | ContainedTaskRunError::NonfatalOperation(mut failure),
+            ) => {
                 if matches!(
                     failure.error.projection().code,
                     RuntimeErrorCode::ContainedTaskDeadlineExceeded
@@ -11153,6 +11157,10 @@ impl HostShared {
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
             recovery.run(&mut recovery_runtime)
         };
+        let nonfatal_operation = matches!(
+            &recovery_execution,
+            Err(ContainedTaskRunError::NonfatalOperation(_))
+        );
         let recovery_outcome = match recovery_execution {
             Ok(outcome) => outcome,
             Err(ContainedTaskRunError::Task(error)) => {
@@ -11164,7 +11172,10 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return fail_contained_task_entry(runtime, error.code());
             }
-            Err(ContainedTaskRunError::Boundary(failure)) => {
+            Err(
+                ContainedTaskRunError::Boundary(failure)
+                | ContainedTaskRunError::NonfatalOperation(failure),
+            ) => {
                 let code = failure.error.code();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
@@ -11178,7 +11189,11 @@ impl HostShared {
                         failure_code: Some(code.to_owned()),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
-                return Err(ContainedTaskRunError::Boundary(failure));
+                return Err(if nonfatal_operation {
+                    ContainedTaskRunError::NonfatalOperation(failure)
+                } else {
+                    ContainedTaskRunError::Boundary(failure)
+                });
             }
         };
         runtime.completed_entry_recovery_steps = recovery_outcome.executed_steps;
@@ -14457,6 +14472,10 @@ struct EntryRecoveryRuntime<'a, 'host> {
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
 
+    fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+        RuntimeContainedTask::classify_error(error)
+    }
+
     fn capture(&mut self) -> Result<Frame, Self::Error> {
         self.inner.capture()
     }
@@ -14556,12 +14575,12 @@ struct RuntimeContainedTaskOcrObservationDiagnostic<'a> {
 }
 
 #[derive(serde::Serialize)]
-struct RuntimeContainedTaskOcrComparisonDiagnostic<'a> {
+struct RuntimeContainedTaskOcrComparisonDiagnostic<'a, T: serde::Serialize> {
     schema_version: &'static str,
     task_id: &'a TaskId,
     run_id: &'a RunId,
     final_frame_id: &'a FrameId,
-    report: &'a PostAdmissionOcrComparisonReport,
+    report: &'a T,
 }
 
 #[derive(serde::Serialize)]
@@ -14776,6 +14795,7 @@ impl RuntimeContainedTask<'_> {
         &self,
         frame_id: IssuedFrameId,
         bytes: &[u8],
+        personal: bool,
     ) -> Result<(), RequestFailure> {
         let event_links = self.links().with_frame_id(frame_id);
         let write_context = ArtifactWriteContext::new(
@@ -14799,7 +14819,11 @@ impl RuntimeContainedTask<'_> {
                     ArtifactIssuePolicy::new(
                         ArtifactProducer::CapturePipeline,
                         RetentionClass::DebugFull,
-                        ArtifactRedactionState::NotRequired,
+                        if personal {
+                            ArtifactRedactionState::Pending
+                        } else {
+                            ArtifactRedactionState::NotRequired
+                        },
                     ),
                 ),
                 &mut sink,
@@ -14876,7 +14900,7 @@ impl RuntimeContainedTask<'_> {
                 artifact_store_error("persist_contained_task_post_admission_ocr_failure"),
             ));
         }
-        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes)
+        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes, false)
     }
 
     fn record_post_admission_ocr_observation(
@@ -14918,7 +14942,11 @@ impl RuntimeContainedTask<'_> {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes)?;
+        self.persist_post_admission_ocr_diagnostic(
+            frame_id,
+            &bytes,
+            observation.contains_personal_fields(),
+        )?;
         self.post_admission_ocr_observations = self
             .post_admission_ocr_observations
             .checked_add(1)
@@ -14932,9 +14960,12 @@ impl RuntimeContainedTask<'_> {
         Ok(())
     }
 
-    fn record_post_admission_ocr_comparison(
+    fn record_post_admission_ocr_comparison<T: serde::Serialize>(
         &mut self,
-        report: PostAdmissionOcrComparisonReport,
+        report: T,
+        frames_collected: u32,
+        outcome_key: &str,
+        personal: bool,
     ) -> Result<(), RequestFailure> {
         let frame_id = self.last_frame_id.ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -14946,8 +14977,8 @@ impl RuntimeContainedTask<'_> {
         if !self.expects_post_admission_ocr
             || self.post_admission_ocr_comparison_recorded
             || self.post_admission_ocr_observations == 0
-            || report.frames_collected() != self.post_admission_ocr_observations
-            || report.outcome_key().trim().is_empty()
+            || frames_collected != self.post_admission_ocr_observations
+            || outcome_key.trim().is_empty()
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -14971,7 +15002,7 @@ impl RuntimeContainedTask<'_> {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes)?;
+        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes, personal)?;
         self.post_admission_ocr_comparison_recorded = true;
         Ok(())
     }
@@ -15312,6 +15343,14 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
+
+    fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
+        if error.error.is_fatal() {
+            ContainedTaskRuntimeErrorClass::Fatal
+        } else {
+            ContainedTaskRuntimeErrorClass::Nonfatal
+        }
+    }
 
     fn capture(&mut self) -> Result<Frame, Self::Error> {
         self.ensure_active()?;
@@ -15810,7 +15849,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 observation,
             } => self.record_post_admission_ocr_observation(frame_index, observation),
             ContainedTaskTrace::PostAdmissionOcrComparison { report } => {
-                self.record_post_admission_ocr_comparison(report)
+                let frames = report.frames_collected();
+                let outcome = report.outcome_key().to_string();
+                self.record_post_admission_ocr_comparison(report, frames, &outcome, false)
+            }
+            ContainedTaskTrace::PostAdmissionOcrFields { report } => {
+                let frames = report.frames_collected;
+                let outcome = report.declaration.outcome_key.clone();
+                let personal = report
+                    .declaration
+                    .fields
+                    .iter()
+                    .any(|f| f.privacy == actingcommand_contract::OcrFieldPrivacy::Personal);
+                self.record_post_admission_ocr_comparison(report, frames, &outcome, personal)
             }
             ContainedTaskTrace::Finalizing { outcome } => {
                 let stability_finalization_invalid = match (
