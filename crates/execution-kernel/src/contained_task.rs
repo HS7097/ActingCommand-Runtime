@@ -3802,7 +3802,9 @@ struct TaskOperationExpectation {
 impl TaskOperationExpectation {
     fn validate(&self) -> Result<(), ContainedTaskError> {
         self.page_id.normalized()?;
-        validate_bounded(self.timeout_ms, MAX_STEP_TIMEOUT_MS)?;
+        if !actingcommand_contract::postcondition_timeout_is_valid(self.timeout_ms) {
+            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+        }
         validate_bounded(self.interval_ms, MAX_CAPTURE_INTERVAL_MS)
     }
 }
@@ -5024,6 +5026,7 @@ mod post_admission_ocr_tests {
 
     // Authorized D01 regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#discussion_r3940629853
     // Callback closure: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
+    // Wait specification: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5554462313
     #[test]
     fn fields_v1_same_frame_pair_reaches_task_success_or_saved_failure() {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5097,6 +5100,15 @@ mod post_admission_ocr_tests {
             ("guard", "0042", None),
             ("timeout", "0042", None),
             ("provider", "0042", None),
+            ("wait_success", "0042", None),
+            ("wait_timeout", "0042", None),
+            ("wait_conflict", "0042", None),
+            ("wait_error", "0042", None),
+            (
+                "wait_boundary",
+                "0042",
+                Some((ContainedTaskRuntimeErrorClass::Nonfatal, Callback::Capture)),
+            ),
         ];
         for callback in [
             Callback::Capture,
@@ -5115,6 +5127,7 @@ mod post_admission_ocr_tests {
             }
         }
         for (case, quantity, failure) in cases {
+            let waiting = case.starts_with("wait_");
             let ids = vec!["fixture/ocr-00".to_string(), "fixture/ocr-01".to_string()];
             let provider = Arc::new(EvidenceProvider {
                 observations: Mutex::new(VecDeque::from([
@@ -5146,11 +5159,21 @@ mod post_admission_ocr_tests {
             if case == "timeout" {
                 operation["post_delay_ms"] = json!(1_001);
             }
-            let program: TaskProgram = serde_json::from_value(json!({"schema_version":"0.8","task_id":"task","game":"neutral","server_scope":["test"],
+            if waiting {
+                operation["expect_after"] = json!({
+                    "page_id": if case == "wait_error" { "operator" } else { "operator_end" },
+                    "timeout_ms": if case == "wait_timeout" { 1 } else { 480_000 },
+                    "interval_ms": 5
+                });
+            }
+            let mut program: TaskProgram = serde_json::from_value(json!({"schema_version":"0.8","task_id":"task","game":"neutral","server_scope":["test"],
                 "coordinate_space":{"width":2,"height":1},"target_page":terminal_page,"timeout_ms":1_000,
                 "post_admission_ocr":declaration,
                 "scheduling_outcome":{"mappings":[{"outcome_key":"fields_recorded","effect":"no_designated_effect","terminal_pages":[terminal_page]}]},
                 "operations":[operation]})).unwrap();
+            if case == "wait_error" {
+                program.error_pages = vec!["operator_end".into()];
+            }
             let fields = PreparedOcrFields {
                 declaration: serde_json::from_value(declaration).unwrap(),
                 dictionaries: BTreeMap::from([(
@@ -5163,8 +5186,11 @@ mod post_admission_ocr_tests {
                 )]),
             };
             fields.declaration.validate().unwrap();
-            let control: TaskControl = serde_json::from_value(json!({"schema_version":CONTROL_SCHEMA,"package_id":"neutral.test.task",
+            let mut control: TaskControl = serde_json::from_value(json!({"schema_version":CONTROL_SCHEMA,"package_id":"neutral.test.task",
                 "execution_mode":"navigable_route","game":"neutral","server":"test","resolution":{"width":2,"height":1},"entry_task_id":"task","timeout_ms":1_000})).unwrap();
+            if waiting {
+                control.step_timeout_ms = Some(1);
+            }
             control.validate().unwrap();
             program.validate_task_timeout(&control).unwrap();
             program.operations[0]
@@ -5185,7 +5211,7 @@ mod post_admission_ocr_tests {
             .unwrap();
             validate_page_references(&control.game, &program.target_pages().unwrap(), &detector)
                 .unwrap();
-            let task = PreparedContainedTask {
+            let mut task = PreparedContainedTask {
                 control,
                 scheduling_outcome: program.scheduling_outcome.clone(),
                 program,
@@ -5217,6 +5243,37 @@ mod post_admission_ocr_tests {
                 failure,
                 report_attempts: 0,
             };
+            if waiting {
+                let unknown = Frame::from_pixels(
+                    2,
+                    1,
+                    vec![0; 6],
+                    PixelFormat::Rgb8,
+                    actingcommand_device::CaptureBackendName::FixtureSimulation,
+                )
+                .unwrap();
+                let last = Frame::from_pixels(
+                    2,
+                    1,
+                    if case == "wait_conflict" {
+                        vec![1, 1, 1, 2, 2, 2]
+                    } else {
+                        vec![0, 0, 0, 2, 2, 2]
+                    },
+                    PixelFormat::Rgb8,
+                    actingcommand_device::CaptureBackendName::FixtureSimulation,
+                )
+                .unwrap();
+                runtime
+                    .inner
+                    .frames
+                    .extend([unknown.clone(), unknown.clone()]);
+                runtime.inner.last_frame = if case == "wait_timeout" {
+                    unknown
+                } else {
+                    last
+                };
+            }
             let outcome = task.run(&mut runtime);
             if let Some(error @ (class, callback)) = failure {
                 let ordinary = class == ContainedTaskRuntimeErrorClass::Nonfatal
@@ -5240,12 +5297,14 @@ mod post_admission_ocr_tests {
                     ),
                     "{failure:?}"
                 );
-            } else if case == "success" {
+            } else if matches!(case, "success" | "wait_success") {
                 assert_eq!(outcome.unwrap().outcome, TaskOutcome::Success);
             } else {
                 let expected = match case {
                     "guard" => "contained_task_guard_refused",
                     "timeout" => "contained_task_timeout",
+                    "wait_timeout" | "wait_error" => "page_confirmation_failed",
+                    "wait_conflict" => "contained_task_recognition_conflict",
                     _ => "contained_task_ocr_fields_unresolved",
                 };
                 assert!(
@@ -5259,7 +5318,9 @@ mod post_admission_ocr_tests {
                 assert_eq!(
                     runtime.inner.inputs,
                     usize::from(
-                        case == "provider" || matches!(failure, Some((_, Callback::Capture)))
+                        waiting
+                            || case == "provider"
+                            || matches!(failure, Some((_, Callback::Capture)))
                     )
                 );
             }
@@ -5347,7 +5408,7 @@ mod post_admission_ocr_tests {
                     .traces
                     .iter()
                     .any(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. })),
-                case == "success"
+                matches!(case, "success" | "wait_success")
             );
             let raw_position = runtime
                 .inner
@@ -5362,6 +5423,41 @@ mod post_admission_ocr_tests {
                 .position(|t| matches!(t, ContainedTaskTrace::PostAdmissionOcrFields { .. }))
                 .unwrap();
             assert!(raw_position < report_position);
+            if case == "wait_success" {
+                assert_eq!(
+                    runtime.inner.captures, 4,
+                    "long explicit wait survives the 1 ms fallback"
+                );
+                assert_eq!(runtime.inner.inputs, 1);
+                let mut collector = PostAdmissionOcrCollector::new(None);
+                assert!(
+                    matches!(
+                        task.await_postcondition(
+                            &mut runtime,
+                            &mut collector,
+                            &task.program.operations[0],
+                            Duration::ZERO,
+                            Duration::from_millis(5)
+                        )
+                        .unwrap(),
+                        PostconditionResolution::Reached(_)
+                    ),
+                    "matching remains before expiry"
+                );
+                // Existing task budget uses its original start, including time before the wait.
+                task.program.operations[0].post_delay_ms = Some(1);
+                assert_eq!(
+                    PreparedContainedTask::wait_post_input_delay(
+                        &task.program.operations[0],
+                        Instant::now() - Duration::from_secs(2),
+                        Duration::from_secs(1)
+                    )
+                    .unwrap_err()
+                    .code(),
+                    "contained_task_timeout"
+                );
+                assert_eq!(runtime.inner.inputs, 1);
+            }
         }
     }
 
