@@ -18,6 +18,20 @@ These files are versioned data and protocol contracts between the runtime decisi
 
 ## Rust mainline boundary
 
+Explicit operation `expect_after.timeout_ms` is a polling budget in
+`1..=600000` milliseconds. Package build, Runtime admission and Lab validation
+share this bound. Omission retains the existing step-timeout fallback. The
+Runtime control step timeout remains at most 60000 ms; post-input delay and
+postcondition interval remain at most 5000 ms.
+
+After the declared input, postcondition polling only captures and recognizes.
+Each iteration includes capture/recognition cost and a bounded interval. A
+matching page is checked before polling expiry, so the budget is not a strict
+wall-clock deadline. Existing request/lease cancellation and cumulative task
+timeout checks retain their precedence at their existing execution boundaries.
+The wait does not reset those budgets or change retry, recovery, input, lease,
+heartbeat or resource-close behavior.
+
 The Rust mainline contract crate lives in:
 
 - `crates/actingcommand-contract`
