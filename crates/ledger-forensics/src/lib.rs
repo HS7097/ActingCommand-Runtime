@@ -29,6 +29,7 @@ pub enum ForensicCommand {
     Tail,
     Repairs,
     Export,
+    Performance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +158,14 @@ impl ForensicRequest {
             events,
         }
     }
+
+    pub fn performance(state_root: impl AsRef<Path>, events: ForensicEventsRequest) -> Self {
+        Self {
+            state_root: state_root.as_ref().to_path_buf(),
+            command: ForensicCommand::Performance,
+            events,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -164,6 +173,7 @@ impl ForensicRequest {
 pub enum ForensicReport {
     Open(OpenReport),
     Events(EventsReport),
+    Performance(Box<PerformanceReport>),
     Chain(ChainReport),
     Tail(TailReport),
     Repairs(RepairsReport),
@@ -227,6 +237,48 @@ pub struct EventsReport {
     pub events: Vec<PersistedEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_after_sequence: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PerformanceReport {
+    pub after_sequence: u64,
+    pub through_sequence: u64,
+    pub limit: usize,
+    pub snapshot_latest_sequence: u64,
+    pub scanned_event_count: usize,
+    pub scanned_through_sequence: u64,
+    pub stutter_count: usize,
+    pub clock_jump_count: usize,
+    pub rows: Vec<PerformanceRow>,
+    pub next_after_sequence: Option<u64>,
+    pub has_more: bool,
+    pub window_complete: bool,
+    pub corrupt_tail: Option<CorruptTailReport>,
+    pub gaps: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PerformanceRow {
+    pub event: PersistedEvent,
+    pub observation: PerformanceObservation,
+    pub thread_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PerformanceObservation {
+    Stutter {
+        frame_gap_ms: u64,
+        capture_latency_ms: Option<u64>,
+        recognition_latency_ms: Option<u64>,
+        action_effect_latency_ms: Option<u64>,
+    },
+    ClockJump {
+        magnitude_ms: Option<i64>,
+        instance_id: Option<String>,
+        host_responsiveness_basis_points: Option<u16>,
+        third_party_pressure_basis_points: Option<u16>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -334,6 +386,9 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ForensicCommand::Events => Ok(ForensicOutput::Machine(ForensicReport::Events(
             events_report(&snapshot, request.events)?,
         ))),
+        ForensicCommand::Performance => Ok(ForensicOutput::Machine(ForensicReport::Performance(
+            Box::new(performance_report(&snapshot, request.events)?),
+        ))),
         ForensicCommand::Chain { request_id } => {
             let query =
                 serde_json::from_value(json!({ "request_id": request_id })).map_err(query_error)?;
@@ -426,6 +481,87 @@ fn events_report(
         limit: request.limit,
         events,
         next_after_sequence,
+    })
+}
+
+fn performance_report(
+    snapshot: &GlobalLedgerReadOnly,
+    request: ForensicEventsRequest,
+) -> ForensicResult<PerformanceReport> {
+    let through_sequence = request
+        .through_sequence
+        .unwrap_or_else(|| snapshot.latest_sequence());
+    if request.after_sequence > through_sequence || request.filter != ForensicEventFilter::default()
+    {
+        return Err(ForensicError::new(
+            "invalid_event_page",
+            "validate_performance_page",
+            "performance pages require an ordered sequence range and no event filters",
+        ));
+    }
+    // Snapshot validation remains owned by GlobalLedger. The report's page budget
+    // counts raw facts, including unrelated families, before projecting payloads.
+    let events = snapshot.events();
+    let start = events.partition_point(|event| event.sequence() <= request.after_sequence);
+    let end = events.partition_point(|event| event.sequence() <= through_sequence);
+    let page_end = start + (end - start).min(request.limit);
+    let page = &events[start..page_end];
+    let scanned_through_sequence = page
+        .last()
+        .map_or(request.after_sequence, PersistedEvent::sequence);
+    let mut rows = Vec::new();
+    let mut stutter_count = 0;
+    let mut clock_jump_count = 0;
+    for event in page {
+        let observation = if let Some(stutter) = event.payload().performance_stutter() {
+            stutter_count += 1;
+            PerformanceObservation::Stutter {
+                frame_gap_ms: stutter.frame_gap_ms(),
+                capture_latency_ms: stutter.capture_latency_ms(),
+                recognition_latency_ms: stutter.recognition_latency_ms(),
+                action_effect_latency_ms: stutter.action_effect_latency_ms(),
+            }
+        } else if let Some(control) = event.payload().performance_clock_jump() {
+            clock_jump_count += 1;
+            PerformanceObservation::ClockJump {
+                magnitude_ms: None,
+                instance_id: control.instance_id().map(str::to_owned),
+                host_responsiveness_basis_points: control.host_responsiveness_basis_points(),
+                third_party_pressure_basis_points: control.third_party_pressure_basis_points(),
+            }
+        } else {
+            continue;
+        };
+        rows.push(PerformanceRow {
+            event: event.clone(),
+            observation,
+            thread_identity: None,
+        });
+    }
+    let has_more = page_end < end;
+    let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
+    let mut gaps = Vec::new();
+    if corrupt_tail.is_some() {
+        gaps.push("corrupt_tail");
+    }
+    if through_sequence > snapshot.latest_sequence() {
+        gaps.push("through_sequence_unavailable");
+    }
+    Ok(PerformanceReport {
+        after_sequence: request.after_sequence,
+        through_sequence,
+        limit: request.limit,
+        snapshot_latest_sequence: snapshot.latest_sequence(),
+        scanned_event_count: page.len(),
+        scanned_through_sequence,
+        stutter_count,
+        clock_jump_count,
+        rows,
+        next_after_sequence: has_more.then_some(scanned_through_sequence),
+        has_more,
+        window_complete: !has_more && gaps.is_empty(),
+        corrupt_tail,
+        gaps,
     })
 }
 
