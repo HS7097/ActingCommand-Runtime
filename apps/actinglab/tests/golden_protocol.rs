@@ -570,6 +570,10 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<EVENT_ID>".to_string();
             return;
         }
+        Some("owner_epoch") => {
+            *text = "<OWNER_EPOCH>".to_string();
+            return;
+        }
         Some("request_id" | "task_request_id") => {
             *text = "<REQUEST_ID>".to_string();
             return;

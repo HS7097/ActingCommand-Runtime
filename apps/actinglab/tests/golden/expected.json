@@ -1542,7 +1542,7 @@
                     "data": {
                       "action": "runtime.action",
                       "audit": {},
-                      "owner_epoch": "epoch_18d24b5fef9d81dc0000000000000001",
+                      "owner_epoch": "<OWNER_EPOCH>",
                       "phase": {
                         "instance_id": "<INSTANCE_ID>",
                         "kind": "resource_quiescence",
