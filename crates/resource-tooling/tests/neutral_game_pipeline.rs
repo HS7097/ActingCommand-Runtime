@@ -68,6 +68,116 @@ fn external_neutral_game_metadata_converts_schedules_and_packages() {
     published.close().expect("close published package");
 }
 
+// Specification 1: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
+#[test]
+fn fields_v1_neutral_declaration_and_package_closure() {
+    use sha2::{Digest, Sha256};
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("resources");
+    write_external_resource_fixture(&root);
+    let path = root.join("operations/return_home/task.json");
+    let mut task: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let dictionary = serde_json::to_vec(&json!({"schema_version":"actingcommand.ocr-truth-set.v2",
+        "items":["TokenA"],"aliases":[{"observed":"short","canonical":"TokenA"}]}))
+    .unwrap();
+    let hash = format!("{:x}", Sha256::digest(&dictionary));
+    fs::write(
+        root.join("operations/return_home/dictionary.json"),
+        &dictionary,
+    )
+    .unwrap();
+    task["schema_version"] = json!("0.8");
+    task["scheduling_outcome"] = json!({"mappings":[{"outcome_key":"fields_recorded",
+        "effect":"no_designated_effect","terminal_pages":["home"]}]});
+    task["ocr_targets"] = json!([{"id":"ocr/name","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},
+        "languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["unused"],
+        "case_sensitive":false,"minimum_confidence":0.0,"model_ref":"PP-OCRv6_medium","model_sha256":"a".repeat(64)}]);
+    task["post_admission_ocr"] = json!({"mode":"fields_v1","page_ids":["home"],
+        "fields":[{"id":"name","group":"item","target_id":"ocr/name","required":true,
+            "privacy":"public","trim":"whitespace_v1","value":{"type":"dictionary_entry",
+                "dictionary":{"path":"dictionary.json","sha256":hash}}}],
+        "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},
+        "outcome_key":"fields_recorded"});
+    let convert = |value: &serde_json::Value| {
+        fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+        resource_convert(ResourceConvertRequest {
+            repo: root.clone(),
+            game: None,
+            server: None,
+            locale: None,
+            maa_tasks_root: None,
+            dry_run: true,
+        })
+    };
+    convert(&task).expect("0.8 source declaration");
+    for case in 0..9 {
+        let mut invalid = task.clone();
+        match case {
+            0 => invalid["schema_version"] = json!("0.7"),
+            1 => invalid["post_admission_ocr"]["comparison"] = json!("exact_set_v1"),
+            2 => invalid["post_admission_ocr"]["fields"][0]["target_id"] = json!("ocr/missing"),
+            3 => invalid["post_admission_ocr"]["fields"][0]["group"] = json!(""),
+            4 => {
+                invalid["post_admission_ocr"]["fields"][0]["value"] =
+                    json!({"type":"unsigned_integer","min":9,"max":2})
+            }
+            5 => {
+                invalid["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
+                    json!("0".repeat(64))
+            }
+            6 => {
+                invalid["post_admission_ocr"]["fields"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("privacy");
+            }
+            7 => invalid["post_admission_ocr"]["fields"][0]["value"]["type"] = json!("unknown"),
+            _ => invalid["post_admission_ocr"]["mode"] = json!("fields_v2"),
+        }
+        assert!(convert(&invalid).is_err(), "case {case}");
+    }
+    let mut legacy = task.clone();
+    legacy["schema_version"] = json!("0.7");
+    legacy["post_admission_ocr"] = json!({"page_id":"home","target_id":"ocr/name",
+        "truth_set":{"path":"dictionary.json","sha256":hash},"normalization":"trim_lowercase_v1",
+        "comparison":"exact_set_v1","limits":task["post_admission_ocr"]["limits"],"outcome_key":"fields_recorded"});
+    convert(&legacy).expect("0.7 set remains accepted");
+    fs::write(&path, serde_json::to_vec(&task).unwrap()).unwrap();
+    resource_convert(ResourceConvertRequest {
+        repo: root.clone(),
+        game: None,
+        server: None,
+        locale: None,
+        maa_tasks_root: None,
+        dry_run: false,
+    })
+    .unwrap();
+    let out = temp.path().join("fields.zip");
+    let prepared = prepare_package_build_task(PackageBuildTaskRequest {
+        source: PackageSource::Local(root),
+        temporary_root: temp.path().join("source"),
+        task_id: "return_home".into(),
+        game: None,
+        server: None,
+        locale: None,
+        package_id: None,
+        execution_mode: None,
+        resolution: None,
+        include_recovery: false,
+        out: out.clone(),
+        dry_run: false,
+        max_buffered_payload_bytes: DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
+        env: PackageEnvOptions::default(),
+    })
+    .unwrap();
+    prepared
+        .build(&AuthoringEnvironmentSnapshot::default())
+        .expect("hash-bound fields package closure");
+    let published = open_published_package(&out).unwrap();
+    assert!(published.path().is_file());
+    published.close().unwrap();
+}
+
 fn write_external_resource_fixture(root: &Path) {
     fs::create_dir_all(root.join("operations/return_home/assets")).expect("operation assets");
     fs::create_dir_all(root.join("navigation")).expect("navigation directory");

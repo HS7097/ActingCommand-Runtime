@@ -7,6 +7,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `runtime-api.openapi.yaml` — local HTTP API reserved for the UI.
 - `runtime-events.schema.json` — WebSocket event envelope and payload schema.
 - `task-flow.schema.json` — declarative task-flow schema.
+- `ocr-fields.md` — operation 0.8 typed post-admission fields and task-run projection.
 - `sqlite/schema.sql` — authoritative versioned Runtime state, migration, and release-set schema.
 - `runtime-project-interface.md` — versioned read-only project projection and compatibility matrix.
 - `ledger-performance-export.md` — read-only, raw-event-paginated stutter and clock-jump export.
