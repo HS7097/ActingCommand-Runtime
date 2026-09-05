@@ -143,6 +143,8 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
+mod online_observation;
+
 #[derive(Clone, Copy)]
 pub enum RuntimeLifecycleFailureStage {
     PolicyInitialization,
@@ -1893,6 +1895,8 @@ struct MonitorRecoveryAdmission {
 struct CompletedReadonlyObservation {
     observation: ReadonlyObservation,
     terminal: PersistedEvent,
+    links: EventLinksDraft,
+    artifact_links: ArtifactLinksDraft,
 }
 
 impl MonitorRecoveryAdmission {
@@ -5341,6 +5345,13 @@ impl HostShared {
             RuntimeOperation::ObserveReadonly { instance_alias } => {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.observe_readonly(request, validated, instance_alias)
+            }
+            RuntimeOperation::ObserveContainedPage {
+                instance_alias,
+                request: observation,
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.observe_contained_page(request, validated, instance_alias, observation)
             }
             RuntimeOperation::CaptureSequence {
                 instance_alias,
@@ -9752,8 +9763,12 @@ impl HostShared {
             None,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
-        let completed =
-            self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
+        let completed = self.capture_readonly_observation(
+            request,
+            instance_alias,
+            resolved.instance_id(),
+            false,
+        )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&completed.terminal)),
@@ -9793,8 +9808,12 @@ impl HostShared {
         let mut observations = Vec::with_capacity(usize::from(spec.frame_count()));
         let mut last_terminal = None;
         for index in 0..spec.frame_count() {
-            let completed =
-                self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
+            let completed = self.capture_readonly_observation(
+                request,
+                instance_alias,
+                resolved.instance_id(),
+                false,
+            )?;
             observations.push(completed.observation);
             last_terminal = Some(completed.terminal);
             if index + 1 < spec.frame_count() && spec.interval_ms() > 0 {
@@ -9827,6 +9846,7 @@ impl HostShared {
         request: &ValidatedRuntimeRequest<'_>,
         instance_alias: &str,
         instance_id: InstanceId,
+        retain_native_artifact_error: bool,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.require_physical_instance_id(instance_id)?;
         let capability = self.issue_readonly_capability(instance_id)?;
@@ -9944,7 +9964,7 @@ impl HostShared {
             artifact_links = artifact_links.with_run_id(run_id);
         }
         let write_context = ArtifactWriteContext::new(
-            artifact_links,
+            artifact_links.clone(),
             links.clone(),
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
@@ -9973,7 +9993,17 @@ impl HostShared {
                 ),
                 &mut sink,
             )
-            .map_err(|_| {
+            .map_err(|error| {
+                if retain_native_artifact_error {
+                    return RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            error.code(),
+                            error.operation(),
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                        .with_native_detail(error.to_string()),
+                    );
+                }
                 RequestFailure::poison_without_terminal(artifact_store_error(
                     "persist_readonly_observation",
                 ))
@@ -9999,7 +10029,7 @@ impl HostShared {
             EventSource::Runtime,
             OriginModule::Recognition,
             EventActor::Runtime,
-            links,
+            links.clone(),
             RecognitionPayloadDraft::completed(
                 EventAction::RecognitionObserve,
                 EffectDisposition::Performed,
@@ -10012,6 +10042,8 @@ impl HostShared {
         Ok(CompletedReadonlyObservation {
             observation,
             terminal: event,
+            links,
+            artifact_links,
         })
     }
 

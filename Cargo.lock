@@ -311,6 +311,7 @@ dependencies = [
 name = "actingcommand-runtime-client"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-policy",

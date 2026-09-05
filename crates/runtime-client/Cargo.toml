@@ -11,6 +11,7 @@ default = []
 test-observation = ["actingcommand-runtime-host/test-observation"]
 
 [dependencies]
+actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
 actingcommand-contract = { workspace = true }
 actingcommand-policy = { workspace = true }
 serde = { workspace = true }
