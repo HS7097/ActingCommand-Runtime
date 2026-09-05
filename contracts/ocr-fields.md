@@ -72,6 +72,54 @@ must not form part of its page's recognition gate. Fields are collected at the e
 post-admission capture points, in declaration order, with one provider observation per
 target. Parsing and dictionary mapping never call OCR again.
 
+An OCR target may locate its ROI relative to a template matched in the current frame.
+The source and sealed pack use this same region object:
+
+```json
+{
+  "mode": "template_relative",
+  "anchor_target_id": "item/icon",
+  "offset": { "x": -4, "y": 18 },
+  "width": 48,
+  "height": 20
+}
+```
+
+Only OCR accepts this region. The anchor must be a template in the same admitted pack,
+with a static rectangle or `full_frame` search region. Selected builds retain that direct
+template and its hashed assets, including a template declared by an otherwise unselected
+source bundle; they do not select the donor task or its OCR. Missing and non-template
+references fail admission. Width and height are positive `i32`; offsets are signed `i32`.
+The recognition owner adds offsets to the actual best match's top-left coordinates with
+checked arithmetic. The entire ROI must fit in the current frame. It never clips, scales,
+or substitutes a declared search rectangle. Existing absolute/full-frame OCR is retained.
+
+Page recognition and field collection share a Scene-bound template evaluation context.
+A previously evaluated template is reused; an unevaluated anchor is evaluated once in
+that Scene. OCR output is not cached, and callers cannot import an old template result.
+The context is bounded by admitted target identities and is released with the frame.
+Best-match score, threshold and the existing color check govern the anchor. This API
+does not establish match uniqueness. Resource authors choose discriminating icons and
+search areas and calibrate offsets for their actual layouts.
+
+An unmatched anchor, checked-coordinate overflow, or out-of-frame ROI produces
+`region_unresolved` with its typed reason and no OCR invocation/execution evidence.
+Required fields then fail the existing fields criterion; optional fields retain their
+unresolved result without a fabricated value. Real provider failures keep their original
+classification. Field/page gates, capture return values and backend session ownership
+retain their existing contracts.
+
+OCR observations and field records carry `region` evidence: anchor identity, actual
+matched rectangle/raw score/score/threshold/pass decision, offset, frame dimensions,
+requested dimensions and resolved ROI or unresolved reason. The Host commits this through
+the existing DiagnosticJson lifecycle with the exact Task/Run/FrameId and original frame
+artifact reference/hash before client projection. The client checks the native frame and
+artifact lifecycle and the report/observation ROI binding. Online page projections expose
+these actual ROI facts. Anchor, OCR target and field annotations contribute to the existing
+personal-data union; public output redacts personal text, values and detail. GlobalLedger
+schema and provider/backend identities are unchanged. Actual icons/layouts and real-device
+calibration remain resource-authoring and Final Audit work.
+
 `whitespace_v1` trims Unicode whitespace using Rust `str::trim`. An `unsigned_integer`
 then requires a nonempty, complete ASCII decimal string. Zero and leading zeros are legal;
 signs, separators, decimal points, non-ASCII digits and suffixes are not. The value must fit

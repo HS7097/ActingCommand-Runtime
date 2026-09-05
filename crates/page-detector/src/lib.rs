@@ -318,11 +318,12 @@ impl PageDetector {
         mut start: impl FnMut(usize, &PageDefinition) -> M,
         mut elapsed: impl FnMut(M) -> Duration,
     ) -> PageDetectorResult<Vec<TimedPageEvaluation>> {
+        let context = evaluator.scene_context(scene);
         let mut durations = Vec::with_capacity(self.page_set.pages.len());
         let outcomes = self
             .evaluate_all_outcomes_with(evaluator, scene, |index, page| {
                 let started = start(index, page);
-                let result = self.evaluate_page_definition(evaluator, scene, page);
+                let result = self.evaluate_page_in_context(&context, page);
                 durations.push(elapsed(started));
                 result
             })
@@ -350,8 +351,25 @@ impl PageDetector {
         evaluator: &RecognitionEvaluator,
         scene: &Scene,
     ) -> PageBatchResult {
-        self.evaluate_all_outcomes_with(evaluator, scene, |_, page| {
-            self.evaluate_page_definition(evaluator, scene, page)
+        self.evaluate_all_outcomes_in_context(&evaluator.scene_context(scene))
+    }
+
+    pub fn evaluate_all_in_context(
+        &self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+    ) -> PageDetectorResult<Vec<PageEvaluation>> {
+        let outcomes = self
+            .evaluate_all_outcomes_in_context(context)
+            .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
+        require_all_page_evaluations(outcomes)
+    }
+
+    pub fn evaluate_all_outcomes_in_context(
+        &self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+    ) -> PageBatchResult {
+        self.evaluate_all_outcomes_with(context.evaluator(), context.scene(), |_, page| {
+            self.evaluate_page_in_context(context, page)
         })
     }
 
@@ -445,46 +463,41 @@ impl PageDetector {
         scene: &Scene,
         page: &PageDefinition,
     ) -> PageDetectorResult<PageEvaluation> {
-        let required_results = evaluate_targets(
-            evaluator,
-            scene,
-            &page.required,
-            PageTargetRole::Required,
-            None,
-        )?;
-        let any_of_results = evaluate_any_of_groups(evaluator, scene, &page.any_of)
+        self.evaluate_page_in_context(&evaluator.scene_context(scene), page)
+    }
+
+    fn evaluate_page_in_context(
+        &self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        page: &PageDefinition,
+    ) -> PageDetectorResult<PageEvaluation> {
+        let required_results =
+            evaluate_targets(context, &page.required, PageTargetRole::Required, None)?;
+        let any_of_results = evaluate_any_of_groups(context, &page.any_of)
             .map_err(|error| error.after(required_results.clone()))?;
-        let optional_results = evaluate_targets(
-            evaluator,
-            scene,
-            &page.optional,
-            PageTargetRole::Optional,
-            None,
-        )
-        .map_err(|error| {
-            error.after(
-                required_results
-                    .iter()
-                    .chain(any_of_results.iter().flatten())
-                    .cloned(),
-            )
-        })?;
-        let forbidden_results = evaluate_targets(
-            evaluator,
-            scene,
-            &page.forbidden,
-            PageTargetRole::Forbidden,
-            None,
-        )
-        .map_err(|error| {
-            error.after(
-                required_results
-                    .iter()
-                    .chain(any_of_results.iter().flatten())
-                    .chain(optional_results.iter())
-                    .cloned(),
-            )
-        })?;
+        let optional_results =
+            evaluate_targets(context, &page.optional, PageTargetRole::Optional, None).map_err(
+                |error| {
+                    error.after(
+                        required_results
+                            .iter()
+                            .chain(any_of_results.iter().flatten())
+                            .cloned(),
+                    )
+                },
+            )?;
+        let forbidden_results =
+            evaluate_targets(context, &page.forbidden, PageTargetRole::Forbidden, None).map_err(
+                |error| {
+                    error.after(
+                        required_results
+                            .iter()
+                            .chain(any_of_results.iter().flatten())
+                            .chain(optional_results.iter())
+                            .cloned(),
+                    )
+                },
+            )?;
 
         let required_passed = count_passed(&required_results);
         let any_of_passed = count_passed_groups(&any_of_results);
@@ -659,15 +672,14 @@ fn page_target_ids(page: &PageDefinition) -> impl Iterator<Item = &str> {
 }
 
 fn evaluate_targets(
-    evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
     target_ids: &[String],
     role: PageTargetRole,
     group_index: Option<usize>,
 ) -> PageDetectorResult<Vec<PageTargetEvaluation>> {
     let mut results = Vec::new();
     for (target_index, target_id) in target_ids.iter().enumerate() {
-        let evaluation = match evaluator.evaluate_target(scene, target_id) {
+        let evaluation = match context.evaluate_target(target_id) {
             Ok(evaluation) => evaluation,
             Err(cause) => {
                 let mut error = pack_error(cause.clone());
@@ -696,15 +708,13 @@ fn evaluate_targets(
 }
 
 fn evaluate_any_of_groups(
-    evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
     groups: &[Vec<String>],
 ) -> PageDetectorResult<Vec<Vec<PageTargetEvaluation>>> {
     let mut results: Vec<Vec<PageTargetEvaluation>> = Vec::new();
     for (index, group) in groups.iter().enumerate() {
-        let evaluated =
-            evaluate_targets(evaluator, scene, group, PageTargetRole::AnyOf, Some(index))
-                .map_err(|error| error.after(results.iter().flatten().cloned()))?;
+        let evaluated = evaluate_targets(context, group, PageTargetRole::AnyOf, Some(index))
+            .map_err(|error| error.after(results.iter().flatten().cloned()))?;
         results.push(evaluated);
     }
     Ok(results)
@@ -813,15 +823,15 @@ mod tests {
             vec!["fixture/home_anchor".to_string()],
             vec!["fixture/settings_anchor".to_string()],
         ];
-        let values = evaluate_any_of_groups(&fixture.evaluator, &scene, &groups).unwrap();
+        let values =
+            evaluate_any_of_groups(&fixture.evaluator.scene_context(&scene), &groups).unwrap();
         for (index, group) in values.iter().enumerate() {
             assert_eq!(group[0].group_index, Some(index));
             assert_eq!(group[0].target_index, 0);
             assert_eq!(group[0].role, PageTargetRole::AnyOf);
         }
         let error = evaluate_targets(
-            &fixture.evaluator,
-            &scene,
+            &fixture.evaluator.scene_context(&scene),
             &["fixture/home_anchor".into(), "absent".into()],
             PageTargetRole::Required,
             None,

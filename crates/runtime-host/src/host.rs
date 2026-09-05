@@ -14606,6 +14606,7 @@ struct RuntimeContainedTaskOcrObservationDiagnostic<'a> {
     run_id: &'a RunId,
     frame_id: &'a FrameId,
     frame_index: u32,
+    frame_artifact: &'a actingcommand_contract::ArtifactReference,
     observation: &'a PostAdmissionOcrObservation,
 }
 
@@ -14962,12 +14963,25 @@ impl RuntimeContainedTask<'_> {
                 ),
             ));
         }
+        let frame_artifact = self
+            .capture_evidence
+            .frames
+            .last()
+            .filter(|frame| frame.artifact.frame_id() == Some(frame_id.transport()))
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_post_admission_ocr_frame_artifact_missing",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
         let diagnostic = RuntimeContainedTaskOcrObservationDiagnostic {
             schema_version: "actingcommand.runtime.post-admission-ocr-observation.v1",
             task_id: self.task_id.transport(),
             run_id: self.run_id.transport(),
             frame_id: frame_id.transport(),
             frame_index,
+            frame_artifact: &frame_artifact.artifact,
             observation: &observation,
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {

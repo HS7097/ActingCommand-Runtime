@@ -275,7 +275,59 @@ pub enum OcrFieldReason {
     AmbiguousEntry,
     LimitExceeded,
     ProviderFailed,
+    RegionUnresolved,
     NotCollected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrRegionRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrRegionOffset {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrAnchorMatch {
+    pub rect: OcrRegionRect,
+    pub raw_score: f32,
+    pub score: f32,
+    pub threshold: f32,
+    pub passed: bool,
+}
+
+// Recognition and transport admission require finite scores.
+impl Eq for OcrAnchorMatch {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrRegionUnresolvedReason {
+    AnchorNotMatched,
+    CoordinateOverflow,
+    OutOfFrame,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrRegionEvidence {
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub anchor_target_id: Option<String>,
+    pub anchor_match: Option<OcrAnchorMatch>,
+    pub offset: Option<OcrRegionOffset>,
+    pub width: i32,
+    pub height: i32,
+    pub roi: Option<OcrRegionRect>,
+    pub unresolved: Option<OcrRegionUnresolvedReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,6 +340,8 @@ pub struct OcrFieldResult {
     pub value: Option<OcrFieldValue>,
     pub reason: OcrFieldReason,
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<OcrRegionEvidence>,
     pub redacted: bool,
 }
 
