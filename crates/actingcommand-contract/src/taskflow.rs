@@ -3,6 +3,7 @@
 //! Rust mainline data structures for declarative task-flow contracts.
 
 use crate::types::*;
+use crate::{SchedulingEffectCondition, SchedulingOutcomeDeclaration};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -78,6 +79,53 @@ pub struct OcrFieldDictionaryReference {
 }
 
 impl OcrFieldsDeclaration {
+    /// A task without input can only collect fields on its declared terminal pages.
+    pub fn validate_zero_input_task(
+        &self,
+        game: &str,
+        execution_mode: &str,
+        stop_on_confirmation: bool,
+        target_pages: &[String],
+        scheduling: &SchedulingOutcomeDeclaration,
+    ) -> Result<(), &'static str> {
+        self.validate()?;
+        scheduling
+            .validate()
+            .map_err(|_| "ocr_fields_zero_input_outcome_invalid")?;
+        let [mapping] = scheduling.mappings() else {
+            return Err("ocr_fields_zero_input_outcome_invalid");
+        };
+        if execution_mode != "navigable_route"
+            || !stop_on_confirmation
+            || scheduling.designated_operation().is_some()
+            || mapping.outcome_key() != self.outcome_key
+            || mapping.effect() != SchedulingEffectCondition::NoDesignatedEffect
+        {
+            return Err("ocr_fields_zero_input_outcome_invalid");
+        }
+        let prefix = format!("{game}/");
+        let canonical = |pages: &[String]| {
+            pages
+                .iter()
+                .map(|page| page.strip_prefix(&prefix).unwrap_or(page).to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let targets = canonical(target_pages);
+        let fields = canonical(&self.page_ids);
+        let terminals = canonical(mapping.terminal_pages());
+        if targets.is_empty()
+            || targets.iter().any(|page| page.is_empty() || page == "any")
+            || targets.len() != target_pages.len()
+            || fields.len() != self.page_ids.len()
+            || terminals.len() != mapping.terminal_pages().len()
+            || targets != fields
+            || targets != terminals
+        {
+            return Err("ocr_fields_zero_input_pages_invalid");
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         let identifier = |value: &str| {
             !value.is_empty()

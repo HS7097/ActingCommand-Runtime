@@ -2698,9 +2698,28 @@ impl OperationBundle {
             )));
         }
         if self.operations.is_empty() {
-            return Err(CliError::package_invalid(
-                "operation bundle has no operations",
-            ));
+            if self.schema_version != "0.8" || self.recovery.is_some() {
+                return Err(CliError::package_invalid(
+                    "operation bundle has no operations",
+                ));
+            }
+            let fields: actingcommand_contract::OcrFieldsDeclaration =
+                serde_json::from_value(self.post_admission_ocr.clone().unwrap_or_default())
+                    .map_err(|_| CliError::package_invalid("ocr_fields_declaration_invalid"))?;
+            let scheduling: actingcommand_contract::SchedulingOutcomeDeclaration =
+                serde_json::from_value(self.scheduling_outcome.clone().unwrap_or_default())
+                    .map_err(|_| CliError::package_invalid("ocr_fields_outcome_invalid"))?;
+            fields
+                .validate_zero_input_task(
+                    &self.game,
+                    &control.execution_mode,
+                    control.stop_on_confirmation.unwrap_or(true),
+                    self.target_page
+                        .as_ref()
+                        .map_or(&[], PageDeclaration::pages),
+                    &scheduling,
+                )
+                .map_err(CliError::package_invalid)?;
         }
         self.validate_stability_termination(control)?;
         self.defaults.validate()?;
