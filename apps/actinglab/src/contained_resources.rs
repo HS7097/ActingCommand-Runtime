@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(super) struct ObservationResources {
+    pub metadata: actingcommand_contract::page_projection::VerifiedProjectionMetadata,
     pub edges: Vec<super::NavigationEdge>,
     pub operations: Vec<PageOperation>,
     pub controls: Vec<super::ControlPoint>,
@@ -85,11 +86,34 @@ pub(super) fn observation_resources(
         .ok_or_else(|| CliError::package_invalid("contained page definitions are missing"))?;
     let pages =
         std::str::from_utf8(pages).map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let pages_value: serde_json::Value = serde_json::from_str(pages.trim_start_matches('\u{feff}'))
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let pages = actingcommand_page_detector::load_page_set_from_json_str(
         pages.trim_start_matches('\u{feff}'),
     )
     .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let metadata = match bundle.projection_metadata() {
+        Some(metadata) => metadata.clone(),
+        None => {
+            let pack = bundle
+                .recognition_pack_path()
+                .and_then(|path| bundle.entry(path))
+                .ok_or_else(|| {
+                    CliError::package_invalid("contained recognition pack is missing")
+                })?;
+            let pack: serde_json::Value = serde_json::from_slice(pack)
+                .map_err(|error| CliError::package_invalid(error.to_string()))?;
+            actingcommand_contract::page_projection::VerifiedProjectionMetadata::unannotated(
+                actingcommand_contract::page_projection::ProjectionCatalog::from_resources(
+                    &pack,
+                    &pages_value,
+                    navigation,
+                )?,
+            )
+        }
+    };
     Ok(ObservationResources {
+        metadata,
         edges,
         operations,
         controls,

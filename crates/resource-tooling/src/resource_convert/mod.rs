@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
+use actingcommand_contract::page_projection::{ProjectionCatalog, ProjectionMetadata};
 use actingcommand_contract::{
     LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
     OcrFieldsDeclaration, SchedulingOutcomeDeclaration,
@@ -450,6 +451,7 @@ pub struct ConvertOutputs {
     pub navigation: Value,
     pub index: Value,
     pub primitives: Value,
+    pub projection_metadata: Option<Value>,
 }
 
 impl ConvertOutputs {
@@ -614,6 +616,42 @@ impl OperationConverter {
     }
 
     pub fn build_all(&self) -> CliOutcome<ConvertOutputs> {
+        let mut outputs = self.build_resources()?;
+        let path = self
+            .root
+            .join("navigation")
+            .join(format!("{}.{}.projection.json", self.game, self.server));
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(outputs),
+            Err(error) => {
+                return Err(CliError::package_invalid(format!(
+                    "failed to read {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        let declaration = ProjectionMetadata::parse(&bytes)?;
+        declaration
+            .clone()
+            .validate(self.projection_catalog(&outputs)?)?;
+        outputs.projection_metadata = Some(
+            serde_json::to_value(declaration)
+                .map_err(|e| CliError::package_invalid(e.to_string()))?,
+        );
+        Ok(outputs)
+    }
+
+    fn projection_catalog(&self, outputs: &ConvertOutputs) -> CliOutcome<ProjectionCatalog> {
+        let mut catalog =
+            ProjectionCatalog::from_resources(&outputs.pack, &outputs.pages, &outputs.navigation)?;
+        for bundle in &self.bundles {
+            catalog.add_operation_fields(&bundle.data)?;
+        }
+        Ok(catalog)
+    }
+
+    fn build_resources(&self) -> CliOutcome<ConvertOutputs> {
         let pack = self.build_pack()?;
         validate_pack_targets_exist(&self.root, &pack)?;
         let pages = self.build_pages()?;
@@ -628,6 +666,7 @@ impl OperationConverter {
             index,
             primitives,
             pack,
+            projection_metadata: None,
         })
     }
 
@@ -658,7 +697,32 @@ impl OperationConverter {
             maa_task_overlays: self.maa_task_overlays.clone(),
         };
         subset.validate_bundles()?;
-        subset.build_all()
+        let mut outputs = subset.build_resources()?;
+        let annotation_path = self
+            .root
+            .join("navigation")
+            .join(format!("{}.{}.projection.json", self.game, self.server));
+        if !annotation_path.try_exists().map_err(|e| {
+            CliError::package_invalid(format!(
+                "failed to inspect {}: {e}",
+                annotation_path.display()
+            ))
+        })? {
+            return Ok(outputs);
+        }
+        let full = self.build_all()?;
+        if let Some(declaration) = &full.projection_metadata {
+            let metadata = ProjectionMetadata::parse(
+                &serde_json::to_vec(declaration)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?,
+            )?
+            .validate(self.projection_catalog(&full)?)?;
+            outputs.projection_metadata = Some(
+                serde_json::to_value(metadata.select(subset.projection_catalog(&outputs)?)?)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?,
+            );
+        }
+        Ok(outputs)
     }
 
     pub(crate) fn canonical_task(&self, task_id: &str) -> CliOutcome<Value> {

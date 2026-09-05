@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
 actingcommand-page-detector = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 serde = { workspace = true }
