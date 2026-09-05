@@ -519,6 +519,16 @@ impl fmt::Debug for GlobalLedger {
 }
 
 impl GlobalLedger {
+    pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
+        match self.writer.as_ref() {
+            Some(writer) if !writer.is_finished() => Ok(()),
+            _ => Err(GlobalLedgerError::fatal(
+                "writer_unavailable",
+                "read_writer_health",
+            )),
+        }
+    }
+
     pub fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
         Self::open_with_store(config, SegmentStore::open)
     }
