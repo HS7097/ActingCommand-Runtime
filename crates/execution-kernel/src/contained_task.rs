@@ -1295,6 +1295,10 @@ pub enum ContainedTaskTrace {
         package_sha256: String,
     },
     RunStarted,
+    EntryRecognition {
+        required_page: String,
+        matched: bool,
+    },
     CaptureCompleted {
         width: u32,
         height: u32,
@@ -1589,7 +1593,7 @@ impl PreparedContainedTask {
     }
 
     pub fn maximum_executed_steps(&self) -> u32 {
-        if self.control.execution_mode == "recognize_only" {
+        if self.control.execution_mode == "recognize_only" || self.program.operations.is_empty() {
             0
         } else {
             self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS)
@@ -2414,6 +2418,22 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        if self.program.operations.is_empty()
+            && let Some(required_page) = self.required_home_entry_page()
+        {
+            let matched = page.as_deref() == Some(required_page);
+            runtime
+                .record(ContainedTaskTrace::EntryRecognition {
+                    required_page: required_page.to_owned(),
+                    matched,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            if !matched {
+                return Err(
+                    ContainedTaskError::new("contained_task_home_entry_not_matched").into(),
+                );
+            }
+        }
         let Some(page_label) = page else {
             return Ok(None);
         };
@@ -2858,7 +2878,6 @@ impl TaskProgram {
                     .any(|value| value == &control.server))
             || self.coordinate_space.width != control.resolution.width
             || self.coordinate_space.height != control.resolution.height
-            || self.operations.is_empty()
             || self.error_pages.iter().any(|value| value.trim().is_empty())
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
@@ -2867,6 +2886,27 @@ impl TaskProgram {
         self.validate_task_max_steps(control)?;
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
+        if self.operations.is_empty() {
+            if self.schema_version != "0.8" || self.recovery.is_some() {
+                return Err(ContainedTaskError::new("contained_task_program_invalid"));
+            }
+            let fields: OcrFieldsDeclaration =
+                serde_json::from_value(self.post_admission_ocr.clone().unwrap_or_default())
+                    .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
+            let scheduling = self
+                .scheduling_outcome
+                .as_ref()
+                .ok_or_else(|| ContainedTaskError::new("ocr_fields_outcome_invalid"))?;
+            fields
+                .validate_zero_input_task(
+                    &self.game,
+                    &control.execution_mode,
+                    control.stop_on_confirmation.unwrap_or(true),
+                    &target_pages,
+                    scheduling,
+                )
+                .map_err(ContainedTaskError::new)?;
+        }
         validate_page_references(&control.game, &target_pages, detector)?;
         validate_page_references(&control.game, &self.error_pages, detector)?;
         validate_page_set_overlap(&control.game, &target_pages, &self.error_pages, detector)?;

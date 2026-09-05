@@ -10786,7 +10786,10 @@ impl HostShared {
             finalizing: None,
             capture_evidence: CaptureEvidenceAccumulator::default(),
         };
-        let execution = if prepared.required_home_entry_page().is_some() {
+        // Zero-input fields confirm the required entry in the interpreter's first capture.
+        let execution = if prepared.required_home_entry_page().is_some()
+            && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
+        {
             self.run_preflighted_contained_task(
                 instance_alias,
                 task_request,
@@ -15579,6 +15582,28 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 self.links(),
                 TaskPayloadDraft::semantic(TaskSemanticFact::RunStarted, AuditInput::new()),
             ),
+            ContainedTaskTrace::EntryRecognition {
+                required_page,
+                matched,
+            } => {
+                self.record_entry_fact(TaskSemanticFact::EntryRecognition {
+                    phase: TaskEntryRecognitionPhase::Initial,
+                    required_page,
+                    matched,
+                })?;
+                self.record_entry_fact(TaskSemanticFact::EntryRecoveryDecision {
+                    required: false,
+                })?;
+                self.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                    disposition: if matched {
+                        TaskEntryTargetDisposition::Started
+                    } else {
+                        TaskEntryTargetDisposition::FailClosed
+                    },
+                    failure_code: (!matched)
+                        .then(|| "contained_task_home_entry_not_matched".to_owned()),
+                })
+            }
             ContainedTaskTrace::CaptureCompleted { width, height } => {
                 let frame_id = self.last_frame_id.ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
