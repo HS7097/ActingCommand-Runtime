@@ -240,7 +240,7 @@ impl CaptureBackend for FakeCapture {
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )?;
-        frame.selection = selection;
+        frame.selection = selection.map(Arc::new);
         Ok(frame)
     }
 }
@@ -299,8 +299,8 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     let second = kernel.capture("node.a").expect("second capture");
     assert_eq!((first.width, first.height), (2, 1));
     assert_eq!((second.width, second.height), (2, 1));
-    assert_eq!(first.selection, Some(capture_selection.clone()));
-    assert_eq!(second.selection, Some(capture_selection));
+    assert_eq!(first.selection.as_deref(), Some(&capture_selection));
+    assert_eq!(second.selection.as_deref(), Some(&capture_selection));
 
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_opens, 1);

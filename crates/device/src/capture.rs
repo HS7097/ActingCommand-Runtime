@@ -22,7 +22,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -143,7 +143,7 @@ pub struct Frame {
     pub captured_at: SystemTime,
     pub backend_name: CaptureBackendName,
     /// Context from the same selected producer; decoded or synthetic frames have none.
-    pub selection: Option<CaptureSelectionContext>,
+    pub selection: Option<Arc<CaptureSelectionContext>>,
 }
 
 impl Frame {
@@ -313,7 +313,7 @@ pub struct CaptureBackendDiagnostics {
 pub struct SelectedCaptureBackend {
     pub backend: Box<dyn CaptureBackend>,
     pub diagnostics: CaptureBackendDiagnostics,
-    pub selection: Option<CaptureSelectionContext>,
+    pub selection: Option<Arc<CaptureSelectionContext>>,
 }
 
 impl CaptureBackend for SelectedCaptureBackend {
@@ -387,7 +387,7 @@ pub fn create_capture_backend(
             ))
         }
     }?;
-    selected.selection = Some(selection);
+    selected.selection = Some(Arc::new(selection));
     Ok(selected)
 }
 
@@ -3067,10 +3067,10 @@ mod tests {
             CaptureBackendName::NemuIpc,
             Box::new(SuccessfulCapture),
         );
-        selected.selection = Some(context.clone());
+        selected.selection = Some(Arc::new(context.clone()));
         let frame = selected.capture().expect("successful selected producer");
         assert_eq!(frame.backend_name, CaptureBackendName::NemuIpc);
-        assert_eq!(frame.selection, Some(context));
+        assert_eq!(frame.selection.as_deref(), Some(&context));
         let _ = fs::remove_dir_all(temp);
     }
 

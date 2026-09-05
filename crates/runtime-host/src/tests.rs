@@ -367,7 +367,8 @@ impl CaptureBackend for FakeCapture {
             .capture_selection
             .lock()
             .expect("capture selection")
-            .clone();
+            .clone()
+            .map(Arc::new);
         Ok(frame)
     }
 }
