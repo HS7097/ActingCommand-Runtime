@@ -1004,6 +1004,222 @@ fn performance_export_is_explicit_bounded_and_preserves_ordinary_export() {
     assert_eq!(after.stdout, ordinary.stdout);
 }
 
+// Specification: #257-B8-STABILITY-READ-v1, official CLI pagination and source preservation.
+#[test]
+fn stability_cli_pages_errors_and_source_files_are_explicit() {
+    use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
+    use actingcommand_contract::{ArtifactIssuePolicy, ArtifactKind, ArtifactProducer};
+    struct Sink<'a>(&'a GlobalLedger);
+    impl ArtifactEventSink for Sink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            self.0
+                .append(
+                    draft
+                        .sanitize(&Sha256SecretFingerprinter::new(b"stability-cli").expect("salt"))
+                        .expect("sanitize"),
+                )
+                .map(|_| ())
+                .map_err(|e| ArtifactStoreError::fatal(e.code(), "append_spec", "append failed"))
+        }
+    }
+    let temp = tempfile::tempdir().expect("state");
+    let root = temp.path();
+    let ids = IdentifierIssuer::new().expect("ids");
+    let task = ids.mint_task_id().expect("task");
+    let run_id = ids.mint_run_id().expect("run");
+    let action = ids.mint_action_id().expect("action");
+    let previous = ids.mint_frame_id().expect("previous");
+    let current = ids.mint_frame_id().expect("current");
+    let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+        root.join("ledger"),
+        "stability-cli",
+    ))
+    .expect("ledger");
+    let unrelated = || {
+        EventDraft::new(
+            ids.mint_event_id().expect("event"),
+            1_752_147_200_001,
+            EventSeverity::Info,
+            EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::User),
+            EventLinksDraft::default(),
+            CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
+        )
+        .sanitize(&Sha256SecretFingerprinter::new(b"stability-cli").expect("salt"))
+        .expect("sanitize")
+    };
+    let first = ledger.append(unrelated()).expect("unrelated prefix");
+    let fact = serde_json::json!({
+        "schema_version": "actingcommand.runtime.contained-task-stability-comparison.v1",
+        "task_id": task.transport(), "run_id": run_id.transport(), "action_id": action.transport(),
+        "step_index": 1, "operation_label": "neutral", "previous_frame_id": previous.transport(),
+        "current_frame_id": current.transport(), "region": {"x": 1, "y": 2, "width": 3, "height": 4},
+        "comparison_mode": "exact_pixels_v1", "comparison_parameters": {}, "result": "changed",
+        "prior_consecutive_unchanged": 1, "new_consecutive_unchanged": 0,
+        "consecutive_unchanged_threshold": 2, "terminal_reason": null
+    });
+    let store = ArtifactStore::open(root).expect("store");
+    let mut references = Vec::new();
+    for schema in [
+        "actingcommand.runtime.contained-task-stability-comparison.v1",
+        "actingcommand.runtime.contained-task-stability-comparison.v99",
+    ] {
+        let mut input = fact.clone();
+        input["schema_version"] = schema.into();
+        let stored = store
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    &serde_json::to_vec(&input).expect("JSON"),
+                    ArtifactWriteContext::new(
+                        ArtifactLinksDraft::default()
+                            .with_run_id(run_id)
+                            .with_frame_id(current),
+                        EventLinksDraft::default()
+                            .with_task_id(task)
+                            .with_run_id(run_id)
+                            .with_action_id(action)
+                            .with_frame_id(current),
+                        1_752_147_200_100,
+                    ),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CapturePipeline,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut Sink(&ledger),
+            )
+            .expect("artifact");
+        references.push(stored.reference().project(true));
+    }
+    let excluded = ledger.append(unrelated()).expect("outside frozen interval");
+    let through = excluded.sequence() - 1;
+    ledger.close().expect("close");
+    let snapshot = || {
+        let mut files = BTreeMap::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            for entry in fs::read_dir(path).expect("tree") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    files.insert(path.clone(), fs::read(path).expect("source bytes"));
+                }
+            }
+        }
+        files
+    };
+    let before = snapshot();
+    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let mut after = 0;
+    let mut emitted = Vec::new();
+    loop {
+        let output = invoke(
+            binary,
+            root,
+            &[
+                "export".into(),
+                "--stability".into(),
+                "--after".into(),
+                after.to_string(),
+                "--through".into(),
+                through.to_string(),
+                "--limit".into(),
+                "1".into(),
+            ],
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("structured report even on failure");
+        assert_eq!(json["command"], "stability");
+        let page = &json["data"];
+        assert_eq!(page["scanned_event_count"], 1);
+        assert_eq!(page["through_sequence"], through);
+        assert_eq!(page["scanned_through_sequence"], after + 1);
+        if after == 0 {
+            assert_eq!(page["matched_count"], 0);
+            assert_eq!(page["rows"], serde_json::json!([]));
+            assert_eq!(page["next_after_sequence"], first.sequence());
+        } else if after < 3 {
+            assert_eq!(page["rows"][0]["comparison"], fact);
+            assert_eq!(
+                page["rows"][0]["artifact"],
+                serde_json::to_value(&references[0]).expect("reference")
+            );
+            emitted.push(
+                page["rows"][0]["event"]["sequence"]
+                    .as_u64()
+                    .expect("sequence"),
+            );
+        } else {
+            assert_eq!(page["failures"][0]["code"], "stability_schema_unsupported");
+            assert_eq!(page["failures"][0]["source_sequence"], after + 1);
+            assert_eq!(page["window_complete"], false);
+        }
+        assert_eq!(output.status.success(), after < 3, "{output:?}");
+        if after < 3 {
+            assert!(output.stderr.is_empty());
+        } else {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("stability_export_incomplete")
+            );
+        }
+        assert_eq!(snapshot(), before);
+        if page["has_more"] == false {
+            assert!(page["next_after_sequence"].is_null());
+            break;
+        }
+        after = page["next_after_sequence"].as_u64().expect("cursor");
+    }
+    assert_eq!(emitted, vec![first.sequence() + 1, first.sequence() + 2]);
+    for invalid in [
+        vec!["export", "--stability", "--performance"],
+        vec!["export", "--stability", "--limit", "0"],
+        vec!["export", "--stability", "--limit", "1025"],
+        vec!["export", "--stability", "--after", "4", "--through", "3"],
+        vec!["export", "--stability", "--severity", "info"],
+        vec!["events", "--stability"],
+    ] {
+        let output = invoke(
+            binary,
+            root,
+            &invalid.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+        );
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid_arguments"));
+    }
+    assert_eq!(snapshot(), before);
+    let segment = fs::read_dir(root.join("ledger/segments"))
+        .expect("segments")
+        .map(|entry| entry.expect("segment").path())
+        .max()
+        .expect("segment");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(segment)
+        .expect("append fixture tail")
+        .write_all(b"{\"partial\":")
+        .expect("partial tail");
+    let corrupt_before = snapshot();
+    let output = invoke(
+        binary,
+        root,
+        &[
+            "export".into(),
+            "--stability".into(),
+            "--through".into(),
+            "1".into(),
+        ],
+    );
+    assert!(!output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("bad tail report");
+    assert!(report["data"]["corrupt_tail"].is_object());
+    assert_eq!(report["data"]["window_complete"], false);
+    assert_eq!(snapshot(), corrupt_before);
+}
+
 fn invoke(binary: &str, state_root: &std::path::Path, command: &[String]) -> std::process::Output {
     Command::new(binary)
         .arg("--state-root")
