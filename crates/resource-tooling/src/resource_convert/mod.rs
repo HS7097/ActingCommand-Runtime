@@ -842,7 +842,8 @@ impl OperationConverter {
                 continue;
             }
             // Only direct template declarations enter the pack; no donor task/page/OCR is selected.
-            dependency.data = json!({"anchors":anchors,"verify_templates":templates,"operations":operations});
+            dependency.data =
+                json!({"anchors":anchors,"verify_templates":templates,"operations":operations});
             if let Some(defaults) = bundle.data.get("defaults") {
                 dependency.data["defaults"] = defaults.clone();
             }
