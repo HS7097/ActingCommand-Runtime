@@ -11798,6 +11798,12 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     let verified_frames = events
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .filter(|event| {
+            event.artifacts.iter().any(|artifact| {
+                artifact.kind == ArtifactKind::CaptureFrame
+                    && artifact.producer == ArtifactProducer::CaptureStore
+            })
+        })
         .map(|event| *event.links.frame_id().expect("artifact frame id"))
         .collect::<BTreeSet<_>>();
     assert_eq!(evidence_frames, verified_frames);
