@@ -9,6 +9,130 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
+pub const EFFECTIVE_CONFIGURATION_SCHEMA: &str =
+    "actingcommand.runtime.effective-task-configuration.v1";
+pub const MAX_EFFECTIVE_CONFIGURATION_BYTES: u64 = 1_048_576;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveDeviceConfiguration {
+    pub input_backend: String,
+    pub capture_backend: String,
+    pub input_adb: String,
+    pub capture_adb: String,
+    pub configured_serial: Option<String>,
+    pub resolved_serial: String,
+    pub input_command_timeout_ms: u64,
+    pub capture_command_timeout_ms: u64,
+    pub capture_timeout_ms: u64,
+    pub configured_mumu_root: Option<std::path::PathBuf>,
+    pub configured_capture_dll: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectiveTimingSource {
+    Control,
+    Default,
+    ExpectAfter,
+    Operation,
+    NotSpecified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveTimingValue {
+    pub milliseconds: u64,
+    pub source: EffectiveTimingSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveOperationTiming {
+    pub operation_id: String,
+    pub expect_after: bool,
+    pub timeout: EffectiveTimingValue,
+    pub interval: EffectiveTimingValue,
+    pub postdelay: EffectiveTimingValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveTaskTiming {
+    pub task_timeout_ms: Option<u64>,
+    pub control_timeout_ms: Option<u64>,
+    pub task_timeout: EffectiveTimingValue,
+    pub step_timeout: EffectiveTimingValue,
+    pub capture_interval: EffectiveTimingValue,
+    pub operations: Vec<EffectiveOperationTiming>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveCaptureSelection {
+    pub requested_backend: String,
+    pub configured_adb: String,
+    pub configured_serial: Option<String>,
+    pub resolved_adb: String,
+    pub selected_serial: String,
+    pub mumu: Option<EffectiveMumuInstallation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveMumuInstallation {
+    pub root: std::path::PathBuf,
+    pub adb_path: std::path::PathBuf,
+    pub capture_dll_path: std::path::PathBuf,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveInputSelection {
+    pub backend: String,
+    pub serial: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EffectiveConfigurationFacts {
+    Initial {
+        device: Option<EffectiveDeviceConfiguration>,
+        timing: EffectiveTaskTiming,
+        request_timeout_ms: u64,
+        host_deadline_monotonic_ms: u64,
+        observed_at_monotonic_ms: u64,
+        host_remaining_ms: u64,
+        capture_observed: bool,
+        input_observed: bool,
+    },
+    EntryRecovery {
+        package_sha256: String,
+        timing: EffectiveTaskTiming,
+    },
+    Capture {
+        backend: String,
+        selection: Option<EffectiveCaptureSelection>,
+    },
+    Input {
+        selection: Option<EffectiveInputSelection>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveConfigurationRecord {
+    pub schema_version: String,
+    pub request_id: super::RequestId,
+    pub task_id: super::TaskId,
+    pub run_id: RunId,
+    pub frame_id: Option<FrameId>,
+    pub action_id: Option<super::ActionId>,
+    pub source_sequence: Option<u64>,
+    pub facts: EffectiveConfigurationFacts,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ArtifactKind {
     #[serde(rename = "capture.frame")]

@@ -25,6 +25,7 @@ pub struct ExecutionBackendRegistration {
     application_id: String,
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
+    configuration: actingcommand_contract::EffectiveDeviceConfiguration,
 }
 
 impl ExecutionBackendRegistration {
@@ -59,12 +60,35 @@ impl ExecutionBackendRegistration {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
+        let milliseconds = |duration: Duration| {
+            u64::try_from(duration.as_millis()).map_err(|_| {
+                RuntimeHostError::fatal(
+                    "execution_configuration_timeout_overflow",
+                    "build_execution_backend_registry",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })
+        };
+        let configuration = actingcommand_contract::EffectiveDeviceConfiguration {
+            input_backend: input.requested.as_str().to_owned(),
+            capture_backend: capture.requested.as_str().to_owned(),
+            input_adb: input.adb_config.adb_path.clone(),
+            capture_adb: capture.adb_config.adb_path.clone(),
+            configured_serial: input.target.serial.clone(),
+            resolved_serial: input.target.resolved_serial(),
+            input_command_timeout_ms: milliseconds(input.adb_config.command_timeout)?,
+            capture_command_timeout_ms: milliseconds(capture.adb_config.command_timeout)?,
+            capture_timeout_ms: milliseconds(capture.capture_timeout)?,
+            configured_mumu_root: capture.nemu.nemu_folder.clone(),
+            configured_capture_dll: capture.nemu.dll_path.clone(),
+        };
         Ok(Self {
             instance_alias,
             instance_id,
             application_id,
             input,
             capture,
+            configuration,
         })
     }
 }
@@ -78,6 +102,7 @@ struct ExecutionBackendEntry {
     application_target: DeviceTarget,
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
+    configuration: actingcommand_contract::EffectiveDeviceConfiguration,
 }
 
 pub struct ExecutionBackendRegistry {
@@ -119,6 +144,7 @@ impl ExecutionBackendRegistry {
                     application_target,
                     input: registration.input,
                     capture: registration.capture,
+                    configuration: registration.configuration,
                 },
             );
         }
@@ -161,10 +187,10 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
-        Some(ResolvedExecutionInstance::new(
-            entry.instance_id,
-            &entry.audit_endpoint,
-        ))
+        Some(
+            ResolvedExecutionInstance::new(entry.instance_id, &entry.audit_endpoint)
+                .with_configuration(entry.configuration.clone()),
+        )
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
@@ -181,7 +207,8 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
-        create_capture_backend(entry.capture.clone()).map(|selected| selected.backend)
+        create_capture_backend(entry.capture.clone())
+            .map(|selected| Box::new(selected) as Box<dyn CaptureBackend>)
     }
 
     fn control_application(

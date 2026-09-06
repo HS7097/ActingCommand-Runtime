@@ -1079,6 +1079,7 @@ impl CaptureBackend for FakeCapture {
                 original_png: None,
                 captured_at: std::time::SystemTime::now(),
                 backend_name: CaptureBackendName::AdbScreencap,
+                selection: None,
             });
         }
         Frame::from_pixels(

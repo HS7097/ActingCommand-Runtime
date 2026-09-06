@@ -18,6 +18,44 @@ These files are versioned data and protocol contracts between the runtime decisi
 
 ## Rust mainline boundary
 
+Each formal contained task records its effective configuration before entry
+preflight as `actingcommand.runtime.effective-task-configuration.v1` in a
+GlobalLedger-linked DiagnosticJson artifact. Registered device configurations
+retain their requested backends, configured ADB and serial, resolved target,
+timeouts and explicit MuMu path inputs. Providers without a registered device
+configuration carry an explicit absent device observation; task timing remains
+recorded. The production registry supplies its parsed configuration directly.
+
+The task interpreter and the record share the same effective timing view:
+task/control timeout declarations, control/default task and step budgets,
+capture interval, and each operation's explicit expect-after, timeout, interval
+and postdelay source. Request response timeout and the Host's existing absolute
+deadline are separate; Host remaining time is measured at the stated monotonic
+observation time. Recording does not move any timer's start or polling boundary.
+
+The first successful capture adds the same Frame producer's selected backend,
+resolved ADB/serial and resolved MuMu installation root, ADB path, capture DLL
+path and installation source. Ordinary Frame constructors leave the selection
+unobserved. The first InputCommitted adds the successful input backend's name
+and selected serial through the existing session and critical-action return.
+Configured values do not substitute for these actual observations. A bound
+entry recovery records its own timing and package identity when used. The task
+emits at most four configuration artifacts, each at most 1 MiB; encoding, size
+and persistence failures propagate explicitly. No successful context is stored
+in a separate cache. Close, failure cleanup, error escalation, lease/fencing
+and preemption ordering retain their existing owners and boundaries.
+
+Plain `actingledger --state-root <root> export` expands verified configuration
+artifacts in its existing bounded event page. Rows include the source sequence,
+artifact reference/hash and typed values, with request/task/run/frame/action
+links checked against the ledger. Capture observations also require the prior
+verified frame artifact; input observations require the actual InputCommitted.
+The leaf reads through `artifact-store::read_projected_verified`; corrupt,
+missing, pending-redaction or mismatched evidence fails visibly. Configuration
+artifacts retain the existing Internal sensitivity and controlled artifact
+references; shared projections retain their existing redaction rules. The
+records have no credential, secret, token or salt fields.
+
 Explicit operation `expect_after.timeout_ms` is a polling budget in
 `1..=600000` milliseconds. Package build, Runtime admission and Lab validation
 share this bound. Omission retains the existing step-timeout fallback. The

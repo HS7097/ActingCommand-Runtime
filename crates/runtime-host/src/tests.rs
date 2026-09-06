@@ -5,6 +5,7 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::{ArtifactStore, read_projected_verified};
+use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
@@ -311,6 +312,8 @@ impl RuntimeClock for ManualRuntimeClock {
 
 #[derive(Default)]
 struct FakeState {
+    input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
+    capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
     open_count: AtomicUsize,
     input_count: AtomicUsize,
     close_count: AtomicUsize,
@@ -390,6 +393,14 @@ impl FakeBackend {
 }
 
 impl InputBackend for FakeBackend {
+    fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
+        self.state
+            .input_selection
+            .lock()
+            .expect("input selection")
+            .clone()
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         self.input(InputAction::Tap { x, y })
     }
@@ -519,7 +530,7 @@ impl CaptureBackend for FakeCapture {
         } else {
             [0, 255, 0]
         };
-        Frame::from_pixels(
+        let mut frame = Frame::from_pixels(
             2,
             1,
             [first.as_slice(), guard.as_slice()].concat(),
@@ -530,7 +541,15 @@ impl CaptureBackend for FakeCapture {
                     CaptureBackendName::FixtureSimulation
                 }
             },
-        )
+        )?;
+        frame.selection = self
+            .state
+            .capture_selection
+            .lock()
+            .expect("capture selection")
+            .clone()
+            .map(Arc::new);
+        Ok(frame)
     }
 }
 
@@ -10040,6 +10059,14 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
 // ZIF-D01: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5554095550
 #[test]
 fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
+    use actingcommand_contract::{
+        EffectiveConfigurationFacts, EffectiveConfigurationRecord, EffectiveTimingSource,
+    };
+    use actingcommand_device::{
+        AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureMumuContext,
+        CaptureSelectionContext, DeviceTarget, InputSelectionContext, MaaTouchConfig,
+        MumuInstallSource, TouchBackendChoice, TouchBackendConfig, TouchBackendName,
+    };
     use actingcommand_recognition_pack::{
         OcrExecutionProviderKind, OcrProviderExecutionEvidence, OcrProviderObservation,
     };
@@ -10132,6 +10159,8 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     let truth_sha = format!("{:x}", Sha256::digest(&truth));
     let mut control: Value = serde_json::from_slice(&files["control.json"]).unwrap();
     control["execution_mode"] = json!("navigable_route");
+    control["capture_interval_ms"] = json!(3);
+    control["step_timeout_ms"] = json!(27);
     control
         .as_object_mut()
         .unwrap()
@@ -10141,6 +10170,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     task["schema_version"] = json!("0.8");
     task["target_page"] = json!("terminal");
     task["operations"][0]["to"] = json!("terminal");
+    task["operations"][0]["expect_after"] =
+        json!({"page_id":"terminal","timeout_ms":480_000,"interval_ms":7});
+    task["operations"][0]["post_delay_ms"] = json!(1);
     task.as_object_mut()
         .unwrap()
         .remove("stability_termination");
@@ -10175,23 +10207,41 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     let bytes = package.finish().unwrap().into_inner();
     let expected_sha = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
 
-    for (capture, fatal, fail_report) in [
-        (true, false, false),
-        (false, false, false),
-        (true, true, false),
-        (false, true, false),
-        (false, false, true),
+    for (capture, fatal, fail_report, successful) in [
+        (true, false, false, false),
+        (false, false, false, false),
+        (true, true, false, false),
+        (false, true, false, false),
+        (false, false, true, false),
+        (false, false, false, true),
     ] {
         let root = TempDir::new().expect("tempdir");
         let package_path = root.path().join("fields-callback.zip");
         fs::write(&package_path, &bytes).expect("inline fields package");
         let state = Arc::new(FakeState::default());
+        *state.input_selection.lock().unwrap() = Some(InputSelectionContext {
+            backend: TouchBackendName::AdbShellInput,
+            serial: "neutral-selected-input".to_owned(),
+        });
+        *state.capture_selection.lock().unwrap() = Some(CaptureSelectionContext {
+            requested: CaptureBackendChoice::NemuIpc,
+            configured_adb: "neutral-configured-adb".to_owned(),
+            configured_serial: Some("127.0.0.1:16384".to_owned()),
+            resolved_adb: "neutral-resolved-adb".to_owned(),
+            selected_serial: "neutral-selected-capture".to_owned(),
+            mumu: Some(CaptureMumuContext {
+                root: "neutral-installation".into(),
+                adb_path: "neutral-installation/adb".into(),
+                capture_dll_path: "neutral-installation/capture.dll".into(),
+                source: MumuInstallSource::RunningProcess,
+            }),
+        });
         if capture {
             state.fail_capture_on.store(2, Ordering::Release);
             state
                 .transient_capture_failure
                 .store(!fatal, Ordering::Release);
-        } else {
+        } else if !successful {
             let error = if fatal {
                 DeviceError::fatal("synthetic input failure")
             } else {
@@ -10203,11 +10253,36 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             ));
         }
         state.block_input.store(fail_report, Ordering::Release);
+        state
+            .transition_capture_after_input
+            .store(successful, Ordering::Release);
+        let configured_instance = instance_id();
+        let target = DeviceTarget {
+            serial: Some("127.0.0.1:16384".to_owned()),
+            ..DeviceTarget::default()
+        };
+        let adb = AdbConfig {
+            adb_path: "neutral-configured-adb".to_owned(),
+            command_timeout: Duration::from_millis(71),
+        };
+        let registry = ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+            "neutral.instance",
+            configured_instance,
+            "neutral.application",
+            TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
+                .with_requested(TouchBackendChoice::Minitouch),
+            CaptureBackendConfig::new(adb, target).with_requested(CaptureBackendChoice::NemuIpc),
+        )
+        .unwrap()])
+        .unwrap();
+        let resolved = registry.resolve("neutral.instance").unwrap();
+        let expected_configuration = resolved.configuration().unwrap().clone();
         let vision = Arc::new(FakeVisionProvider::default());
         let host = RuntimeHost::start(
             config(&root),
             Arc::new(
-                FakeProvider::one("neutral.instance", instance_id(), state.clone())
+                FakeProvider::one("neutral.instance", configured_instance, state.clone())
+                    .with_resolved_override(Arc::new(std::sync::Mutex::new(resolved)))
                     .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone()))),
             ),
         )
@@ -10258,7 +10333,149 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .filter(|event| event.event_type() == EventType::ArtifactVerified)
             .flat_map(|event| event.artifacts())
             .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+            .filter(|artifact| artifact.producer() == ArtifactProducer::CapturePipeline)
             .collect::<Vec<_>>();
+        let configuration_records = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::ArtifactVerified)
+            .flat_map(|event| {
+                event
+                    .artifacts()
+                    .iter()
+                    .filter(|artifact| {
+                        artifact.kind() == ArtifactKind::DiagnosticJson
+                            && artifact.producer() == ArtifactProducer::ArtifactStore
+                    })
+                    .map(move |artifact| (event, artifact))
+            })
+            .map(|(event, artifact)| {
+                assert!(
+                    artifact.byte_count()
+                        <= actingcommand_contract::MAX_EFFECTIVE_CONFIGURATION_BYTES
+                );
+                let bytes = read_projected_verified(root.path(), &artifact.project(true)).unwrap();
+                let record: EffectiveConfigurationRecord = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(event.links().task_id(), Some(&record.task_id));
+                assert_eq!(event.links().run_id(), Some(&record.run_id));
+                assert_eq!(event.links().frame_id(), record.frame_id.as_ref());
+                assert_eq!(event.links().action_id(), record.action_id.as_ref());
+                assert_eq!(event.links().request_id(), Some(&record.request_id));
+                (event, record)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            configuration_records.len(),
+            if capture || successful { 3 } else { 2 }
+        );
+        assert!(configuration_records.len() <= 4);
+        let (initial_event, initial) = &configuration_records[0];
+        let EffectiveConfigurationFacts::Initial {
+            device,
+            timing,
+            capture_observed,
+            input_observed,
+            host_deadline_monotonic_ms,
+            observed_at_monotonic_ms,
+            host_remaining_ms,
+            ..
+        } = &initial.facts
+        else {
+            panic!("initial effective configuration");
+        };
+        assert_eq!(device.as_ref(), Some(&expected_configuration));
+        assert!(!capture_observed && !input_observed);
+        assert_eq!(
+            *host_remaining_ms,
+            host_deadline_monotonic_ms.saturating_sub(*observed_at_monotonic_ms)
+        );
+        assert_eq!(timing.step_timeout.milliseconds, 27);
+        assert_eq!(timing.step_timeout.source, EffectiveTimingSource::Control);
+        assert_eq!(timing.capture_interval.milliseconds, 3);
+        assert_eq!(timing.operations[0].timeout.milliseconds, 480_000);
+        assert_eq!(timing.operations[0].interval.milliseconds, 7);
+        assert_eq!(
+            timing.operations[0].timeout.source,
+            EffectiveTimingSource::ExpectAfter
+        );
+        assert_eq!(timing.operations[0].postdelay.milliseconds, 1);
+        assert_eq!(
+            timing.operations[0].postdelay.source,
+            EffectiveTimingSource::Operation
+        );
+        assert!(timing.operations[0].expect_after);
+        assert!(
+            events
+                .iter()
+                .find(|event| event.event_type() == EventType::CaptureRequested)
+                .unwrap()
+                .sequence()
+                > initial_event.sequence()
+        );
+        assert!(
+            initial.frame_id.is_none()
+                && initial.action_id.is_none()
+                && initial.source_sequence.is_none()
+        );
+        let capture_record = &configuration_records[1].1;
+        let EffectiveConfigurationFacts::Capture {
+            backend,
+            selection: Some(selection),
+        } = &capture_record.facts
+        else {
+            panic!("first successful capture context");
+        };
+        assert_eq!(backend, "adb_screencap");
+        assert_eq!(selection.requested_backend, "nemu_ipc");
+        assert_eq!(selection.resolved_adb, "neutral-resolved-adb");
+        assert_eq!(selection.selected_serial, "neutral-selected-capture");
+        assert_eq!(selection.mumu.as_ref().unwrap().source, "running_process");
+        assert_eq!(
+            selection.mumu.as_ref().unwrap().capture_dll_path,
+            std::path::PathBuf::from("neutral-installation/capture.dll")
+        );
+        let capture_source = events
+            .iter()
+            .find(|event| Some(event.sequence()) == capture_record.source_sequence)
+            .unwrap();
+        assert_eq!(capture_source.event_type(), EventType::CaptureRequested);
+        assert_eq!(
+            capture_source.links().frame_id(),
+            capture_record.frame_id.as_ref()
+        );
+        if capture || successful {
+            let input_record = &configuration_records[2].1;
+            let EffectiveConfigurationFacts::Input {
+                selection: Some(selection),
+            } = &input_record.facts
+            else {
+                panic!("committed input context");
+            };
+            assert_eq!(selection.backend, "adb_shell_input");
+            assert_eq!(selection.serial, "neutral-selected-input");
+            let input_source = events
+                .iter()
+                .find(|event| Some(event.sequence()) == input_record.source_sequence)
+                .unwrap();
+            assert_eq!(input_source.event_type(), EventType::InputCommitted);
+            assert_eq!(
+                input_source.links().action_id(),
+                input_record.action_id.as_ref()
+            );
+        }
+        if successful {
+            let output = result.expect("successful formal task with effective configuration");
+            assert!(matches!(
+                output.receipt().result(),
+                Some(RuntimeResult::ContainedTaskCompleted {
+                    outcome: TaskOutcome::Success,
+                    ..
+                })
+            ));
+            assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 2);
+            host.close().expect("successful close");
+            continue;
+        }
         assert_eq!(
             vision.ocr_calls.load(Ordering::Acquire),
             1,
@@ -10336,6 +10553,183 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(host.fatal_error().unwrap().is_none());
             host.close().expect("ordinary failure leaves host healthy");
         }
+    }
+
+    {
+        let root = TempDir::new().unwrap();
+        let target = explicit_home_contained_task_package(
+            "fixture01.configuration-target",
+            [0, 0, 255],
+            [255, 0, 0],
+        );
+        let recovery_source = explicit_home_contained_task_package(
+            "fixture01.configuration-recovery",
+            [0, 0, 255],
+            [255, 0, 0],
+        );
+        let mut archive = zip::ZipArchive::new(Cursor::new(recovery_source)).unwrap();
+        let mut recovery = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry.name() == "control.json" {
+                let mut control: Value = serde_json::from_slice(&bytes).unwrap();
+                for key in ["capture_interval_ms", "step_timeout_ms", "timeout_ms"] {
+                    control.as_object_mut().unwrap().remove(key);
+                }
+                bytes = serde_json::to_vec(&control).unwrap();
+            }
+            recovery
+                .start_file(
+                    entry.name(),
+                    FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            recovery.write_all(&bytes).unwrap();
+        }
+        let recovery = recovery.finish().unwrap().into_inner();
+        let target_path = root.path().join("configuration-target.zip");
+        let recovery_path = root.path().join("configuration-recovery.zip");
+        fs::write(&target_path, &target).unwrap();
+        fs::write(&recovery_path, &recovery).unwrap();
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        *state.input_selection.lock().unwrap() = Some(InputSelectionContext {
+            backend: TouchBackendName::AdbShellInput,
+            serial: "neutral-recovery".to_owned(),
+        });
+        *state.capture_selection.lock().unwrap() = Some(CaptureSelectionContext {
+            requested: CaptureBackendChoice::Adb,
+            configured_adb: "neutral-adb".to_owned(),
+            configured_serial: Some("neutral-recovery".to_owned()),
+            resolved_adb: "neutral-adb".to_owned(),
+            selected_serial: "neutral-recovery".to_owned(),
+            mumu: None,
+        });
+        let configured_instance = instance_id();
+        let target_config = DeviceTarget {
+            serial: Some("neutral-recovery".to_owned()),
+            ..DeviceTarget::default()
+        };
+        let adb = AdbConfig {
+            adb_path: "neutral-adb".to_owned(),
+            ..AdbConfig::default()
+        };
+        let registry = ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+            "fixture01.instance",
+            configured_instance,
+            "neutral.application",
+            TouchBackendConfig::new(
+                adb.clone(),
+                target_config.clone(),
+                MaaTouchConfig::default(),
+            )
+            .with_requested(TouchBackendChoice::AdbShellInput),
+            CaptureBackendConfig::new(adb, target_config).with_requested(CaptureBackendChoice::Adb),
+        )
+        .unwrap()])
+        .unwrap();
+        let resolved = registry.resolve("fixture01.instance").unwrap();
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("fixture01.instance", configured_instance, state.clone())
+                    .with_resolved_override(Arc::new(std::sync::Mutex::new(resolved))),
+            ),
+        )
+        .unwrap();
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .unwrap();
+        let request = ContainedTaskRequest::new(
+            target_path.display().to_string(),
+            format!("{:x}", Sha256::digest(&target)),
+        )
+        .unwrap()
+        .with_recovery(
+            ContainedTaskRecoveryBinding::new(
+                recovery_path.display().to_string(),
+                format!("{:x}", Sha256::digest(&recovery)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let output = client
+            .run_contained_task("fixture01.instance", request)
+            .unwrap();
+        assert!(matches!(
+            output.receipt().result(),
+            Some(RuntimeResult::ContainedTaskCompleted {
+                outcome: TaskOutcome::Success,
+                ..
+            })
+        ));
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .unwrap();
+        let configurations = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::ArtifactVerified)
+            .flat_map(|event| event.artifacts())
+            .filter(|artifact| {
+                artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer() == ArtifactProducer::ArtifactStore
+            })
+            .map(|artifact| {
+                serde_json::from_slice::<EffectiveConfigurationRecord>(
+                    &read_projected_verified(root.path(), &artifact.project(true)).unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            configurations.len(),
+            4,
+            "one initial, first capture, recovery, first committed input"
+        );
+        let recovery_record = configurations
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.facts,
+                    EffectiveConfigurationFacts::EntryRecovery { .. }
+                )
+            })
+            .unwrap();
+        let EffectiveConfigurationFacts::EntryRecovery {
+            package_sha256,
+            timing,
+        } = &recovery_record.facts
+        else {
+            unreachable!()
+        };
+        assert_eq!(package_sha256, &format!("{:x}", Sha256::digest(&recovery)));
+        assert_eq!(timing.task_timeout.milliseconds, 60_000);
+        assert_eq!(timing.step_timeout.milliseconds, 5_000);
+        assert_eq!(timing.capture_interval.milliseconds, 50);
+        assert_eq!(
+            timing.operations[0].timeout.source,
+            EffectiveTimingSource::Default
+        );
+        assert_eq!(
+            timing.operations[0].interval.source,
+            EffectiveTimingSource::Default
+        );
+        assert_eq!(
+            timing.operations[0].postdelay.source,
+            EffectiveTimingSource::NotSpecified
+        );
+        assert!(!timing.operations[0].expect_after);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+        assert!(state.capture_count.load(Ordering::Acquire) > 1);
+        assert_eq!(events.iter().filter(|event| matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload)) if matches!(payload.fact(), TaskSemanticFact::RunStarted))).count(), 1);
+        host.close().unwrap();
     }
 
     for (declared_page, explicit_home, starts_home) in [
@@ -10527,7 +10921,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 .iter()
                 .filter(|event| event.event_type() == EventType::ArtifactVerified)
                 .flat_map(|event| event.artifacts())
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| {
+                    artifact.kind() == ArtifactKind::DiagnosticJson
+                        && artifact.producer() == ArtifactProducer::CapturePipeline
+                })
                 .collect::<Vec<_>>();
             assert_eq!(diagnostics.len(), 2, "one observation and one final report");
             for artifact in diagnostics {
@@ -10642,7 +11039,10 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
             event
                 .artifacts
                 .iter()
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| {
+                    artifact.kind() == ArtifactKind::DiagnosticJson
+                        && artifact.producer == ArtifactProducer::CapturePipeline
+                })
                 .map(move |artifact| (event, artifact))
         })
         .collect::<Vec<_>>();
@@ -10855,7 +11255,8 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
             .iter()
             .filter(|event| event.event_type() == EventType::ArtifactVerified)
             .flat_map(|event| event.artifacts().iter())
-            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson
+                && artifact.producer() == ArtifactProducer::CapturePipeline)
             .count(),
         0
     );
@@ -10973,7 +11374,8 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             events
                 .iter()
                 .flat_map(|event| event.artifacts.iter())
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer == ArtifactProducer::CapturePipeline)
                 .count(),
             0,
             "{case}"
@@ -11174,7 +11576,8 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
                 .iter()
                 .filter(|event| event.event_type() == EventType::ArtifactVerified)
                 .flat_map(|event| event.artifacts().iter())
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer() == ArtifactProducer::CapturePipeline)
                 .count(),
             0,
             "{failure_kind}"
@@ -11265,10 +11668,10 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
         .iter()
         .filter(|event| {
             event.event_type == EventType::ArtifactVerified
-                && event
-                    .artifacts
-                    .iter()
-                    .any(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                && event.artifacts.iter().any(|artifact| {
+                    artifact.kind() == ArtifactKind::DiagnosticJson
+                        && artifact.producer == ArtifactProducer::CapturePipeline
+                })
         })
         .collect::<Vec<_>>();
     assert_eq!(capture_frames.len(), 6);
@@ -11411,7 +11814,10 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
         .flat_map(|event| event.artifacts.iter())
-        .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+        .filter(|artifact| {
+            artifact.kind() == ArtifactKind::DiagnosticJson
+                && artifact.producer == ArtifactProducer::CapturePipeline
+        })
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 3, "terminal trace adds no artifact");
     let terminal: serde_json::Value = serde_json::from_slice(
@@ -11572,6 +11978,12 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     let verified_frames = events
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .filter(|event| {
+            event.artifacts.iter().any(|artifact| {
+                artifact.kind == ArtifactKind::CaptureFrame
+                    && artifact.producer == ArtifactProducer::CaptureStore
+            })
+        })
         .map(|event| *event.links.frame_id().expect("artifact frame id"))
         .collect::<BTreeSet<_>>();
     assert_eq!(evidence_frames, verified_frames);
