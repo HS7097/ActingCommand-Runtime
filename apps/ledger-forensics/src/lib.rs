@@ -62,6 +62,7 @@ where
     }
     .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
     let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
+    let task_evidence_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) if !report.gaps.is_empty());
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -80,6 +81,13 @@ where
             "stability_export_incomplete",
             "export_stability",
             "see structured gaps and failures in the report",
+        ));
+    }
+    if task_evidence_incomplete {
+        return Err(CliError::new(
+            "task_evidence_export_incomplete",
+            "export_task_evidence",
+            "see explicit relations, gaps and failures in the report",
         ));
     }
     Ok(())
@@ -137,6 +145,7 @@ where
                 let mode = match option.as_str() {
                     "--performance" => ForensicCommand::Performance,
                     "--stability" => ForensicCommand::Stability,
+                    "--task-evidence" => ForensicCommand::TaskEvidence,
                     _ => return Err(invalid_arguments("unsupported export mode")),
                 };
                 return parse_events(state_root, args, mode).map(CliRequest::StateRoot);
@@ -249,6 +258,7 @@ where
     Ok(match command {
         ForensicCommand::Performance => ForensicRequest::performance(state_root, events),
         ForensicCommand::Stability => ForensicRequest::stability(state_root, events),
+        ForensicCommand::TaskEvidence => ForensicRequest::task_evidence(state_root, events),
         _ => ForensicRequest::events(state_root, events),
     })
 }

@@ -56,6 +56,49 @@ artifacts retain the existing Internal sensitivity and controlled artifact
 references; shared projections retain their existing redaction rules. The
 records have no credential, secret, token or salt fields.
 
+Each physical `input.intent` includes optional typed `provenance` with
+`input_action`, `source_step_action_id` and `before_frame_id`. The input action
+uses the same persistence sanitization as the task effect declaration: Key and
+Text values become `[redacted]`; coordinates, durations and the existing input
+execution plan remain exact. The backend receives the original action. The
+Host issues the physical action ID in the intent's event links before executing
+the action, so provenance survives input failure or a later cleanup failure.
+
+Contained Lab operations supply the FrameId from their verified before frame
+to this same input context. They retain existing optional task/run links and
+omit a task-step reference when none exists.
+
+Contained task effect intents link their actual preceding frame and supply
+their step identity to that physical intent. The first attempted capture after
+a successful input links its requested/completed or failed events, and any
+CaptureStore frame artifacts, to the returned physical action ID. A failed or
+unperformed capture never supplies a successful PNG. These references reuse
+existing events and IDs; they do not change input/capture counts, task/run
+identity, cleanup, fencing or preemption.
+
+`actingledger --state-root <path> export --task-evidence [--after N]
+[--through N] [--limit N]` emits a structured read-only task evidence report.
+It uses the existing event-page limit of 1024 and starts after sequence zero by
+default. `page.events` preserves native step/index/operation declarations,
+physical outcomes, terminal self-reported counts, and CaptureSummary pins and
+completeness. `steps` and `inputs` add explicit ID relations with source
+sequences, safe original input parameters, before/after FrameIds and verified
+PNG references/hashes. Associations require matching request, correlation,
+instance, lease, task and run identity and valid lifecycle order. Multiple
+competing single-source records remain ambiguous; no nearest-event selection
+fills an absent edge.
+
+Relations outside a bounded page are `outside_window_or_missing`, and the
+window remains incomplete without declaring those sources absent. Legacy
+intents without provenance remain readable as `not_recorded`. Missing sources
+in a complete window, identity conflicts, inconsistent links, a corrupt tail
+or failed artifact verification are returned as structured gaps; the CLI prints
+that partial report and exits nonzero. Pagination alone preserves a successful
+exit and an incomplete window. Bare export and performance/stability modes
+retain their behavior, including effective-configuration expansion. This mode
+writes neither ledger state nor artifacts and does not infer successful input
+or capture from the task terminal's outcome or step count.
+
 Explicit operation `expect_after.timeout_ms` is a polling budget in
 `1..=600000` milliseconds. Package build, Runtime admission and Lab validation
 share this bound. Omission retains the existing step-timeout fallback. The
