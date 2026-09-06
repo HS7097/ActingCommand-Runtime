@@ -103,8 +103,13 @@ pub fn restore_authoring_draft(
         {
             return Err(invalid("original source page rules are not an object"));
         }
+        let declared_locale = source
+            .get("locale")
+            .and_then(Value::as_str)
+            .map(canonical_locale)
+            .transpose()?;
         if source["game"] != game
-            || source["locale"] != locale
+            || declared_locale.is_some_and(|value| value != locale)
             || !rows(&source, "server_scope")
                 .iter()
                 .any(|value| value == &server)
@@ -280,8 +285,15 @@ pub fn restore_authoring_draft(
                     .and_then(Value::as_str)
                     .map(str::to_owned)
                 {
-                    let copied =
-                        copy_template(package, path, &template, &mut assets, &mut source_entries)?;
+                    let copied = copy_template(
+                        package,
+                        &pack,
+                        path,
+                        &target,
+                        &template,
+                        &mut assets,
+                        &mut source_entries,
+                    )?;
                     row["template"] = json!(copied);
                 }
                 if let Some(previous) = output.insert(id.to_string(), row.clone())
@@ -380,7 +392,9 @@ pub fn restore_authoring_draft(
             {
                 value["verify_template"] = json!(copy_template(
                     package,
+                    &pack,
                     source_path,
+                    text(value, "target_id")?,
                     &template,
                     &mut assets,
                     &mut source_entries
@@ -616,7 +630,9 @@ fn geometry_click(geometry: &Geometry) -> Value {
 
 fn copy_template(
     package: &LoadedBundle,
+    pack: &Value,
     source_path: &str,
+    target_id: &str,
     template: &str,
     assets: &mut BTreeMap<String, Vec<u8>>,
     source_entries: &mut BTreeMap<String, String>,
@@ -634,7 +650,21 @@ fn copy_template(
         .rsplit_once('/')
         .ok_or_else(|| invalid("source task path is invalid"))?
         .0;
-    let path = format!("{parent}/{template}");
+    let template_path = rows(pack, "targets")
+        .iter()
+        .find(|target| target["id"] == target_id)
+        .and_then(|target| target.get("template_path"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("declared template target entry is missing"))?;
+    // The admitted target retains the compiler's resource-root or task-relative resolution.
+    let path = format!("{}/{template_path}", package.resource_root());
+    if path != format!("{parent}/{template}")
+        && path != format!("{}/{template}", package.resource_root())
+    {
+        return Err(invalid(
+            "declared template does not match admitted target entry",
+        ));
+    }
     let bytes = package
         .entry(&path)
         .ok_or_else(|| invalid("declared template entry is missing"))?;
