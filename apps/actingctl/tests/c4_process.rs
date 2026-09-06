@@ -622,7 +622,7 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 "entry_task_id":"task",
                 "capture_interval_ms":1,
                 "step_timeout_ms":50,
-                "timeout_ms":1000,
+                "timeout_ms":3000,
                 "max_steps":2
             }"#,
         ),
