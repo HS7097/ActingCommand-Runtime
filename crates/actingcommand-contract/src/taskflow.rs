@@ -220,7 +220,9 @@ pub struct OcrFieldDictionaryReference {
 }
 
 impl OcrFieldDeclaration {
-    fn deserialize_required_on_pages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+    fn deserialize_required_on_pages<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<Vec<String>>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {

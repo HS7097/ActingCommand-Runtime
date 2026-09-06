@@ -969,12 +969,19 @@ impl OperationConverter {
                 .and_then(Value::as_object)
                 && let Ok(page_ids) = post_admission_ocr_page_ids(declaration)
             {
+                let full_ids = array_field(&bundle.data["post_admission_ocr"], "fields")
+                    .iter()
+                    .any(|field| field.get("required_on_pages").is_some());
                 let page_ids = page_ids
                     .into_iter()
                     .map(|page| {
-                        page.strip_prefix(&format!("{}/", self.game))
-                            .unwrap_or(page)
-                            .to_owned()
+                        if full_ids {
+                            page.strip_prefix(&format!("{}/", self.game))
+                                .unwrap_or(page)
+                        } else {
+                            page
+                        }
+                        .to_owned()
                     })
                     .collect::<Vec<_>>();
                 validate_declared_page_set(
