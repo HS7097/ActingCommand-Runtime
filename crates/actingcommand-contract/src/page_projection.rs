@@ -134,6 +134,7 @@ pub struct ProjectionCatalog {
     pub fields: BTreeSet<FieldKey>,
     pub pages: BTreeSet<String>,
     field_privacy: BTreeMap<FieldKey, Privacy>,
+    relative_anchors: BTreeMap<String, String>,
 }
 
 fn rows<'a>(value: &'a Value, key: &str) -> LabResult<&'a [Value]> {
@@ -218,9 +219,19 @@ impl ProjectionCatalog {
             fields: BTreeSet::new(),
             pages: BTreeSet::new(),
             field_privacy: BTreeMap::new(),
+            relative_anchors: BTreeMap::new(),
         };
         for target in rows(pack, "targets")? {
             unique(&mut catalog.targets, id(target, "id")?)?;
+            if target.get("type").and_then(Value::as_str) == Some("ocr")
+                && target.pointer("/region/mode").and_then(Value::as_str)
+                    == Some("template_relative")
+            {
+                catalog.relative_anchors.insert(
+                    id(target, "id")?,
+                    id(&target["region"], "anchor_target_id")?,
+                );
+            }
         }
         for page in rows(pages, "pages")? {
             unique(&mut catalog.pages, id(page, "id")?)?;
@@ -378,16 +389,30 @@ impl VerifiedProjectionMetadata {
         if !self.catalog.targets.contains(target) {
             return None;
         }
+        let root = self
+            .catalog
+            .relative_anchors
+            .get(target)
+            .map(String::as_str)
+            .unwrap_or(target);
+        let related = |candidate: &str| {
+            candidate == root
+                || self
+                    .catalog
+                    .relative_anchors
+                    .get(candidate)
+                    .is_some_and(|anchor| anchor == root)
+        };
         let personal =
             self.declaration
                 .targets
                 .iter()
-                .any(|entry| entry.target_id == target && entry.privacy == Privacy::Personal)
+                .any(|entry| related(&entry.target_id) && entry.privacy == Privacy::Personal)
                 || self.declaration.fields.iter().any(|entry| {
-                    entry.field.target_id == target && entry.privacy == Privacy::Personal
+                    related(&entry.field.target_id) && entry.privacy == Privacy::Personal
                 })
                 || self.catalog.field_privacy.iter().any(|(field, privacy)| {
-                    field.target_id == target && *privacy == Privacy::Personal
+                    related(&field.target_id) && *privacy == Privacy::Personal
                 });
         Some(if personal {
             Privacy::Personal
