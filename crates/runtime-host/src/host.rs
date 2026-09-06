@@ -58,31 +58,31 @@ use actingcommand_contract::{
     IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES,
-    MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout,
-    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
-    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
-    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
-    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RunId,
-    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
-    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
-    RuntimeEvidenceScreenshotCounts, RuntimeForwardProjectionRequest, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
-    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
-    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, Sensitivity, StatePayload, StatePayloadDraft,
-    TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload,
-    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule, OwnerResourceDisposition,
+    PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
+    PerformancePayloadDraft, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectDecisionPageRequest,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProposalClass,
+    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
+    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase,
+    ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend, RuntimeContractError,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult,
+    RuntimeSubscriptionRequest, SchedulerPayloadDraft, SchedulingDisposition,
+    SchedulingEffectCondition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
+    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, Sensitivity, StatePayload,
+    StatePayloadDraft, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome,
+    TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
-use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
+use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
     ContainedTaskRuntimeErrorClass, ContainedTaskTrace, ExecutionBackendProvenance,
@@ -7846,10 +7846,17 @@ impl HostShared {
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
 
-        let frame = match self.execution.capture(&probe.instance_alias) {
+        self.mark_resources_in_use()?;
+        let frame = match self.execution.capture_retained(&probe.instance_alias) {
             Ok(frame) => frame,
             Err(error) => {
+                let error = self
+                    .execution
+                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
                 let error = RuntimeHostError::execution("run_monitor_capture", &error);
+                if self.retain_unconfirmed_resources(&error, links.clone())? {
+                    return Err(error);
+                }
                 return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
             }
         };
@@ -9393,6 +9400,11 @@ impl HostShared {
                 audit_endpoint(context.instance.audit_endpoint()),
             ),
         )?;
+        self.close_instance_resources(
+            &from,
+            prepared.from_connection_id(),
+            EventLinksDraft::default(),
+        )?;
         let transferred = self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -9646,6 +9658,7 @@ impl HostShared {
         let instance_guard = self.instance_guard(token.instance_id())?;
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
         self.expire_queued_for_instance(token.instance_id())?;
+        self.close_instance_resources(token, connection_id, EventLinksDraft::default())?;
         let transfer = lock(&self.scheduler, "prepare_release_transfer")?
             .prepare_transfer(
                 token,
@@ -9878,10 +9891,21 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let frame = match self.execution.capture(instance_alias) {
+        self.mark_resources_in_use()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let frame = match self.execution.capture_retained(instance_alias) {
             Ok(frame) => frame,
             Err(error) => {
+                let error = self
+                    .execution
+                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
                 let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
+                if self
+                    .retain_unconfirmed_resources(&runtime_error, links.clone())
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    return Err(RequestFailure::poison_without_terminal(runtime_error));
+                }
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,
                     DiagnosticCode::CaptureFailed,
@@ -11719,6 +11743,15 @@ impl HostShared {
             )
             .with_task_id(draft.task_id)
             .with_run_id(draft.run_id);
+        let connection_id = lock(&self.scheduler, "read_task_lease_connection")?
+            .connection_for_token(token)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    "read_task_lease_connection",
+                    &error,
+                ))
+            })?;
+        self.close_instance_resources(token, connection_id, links.clone())?;
         let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
             .map_err(RequestFailure::poison_without_terminal)?;
         let chain_events = self
@@ -12166,6 +12199,11 @@ impl HostShared {
         connection_id: ConnectionId,
         failure: RequestFailure,
     ) -> RequestFailure {
+        match self.retain_unconfirmed_resources(&failure.error, EventLinksDraft::default()) {
+            Ok(true) => return failure,
+            Ok(false) => {}
+            Err(retain_failure) => return failure.replace_with_poison(retain_failure),
+        }
         match self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure) {
             Ok(()) => failure,
             Err(error) => failure.replace_with_poison(error),
@@ -12180,6 +12218,11 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
         failure: RequestFailure,
     ) -> RequestFailure {
+        match self.retain_unconfirmed_resources(&failure.error, EventLinksDraft::default()) {
+            Ok(true) => return failure,
+            Ok(false) => {}
+            Err(retain_failure) => return failure.replace_with_poison(retain_failure),
+        }
         let cleanup = match run_links {
             Some(run_links) => self.cleanup_scheduled_failure_with_run_links(
                 request,
@@ -12323,6 +12366,12 @@ impl HostShared {
                         effect: EffectDisposition::NotPerformed,
                     };
                 }
+                if let Err(error) = self.mark_resources_in_use() {
+                    return CriticalActionReport::Failed {
+                        error: ActionFailure::poison(error),
+                        effect: EffectDisposition::NotPerformed,
+                    };
+                }
                 match self
                     .execution
                     .input_prepared(&instance_alias, action_for_worker)
@@ -12390,6 +12439,18 @@ impl HostShared {
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
                 self.record_required_failure(&error.error, &outcome, lifecycle_links)?;
+                if self
+                    .retain_unconfirmed_resources(&error.error, EventLinksDraft::default())
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    return Err(RequestFailure {
+                        state: RuntimeReceiptState::Failed,
+                        terminal: None,
+                        error: Box::new(error.error.into_fatal()),
+                        poison_runtime: true,
+                        task_failure: error.task_failure.map(|evidence| *evidence),
+                    });
+                }
                 if error.destructive_started {
                     self.finish_destructive_input(token, connection_id)?;
                 }
@@ -12500,6 +12561,12 @@ impl HostShared {
                         effect: EffectDisposition::NotPerformed,
                     };
                 }
+                if let Err(error) = self.mark_resources_in_use() {
+                    return CriticalActionReport::Failed {
+                        error: ActionFailure::poison(error),
+                        effect: EffectDisposition::NotPerformed,
+                    };
+                }
                 match self.execution.control_application(&instance_alias, action) {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
@@ -12569,6 +12636,18 @@ impl HostShared {
                         Some(action_id),
                     ),
                 )?;
+                if self
+                    .retain_unconfirmed_resources(&error.error, EventLinksDraft::default())
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    return Err(RequestFailure {
+                        state: RuntimeReceiptState::Failed,
+                        terminal: None,
+                        error: Box::new(error.error.into_fatal()),
+                        poison_runtime: true,
+                        task_failure: None,
+                    });
+                }
                 if error.destructive_started {
                     self.finish_destructive_input(token, connection_id)?;
                 }
@@ -12640,6 +12719,123 @@ impl HostShared {
                     &error,
                 ))
             })
+    }
+
+    fn mark_resources_in_use(&self) -> RuntimeHostResult<()> {
+        lock(&self.owner, "mark_owner_resources_in_use")?
+            .set_resource_disposition(OwnerResourceDisposition::InUse)
+    }
+
+    fn retain_unconfirmed_resources(
+        &self,
+        error: &RuntimeHostError,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<bool> {
+        if error.lifecycle.resource_quiescence != Some(ResourceQuiescence::Unconfirmed) {
+            return Ok(false);
+        }
+        let error = error.clone().into_fatal();
+        let lifecycle_result = self.append_lifecycle_failure(
+            RuntimeLifecycleFailureStage::SessionClose,
+            RuntimeLifecycleFailure::Host(&error),
+            links,
+            None,
+        );
+        let retain_result = lock(&self.owner, "retain_unconfirmed_owner")
+            .and_then(|mut owner| owner.retain_unconfirmed());
+        let fatal_result = self.fatal.mark(error.clone());
+        lifecycle_result?;
+        retain_result?;
+        fatal_result?;
+        Ok(true)
+    }
+
+    fn close_instance_resources(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+    ) -> Result<(), RequestFailure> {
+        let has_session = self
+            .execution
+            .has_session(token.instance_id())
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "inspect_execution_session",
+                    &error,
+                ))
+            })?;
+        if !has_session {
+            return Ok(());
+        }
+        lock(&self.scheduler, "begin_destructive_resource_close")?
+            .begin_resource_close(token, connection_id, self.monotonic_ms()?)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    "begin_destructive_resource_close",
+                    &error,
+                ))
+            })?;
+
+        match self
+            .execution
+            .close_instance(token.instance_id(), DeviceCloseAuthority::FencedDeviceWrite)
+        {
+            Ok(outcome) => {
+                self.append_lifecycle_observed(
+                    RuntimeLifecyclePhase::ResourceQuiescence {
+                        instance_id: token.instance_id(),
+                        resource_count: outcome.resource_count(),
+                        quiescence: outcome.quiescence(),
+                        owner_disposition: OwnerResourceDisposition::ConfirmedClosed,
+                    },
+                    links,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+                // The live Host can acquire another session concurrently; only Host drain clears InUse.
+                lock(&self.owner, "record_owner_resource_close")?
+                    .set_resource_disposition(OwnerResourceDisposition::InUse)?;
+                lock(&self.scheduler, "finish_destructive_resource_close")?
+                    .finish_destructive_step(token, connection_id)
+                    .map_err(|error| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                            "finish_destructive_resource_close",
+                            &error,
+                        ))
+                    })?;
+                Ok(())
+            }
+            Err(error) => {
+                let error = RuntimeHostError::execution("close_execution_session", &error);
+                let lifecycle_result = self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&error),
+                    links,
+                    None,
+                );
+                if error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed) {
+                    let retain_result = lock(&self.owner, "retain_unconfirmed_owner")
+                        .and_then(|mut owner| owner.retain_unconfirmed());
+                    let fatal_result = self.fatal.mark(error.clone());
+                    lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
+                    retain_result.map_err(RequestFailure::poison_without_terminal)?;
+                    fatal_result.map_err(RequestFailure::poison_without_terminal)?;
+                    return Err(RequestFailure::poison_without_terminal(error));
+                }
+                lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
+                lock(&self.owner, "record_owner_resource_close_failure")?
+                    .set_resource_disposition(OwnerResourceDisposition::InUse)?;
+                lock(&self.scheduler, "finish_destructive_resource_close")?
+                    .finish_destructive_step(token, connection_id)
+                    .map_err(|scheduler_error| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                            "finish_destructive_resource_close",
+                            &scheduler_error,
+                        ))
+                    })?;
+                Err(RequestFailure::poison_without_terminal(error))
+            }
+        }
     }
 
     fn transfer_preempted_if_ready(
@@ -12847,6 +13043,8 @@ impl HostShared {
             .map_err(|failure| *failure.error)?;
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
         self.expire_queued_for_instance(token.instance_id())
+            .map_err(|failure| *failure.error)?;
+        self.close_instance_resources(token, connection_id, EventLinksDraft::default())
             .map_err(|failure| *failure.error)?;
         let transfer_reason = match reason {
             LeaseReleaseReason::Disconnect => Some(LeaseTransferReason::Disconnect),
@@ -13365,6 +13563,9 @@ impl HostShared {
             lock(&self.scheduler, "list_connection_leases")?.tokens_for_connection(connection_id);
         let mut failure = None;
         for token in tokens {
+            if self.fatal.current()?.is_some() {
+                break;
+            }
             self.record_lifecycle_result(
                 RuntimeLifecycleFailureStage::ConnectionCleanup,
                 &mut failure,
@@ -13389,6 +13590,9 @@ impl HostShared {
         };
         let mut failure = None;
         for token in tokens {
+            if self.fatal.current()?.is_some() {
+                break;
+            }
             let connection_id =
                 lock(&self.scheduler, "read_lease_connection").and_then(|scheduler| {
                     scheduler.connection_for_token(&token).map_err(|error| {
@@ -13409,6 +13613,8 @@ impl HostShared {
             }
         }
         if let Err(mut error) = self.execution.close() {
+            let aggregate_error = RuntimeHostError::execution("close_execution_kernel", &error);
+            let unconfirmed = error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed);
             let closed_sessions = error.take_closed_sessions();
             if closed_sessions.is_empty() {
                 self.record_lifecycle_result(
@@ -13448,6 +13654,19 @@ impl HostShared {
                         )),
                     );
                 }
+            }
+            if unconfirmed {
+                self.record_lifecycle_result(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    &mut failure,
+                    lock(&self.owner, "retain_unconfirmed_owner")
+                        .and_then(|mut owner| owner.retain_unconfirmed()),
+                );
+                self.record_lifecycle_result(
+                    RuntimeLifecycleFailureStage::HostClose,
+                    &mut failure,
+                    self.fatal.mark(aggregate_error),
+                );
             }
         }
         match self.fatal.current() {
@@ -13890,10 +14109,12 @@ impl HostShared {
             Ok::<_, RuntimeHostError>(id)
         };
         if let Some(error) = host_error {
-            let phase_close = error.code() == "input_backend_close_failed"
-                && error.lifecycle.causes.iter().any(|cause| {
-                    cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
-                });
+            let phase_close = matches!(
+                error.code(),
+                "input_backend_close_failed" | "capture_backend_close_failed"
+            ) && error.lifecycle.causes.iter().any(|cause| {
+                cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
+            });
             if error.lifecycle.recorded_event.get().is_none() && !phase_close {
                 let id = emit(None, entered_event_id)?;
                 let _ = error.lifecycle.recorded_event.set(id);
@@ -15405,7 +15626,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             links.clone(),
             CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
         )?;
-        match self.host.execution.capture(self.instance_alias) {
+        self.host.mark_resources_in_use()?;
+        match self.host.execution.capture_retained(self.instance_alias) {
             Ok(frame) => {
                 self.ensure_active()?;
                 let frame_index = self.capture_evidence.captured()?;
@@ -15453,8 +15675,18 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 Ok(frame)
             }
             Err(error) => {
+                let error = self
+                    .host
+                    .execution
+                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
                 let runtime_error =
                     RuntimeHostError::execution("run_contained_task_capture", &error);
+                if self
+                    .host
+                    .retain_unconfirmed_resources(&runtime_error, links.clone())?
+                {
+                    return Err(RequestFailure::poison_without_terminal(runtime_error));
+                }
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,
                     DiagnosticCode::CaptureFailed,
@@ -16058,7 +16290,7 @@ impl RequestFailure {
         Self {
             state: RuntimeReceiptState::Failed,
             terminal,
-            error: Box::new(error),
+            error: Box::new(error.into_fatal()),
             poison_runtime: true,
             task_failure: None,
         }
@@ -16072,7 +16304,7 @@ impl RequestFailure {
         Self {
             state: RuntimeReceiptState::Failed,
             terminal: self.terminal,
-            error: Box::new(error),
+            error: Box::new(error.into_fatal()),
             poison_runtime: true,
             task_failure: self.task_failure,
         }
@@ -16160,6 +16392,7 @@ impl ActionFailure {
     }
 
     fn poison(error: RuntimeHostError) -> Self {
+        let error = error.into_fatal();
         Self {
             diagnostic: DiagnosticCode::RuntimeDiagnostic,
             effect: EffectDisposition::Indeterminate,

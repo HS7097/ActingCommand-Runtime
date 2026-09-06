@@ -58,8 +58,14 @@ impl InputBackend for RuntimeInputBackend {
         self.execute(InputAction::Reset)
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
-        self.proxy.close().map_err(device_error)
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        self.proxy.close().map_err(device_error)?;
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 

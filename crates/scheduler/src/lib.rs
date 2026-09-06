@@ -1089,6 +1089,26 @@ impl SeedScheduler {
         Ok(())
     }
 
+    /// Keeps the current owner's resources fenced while closing before a transfer.
+    pub fn begin_resource_close(
+        &mut self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<()> {
+        self.validate_write(token, connection_id, now_monotonic_ms)?;
+        let state = self
+            .instances
+            .get_mut(&token.instance_id())
+            .ok_or(SchedulerError::LeaseMissing)?;
+        let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
+        if lease.destructive_step_active {
+            return Err(SchedulerError::DestructiveStateMismatch);
+        }
+        lease.destructive_step_active = true;
+        Ok(())
+    }
+
     pub fn finish_destructive_step(
         &mut self,
         token: &LeaseToken,

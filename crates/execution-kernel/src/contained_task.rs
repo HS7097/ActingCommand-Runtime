@@ -8783,13 +8783,10 @@ mod retry_wiring_tests {
                 ),
             ]
         );
-        assert!(matches!(
-            runtime.traces.iter().find(|trace| matches!(
-                trace,
-                ContainedTaskTrace::StabilityBaseline { step_index: 0, .. }
-            )),
-            Some(_)
-        ));
+        assert!(runtime.traces.iter().any(|trace| matches!(
+            trace,
+            ContainedTaskTrace::StabilityBaseline { step_index: 0, .. }
+        )));
 
         let terminal = runtime
             .traces

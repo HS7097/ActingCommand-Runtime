@@ -854,7 +854,10 @@ impl InputBackend for FakeBackend {
         self.input()
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         #[cfg(feature = "test-observation")]
         let _observation_owner = enter_observation_owner(self.state.observation_owner);
         if !self.closed {
@@ -871,7 +874,9 @@ impl InputBackend for FakeBackend {
             None,
             None,
         );
-        Ok(())
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -918,6 +923,19 @@ impl CaptureBackend for FakeCapture {
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if !self.closed {
+            self.closed = true;
+            self.state.capture_closes.fetch_add(1, Ordering::AcqRel);
+        }
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -2250,7 +2268,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert!(!client.status().expect("released status").instances()[0].lease_active());
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 0);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
@@ -2947,7 +2965,7 @@ fn safe_reset_uses_one_runtime_request_and_returns_ledger_projection() {
     ));
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 0);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
     assert_eq!(
         output.events().last().map(|event| event.event_type),
         Some(EventType::LeaseReleased)
@@ -3002,7 +3020,7 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
         .expect("input after renewals");
     proxy.close().expect("close proxy");
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 0);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);

@@ -1520,6 +1520,51 @@
             {
               "artifacts": [],
               "event_id": "<EVENT_ID>",
+              "event_type": "runtime.lifecycle_observed",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
+              },
+              "origin": {
+                "actor": "runtime",
+                "module": "runtime",
+                "source": "runtime"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "runtime",
+                  "payload": {
+                    "data": {
+                      "action": "runtime.action",
+                      "audit": {},
+                      "owner_epoch": "<OWNER_EPOCH>",
+                      "phase": {
+                        "instance_id": "<INSTANCE_ID>",
+                        "kind": "resource_quiescence",
+                        "owner_disposition": "confirmed_closed",
+                        "quiescence": "confirmed",
+                        "resource_count": 0
+                      }
+                    },
+                    "kind": "lifecycle_observed"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.runtime.v1",
+              "schema_version": "actingcommand.event.v2",
+              "sensitivity": "internal",
+              "sequence": 21,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>"
+            },
+            {
+              "artifacts": [],
+              "event_id": "<EVENT_ID>",
               "event_type": "capture.summary_committed",
               "links": {
                 "correlation_id": "<CORRELATION_ID>",
@@ -1617,7 +1662,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 21,
+              "sequence": 22,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1660,7 +1705,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 22,
+              "sequence": 23,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1697,7 +1742,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 23,
+              "sequence": 24,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1735,7 +1780,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 24,
+              "sequence": 25,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1774,7 +1819,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 25,
+              "sequence": 26,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             }
@@ -1796,7 +1841,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 22
+              "sequence": 23
             }
           }
         }

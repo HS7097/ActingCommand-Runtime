@@ -3,8 +3,9 @@
 use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rotation};
 use crate::{
     Adb, AdbBoundsAction, AdbBoundsCoordinate, AdbConfig, AdbInputBoundsContext,
-    AdbInputConnectGeometry, DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage,
-    DeviceErrorSensitivity, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
+    AdbInputConnectGeometry, DeviceCloseAuthority, DeviceError, DeviceErrorCategory,
+    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceResourceCloseOutcome,
+    DeviceResourceQuiescence, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
     MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig, PreparedSegmentedSwipePlan,
 };
 use std::time::{Duration, Instant};
@@ -191,6 +192,7 @@ pub struct SelectedTouchBackend {
     active: ConnectedTouchBackend,
     remaining: Vec<Box<dyn TouchBackendFactory>>,
     diagnostics: TouchBackendDiagnostics,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl SelectedTouchBackend {
@@ -230,7 +232,7 @@ impl SelectedTouchBackend {
         self.validate_action_points(action, points)?;
 
         let active_started = Instant::now();
-        match run(self.active.backend.as_mut()) {
+        let active_failure = match run(self.active.backend.as_mut()) {
             Ok(()) => return Ok(()),
             Err(err) => {
                 let elapsed_ms = active_started.elapsed().as_millis();
@@ -248,8 +250,9 @@ impl SelectedTouchBackend {
                 if !err.is_fallback_eligible() {
                     return Err(err);
                 }
+                err
             }
-        }
+        };
 
         while !self.remaining.is_empty() {
             let factory = self.remaining.remove(0);
@@ -261,12 +264,25 @@ impl SelectedTouchBackend {
                         let elapsed_ms = started.elapsed().as_millis();
                         self.diagnostics
                             .push_success(connected.name, elapsed_ms, action, true);
-                        if let Err(err) = self.active.backend.close() {
-                            self.diagnostics.warnings.push(format!(
-                                "WARNING failed to close previous touch backend {} after fallback: {}",
-                                self.active.name.as_str(),
-                                err
-                            ));
+                        if let Err(cleanup) = self
+                            .active
+                            .backend
+                            .close_once(DeviceCloseAuthority::LocalOnly)
+                        {
+                            self.close_result = Some(Err(cleanup.clone()));
+                            let mut error = active_failure.clone().merge_resource_cleanup(cleanup);
+                            if let Err(new_cleanup) = connected
+                                .backend
+                                .close_once(DeviceCloseAuthority::LocalOnly)
+                            {
+                                let unconfirmed = new_cleanup.resource_quiescence()
+                                    == Some(DeviceResourceQuiescence::Unconfirmed);
+                                error = error.merge_resource_cleanup(new_cleanup);
+                                if unconfirmed {
+                                    std::mem::forget(connected);
+                                }
+                            }
+                            return Err(error);
                         }
                         self.active = connected;
                         self.set_selected(self.active.name);
@@ -288,15 +304,20 @@ impl SelectedTouchBackend {
                             connected.name.as_str(),
                             fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                         ));
-                        if let Err(close_err) = connected.backend.close() {
-                            self.diagnostics.warnings.push(format!(
-                                "WARNING failed to close failed touch backend {}: {}",
-                                connected.name.as_str(),
-                                close_err
-                            ));
+                        if let Err(close_err) = connected
+                            .backend
+                            .close_once(DeviceCloseAuthority::LocalOnly)
+                        {
+                            let unconfirmed = close_err.resource_quiescence()
+                                == Some(DeviceResourceQuiescence::Unconfirmed);
+                            let error = err.merge_resource_cleanup(close_err);
+                            if unconfirmed {
+                                std::mem::forget(connected);
+                            }
+                            return Err(error);
                         }
                         if !err.is_fallback_eligible() {
-                            return Err(self.chain_failed_error(action));
+                            return Err(err);
                         }
                     }
                 },
@@ -317,7 +338,7 @@ impl SelectedTouchBackend {
                         fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                     ));
                     if !err.is_fallback_eligible() {
-                        return Err(self.chain_failed_error(action));
+                        return Err(err);
                     }
                 }
             }
@@ -438,8 +459,16 @@ impl InputBackend for SelectedTouchBackend {
         self.active.backend.reset()
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
-        self.active.backend.close()
+    fn close_once(
+        &mut self,
+        authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
+        let result = self.active.backend.close_once(authority);
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
@@ -492,12 +521,23 @@ fn touch_probe_report_with_factories(
             Ok(mut connected) => {
                 let elapsed_ms = started.elapsed().as_millis();
                 let name = connected.name;
-                if let Err(err) = connected.backend.close() {
-                    diagnostics.warnings.push(format!(
-                        "touch probe backend {} close failed: {}",
-                        name.as_str(),
-                        err
-                    ));
+                if let Err(err) = connected
+                    .backend
+                    .close_once(DeviceCloseAuthority::LocalOnly)
+                {
+                    let unconfirmed =
+                        err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed);
+                    diagnostics.push_failure(
+                        name,
+                        elapsed_ms,
+                        err.to_string(),
+                        "probe_close",
+                        None,
+                    );
+                    if unconfirmed {
+                        std::mem::forget(connected);
+                    }
+                    continue;
                 }
                 diagnostics.push_success(name, elapsed_ms, "probe", false);
                 successful.push((name, elapsed_ms));
@@ -573,6 +613,7 @@ fn select_fixed_priority(
                     active,
                     remaining: factories,
                     diagnostics,
+                    close_result: None,
                 });
             }
             Err(err) => {
@@ -592,10 +633,7 @@ fn select_fixed_priority(
                     fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                 ));
                 if !err.is_fallback_eligible() {
-                    return Err(DeviceError::fatal(format!(
-                        "touch backend selection stopped on non-fallback error; diagnostics: {}",
-                        format_touch_diagnostics(&diagnostics)
-                    )));
+                    return Err(err);
                 }
             }
         }
@@ -636,10 +674,7 @@ fn select_fastest(
                     backend.as_str()
                 ));
                 if !err.is_fallback_eligible() {
-                    return Err(DeviceError::fatal(format!(
-                        "touch backend fastest selection stopped on non-fallback error; diagnostics: {}",
-                        format_touch_diagnostics(&diagnostics)
-                    )));
+                    return Err(close_connected_touch_backends(connected, err));
                 }
             }
         }
@@ -657,15 +692,36 @@ fn select_fastest(
         )));
     };
 
-    let (selected_factory_index, _elapsed_ms, active) = connected.remove(selected_pos);
+    let (selected_factory_index, _elapsed_ms, mut active) = connected.remove(selected_pos);
+    let mut cleanup_error: Option<DeviceError> = None;
     for (_index, _elapsed_ms, mut backend) in connected {
-        if let Err(err) = backend.backend.close() {
-            diagnostics.warnings.push(format!(
-                "touch backend {} close failed after fastest probe: {}",
-                backend.name.as_str(),
-                err
-            ));
+        if let Err(error) = backend.backend.close_once(DeviceCloseAuthority::LocalOnly) {
+            let unconfirmed =
+                error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed);
+            cleanup_error = Some(match cleanup_error {
+                Some(primary) => primary.merge_resource_cleanup(error),
+                None => error,
+            });
+            if unconfirmed {
+                std::mem::forget(backend);
+            }
         }
+    }
+    if let Some(primary) = cleanup_error {
+        return Err(
+            match active.backend.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(_) => primary,
+                Err(cleanup) => {
+                    let unconfirmed = cleanup.resource_quiescence()
+                        == Some(DeviceResourceQuiescence::Unconfirmed);
+                    let error = primary.merge_resource_cleanup(cleanup);
+                    if unconfirmed {
+                        std::mem::forget(active);
+                    }
+                    error
+                }
+            },
+        );
     }
 
     diagnostics.selected = Some(active.name);
@@ -683,7 +739,32 @@ fn select_fastest(
         active,
         remaining,
         diagnostics,
+        close_result: None,
     })
+}
+
+fn close_connected_touch_backends(
+    connected: Vec<(usize, u128, ConnectedTouchBackend)>,
+    primary: DeviceError,
+) -> DeviceError {
+    connected.into_iter().fold(
+        primary,
+        |primary, (_index, _elapsed_ms, mut backend)| match backend
+            .backend
+            .close_once(DeviceCloseAuthority::LocalOnly)
+        {
+            Ok(_) => primary,
+            Err(cleanup) => {
+                let unconfirmed =
+                    cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed);
+                let error = primary.merge_resource_cleanup(cleanup);
+                if unconfirmed {
+                    std::mem::forget(backend);
+                }
+                error
+            }
+        },
+    )
 }
 
 fn default_touch_factories(config: TouchBackendConfig) -> Vec<Box<dyn TouchBackendFactory>> {
@@ -826,6 +907,7 @@ pub struct AdbShellInputBackend {
     bounds: Option<TouchBounds>,
     connect_geometry: Option<AdbInputConnectGeometry>,
     connected: bool,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl AdbShellInputBackend {
@@ -838,6 +920,7 @@ impl AdbShellInputBackend {
             bounds: None,
             connect_geometry: None,
             connected: false,
+            close_result: None,
         }
     }
 
@@ -919,6 +1002,7 @@ impl AdbShellInputBackend {
             },
         ));
         self.connected = true;
+        self.close_result = None;
         Ok(DeviceInfo {
             serial: self.serial.clone(),
             state,
@@ -1073,9 +1157,18 @@ impl InputBackend for AdbShellInputBackend {
         self.ensure_connected()
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
+        let resource_count = u16::from(self.connected);
         self.connected = false;
-        Ok(())
+        let result = Ok(DeviceResourceCloseOutcome::confirmed(resource_count));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
@@ -1695,9 +1788,12 @@ mod tests {
             Ok(())
         }
 
-        fn close(&mut self) -> DeviceResult<()> {
+        fn close_once(
+            &mut self,
+            _authority: DeviceCloseAuthority,
+        ) -> DeviceResult<DeviceResourceCloseOutcome> {
             self.closed = true;
-            Ok(())
+            Ok(DeviceResourceCloseOutcome::confirmed(1))
         }
     }
 
@@ -1711,6 +1807,57 @@ mod tests {
             connect_result: Rc::new(RefCell::new(vec![connect])),
             action_result: Rc::new(RefCell::new(vec![action])),
         })
+    }
+
+    // Defect regressions D04/D09: PR298 review 5120590779, Workflow #257 C1B9 v16.
+    #[test]
+    fn c1b9_d04_factory_quiescence() {
+        let original = DeviceError::transient("acquisition primary").with_resource_close_cause(
+            crate::DeviceResourceKind::InputBackend,
+            crate::DeviceResourceClosePhase::AcquisitionCleanup,
+            "maatouch",
+            None,
+            None,
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        );
+        for requested in [TouchBackendChoice::AutoFastest, TouchBackendChoice::Auto] {
+            let factories = vec![
+                fake_factory(TouchBackendName::MaaTouch, Err(original.clone()), Ok(())),
+                fake_factory(TouchBackendName::Minitouch, Ok(()), Ok(())),
+            ];
+            let error = match requested {
+                TouchBackendChoice::AutoFastest => select_fastest(requested, factories),
+                _ => select_fixed_priority(requested, factories),
+            }
+            .err()
+            .expect("unconfirmed acquisition stops fallback");
+            assert_eq!(error, original);
+            assert!(std::sync::Arc::ptr_eq(
+                error.resource_close_causes()[0].occurrence(),
+                original.resource_close_causes()[0].occurrence()
+            ));
+        }
+    }
+
+    #[test]
+    fn c1b9_d09_adb_close_terminal_cache() {
+        let mut backend = AdbShellInputBackend::new(AdbConfig::default(), DeviceTarget::default());
+        backend
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Ok("Physical size: 720x1280".to_string()),
+                || Ok(DeviceRotation::R0),
+            )
+            .expect("simulated connect");
+        let first = backend
+            .close_once(DeviceCloseAuthority::LocalOnly)
+            .expect("close");
+        let second = backend
+            .close_once(DeviceCloseAuthority::LocalOnly)
+            .expect("cached close");
+        assert_eq!(first, second);
+        assert_eq!(first.resource_count(), 1);
     }
 
     #[test]
@@ -1903,6 +2050,7 @@ mod tests {
             },
             remaining: Vec::new(),
             diagnostics: TouchBackendDiagnostics::new(TouchBackendChoice::AdbShellInput),
+            close_result: None,
         };
 
         selected

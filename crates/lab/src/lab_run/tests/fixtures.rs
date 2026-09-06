@@ -204,6 +204,13 @@
         fn capture(&mut self) -> actingcommand_device::DeviceResult<Frame> {
             Ok(self.frame.clone())
         }
+        fn close_once(
+            &mut self,
+            _authority: actingcommand_device::DeviceCloseAuthority,
+        ) -> actingcommand_device::DeviceResult<actingcommand_device::DeviceResourceCloseOutcome>
+        {
+            Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(0))
+        }
     }
 
     fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvaluation {

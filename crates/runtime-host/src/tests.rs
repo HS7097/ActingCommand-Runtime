@@ -324,6 +324,7 @@ struct FakeState {
     capture_count: AtomicUsize,
     capture_delay_ms: AtomicU64,
     capture_close_count: AtomicUsize,
+    capture_close_error: std::sync::Mutex<Option<DeviceError>>,
     fail_capture: AtomicBool,
     transient_capture_failure: AtomicBool,
     fail_capture_on: AtomicUsize,
@@ -345,13 +346,13 @@ struct FakeState {
 
 struct FakeBackend {
     state: Arc<FakeState>,
-    closed: bool,
+    close_outcome: Option<DeviceResult<actingcommand_device::DeviceResourceCloseOutcome>>,
 }
 
 struct FakeCapture {
     state: Arc<FakeState>,
     provenance: ExecutionBackendProvenance,
-    closed: bool,
+    close_outcome: Option<DeviceResult<actingcommand_device::DeviceResourceCloseOutcome>>,
 }
 
 impl FakeBackend {
@@ -437,15 +438,22 @@ impl InputBackend for FakeBackend {
         self.input(InputAction::Reset)
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
-        if !self.closed {
-            self.closed = true;
-            self.state.close_count.fetch_add(1, Ordering::AcqRel);
-            if let Some(error) = self.state.close_error.lock().expect("close error").as_ref() {
-                return Err(error.clone());
-            }
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if let Some(outcome) = &self.close_outcome {
+            return outcome.clone();
         }
-        Ok(())
+        self.state.close_count.fetch_add(1, Ordering::AcqRel);
+        let outcome = match self.state.close_error.lock().expect("close error").clone() {
+            Some(error) => Err(error),
+            None => Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                1,
+            )),
+        };
+        self.close_outcome = Some(outcome.clone());
+        outcome
     }
 }
 
@@ -532,12 +540,40 @@ impl CaptureBackend for FakeCapture {
             },
         )
     }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if let Some(outcome) = &self.close_outcome {
+            return outcome.clone();
+        }
+        self.state
+            .capture_close_count
+            .fetch_add(1, Ordering::AcqRel);
+        let outcome = match self
+            .state
+            .capture_close_error
+            .lock()
+            .expect("capture close error")
+            .clone()
+        {
+            Some(error) => Err(error),
+            None => Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                1,
+            )),
+        };
+        self.close_outcome = Some(outcome.clone());
+        outcome
+    }
 }
 
 impl Drop for FakeCapture {
     fn drop(&mut self) {
-        if !self.closed {
-            self.closed = true;
+        if self.close_outcome.is_none() {
+            self.close_outcome = Some(Ok(
+                actingcommand_device::DeviceResourceCloseOutcome::confirmed(1),
+            ));
             self.state
                 .capture_close_count
                 .fetch_add(1, Ordering::AcqRel);
@@ -641,7 +677,7 @@ impl ExecutionBackendProvider for FakeProvider {
         entry.state.open_count.fetch_add(1, Ordering::AcqRel);
         Ok(Box::new(FakeBackend {
             state: Arc::clone(&entry.state),
-            closed: false,
+            close_outcome: None,
         }))
     }
 
@@ -666,7 +702,7 @@ impl ExecutionBackendProvider for FakeProvider {
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&entry.state),
             provenance: self.provenance,
-            closed: false,
+            close_outcome: None,
         }))
     }
 
@@ -1250,8 +1286,8 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         .collect::<Vec<_>>();
     assert_eq!(
         failures.len(),
-        8,
-        "four actual phases for each failed instance"
+        10,
+        "four actual phases plus one typed resource-close cause for each failed instance"
     );
     for instance in [first, second] {
         let actual = failures
@@ -1266,7 +1302,14 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
                 (failure.instance_id() == Some(instance)).then_some((event, failure))
             })
             .collect::<Vec<_>>();
-        assert_eq!(actual.len(), 4);
+        assert_eq!(actual.len(), 5);
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(_, failure)| failure.cause().expect("phase").resource().is_some())
+                .count(),
+            1
+        );
         for (event, failure) in actual {
             assert_eq!(failure.stage(), "runtime.lifecycle.session_close");
             assert_eq!(
@@ -1292,11 +1335,11 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         .iter()
         .filter(|event| event.event_type() == EventType::LeaseReleased)
         .collect::<Vec<_>>();
-    assert_eq!(releases.len(), 3);
+    assert!(releases.len() <= 1);
     assert!(
         releases
             .iter()
-            .all(|event| event.sequence() < failures[0].sequence())
+            .all(|event| event.links().instance_id() == Some(&successful))
     );
     assert!(events.iter().any(
         |event| event.event_type() == EventType::RuntimeLifecycleObserved
@@ -8671,6 +8714,33 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
         panic!("expected preempted lease");
     };
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("authoritative preemption events");
+    let input = events
+        .iter()
+        .find(|event| event.event_type() == EventType::InputCommitted)
+        .expect("durable input");
+    let closed = events
+        .iter()
+        .find(|event| matches!(
+            event.payload(),
+            EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
+                if matches!(payload.phase(), actingcommand_contract::RuntimeLifecyclePhase::ResourceQuiescence {
+                    quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
+                    owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
+                    ..
+                })
+        ))
+        .expect("confirmed resource quiescence");
+    let transferred = events
+        .iter()
+        .find(|event| event.event_type() == EventType::LeaseTransferred)
+        .expect("durable transfer");
+    assert!(input.sequence() < closed.sequence());
+    assert!(closed.sequence() < transferred.sequence());
+    assert!(host.fatal_error().expect("runtime health").is_none());
     assert_input_denied(&mut first, old_token, RuntimeErrorCode::LeaseMismatch);
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
@@ -9283,7 +9353,7 @@ fn different_instances_acquire_and_execute_independently() {
     for state in [&state_a, &state_b] {
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-        assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     }
     host.close().expect("close host");
     for state in [&state_a, &state_b] {
@@ -9854,7 +9924,7 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     ));
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     assert_eq!(
         event_types_for_correlation(&mut client, correlation_id),
         vec![
@@ -11663,6 +11733,161 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     restarted.close().expect("close restarted host");
 }
 
+// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+#[test]
+fn task_teardown_precedes_terminal_and_lease_release() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("resource-close-order-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let resource_close = events
+        .iter()
+        .find(|event| event.event_type == EventType::RuntimeLifecycleObserved)
+        .expect("resource close lifecycle");
+    let task_terminal = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .expect("task terminal");
+    let lease_release = events
+        .iter()
+        .find(|event| event.event_type == EventType::LeaseReleased)
+        .expect("lease release");
+    assert!(resource_close.sequence < task_terminal.sequence);
+    assert!(task_terminal.sequence < lease_release.sequence);
+    drop(client);
+    host.close().expect("close host");
+}
+
+// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+#[test]
+fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
+    for close_error in [
+        DeviceError::fatal("injected unconfirmed capture close"),
+        DeviceError::transient("injected unconfirmed capture close"),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package = root.path().join("unconfirmed-resource-close-task.zip");
+        let bytes = neutral_contained_task_package();
+        fs::write(&package, &bytes).expect("write package");
+        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        *state
+            .capture_close_error
+            .lock()
+            .expect("capture close error") = Some(close_error.with_resource_close_cause(
+            actingcommand_device::DeviceResourceKind::CaptureBackend,
+            actingcommand_device::DeviceResourceClosePhase::Close,
+            "fake_capture",
+            None,
+            None,
+            actingcommand_device::DeviceResourceQuiescence::Unconfirmed,
+            1,
+        ));
+        let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+        let mut client = TestClient::connect(&host);
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "neutral.instance",
+                client.ids.mint_holder_id().expect("holder"),
+                ContainedTaskRequest::new(package.display().to_string(), expected)
+                    .expect("task request"),
+            ),
+        );
+
+        let failed = client.send(&request);
+
+        assert_eq!(failed.state(), RuntimeReceiptState::Failed);
+        assert!(failed.terminal().is_none());
+        assert!(
+            failed
+                .error_projection()
+                .expect("fatal close projection")
+                .fatal
+        );
+        let fatal = host
+            .fatal_error()
+            .expect("runtime health")
+            .expect("fatal state");
+        assert_eq!(fatal.code(), "capture_backend_close_failed");
+        assert_eq!(fatal.operation(), "close_execution_session");
+        assert!(fatal.is_fatal());
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+        let events = host
+            .query_persisted_events_for_test(EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            })
+            .expect("query unconfirmed lifecycle");
+        assert!(events.iter().any(|event| {
+            event.event_type() == EventType::RuntimeFailed
+                && serde_json::to_string(event.payload())
+                    .expect("runtime failure JSON")
+                    .contains("\"quiescence\":\"unconfirmed\"")
+        }));
+        assert!(!events.iter().any(|event| matches!(
+            event.event_type(),
+            EventType::TaskCompleted | EventType::LeaseReleased
+        )));
+        let status = client.request(RuntimeOperation::Status);
+        let rejected = host
+            .process_request_for_test(&status, ConnectionId::new(177).expect("connection"))
+            .expect("fatal receipt");
+        assert_eq!(rejected.state(), RuntimeReceiptState::Failed);
+        assert!(rejected.terminal().is_none());
+
+        let takeover = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "neutral.instance",
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .err()
+        .expect("retained owner blocks takeover");
+        assert_eq!(takeover.code(), "owner_conflict");
+        drop(client);
+        assert!(host.close().is_err());
+    }
+}
+
 // Task Contract: Workflow #241 / direct contained-task lease deadline v1.
 // Test class: specification criterion.
 #[test]
@@ -12639,7 +12864,7 @@ fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     assert_eq!(replayed, first);
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     assert_eq!(
         event_types_for_request(&host, &ids, connection, request.request_id()).len(),
         13
@@ -12840,7 +13065,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let receipt = client.send(&release);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     assert_eq!(client.send(&release), receipt);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);
@@ -14062,7 +14287,16 @@ fn required_failure_events_preserve_cleanup_detail() {
                             DeviceErrorSensitivity::Secret,
                         );
                 }
-                *state.close_error.lock().expect("close error") = Some(error);
+                *state.close_error.lock().expect("close error") =
+                    Some(error.with_resource_close_cause(
+                        actingcommand_device::DeviceResourceKind::InputBackend,
+                        actingcommand_device::DeviceResourceClosePhase::Close,
+                        "fake_input",
+                        None,
+                        None,
+                        actingcommand_device::DeviceResourceQuiescence::Confirmed,
+                        1,
+                    ));
             }
             let correlation = client.ids.mint_correlation_id().expect("correlation");
             let correlation_id = *correlation.transport();
@@ -14109,10 +14343,32 @@ fn required_failure_events_preserve_cleanup_detail() {
                     ..EventQuery::default()
                 },
             );
-            let types = events
-                .iter()
-                .map(|event| event.event_type)
-                .collect::<Vec<_>>();
+            let mut types = Vec::new();
+            let mut resource_causes = 0;
+            for event in &events {
+                if let ProjectionPayload::Full(payload) = &event.payload
+                    && let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                        failure,
+                    )) = payload.as_ref()
+                    && let Some(cause) = failure
+                        .lifecycle_failure()
+                        .and_then(|lifecycle| lifecycle.cause())
+                    && cause.resource().is_some()
+                {
+                    assert_eq!(
+                        cause.quiescence(),
+                        Some(actingcommand_contract::ResourceQuiescence::Confirmed)
+                    );
+                    assert_eq!(
+                        cause.owner_disposition(),
+                        Some(actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed)
+                    );
+                    resource_causes += 1;
+                } else {
+                    types.push(event.event_type);
+                }
+            }
+            assert_eq!(resource_causes, usize::from(cleanup_detail.is_some()));
             if let Some(baseline) = &baseline_types {
                 assert_eq!(&types, baseline);
             } else {

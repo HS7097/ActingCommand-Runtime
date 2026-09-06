@@ -214,12 +214,17 @@ impl InputBackend for FakeBackend {
         Ok(())
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         if !self.closed {
             self.closed = true;
             self.state.closes.fetch_add(1, Ordering::AcqRel);
         }
-        Ok(())
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -255,6 +260,14 @@ impl CaptureBackend for FakeCapture {
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
     }
 }
 
@@ -1620,7 +1633,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
         Some("runtime_proxy")
     );
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 0);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
@@ -1703,7 +1716,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     assert!(result_path.is_file());
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert!(state.captures.load(Ordering::Acquire) >= 2);
-    assert_eq!(state.closes.load(Ordering::Acquire), 0);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
     assert!(
         !adb_marker.exists(),
         "ActingLab invoked a local ADB backend"
