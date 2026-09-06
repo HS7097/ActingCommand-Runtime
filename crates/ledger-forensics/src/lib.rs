@@ -42,6 +42,7 @@ pub enum ForensicCommand {
     Export,
     Performance,
     Stability,
+    TaskEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +187,14 @@ impl ForensicRequest {
             events,
         }
     }
+
+    pub fn task_evidence(state_root: impl AsRef<Path>, events: ForensicEventsRequest) -> Self {
+        Self {
+            state_root: state_root.as_ref().to_path_buf(),
+            command: ForensicCommand::TaskEvidence,
+            events,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -195,6 +204,7 @@ pub enum ForensicReport {
     Events(EventsReport),
     Performance(Box<PerformanceReport>),
     Stability(Box<StabilityReport>),
+    TaskEvidence(Box<TaskEvidenceReport>),
     Chain(ChainReport),
     Tail(TailReport),
     Repairs(RepairsReport),
@@ -259,6 +269,50 @@ pub struct EventsReport {
     pub events: Vec<PersistedEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_after_sequence: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskEvidenceRelation {
+    pub state: &'static str,
+    pub source_sequences: Vec<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskFrameEvidence {
+    pub frame_id: Option<FrameId>,
+    pub capture: TaskEvidenceRelation,
+    pub png: TaskEvidenceRelation,
+    pub artifacts: Vec<ProjectedArtifactReference>,
+    pub capture_summary: TaskEvidenceRelation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskInputEvidence {
+    pub intent_sequence: u64,
+    pub physical_action_id: Option<ActionId>,
+    pub intent: actingcommand_contract::InputIntentPayload,
+    pub source_step: TaskEvidenceRelation,
+    pub outcome: TaskEvidenceRelation,
+    pub before_frame: TaskFrameEvidence,
+    pub after_capture: TaskEvidenceRelation,
+    pub after_frame: TaskFrameEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskStepEvidence {
+    pub effect_intent_sequence: u64,
+    pub physical_inputs: TaskEvidenceRelation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskEvidenceReport {
+    pub page: EventsReport,
+    pub inputs: Vec<TaskInputEvidence>,
+    pub steps: Vec<TaskStepEvidence>,
+    pub window_complete: bool,
+    pub corrupt_tail: Option<CorruptTailReport>,
+    pub failures: Vec<StabilityFailure>,
+    pub gaps: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -496,6 +550,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     let artifact_root = request.state_root.clone();
     let stability = request.command == ForensicCommand::Stability;
     let export = request.command == ForensicCommand::Export;
+    let task_evidence = request.command == ForensicCommand::TaskEvidence;
     let mut artifact_failures = Vec::new();
     let snapshot = GlobalLedger::open_read_only(
         GlobalLedgerReadOnlyConfig::new(request.state_root.join("ledger")),
@@ -513,7 +568,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
             match verified {
                 Ok(verified) => Some(verified),
                 Err(error) => {
-                    if stability || export {
+                    if stability || export || task_evidence {
                         artifact_failures.push(StabilityFailure {
                             source_sequence: None,
                             artifact: reference.clone(),
@@ -550,6 +605,13 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
             Box::new(stability_report(
                 &snapshot,
                 &artifact_root,
+                request.events,
+                artifact_failures,
+            )?),
+        ))),
+        ForensicCommand::TaskEvidence => Ok(ForensicOutput::Machine(ForensicReport::TaskEvidence(
+            Box::new(task_evidence_report(
+                &snapshot,
                 request.events,
                 artifact_failures,
             )?),
@@ -605,6 +667,341 @@ pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> 
             manifest: verification.manifest,
         },
     ))))
+}
+
+fn task_evidence_report(
+    snapshot: &GlobalLedgerReadOnly,
+    request: ForensicEventsRequest,
+    failures: Vec<StabilityFailure>,
+) -> ForensicResult<TaskEvidenceReport> {
+    use actingcommand_contract::{EventPayload, InputPayload, TaskPayload, TaskSemanticFact};
+    if request.filter != ForensicEventFilter::default() {
+        return Err(ForensicError::new(
+            "invalid_event_page",
+            "task_evidence",
+            "task evidence accepts only sequence page bounds",
+        ));
+    }
+    let page = events_report(snapshot, request)?;
+    let limited = page.after_sequence != 0
+        || page.next_after_sequence.is_some()
+        || page.through_sequence != snapshot.latest_sequence()
+        || !snapshot.storage_snapshot().read_complete
+        || snapshot.corrupt_tail().is_some();
+    let events = &page.events;
+    let mut inputs = Vec::new();
+    let mut steps = Vec::new();
+    let mut gaps = std::collections::BTreeSet::new();
+    for event in events {
+        if let EventPayload::Input(InputPayload::Intent(intent)) = event.payload() {
+            let physical = event.links().action_id().copied();
+            let provenance = intent.provenance();
+            let step_id = provenance.and_then(|value| value.source_step_action_id);
+            let before = provenance.and_then(|value| value.before_frame_id);
+            let source_step = if let Some(step_id) = step_id {
+                task_evidence_relation(
+                    event,
+                    events
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.event_type() == EventType::TaskEffectIntent
+                                && candidate.links().action_id() == Some(&step_id)
+                        })
+                        .collect(),
+                    limited,
+                    true,
+                    |candidate| {
+                        candidate.sequence() < event.sequence()
+                            && candidate.links().frame_id().copied() == before
+                            && matches!(candidate.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
+                                if matches!(payload.fact(), TaskSemanticFact::EffectIntent { action, .. }
+                                    if provenance.is_some_and(|value| &value.input_action == action)))
+                    },
+                )
+            } else {
+                TaskEvidenceRelation {
+                    state: "not_recorded",
+                    source_sequences: Vec::new(),
+                }
+            };
+            let outcome = task_evidence_relation(
+                event,
+                events
+                    .iter()
+                    .filter(|candidate| {
+                        physical.is_some()
+                            && candidate.links().action_id().copied() == physical
+                            && matches!(
+                                candidate.event_type(),
+                                EventType::InputCommitted | EventType::InputFailed
+                            )
+                    })
+                    .collect(),
+                limited,
+                true,
+                |candidate| {
+                    candidate.sequence() > event.sequence()
+                        && candidate.payload().action() == intent.action()
+                },
+            );
+            let after_candidates = events
+                .iter()
+                .filter(|candidate| {
+                    physical.is_some()
+                        && candidate.event_type() == EventType::CaptureRequested
+                        && candidate.links().action_id().copied() == physical
+                })
+                .collect::<Vec<_>>();
+            let after_capture = task_evidence_relation(
+                event,
+                after_candidates.clone(),
+                limited,
+                true,
+                |candidate| {
+                    candidate.sequence() > event.sequence()
+                        && outcome.state == "linked"
+                        && outcome.source_sequences[0] < candidate.sequence()
+                        && events.iter().any(|outcome_event| {
+                            outcome_event.sequence() == outcome.source_sequences[0]
+                                && outcome_event.event_type() == EventType::InputCommitted
+                        })
+                },
+            );
+            let after = if after_capture.state == "linked" {
+                after_candidates[0].links().frame_id().copied()
+            } else {
+                None
+            };
+            let before_frame = task_frame_evidence(events, event, before, limited, true);
+            let after_frame = task_frame_evidence(events, event, after, limited, false);
+            if provenance.is_none() {
+                gaps.insert("provenance_not_recorded");
+            }
+            for relation in [
+                &source_step,
+                &outcome,
+                &before_frame.capture,
+                &before_frame.png,
+                &before_frame.capture_summary,
+                &after_capture,
+                &after_frame.capture,
+                &after_frame.png,
+                &after_frame.capture_summary,
+            ] {
+                if matches!(
+                    relation.state,
+                    "missing" | "identity_conflict" | "ambiguous" | "source_mismatch"
+                ) {
+                    gaps.insert(relation.state);
+                }
+            }
+            inputs.push(TaskInputEvidence {
+                intent_sequence: event.sequence(),
+                physical_action_id: physical,
+                intent: intent.clone(),
+                source_step,
+                outcome,
+                before_frame,
+                after_capture,
+                after_frame,
+            });
+        }
+        if event.event_type() == EventType::TaskEffectIntent {
+            let physical_inputs = task_evidence_relation(
+                event,
+                events.iter().filter(|candidate| {
+                    matches!(candidate.payload(), EventPayload::Input(InputPayload::Intent(intent))
+                        if intent.provenance().is_some_and(|value| value.source_step_action_id.is_some()
+                            && value.source_step_action_id.as_ref() == event.links().action_id()))
+                }).collect(),
+                limited, false,
+                |candidate| candidate.sequence() > event.sequence(),
+            );
+            if matches!(
+                physical_inputs.state,
+                "missing" | "identity_conflict" | "source_mismatch"
+            ) {
+                gaps.insert(physical_inputs.state);
+            }
+            steps.push(TaskStepEvidence {
+                effect_intent_sequence: event.sequence(),
+                physical_inputs,
+            });
+        }
+    }
+    let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
+    if corrupt_tail.is_some() {
+        gaps.insert("corrupt_tail");
+    }
+    if !snapshot.storage_snapshot().read_complete {
+        gaps.insert("storage_read_incomplete");
+    }
+    if page.through_sequence > snapshot.latest_sequence() {
+        gaps.insert("through_sequence_unavailable");
+    }
+    if !failures.is_empty() {
+        gaps.insert("artifact_verification_failed");
+    }
+    Ok(TaskEvidenceReport {
+        window_complete: !limited && gaps.is_empty(),
+        page,
+        inputs,
+        steps,
+        corrupt_tail,
+        failures,
+        gaps: gaps.into_iter().collect(),
+    })
+}
+
+fn task_evidence_relation(
+    source: &PersistedEvent,
+    candidates: Vec<&PersistedEvent>,
+    limited: bool,
+    unique: bool,
+    consistent: impl Fn(&PersistedEvent) -> bool,
+) -> TaskEvidenceRelation {
+    let state = if candidates.is_empty() {
+        if limited {
+            "outside_window_or_missing"
+        } else {
+            "missing"
+        }
+    } else if candidates.iter().any(|candidate| {
+        let left = source.links();
+        let right = candidate.links();
+        left.request_id().is_none()
+            || left.correlation_id().is_none()
+            || left.instance_id().is_none()
+            || left.lease_id().is_none()
+            || left.request_id() != right.request_id()
+            || left.correlation_id() != right.correlation_id()
+            || left.instance_id() != right.instance_id()
+            || left.lease_id() != right.lease_id()
+            || left.task_id() != right.task_id()
+            || left.run_id() != right.run_id()
+    }) {
+        "identity_conflict"
+    } else if unique && candidates.len() != 1 {
+        "ambiguous"
+    } else if candidates.iter().any(|candidate| !consistent(candidate)) {
+        "source_mismatch"
+    } else {
+        "linked"
+    };
+    TaskEvidenceRelation {
+        state,
+        source_sequences: candidates.iter().map(|event| event.sequence()).collect(),
+    }
+}
+
+fn task_frame_evidence(
+    events: &[PersistedEvent],
+    input: &PersistedEvent,
+    frame_id: Option<FrameId>,
+    limited: bool,
+    before: bool,
+) -> TaskFrameEvidence {
+    use actingcommand_contract::{CapturePayload, EventPayload};
+    let Some(frame) = frame_id else {
+        let absent = TaskEvidenceRelation {
+            state: "not_recorded",
+            source_sequences: Vec::new(),
+        };
+        return TaskFrameEvidence {
+            frame_id,
+            capture: absent.clone(),
+            png: absent.clone(),
+            artifacts: Vec::new(),
+            capture_summary: absent,
+        };
+    };
+    let capture_candidates = events
+        .iter()
+        .filter(|event| {
+            event.links().frame_id() == Some(&frame)
+                && matches!(
+                    event.event_type(),
+                    EventType::CaptureCompleted | EventType::CaptureFailed
+                )
+        })
+        .collect::<Vec<_>>();
+    let mut capture =
+        task_evidence_relation(input, capture_candidates.clone(), limited, true, |event| {
+            if before {
+                event.sequence() < input.sequence()
+            } else {
+                event.sequence() > input.sequence()
+            }
+        });
+    if capture.state == "linked" && capture_candidates[0].event_type() == EventType::CaptureFailed {
+        capture.state = "failed";
+    }
+    let png_candidates = events
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::ArtifactVerified
+                && event.links().frame_id() == Some(&frame)
+                && event.artifacts().iter().any(|artifact| {
+                    artifact.kind() == ArtifactKind::CaptureFrame
+                        && artifact.producer() == ArtifactProducer::CaptureStore
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut png = task_evidence_relation(input, png_candidates.clone(), limited, true, |event| {
+        (if before {
+            event.sequence() < input.sequence()
+        } else {
+            event.sequence() > input.sequence()
+        }) && event
+            .artifacts()
+            .iter()
+            .filter(|artifact| {
+                artifact.kind() == ArtifactKind::CaptureFrame
+                    && artifact.producer() == ArtifactProducer::CaptureStore
+            })
+            .count()
+            == 1
+            && event.artifacts().iter().all(|artifact| {
+                artifact.frame_id() == Some(&frame)
+                    && artifact.run_id() == input.links().run_id()
+                    && artifact.correlation_id() == input.links().correlation_id()
+            })
+    });
+    if capture.state == "failed" && png_candidates.is_empty() {
+        png.state = "not_produced";
+    }
+    let artifacts = if png.state == "linked" {
+        png_candidates[0]
+            .artifacts()
+            .iter()
+            .filter(|artifact| {
+                artifact.kind() == ArtifactKind::CaptureFrame
+                    && artifact.producer() == ArtifactProducer::CaptureStore
+            })
+            .map(|artifact| artifact.project(true))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut capture_summary = task_evidence_relation(
+        input,
+        events.iter().filter(|event| {
+            matches!(event.payload(), EventPayload::Capture(CapturePayload::SummaryCommitted(payload))
+                if payload.summary().frames().iter().any(|value| value.artifact().frame_id == Some(frame))
+                    || payload.summary().pinned().iter().any(|value| value.artifact().is_some_and(|artifact| artifact.frame_id == Some(frame))))
+        }).collect(),
+        limited, true, |event| event.sequence() > input.sequence(),
+    );
+    if input.links().run_id().is_none() && capture_summary.source_sequences.is_empty() {
+        capture_summary.state = "not_applicable";
+    }
+    TaskFrameEvidence {
+        frame_id,
+        capture,
+        png,
+        artifacts,
+        capture_summary,
+    }
 }
 
 fn events_report(

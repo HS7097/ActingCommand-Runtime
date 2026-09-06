@@ -2956,6 +2956,13 @@ struct RuntimeRunLinks {
     run_id: IssuedRunId,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RuntimeInputContext {
+    run_links: Option<RuntimeRunLinks>,
+    source_step_action_id: Option<ActionId>,
+    before_frame_id: Option<actingcommand_contract::FrameId>,
+}
+
 #[derive(Clone, Copy)]
 struct RuntimeLeaseAcquisition<'request, 'payload> {
     request: &'request ValidatedRuntimeRequest<'payload>,
@@ -5412,7 +5419,7 @@ impl HostShared {
                     action,
                     connection_id,
                     ExecutionBackendProvenance::PhysicalDevice,
-                    None,
+                    RuntimeInputContext::default(),
                 )
                 .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {
@@ -10176,7 +10183,7 @@ impl HostShared {
             &InputAction::Reset,
             connection_id,
             ExecutionBackendProvenance::PhysicalDevice,
-            None,
+            RuntimeInputContext::default(),
         ) {
             Ok((success, _)) => success,
             Err(failure) => {
@@ -10776,6 +10783,9 @@ impl HostShared {
             execution_provenance,
             control: Arc::clone(&control),
             last_frame_id: None,
+            input_step_action_id: None,
+            post_input_action_id: None,
+            last_capture_input_action_id: None,
             expected_stability_declaration,
             stability: None,
             expects_post_admission_ocr,
@@ -12225,7 +12235,7 @@ impl HostShared {
         action: &InputAction,
         connection_id: ConnectionId,
         execution_provenance: ExecutionBackendProvenance,
-        run_links: Option<RuntimeRunLinks>,
+        context: RuntimeInputContext,
     ) -> Result<
         (
             OperationSuccess,
@@ -12233,6 +12243,11 @@ impl HostShared {
         ),
         RequestFailure,
     > {
+        let RuntimeInputContext {
+            run_links,
+            source_step_action_id,
+            before_frame_id,
+        } = context;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
             let admission = lock(&instance_guard, "lock_instance_admission")?;
@@ -12302,17 +12317,13 @@ impl HostShared {
             ),
         };
         let event_action = action.event_action();
-        let intent_payload = match execution_plan {
-            Some(execution_plan) => InputPayloadDraft::intent_with_execution_plan(
-                event_action,
-                execution_plan,
-                execution_audit(execution_provenance, resolved.audit_endpoint()),
-            ),
-            None => InputPayloadDraft::intent(
-                event_action,
-                execution_audit(execution_provenance, resolved.audit_endpoint()),
-            ),
-        };
+        let intent_payload = InputPayloadDraft::intent_with_provenance(
+            action.clone(),
+            execution_plan,
+            source_step_action_id,
+            before_frame_id,
+            execution_audit(execution_provenance, resolved.audit_endpoint()),
+        );
         let intent = self
             .events
             .draft(
@@ -14518,6 +14529,9 @@ struct RuntimeContainedTask<'a> {
     execution_provenance: ExecutionBackendProvenance,
     control: Arc<ContainedRunControl>,
     last_frame_id: Option<IssuedFrameId>,
+    input_step_action_id: Option<ActionId>,
+    post_input_action_id: Option<ActionId>,
+    last_capture_input_action_id: Option<ActionId>,
     expected_stability_declaration: Option<StabilityTerminationDeclaration>,
     stability: Option<RuntimeContainedTaskStability>,
     expects_post_admission_ocr: bool,
@@ -15547,7 +15561,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .issuer()
             .mint_frame_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        let links = self.links().with_frame_id(frame_id);
+        let input_action_id = self.post_input_action_id.take();
+        let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+            .apply(self.host.events.request_links(
+                self.request,
+                Some(self.token.instance_id()),
+                Some(self.token.lease_id()),
+                input_action_id,
+            ))
+            .with_frame_id(frame_id);
         let (source, module) = self.capture_origin();
         let requested = self.host.append_event(
             EventSeverity::Info,
@@ -15602,6 +15624,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     })?;
                 self.capture_evidence.persisted(frame_index, &stored)?;
                 self.last_frame_id = Some(frame_id);
+                self.last_capture_input_action_id = input_action_id;
                 if self.configuration_records > 0 && !self.configuration_capture_recorded {
                     let selection =
                         frame
@@ -15711,10 +15734,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             &action,
             self.connection_id,
             self.execution_provenance,
-            Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+            RuntimeInputContext {
+                run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+                source_step_action_id: self.input_step_action_id.take(),
+                before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
+            },
         )?;
         self.ensure_active()?;
         if let RuntimeResult::InputCommitted { action_id } = success.result {
+            self.post_input_action_id = Some(action_id);
             if self.configuration_records > 0 && !self.configuration_input_recorded {
                 self.record_configuration(
                     EffectiveConfigurationFacts::Input {
@@ -15809,7 +15837,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
-                let links = self.links().with_frame_id(frame_id);
+                let input_action_id = self.last_capture_input_action_id.take();
+                let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+                    .apply(self.host.events.request_links(
+                        self.request,
+                        Some(self.token.instance_id()),
+                        Some(self.token.lease_id()),
+                        input_action_id,
+                    ))
+                    .with_frame_id(frame_id);
                 let (source, module) = self.capture_origin();
                 self.host.append_event(
                     EventSeverity::Info,
@@ -16020,11 +16056,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     }
                     None => TaskPayloadDraft::semantic(fact, AuditInput::new()),
                 };
-                self.append_task(
-                    EventSeverity::Info,
-                    self.links().with_action_id(action_id),
-                    payload,
-                )
+                let mut links = self.links().with_action_id(action_id);
+                if let Some(frame_id) = self.last_frame_id {
+                    links = links.with_frame_id(frame_id);
+                }
+                self.append_task(EventSeverity::Info, links, payload)?;
+                self.input_step_action_id = Some(*action_id.transport());
+                Ok(())
             }
             ContainedTaskTrace::EffectCompleted {
                 step_index,
@@ -16050,6 +16088,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 page_label,
             } => {
+                self.input_step_action_id = None;
+                self.post_input_action_id = None;
                 contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
                 let (action_id, _) = self.step_actions.remove(&step_index).ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

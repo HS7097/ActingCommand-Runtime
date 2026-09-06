@@ -11926,6 +11926,122 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
             ..EventQuery::default()
         },
     );
+    let input_intents = events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputIntent)
+        .collect::<Vec<_>>();
+    let [input_intent] = input_intents.as_slice() else {
+        panic!("one physical input intent");
+    };
+    let ProjectionPayload::Full(payload) = &input_intent.payload else {
+        panic!("full input intent");
+    };
+    let EventPayload::Input(actingcommand_contract::InputPayload::Intent(input)) = payload.as_ref()
+    else {
+        panic!("typed input intent");
+    };
+    let provenance = input
+        .provenance()
+        .expect("durable input provenance")
+        .clone();
+    let physical_id = *input_intent.links.action_id().expect("physical action");
+    let step_intents = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEffectIntent)
+        .collect::<Vec<_>>();
+    let [step_intent] = step_intents.as_slice() else {
+        panic!("one task effect intent");
+    };
+    assert_eq!(
+        provenance.source_step_action_id.as_ref(),
+        step_intent.links.action_id()
+    );
+    assert_eq!(
+        provenance.before_frame_id.as_ref(),
+        step_intent.links.frame_id()
+    );
+    assert_ne!(Some(&physical_id), step_intent.links.action_id());
+    let TaskSemanticFact::EffectIntent { action, .. } =
+        projected_task_semantic_fact(step_intent).unwrap()
+    else {
+        panic!("step input action");
+    };
+    assert_eq!(provenance.input_action, action);
+    let outcomes = events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputCommitted)
+        .collect::<Vec<_>>();
+    let [outcome] = outcomes.as_slice() else {
+        panic!("one physical outcome");
+    };
+    assert_eq!(outcome.links.action_id(), Some(&physical_id));
+    assert!(
+        step_intent.sequence < input_intent.sequence && input_intent.sequence < outcome.sequence
+    );
+    let after_captures = events
+        .iter()
+        .filter(|event| {
+            event.event_type == EventType::CaptureRequested
+                && event.links.action_id() == Some(&physical_id)
+        })
+        .collect::<Vec<_>>();
+    let [after_capture] = after_captures.as_slice() else {
+        panic!("first post-input capture");
+    };
+    let after_frame = *after_capture.links.frame_id().unwrap();
+    let before_frame = provenance.before_frame_id.unwrap();
+    assert_ne!(before_frame, after_frame);
+    assert!(outcome.sequence < after_capture.sequence);
+    for frame_id in [before_frame, after_frame] {
+        let completed = events
+            .iter()
+            .filter(|event| {
+                event.event_type == EventType::CaptureCompleted
+                    && event.links.frame_id() == Some(&frame_id)
+            })
+            .collect::<Vec<_>>();
+        let [completed] = completed.as_slice() else {
+            panic!("one capture completion per frame");
+        };
+        assert_eq!(
+            completed.links.action_id(),
+            (frame_id == after_frame).then_some(&physical_id)
+        );
+        for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
+            let artifacts = events
+                .iter()
+                .filter(|event| {
+                    event.event_type == event_type
+                        && event.links.frame_id() == Some(&frame_id)
+                        && event
+                            .artifacts
+                            .iter()
+                            .any(|artifact| artifact.kind == ArtifactKind::CaptureFrame)
+                })
+                .collect::<Vec<_>>();
+            let [artifact_event] = artifacts.as_slice() else {
+                panic!("one persisted PNG event");
+            };
+            assert_eq!(
+                artifact_event.links.action_id(),
+                completed.links.action_id()
+            );
+            assert_eq!(artifact_event.links.run_id(), input_intent.links.run_id());
+            assert_eq!(artifact_event.links.task_id(), input_intent.links.task_id());
+            assert_eq!(
+                artifact_event.links.request_id(),
+                input_intent.links.request_id()
+            );
+            let [artifact] = artifact_event.artifacts.as_slice() else {
+                panic!("one PNG reference");
+            };
+            let bytes = read_projected_verified(root.path(), artifact).unwrap();
+            assert_eq!(
+                artifact.sha256,
+                format!("sha256:{:x}", Sha256::digest(bytes))
+            );
+        }
+    }
     let semantic = events
         .iter()
         .filter_map(projected_task_semantic_fact)
@@ -12025,6 +12141,14 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     );
     assert_eq!(summary.summary().frames().len(), 2);
     assert_eq!(
+        summary.summary().frames()[0].artifact().frame_id,
+        Some(before_frame)
+    );
+    assert_eq!(
+        summary.summary().frames()[1].artifact().frame_id,
+        Some(after_frame)
+    );
+    assert_eq!(
         summary
             .summary()
             .pinned()
@@ -12071,6 +12195,26 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         panic!("replayed typed capture summary");
     };
     assert_eq!(summary.summary(), &summary_record);
+    let restored_inputs = projected_events(
+        &mut replay_client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            event_type: Some(EventType::InputIntent),
+            ..EventQuery::default()
+        },
+    );
+    let [restored_input] = restored_inputs.as_slice() else {
+        panic!("one restored input");
+    };
+    let ProjectionPayload::Full(payload) = &restored_input.payload else {
+        panic!("full restored intent");
+    };
+    let EventPayload::Input(actingcommand_contract::InputPayload::Intent(input)) = payload.as_ref()
+    else {
+        panic!("typed restored intent");
+    };
+    assert_eq!(input.provenance(), Some(&provenance));
+    assert_eq!(restored_input.links.action_id(), Some(&physical_id));
     drop(replay_client);
     restarted.close().expect("close restarted host");
 }
