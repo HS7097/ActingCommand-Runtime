@@ -268,6 +268,104 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
         }
     }
 
+    let snapshot = || {
+        let mut paths = vec![state_root.to_path_buf()];
+        let mut files = BTreeMap::new();
+        while let Some(path) = paths.pop() {
+            for entry in fs::read_dir(path).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    paths.push(path);
+                } else {
+                    files.insert(path.clone(), fs::read(path).unwrap());
+                }
+            }
+        }
+        files
+    };
+    let before = snapshot();
+    let task_evidence = invoke(
+        binary,
+        state_root,
+        &[
+            "export".into(),
+            "--task-evidence".into(),
+            "--after".into(),
+            "0".into(),
+            "--through".into(),
+            "1".into(),
+            "--limit".into(),
+            "1".into(),
+        ],
+    );
+    assert!(task_evidence.status.success(), "{task_evidence:?}");
+    assert!(task_evidence.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&task_evidence.stdout).unwrap();
+    assert_eq!(report["command"], "task_evidence");
+    assert_eq!(report["data"]["page"]["events"][0]["sequence"], 1);
+    assert_eq!(report["data"]["inputs"], serde_json::json!([]));
+    assert_eq!(report["data"]["window_complete"], true);
+    assert_eq!(snapshot(), before);
+    for suffix in [
+        vec!["--json"],
+        vec!["--run", "run"],
+        vec!["--req", "request"],
+        vec!["--after", "2", "--through", "1"],
+        vec!["--limit", "0"],
+        vec!["--limit", "1025"],
+        vec!["--limit", "1", "--limit", "2"],
+    ] {
+        let mut command = vec!["export".to_string(), "--task-evidence".to_string()];
+        command.extend(suffix.into_iter().map(str::to_string));
+        let output = invoke(binary, state_root, &command);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+    }
+    assert_eq!(snapshot(), before);
+    let writer =
+        GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "legacy-input-source")).unwrap();
+    writer
+        .append(
+            EventDraft::new(
+                identifiers.mint_event_id().unwrap(),
+                1_752_147_200_001,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default()
+                    .with_request_id(request_id)
+                    .with_action_id(identifiers.mint_action_id().unwrap()),
+                actingcommand_contract::InputPayloadDraft::intent(
+                    EventAction::InputTap,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap())
+            .unwrap(),
+        )
+        .unwrap();
+    writer.close().unwrap();
+    let legacy_before = snapshot();
+    let output = invoke(
+        binary,
+        state_root,
+        &["export".into(), "--task-evidence".into()],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("task_evidence_export_incomplete"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["inputs"][0]["source_step"]["state"],
+        "not_recorded"
+    );
+    assert_eq!(report["data"]["window_complete"], false);
+    assert_eq!(snapshot(), legacy_before);
+
     for invalid in [
         Vec::<&str>::new(),
         vec!["--state-root"],

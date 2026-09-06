@@ -1968,6 +1968,9 @@ fn task_semantic_payload_preserves_recognition_basis_and_v3_schema() {
 
 #[test]
 fn task_semantic_effect_intent_redacts_text_and_key_before_persistence() {
+    let identifiers = IdentifierIssuer::new().unwrap();
+    let step = identifiers.mint_action_id().unwrap();
+    let frame = identifiers.mint_frame_id().unwrap();
     for (index, action) in [
         InputAction::Text {
             text: "authentication-secret-task-text".to_string(),
@@ -1984,7 +1987,7 @@ fn task_semantic_effect_intent_redacts_text_and_key_before_persistence() {
                 TaskSemanticFact::EffectIntent {
                     step_index: index as u32,
                     operation_label: "input".to_string(),
-                    action,
+                    action: action.clone(),
                 },
                 AuditInput::new(),
             )
@@ -1995,6 +1998,39 @@ fn task_semantic_effect_intent_redacts_text_and_key_before_persistence() {
 
         assert!(!durable.contains("authentication-secret-task"));
         assert!(durable.contains("[redacted]"));
+        let intent = sanitize(
+            InputPayloadDraft::intent_with_provenance(
+                action.clone(),
+                None,
+                Some(*step.transport()),
+                Some(*frame.transport()),
+                AuditInput::new(),
+            )
+            .into(),
+            index as u64 + 3,
+        );
+        let persisted = serde_json::to_string(intent.payload()).unwrap();
+        assert!(!persisted.contains("authentication-secret-task"));
+        assert!(persisted.contains("[redacted]"));
+        assert!(
+            serde_json::to_string(&action)
+                .unwrap()
+                .contains("authentication-secret-task")
+        );
+        let decoded: EventPayload = serde_json::from_str(&persisted).unwrap();
+        let EventPayload::Input(InputPayload::Intent(payload)) = decoded else {
+            panic!("typed input intent");
+        };
+        let provenance = payload.provenance().unwrap();
+        assert_eq!(provenance.source_step_action_id, Some(*step.transport()));
+        assert_eq!(provenance.before_frame_id, Some(*frame.transport()));
+        let EventPayload::Task(TaskPayload::Semantic(semantic)) = event.payload() else {
+            panic!("typed semantic intent");
+        };
+        let TaskSemanticFact::EffectIntent { action, .. } = semantic.fact() else {
+            panic!("semantic input action");
+        };
+        assert_eq!(&provenance.input_action, action);
     }
 }
 
