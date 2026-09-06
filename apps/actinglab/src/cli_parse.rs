@@ -97,7 +97,10 @@ where
         index += 1;
     }
 
-    let (command, args) = if global.version && !package_cli::is_offline_command(&rest) {
+    let (command, args) = if global.version
+        && !package_cli::is_offline_command(&rest)
+        && rest.first().is_none_or(|group| group != "scheduling")
+    {
         (vec!["version".to_string()], rest)
     } else if rest.is_empty() {
         (vec!["help".to_string()], Vec::new())
@@ -131,7 +134,7 @@ fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
         "config" | "env" | "lab" | "package" | "operation" | "control" | "scheduler"
-        | "runtime" | "resource" | "run" | "report" | "session" | "ledger" => {
+        | "runtime" | "resource" | "run" | "report" | "session" | "ledger" | "scheduling" => {
             rest.get(1).map(|_| 2).unwrap_or(1)
         }
         _ => 1,

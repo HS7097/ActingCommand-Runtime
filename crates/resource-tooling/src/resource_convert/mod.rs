@@ -652,7 +652,18 @@ impl OperationConverter {
     }
 
     fn build_resources(&self) -> CliOutcome<ConvertOutputs> {
-        let pack = self.build_pack()?;
+        self.build_resources_with_dependencies(&[])
+    }
+
+    fn build_resources_with_dependencies(
+        &self,
+        dependencies: &[Bundle],
+    ) -> CliOutcome<ConvertOutputs> {
+        let pack = if dependencies.is_empty() {
+            self.build_pack()?
+        } else {
+            self.build_pack_with_dependencies(dependencies)?
+        };
         validate_pack_targets_exist(&self.root, &pack)?;
         let pages = self.build_pages()?;
         validate_page_rule_targets(&pack, &self.bundles)?;
@@ -683,7 +694,8 @@ impl OperationConverter {
                 task_ids.join(", ")
             )));
         }
-        let selected = self.prune_page_rules_for_selected_build(selected)?;
+        let dependencies = self.relative_ocr_dependencies(&selected)?;
+        let selected = self.prune_page_rules_for_selected_build(selected, &dependencies)?;
         let subset = Self {
             root: self.root.clone(),
             game: self.game.clone(),
@@ -697,7 +709,7 @@ impl OperationConverter {
             maa_task_overlays: self.maa_task_overlays.clone(),
         };
         subset.validate_bundles()?;
-        let mut outputs = subset.build_resources()?;
+        let mut outputs = subset.build_resources_with_dependencies(&dependencies)?;
         let annotation_path = self
             .root
             .join("navigation")
@@ -785,9 +797,69 @@ impl OperationConverter {
         Ok(task)
     }
 
-    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> CliOutcome<Vec<Bundle>> {
+    fn relative_ocr_dependencies(&self, selected: &[Bundle]) -> CliOutcome<Vec<Bundle>> {
+        let available = selected_available_target_ids(selected)?;
+        let mut required = BTreeSet::new();
+        for bundle in selected {
+            for target in ocr_target_declarations(bundle)? {
+                if target.pointer("/region/mode").and_then(Value::as_str)
+                    == Some("template_relative")
+                {
+                    let anchor = required_string(&target["region"], "anchor_target_id")?;
+                    if !available.contains(&anchor) {
+                        required.insert(anchor);
+                    }
+                }
+            }
+        }
+        let mut dependencies = Vec::new();
+        for bundle in &self.bundles {
+            let mut dependency = bundle.clone();
+            let anchors = array_field(&bundle.data, "anchors")
+                .iter()
+                .filter(|row| {
+                    row["id"]
+                        .as_str()
+                        .is_some_and(|id| required.contains(&anchor_target_id(id)))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let templates = array_field(&bundle.data, "verify_templates")
+                .iter()
+                .filter(|row| row["id"].as_str().is_some_and(|id| required.contains(id)))
+                .cloned()
+                .collect::<Vec<_>>();
+            let operations = array_field(&bundle.data, "operations")
+                .iter()
+                .filter(|row| {
+                    row["verify_template"]
+                        .as_str()
+                        .is_some_and(|path| required.contains(&template_target_id(path)))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if anchors.is_empty() && templates.is_empty() && operations.is_empty() {
+                continue;
+            }
+            // Only direct template declarations enter the pack; no donor task/page/OCR is selected.
+            dependency.data =
+                json!({"anchors":anchors,"verify_templates":templates,"operations":operations});
+            if let Some(defaults) = bundle.data.get("defaults") {
+                dependency.data["defaults"] = defaults.clone();
+            }
+            dependencies.push(dependency);
+        }
+        Ok(dependencies)
+    }
+
+    fn prune_page_rules_for_selected_build(
+        &self,
+        bundles: Vec<Bundle>,
+        dependencies: &[Bundle],
+    ) -> CliOutcome<Vec<Bundle>> {
         let available_pages = selected_available_page_ids(&self.game, &bundles)?;
-        let available_targets = selected_available_target_ids(&bundles)?;
+        let mut available_targets = selected_available_target_ids(&bundles)?;
+        available_targets.extend(selected_available_target_ids(dependencies)?);
         Ok(bundles
             .into_iter()
             .map(|mut bundle| {
@@ -1035,9 +1107,13 @@ impl OperationConverter {
     }
 
     fn build_pack(&self) -> CliOutcome<Value> {
+        self.build_pack_with_dependencies(&[])
+    }
+
+    fn build_pack_with_dependencies(&self, dependencies: &[Bundle]) -> CliOutcome<Value> {
         let mut targets = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
-        for bundle in &self.bundles {
+        for bundle in self.bundles.iter().chain(dependencies) {
             let template_threshold = |source: &Value| -> CliOutcome<Value> {
                 let threshold = source.get("threshold").map(Ok).unwrap_or_else(|| {
                     let defaults = bundle
@@ -2407,6 +2483,18 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
 }
 
 fn ocr_region_to_pack(region: &Value) -> CliOutcome<Value> {
+    if region.get("mode").and_then(Value::as_str) == Some("template_relative") {
+        let object = require_exact_object(
+            region,
+            &["mode", "anchor_target_id", "offset", "width", "height"],
+            "template_relative OCR region",
+        )?;
+        for field in ["anchor_target_id", "offset", "width", "height"] {
+            required_map_field(object, field)?;
+        }
+        require_exact_object(&object["offset"], &["x", "y"], "template_relative offset")?;
+        return Ok(region.clone());
+    }
     let region = require_exact_object(region, &["mode", "rect"], "ocr_targets entry region")?;
     let mode = region.get("mode").and_then(Value::as_str).ok_or_else(|| {
         CliError::package_invalid("ocr_targets entry region missing string field mode")
@@ -2627,6 +2715,28 @@ fn validate_post_admission_ocr_target_region(
     target_id: &str,
     target: &Value,
 ) -> CliOutcome<()> {
+    if target.pointer("/region/mode").and_then(Value::as_str) == Some("template_relative") {
+        let region = ocr_region_to_pack(required_field(target, "region")?)?;
+        let _: actingcommand_recognition_pack::PackRegion = serde_json::from_value(region.clone())
+            .map_err(|error| {
+                CliError::package_invalid(format!("invalid relative OCR region: {error}"))
+            })?;
+        for dimension in ["width", "height"] {
+            let value = region[dimension].as_i64().ok_or_else(|| {
+                CliError::package_invalid("relative OCR dimension must be an integer")
+            })?;
+            let bound = bundle.data["coordinate_space"][dimension]
+                .as_u64()
+                .ok_or_else(|| CliError::package_invalid("task coordinate_space is invalid"))?;
+            if value <= 0 || value as u64 > bound {
+                return Err(CliError::package_invalid(
+                    "relative OCR dimensions exceed coordinate space",
+                ));
+            }
+        }
+        // The complete generated pack validates direct template identity and assets.
+        return Ok(());
+    }
     let region = require_exact_object(
         required_map_field(
             target.as_object().ok_or_else(|| {
@@ -3053,7 +3163,7 @@ fn add_ocr_target(
 }
 
 fn validate_generated_ocr_targets(root: &Path, pack: &Value) -> CliOutcome<()> {
-    let ocr_targets = array_field(pack, "targets")
+    let mut ocr_targets = array_field(pack, "targets")
         .iter()
         .filter(|target| target.get("type").and_then(Value::as_str) == Some("ocr"))
         .cloned()
@@ -3061,6 +3171,24 @@ fn validate_generated_ocr_targets(root: &Path, pack: &Value) -> CliOutcome<()> {
     if ocr_targets.is_empty() {
         return Ok(());
     }
+    let anchors = ocr_targets
+        .iter()
+        .filter_map(|target| {
+            target
+                .pointer("/region/anchor_target_id")
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    ocr_targets.extend(
+        array_field(pack, "targets")
+            .iter()
+            .filter(|target| {
+                target["id"].as_str().is_some_and(|id| anchors.contains(id))
+                    && target["type"].as_str() != Some("ocr")
+            })
+            .cloned(),
+    );
     let validation_pack = ordered_object([
         (
             "schema_version",
