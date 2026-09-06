@@ -5,8 +5,8 @@ use actingcommand_artifact_store::{read_projected_verified, verify_projected_rea
 use actingcommand_contract::{
     ArtifactKind, ContainedLabOperationResult, EventQuery, EventType,
     LAB_OPERATION_PREPARED_SCHEMA, LAB_OPERATION_TERMINAL_SCHEMA, LabEvidenceReference,
-    LabOperationEvidence, LabOperationPrepared, LabOperationRecord,
-    ProjectionPayload, ProjectionProfile, RequestId, RuntimeDebugOperation, TerminalEvent,
+    LabOperationEvidence, LabOperationPrepared, LabOperationRecord, ProjectionPayload,
+    ProjectionProfile, RequestId, RuntimeDebugOperation, TerminalEvent,
     verify_lab_operation_evidence,
 };
 use actingcommand_ledger::{
@@ -203,9 +203,9 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             || prepared.expected_package_sha256 != expected.to_string()
             || prepared.actual_package_sha256 != expected.to_string()
             || instance.is_some_and(|value| value != prepared.instance_id)
-            || events.iter().any(|event| {
-                event.links.correlation_id() != Some(&prepared.correlation_id)
-            })
+            || events
+                .iter()
+                .any(|event| event.links.correlation_id() != Some(&prepared.correlation_id))
         {
             return Err(restore_error(
                 "request instance or external package hash mismatch",
@@ -231,14 +231,18 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             })
             .collect::<Vec<_>>();
         let Some(operation) = terminal_record else {
-            gaps.push(json!({"request_id":request_id, "code":"lab_terminal_record_missing",
+            gaps.push(
+                json!({"request_id":request_id, "code":"lab_terminal_record_missing",
                 "correlation_id":prepared.correlation_id,"instance_id":prepared.instance_id,
                 "lease_id":prepared.lease_id,"package_sha256":prepared.actual_package_sha256,
-                "prepared":prepared_reference,"native_inputs":native_inputs}));
+                "prepared":prepared_reference,"native_inputs":native_inputs}),
+            );
             continue;
         };
         if operation.record.prepared != *prepared {
-            return Err(restore_error("stored Lab prepared and terminal content differ"));
+            return Err(restore_error(
+                "stored Lab prepared and terminal content differ",
+            ));
         }
         let terminals = events
             .iter()
