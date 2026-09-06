@@ -929,7 +929,7 @@ fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> Cli
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if flags.bool("--capture") && !(global.dry_run || flags.bool("--dry-run")) {
-        return operation::run(global, &flags);
+        return operation::run_contained_lab_do(global, &flags);
     }
     let ids = Lab2Ids::new();
     let target = target_argument(&flags, "do")?;

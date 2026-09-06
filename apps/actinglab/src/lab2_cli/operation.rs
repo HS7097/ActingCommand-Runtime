@@ -5,7 +5,7 @@ use actingcommand_contract::{
     ContainedLabOperationRequest, LabOperationSelection, LabProjectionHint,
 };
 
-pub(super) fn run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "do")?;
     let selection = selection(flags)?;
     let projection_hint = LabProjectionHint {
