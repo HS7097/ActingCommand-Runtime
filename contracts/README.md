@@ -18,6 +18,40 @@ These files are versioned data and protocol contracts between the runtime decisi
 
 ## Rust mainline boundary
 
+ArtifactStore supports a task-owned `begin_stream` / `seal_stream` lifecycle.
+The stream implements standard `Write` and accepts successive byte chunks;
+neither opening nor appending publishes an artifact or a ledger event. The
+store tracks the actual bytes written. Sealing synchronizes the staging file,
+recomputes its material with a fixed 64 KiB read buffer, and compares length and
+SHA-256 against the write calculation. The contract's opaque material API
+accepts bytes, never a caller-declared final hash. The store then issues the
+ordinary artifact identity, derives its object key, and performs its existing
+no-overwrite atomic rename and `ArtifactCreated` → verification →
+`ArtifactVerified` publication under the same writer mutex. Both required event
+failures retain their existing published-file cleanup and fatal return.
+
+The staging stream carries no verified reference. Its owner must consume it
+with `seal_stream` or `abort` before normal task termination, including a
+normally terminable failure or cancellation. Write and seal errors clean up
+the staging file and propagate the original failure with any cleanup error;
+an errored stream cannot seal successfully. Explicit abort also reports cleanup
+failure. Abrupt process termination can leave an unpublished partial file;
+that file has no diagnostic authority or recovery mechanism. Publication facts
+remain owned by GlobalLedger. Memory for store IO is bounded independently of
+total artifact length, and byte-count overflow and IO failure are explicit.
+Record encoding and record limits belong to the producer's schema; the byte
+stream does not sample, truncate, or interpret records.
+
+`open_projected_stream` opens an existing ledger-referenced artifact for
+bounded sequential reads without a writer lock or filesystem mutation. Bytes
+read before `finish` are provisional. `finish` reads any remaining bytes and
+returns a verified reference only after EOF, actual length, and the complete
+SHA-256 match the published reference. Reading a prefix or a record page alone
+does not establish integrity. Consumers enforce the reference's privacy policy
+and must complete verification before presenting the page as verified. Recovery
+and read-only reference verification also use bounded material calculation;
+existing byte-vector read interfaces retain their behavior.
+
 Each formal contained task records its effective configuration before entry
 preflight as `actingcommand.runtime.effective-task-configuration.v1` in a
 GlobalLedger-linked DiagnosticJson artifact. Registered device configurations

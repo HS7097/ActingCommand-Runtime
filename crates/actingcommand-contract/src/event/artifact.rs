@@ -7,7 +7,9 @@ use super::{
 use super::{IdentifierIssuanceError, IdentifierIssuer};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
+use std::io::Read;
 
 pub const EFFECTIVE_CONFIGURATION_SCHEMA: &str =
     "actingcommand.runtime.effective-task-configuration.v1";
@@ -329,6 +331,65 @@ impl ArtifactLinksDraft {
     }
 }
 
+/// Opaque material calculated from actual bytes, without an identity or publication authority.
+pub struct ArtifactMaterial {
+    byte_count: u64,
+    sha256: String,
+}
+
+impl ArtifactMaterial {
+    /// Consumes a reader to EOF using a fixed 64 KiB buffer. Declared hashes are not inputs.
+    pub fn read_from(reader: &mut impl Read) -> std::io::Result<Self> {
+        let mut material = ArtifactMaterialAccumulator::default();
+        let mut buffer = [0_u8; 65_536];
+        loop {
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            material.update(&buffer[..count])?;
+        }
+        Ok(material.finish())
+    }
+
+    pub const fn byte_count(&self) -> u64 {
+        self.byte_count
+    }
+
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
+/// Bounded calculation state. Only bytes can contribute to the resulting material.
+#[derive(Default)]
+pub struct ArtifactMaterialAccumulator {
+    byte_count: u64,
+    hasher: Sha256,
+}
+
+impl ArtifactMaterialAccumulator {
+    pub fn update(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.byte_count = self
+            .byte_count
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| std::io::Error::other("artifact byte count exceeds u64"))?;
+        self.hasher.update(bytes);
+        Ok(())
+    }
+
+    pub const fn byte_count(&self) -> u64 {
+        self.byte_count
+    }
+
+    pub fn finish(self) -> ArtifactMaterial {
+        ArtifactMaterial {
+            byte_count: self.byte_count,
+            sha256: format!("sha256:{:x}", self.hasher.finalize()),
+        }
+    }
+}
+
 /// Mints artifact attachment capabilities for the durable artifact-store boundary.
 ///
 /// Workspace architecture guards restrict construction to `actingcommand-artifact-store` and
@@ -352,7 +413,23 @@ impl ArtifactStoreIssuer {
         created_at_unix_ms: u64,
         policy: ArtifactIssuePolicy,
     ) -> Result<StoreIssuedArtifact, SanitizationError> {
-        if bytes.is_empty() {
+        let material = ArtifactMaterial {
+            byte_count: u64::try_from(bytes.len())
+                .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?,
+            sha256: canonical_sha256(bytes),
+        };
+        self.issue_material(kind, links, material, created_at_unix_ms, policy)
+    }
+
+    pub fn issue_material(
+        &self,
+        kind: ArtifactKind,
+        links: ArtifactLinksDraft,
+        material: ArtifactMaterial,
+        created_at_unix_ms: u64,
+        policy: ArtifactIssuePolicy,
+    ) -> Result<StoreIssuedArtifact, SanitizationError> {
+        if material.byte_count == 0 {
             return Err(SanitizationError::new(
                 "invalid_artifact_byte_count",
                 "byte_count",
@@ -364,14 +441,12 @@ impl ArtifactStoreIssuer {
                 "created_at_unix_ms",
             ));
         }
-        let byte_count = u64::try_from(bytes.len())
-            .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?;
         let artifact_id = self
             .identifiers
             .mint_artifact_id()
             .map_err(|_| SanitizationError::new("artifact_id_issuance_failed", "artifact_id"))?
             .into_transport();
-        let sha256 = canonical_sha256(bytes);
+        let ArtifactMaterial { byte_count, sha256 } = material;
         let object_key = object_key_for(&artifact_id, kind, &sha256);
         let reference = ArtifactReference {
             artifact_id,
@@ -399,13 +474,24 @@ impl ArtifactStoreIssuer {
         projected: ProjectedArtifactReference,
         bytes: &[u8],
     ) -> Result<VerifiedArtifactReference, SanitizationError> {
+        let material = ArtifactMaterial {
+            byte_count: u64::try_from(bytes.len())
+                .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?,
+            sha256: canonical_sha256(bytes),
+        };
+        self.verify_existing_material(projected, material)
+    }
+
+    pub fn verify_existing_material(
+        &self,
+        projected: ProjectedArtifactReference,
+        material: ArtifactMaterial,
+    ) -> Result<VerifiedArtifactReference, SanitizationError> {
         projected.validate()?;
-        let byte_count = u64::try_from(bytes.len())
-            .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?;
         let object_key = projected
             .object_key
             .ok_or_else(|| SanitizationError::new("invalid_artifact_reference", "object_key"))?;
-        if byte_count != projected.byte_count || canonical_sha256(bytes) != projected.sha256 {
+        if material.byte_count != projected.byte_count || material.sha256 != projected.sha256 {
             return Err(SanitizationError::new(
                 "artifact_verification_failed",
                 "artifact",
