@@ -5820,10 +5820,14 @@ mod post_admission_ocr_tests {
                 provider.clone(),
             )
             .unwrap();
-            let detector = PageDetector::new(serde_json::from_value(json!({"schema_version":"0.6","pages":[
-                {"id":"neutral/home","required":[],"any_of":[["page/operator"]]},
-                {"id":"neutral/result","required":["page/operator_end"]}
-            ]})).unwrap()).unwrap();
+            let detector = PageDetector::new(
+                serde_json::from_value(json!({"schema_version":"0.6","pages":[
+                    {"id":"neutral/home","required":[],"any_of":[["page/operator"]]},
+                    {"id":"neutral/result","required":["page/operator_end"]}
+                ]}))
+                .unwrap(),
+            )
+            .unwrap();
             detector.validate(&evaluator).unwrap();
             let entry_page = program
                 .required_home_entry_page(&control, &detector)
