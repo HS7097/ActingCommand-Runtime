@@ -1114,6 +1114,33 @@ impl OperationConverter {
         let mut targets = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in self.bundles.iter().chain(dependencies) {
+            let template_threshold = |source: &Value| -> CliOutcome<Value> {
+                let threshold = source.get("threshold").map(Ok).unwrap_or_else(|| {
+                    let defaults = bundle
+                        .data
+                        .get("defaults")
+                        .map(|defaults| {
+                            defaults.as_object().ok_or_else(|| {
+                                CliError::package_invalid(format!(
+                                    "{}: defaults must be an object",
+                                    bundle.task_json_path().display()
+                                ))
+                            })
+                        })
+                        .transpose()?;
+                    defaults
+                        .and_then(|defaults| defaults.get("template_threshold"))
+                        .map(Ok)
+                        .unwrap_or_else(|| required_field(&self.defaults, "template_threshold"))
+                })?;
+                if !threshold.is_number() {
+                    return Err(CliError::package_invalid(format!(
+                        "{}: template threshold must be a number",
+                        bundle.task_json_path().display()
+                    )));
+                }
+                Ok(threshold.clone())
+            };
             for anchor in array_field(&bundle.data, "anchors") {
                 let anchor_id = required_string(anchor, "id")?;
                 let target_id = anchor_target_id(&anchor_id);
@@ -1124,11 +1151,7 @@ impl OperationConverter {
                     &target_id,
                     &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
-                    source.get("threshold").cloned().unwrap_or_else(|| {
-                        required_field(&self.defaults, "template_threshold")
-                            .cloned()
-                            .unwrap_or(Value::Null)
-                    }),
+                    template_threshold(&source)?,
                     color_check_to_pack(source.get("color_check"))?,
                     None,
                 )?;
@@ -1153,11 +1176,7 @@ impl OperationConverter {
                     &target_id,
                     &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
-                    source.get("threshold").cloned().unwrap_or_else(|| {
-                        required_field(&self.defaults, "template_threshold")
-                            .cloned()
-                            .unwrap_or(Value::Null)
-                    }),
+                    template_threshold(&source)?,
                     None,
                     None,
                 )?;
@@ -1179,10 +1198,7 @@ impl OperationConverter {
                     &target_id,
                     &template_resource_path(&self.root, &bundle.dir, template)?,
                     Value::String(FULL_FRAME_SENTINEL.to_string()),
-                    source
-                        .get("threshold")
-                        .cloned()
-                        .unwrap_or(required_field(&self.defaults, "template_threshold")?.clone()),
+                    template_threshold(&source)?,
                     None,
                     None,
                 )?;
