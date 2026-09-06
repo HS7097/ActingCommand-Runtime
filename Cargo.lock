@@ -278,6 +278,7 @@ dependencies = [
 name = "actingcommand-recognition-pack"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-recognition",
  "serde",
  "serde_json",

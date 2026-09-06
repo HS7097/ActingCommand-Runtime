@@ -208,7 +208,8 @@ impl PreparedPageObservation {
                 error,
             )
         })?;
-        let (pages, batch_error) = match detector.evaluate_all_outcomes(evaluator, &scene) {
+        let context = evaluator.scene_context(&scene);
+        let (pages, batch_error) = match detector.evaluate_all_outcomes_in_context(&context) {
             Ok(pages) => (pages, None),
             Err(error) => (error.completed.clone(), Some(error)),
         };
@@ -314,7 +315,7 @@ impl PreparedPageObservation {
                 facts.push(row, 0).map_err(fact_error)?;
                 continue;
             }
-            match evaluator.evaluate_target(&scene, target) {
+            match context.evaluate_target(target) {
                 Ok(value) => {
                     let evaluated = PageTargetEvaluation {
                         target_id: target.clone(),
