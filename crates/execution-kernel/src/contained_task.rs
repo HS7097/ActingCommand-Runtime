@@ -892,6 +892,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 reason: OcrFieldReason::NotCollected,
                 detail: None,
                 region: None,
+                extraction: None,
                 redacted: false,
             };
             if self.field_failure.is_none() {
@@ -953,11 +954,23 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                             result.raw_text = Some(evaluated.text.clone());
                             if !exceeds {
                                 let normalized = evaluated.text.trim().to_string();
-                                let (value, reason) = parse_ocr_field(
+                                let (mut value, mut reason) = parse_ocr_field(
                                     &field.value,
                                     &normalized,
                                     prepared.dictionaries.get(&field.id),
                                 );
+                                if reason == OcrFieldReason::UnknownEntry
+                                    && let Some(rule) = &field.text_extraction
+                                    && let Some(extraction) = rule.extract(&normalized)
+                                        .map_err(ContainedTaskError::new)?
+                                {
+                                    (value, reason) = parse_ocr_field(
+                                        &field.value,
+                                        &extraction.extracted_text,
+                                        prepared.dictionaries.get(&field.id),
+                                    );
+                                    result.extraction = Some(extraction);
+                                }
                                 result.normalized_text = Some(normalized);
                                 result.value = value;
                                 result.reason = reason;

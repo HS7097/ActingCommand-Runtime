@@ -54,6 +54,131 @@ pub struct OcrFieldDeclaration {
     pub privacy: OcrFieldPrivacy,
     pub trim: OcrFieldTrim,
     pub value: OcrFieldType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_extraction: Option<OcrFieldTextExtraction>,
+}
+
+/// A single bounded suffix, interpreted identically by execution and projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OcrFieldTextExtraction {
+    StripDeclaredSuffixV1 { suffix: Vec<OcrFieldSuffixSegment> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OcrFieldSuffixSegment {
+    AsciiDigits { count: u8 },
+    Literal { value: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrFieldExtractionVersion {
+    StripDeclaredSuffixV1,
+}
+
+/// Half-open byte offsets in the original normalized text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrFieldTextRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrFieldExtractionEvidence {
+    pub rule_version: OcrFieldExtractionVersion,
+    pub matched_suffix: OcrFieldTextRange,
+    pub extracted_text: String,
+    pub extracted_range: OcrFieldTextRange,
+}
+
+impl OcrFieldTextExtraction {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let Self::StripDeclaredSuffixV1 { suffix } = self;
+        if !(1..=16).contains(&suffix.len()) {
+            return Err("ocr_fields_text_extraction_invalid");
+        }
+        let mut bytes = 0;
+        for segment in suffix {
+            bytes += match segment {
+                OcrFieldSuffixSegment::AsciiDigits { count } if (1..=8).contains(count) => {
+                    usize::from(*count)
+                }
+                OcrFieldSuffixSegment::Literal { value } if (1..=64).contains(&value.len()) => {
+                    value.len()
+                }
+                _ => return Err("ocr_fields_text_extraction_invalid"),
+            };
+        }
+        if bytes > 256 {
+            return Err("ocr_fields_text_extraction_invalid");
+        }
+        Ok(())
+    }
+
+    /// Call only after the complete dictionary input has no exact or alias match.
+    pub fn extract(
+        &self,
+        normalized_text: &str,
+    ) -> Result<Option<OcrFieldExtractionEvidence>, &'static str> {
+        self.validate()?;
+        let Self::StripDeclaredSuffixV1 { suffix } = self;
+        let mut end = normalized_text.len();
+        for segment in suffix.iter().rev() {
+            let length = match segment {
+                OcrFieldSuffixSegment::AsciiDigits { count } => usize::from(*count),
+                OcrFieldSuffixSegment::Literal { value } => value.len(),
+            };
+            let Some(start) = end.checked_sub(length) else {
+                return Ok(None);
+            };
+            let Some(text) = normalized_text.get(start..end) else {
+                return Ok(None);
+            };
+            let matches = match segment {
+                OcrFieldSuffixSegment::AsciiDigits { .. } => {
+                    text.bytes().all(|byte| byte.is_ascii_digit())
+                }
+                OcrFieldSuffixSegment::Literal { value } => text == value,
+            };
+            if !matches {
+                return Ok(None);
+            }
+            end = start;
+        }
+        let prefix = &normalized_text[..end];
+        let extracted_text = prefix.trim();
+        if extracted_text.is_empty() {
+            return Ok(None);
+        }
+        let start = prefix.len() - prefix.trim_start().len();
+        Ok(Some(OcrFieldExtractionEvidence {
+            rule_version: OcrFieldExtractionVersion::StripDeclaredSuffixV1,
+            matched_suffix: OcrFieldTextRange {
+                start: end,
+                end: normalized_text.len(),
+            },
+            extracted_text: extracted_text.to_owned(),
+            extracted_range: OcrFieldTextRange {
+                start,
+                end: start + extracted_text.len(),
+            },
+        }))
+    }
+
+    pub fn verify(
+        &self,
+        normalized_text: &str,
+        evidence: &OcrFieldExtractionEvidence,
+    ) -> Result<(), &'static str> {
+        if self.extract(normalized_text)?.as_ref() != Some(evidence) {
+            return Err("ocr_fields_text_extraction_evidence_invalid");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +291,12 @@ impl OcrFieldsDeclaration {
             return Err("ocr_fields_declaration_invalid");
         }
         for field in &self.fields {
+            if let Some(extraction) = &field.text_extraction {
+                if !matches!(field.value, OcrFieldType::DictionaryEntry { .. }) {
+                    return Err("ocr_fields_text_extraction_type_invalid");
+                }
+                extraction.validate()?;
+            }
             if !identifier(&field.id)
                 || !identifier(&field.group)
                 || !identifier(&field.target_id)
@@ -352,6 +483,8 @@ pub struct OcrFieldResult {
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<OcrRegionEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction: Option<OcrFieldExtractionEvidence>,
     pub redacted: bool,
 }
 

@@ -144,6 +144,48 @@ must exactly name a declared item. Duplicate normalized items, duplicate/conflic
 aliases and invalid canonical references fail admission as ambiguous. Unknown observations
 remain unresolved; no tolerant substitution or retry is applied to fields.
 
+A `dictionary_entry` field may explicitly declare `text_extraction`:
+
+```json
+{
+  "mode": "strip_declared_suffix_v1",
+  "suffix": [
+    { "type": "ascii_digits", "count": 2 },
+    { "type": "literal", "value": "/" },
+    { "type": "ascii_digits", "count": 4 },
+    { "type": "literal", "value": ":" },
+    { "type": "ascii_digits", "count": 2 },
+    { "type": "literal", "value": " expires" }
+  ]
+}
+```
+
+The field still queries the complete trimmed input first, including exact aliases.
+Only an unknown dictionary entry triggers extraction. The shared contract rule matches
+the entire declared suffix once from the right, trims the remaining prefix, and passes
+that prefix to the same exact dictionary lookup. For example, `Sample09/2803:59 expires`
+can resolve to the declared item `Sample`. Unknown suffixes, empty prefixes and unknown
+items remain unresolved. The declaration does not establish other date layouts.
+
+There is one suffix sequence of 1–16 segments. An ASCII digit segment has exactly 1–8
+digits; a literal is nonempty and at most 64 UTF-8 bytes. The complete suffix is at most
+256 bytes. Unknown modes, segment types, invalid limits and use on another field type
+fail admission. Omitting `text_extraction` preserves the existing declaration output and
+full-input behavior. Resource authors own the literals and the source text budget.
+
+`raw_text` stays the original bounded observation, and `normalized_text` stays its
+Unicode-whitespace-trimmed form. A successful suffix extraction adds `extraction` with
+`rule_version: "strip_declared_suffix_v1"`, `matched_suffix: {"start": ..., "end": ...}`,
+`extracted_text`, and `extracted_range` in the same range shape. Both ranges are half-open
+UTF-8 byte offsets in `normalized_text`. The client recomputes the evidence with the
+shared rule under the existing frame/artifact/declaration binding; inconsistent text,
+ranges or rule versions fail projection. Personal fields also redact this evidence.
+The default path omits it. Extraction makes no additional OCR call and retains no state.
+
+Original text and block text are counted before extraction. An over-budget observation
+retains the existing truncation failure; a shorter extracted value cannot avoid it.
+This capability does not increase or reset a resource's declared limits.
+
 Limits retain the existing maxima: 256 frames, 4096 observations, 4096 bytes per string,
 4 MiB total observed text/error detail, and 4096 dictionary entries. Aliases are bounded to
 1024 per dictionary. Total loaded dictionary bytes are also bounded by `max_total_bytes`.

@@ -2945,9 +2945,29 @@ fn project_ocr_fields(
                 {
                     return Err(invalid());
                 }
+                if let Some(extraction) = &field.extraction {
+                    if !matches!(
+                        field.reason,
+                        OcrFieldReason::Resolved
+                            | OcrFieldReason::UnknownEntry
+                            | OcrFieldReason::AmbiguousEntry
+                    ) {
+                        return Err(invalid());
+                    }
+                    declared
+                        .text_extraction
+                        .as_ref()
+                        .ok_or_else(invalid)?
+                        .verify(
+                            field.normalized_text.as_deref().ok_or_else(invalid)?,
+                            extraction,
+                        )
+                        .map_err(|_| invalid())?;
+                }
                 if declared.privacy == OcrFieldPrivacy::Personal {
                     field.raw_text = None;
                     field.normalized_text = None;
+                    field.extraction = None;
                     field.value = None;
                     field.detail = None;
                     field.redacted = true;
