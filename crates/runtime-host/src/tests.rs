@@ -138,6 +138,7 @@ struct FakeState {
     block_input: AtomicBool,
     input_started: AtomicBool,
     capture_open_count: AtomicUsize,
+    capture_open_error: std::sync::Mutex<Option<DeviceError>>,
     capture_count: AtomicUsize,
     capture_delay_ms: AtomicU64,
     capture_close_count: AtomicUsize,
@@ -465,6 +466,15 @@ impl ExecutionBackendProvider for FakeProvider {
             .state
             .capture_open_count
             .fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = entry
+            .state
+            .capture_open_error
+            .lock()
+            .expect("capture open error")
+            .as_ref()
+        {
+            return Err(error.clone());
+        }
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&entry.state),
             provenance: self.provenance,
@@ -9294,6 +9304,121 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close host");
+}
+
+#[test]
+fn capture_failure_persists_nemu_resolution_context() {
+    use actingcommand_device::{
+        MumuInstallSource, NemuConfiguredAdbClass, NemuResolutionContext, NemuResolutionCountKind,
+        NemuResolutionReason,
+    };
+
+    let context = NemuResolutionContext::new(NemuResolutionReason::SharedAdbMultipleDllVersions)
+        .with_count(NemuResolutionCountKind::DllVersions, 2, false)
+        .with_source(MumuInstallSource::ConfiguredBackendPath)
+        .with_provenance(Some(NemuConfiguredAdbClass::SharedMumu), false, false);
+    let mut baseline_types = None;
+    for include_context in [false, true] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        let mut error = DeviceError::fatal("original Nemu resolution error");
+        if include_context {
+            error = error.with_nemu_resolution_context_if_absent(context);
+        }
+        let expected_message = error
+            .diagnostic_message()
+            .unwrap_or(error.message())
+            .to_owned();
+        *state.capture_open_error.lock().expect("capture open error") = Some(
+            error
+                .with_diagnostic(DeviceErrorCategory::Protocol, "nemu.installation.resolve")
+                .with_diagnostic_context(
+                    "nemu_ipc",
+                    "installation_resolve",
+                    DeviceErrorSensitivity::Internal,
+                ),
+        );
+        let host = host_with_state(&root, "node.a", Arc::clone(&state));
+        let mut client = TestClient::connect(&host);
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::ObserveReadonly {
+                instance_alias: "node.a".to_owned(),
+            },
+        );
+        let receipt = client.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+        assert_eq!(
+            receipt.error_projection().expect("failure").code,
+            RuntimeErrorCode::CaptureFailed
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let types = events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        if let Some(baseline) = &baseline_types {
+            assert_eq!(&types, baseline);
+        } else {
+            baseline_types = Some(types);
+        }
+        let flow = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::CaptureRequested
+                        | EventType::RecognitionRequested
+                        | EventType::CaptureFailed
+                        | EventType::RecognitionFailed
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            flow.iter()
+                .map(|event| event.event_type)
+                .collect::<Vec<_>>(),
+            vec![
+                EventType::CaptureRequested,
+                EventType::RecognitionRequested,
+                EventType::CaptureFailed,
+                EventType::RecognitionFailed,
+            ]
+        );
+        for event in &flow {
+            assert_eq!(event.links, flow[0].links);
+            assert_eq!(event.links.request_id(), Some(&request.request_id()));
+            assert_eq!(event.links.correlation_id(), Some(&correlation_id));
+            assert!(event.links.frame_id().is_some());
+            assert!(event.links.recognition_id().is_some());
+        }
+        let ProjectionPayload::Full(payload) = &flow[2].payload else {
+            panic!("full failure payload")
+        };
+        let EventPayload::Capture(CapturePayload::Failed(outcome)) = payload.as_ref() else {
+            panic!("capture failure")
+        };
+        let detail = outcome.detail().expect("resolution detail");
+        assert_eq!(detail.message(), expected_message);
+        assert_eq!(detail.category(), "protocol");
+        assert_eq!(detail.stage(), "nemu.installation.resolve");
+        assert_eq!(detail.backend(), "nemu_ipc");
+        assert_eq!(detail.operation(), "installation_resolve");
+        assert_eq!(detail.declared_sensitivity(), Sensitivity::Internal);
+        assert_eq!(state.capture_open_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+        assert!(host.fatal_error().expect("health").is_none());
+        drop(client);
+        host.close().expect("close host");
+    }
 }
 
 #[test]
