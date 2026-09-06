@@ -541,7 +541,9 @@ fn run_ocr_smoke(options: &CheckOptions) -> VisionFfiResult<OcrSmokeReport<serde
         ));
     };
     let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
-    let artifacts = manifest.require_production_fastdeploy_ppocr()?.clone();
+    let mut artifacts = manifest.require_production_fastdeploy_ppocr()?.clone();
+    let execution_root = checker_execution_root()?;
+    resolve_ocr_runtime_library_paths(&mut artifacts, &execution_root)?;
     let mut backend = FastDeployPpocrBackend::from_artifacts(artifacts.clone())?;
     let (frame_report, vision_frame) = load_png_frame(frame)?;
     let region = match region {
@@ -555,6 +557,70 @@ fn run_ocr_smoke(options: &CheckOptions) -> VisionFfiResult<OcrSmokeReport<serde
         timeout_ms: artifacts.default_timeout_ms,
     })?;
     build_ocr_smoke_report(frame_report, output)
+}
+
+fn checker_execution_root() -> VisionFfiResult<PathBuf> {
+    let execution_root = env::current_dir().map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("failed to obtain checker execution root: {err}"),
+        )
+    })?;
+    require_absolute_execution_root(&execution_root)?;
+    Ok(execution_root)
+}
+
+fn resolve_ocr_runtime_library_paths(
+    artifacts: &mut FastDeployPpocrArtifacts,
+    execution_root: &Path,
+) -> VisionFfiResult<()> {
+    require_absolute_execution_root(execution_root)?;
+    artifacts.validate_ppocr_v6_execution()?;
+    for path in &mut artifacts.runtime_library_paths {
+        resolve_runtime_library_path(execution_root, path)?;
+    }
+    let selected = artifacts.runtime_library_path.as_mut().ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "vision-provider-check",
+            "validated OCR artifacts are missing runtime_library_path",
+        )
+    })?;
+    resolve_runtime_library_path(execution_root, selected)?;
+    artifacts.validate_ppocr_v6_execution()
+}
+
+fn require_absolute_execution_root(execution_root: &Path) -> VisionFfiResult<()> {
+    if execution_root.is_absolute() {
+        Ok(())
+    } else {
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            "vision-provider-check",
+            format!(
+                "checker execution root must be absolute: {}",
+                execution_root.display()
+            ),
+        ))
+    }
+}
+
+fn resolve_runtime_library_path(execution_root: &Path, path: &mut PathBuf) -> VisionFfiResult<()> {
+    if path.is_relative() {
+        *path = execution_root.join(&*path);
+    }
+    if path.is_absolute() {
+        Ok(())
+    } else {
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            "vision-provider-check",
+            format!(
+                "OCR runtime-library path did not resolve to an absolute path: {}",
+                path.display()
+            ),
+        ))
+    }
 }
 
 fn build_ocr_smoke_report(
@@ -1695,6 +1761,97 @@ mod tests {
     }
 
     #[test]
+    fn ready_relative_runtime_closure_resolves_against_execution_root_in_order() {
+        let execution_root = absolute_test_root("ready-relative");
+        let mut artifacts = example_ocr_artifacts();
+        artifacts.runtime_library_paths = vec![
+            PathBuf::from("provider/runtime/cudnn64_9.dll"),
+            PathBuf::from("provider/runtime/onnxruntime.dll"),
+            PathBuf::from("provider/runtime/cudnn_ops64_9.dll"),
+        ];
+        artifacts.runtime_library_path = Some(artifacts.runtime_library_paths[1].clone());
+        let original = artifacts.clone();
+
+        resolve_ocr_runtime_library_paths(&mut artifacts, &execution_root)
+            .expect("Ready-style runtime closure resolves");
+
+        let expected_paths: Vec<_> = original
+            .runtime_library_paths
+            .iter()
+            .map(|path| execution_root.join(path))
+            .collect();
+        let mut expected = original;
+        expected.runtime_library_paths = expected_paths.clone();
+        expected.runtime_library_path = Some(expected_paths[1].clone());
+        assert_eq!(artifacts, expected);
+        assert_eq!(
+            artifacts.runtime_library_path.as_ref(),
+            Some(&artifacts.runtime_library_paths[1])
+        );
+    }
+
+    #[test]
+    fn absolute_runtime_closure_paths_remain_unchanged() {
+        let execution_root = absolute_test_root("unused-root");
+        let absolute_root = absolute_test_root("absolute-closure");
+        let mut artifacts = example_ocr_artifacts();
+        artifacts.runtime_library_paths = vec![
+            absolute_root.join("cudnn64_9.dll"),
+            absolute_root.join("onnxruntime.dll"),
+        ];
+        artifacts.runtime_library_path = Some(artifacts.runtime_library_paths[1].clone());
+        let expected = artifacts.clone();
+
+        resolve_ocr_runtime_library_paths(&mut artifacts, &execution_root)
+            .expect("absolute runtime closure accepted");
+
+        assert_eq!(artifacts, expected);
+    }
+
+    #[test]
+    fn runtime_closure_resolution_rejects_relative_execution_root() {
+        let mut artifacts = example_ocr_artifacts();
+        let err =
+            resolve_ocr_runtime_library_paths(&mut artifacts, Path::new("relative-checker-root"))
+                .expect_err("relative execution root rejected");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::InvalidRequest);
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(err.message().contains("execution root must be absolute"));
+    }
+
+    #[test]
+    fn runtime_closure_resolution_rejects_invalid_member_path() {
+        let execution_root = absolute_test_root("invalid-member");
+        let mut artifacts = example_ocr_artifacts();
+        artifacts.runtime_library_paths = vec![PathBuf::new()];
+        artifacts.runtime_library_path = Some(PathBuf::new());
+
+        let err = resolve_ocr_runtime_library_paths(&mut artifacts, &execution_root)
+            .expect_err("empty runtime closure member rejected");
+
+        assert_eq!(err.module(), "fastdeploy-ppocr");
+        assert!(err.message().contains("runtime_library_paths"));
+    }
+
+    #[test]
+    fn runtime_closure_resolution_rejects_selected_core_mismatch() {
+        let execution_root = absolute_test_root("selected-mismatch");
+        let mut artifacts = example_ocr_artifacts();
+        artifacts.runtime_library_paths = vec![PathBuf::from("provider/runtime/cudnn64_9.dll")];
+        artifacts.runtime_library_path = Some(PathBuf::from("provider/runtime/onnxruntime.dll"));
+
+        let err = resolve_ocr_runtime_library_paths(&mut artifacts, &execution_root)
+            .expect_err("selected runtime outside closure rejected");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::InvalidRequest);
+        assert!(
+            err.message()
+                .contains("runtime_library_path must occur exactly once")
+        );
+    }
+
+    #[test]
     fn ocr_smoke_report_preserves_result_and_exposes_typed_attestation() {
         let report = build_ocr_smoke_report(
             synthetic_frame_report(),
@@ -2250,6 +2407,27 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fixture root");
         root
+    }
+
+    fn absolute_test_root(label: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(r"C:\synthetic-checker-root\{label}"))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/synthetic-checker-root/{label}"))
+        }
+    }
+
+    fn example_ocr_artifacts() -> FastDeployPpocrArtifacts {
+        let manifest =
+            VisionProviderArtifactManifest::from_json_slice(example_manifest_json().as_bytes())
+                .expect("example manifest");
+        manifest
+            .require_production_fastdeploy_ppocr()
+            .expect("production OCR artifacts")
+            .clone()
     }
 
     fn synthetic_frame_report() -> FrameReport {
