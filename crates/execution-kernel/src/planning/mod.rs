@@ -82,7 +82,7 @@ pub struct DryRunTaskLoop {
     task_plan: TaskPlan,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DryRunResult {
     pub task_id: String,
     pub matched_step_id: Option<String>,

@@ -166,7 +166,7 @@ pub(super) fn navigation_graph(
     parse_navigation_graph_value(navigation)
 }
 
-fn explicit_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
+pub(super) fn explicit_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
     match flags.optional(name) {
         None => Err(CliError::package_invalid(format!(
             "semantic commands require {name} <package> and --expected-sha256 <hash>; loose resource roots are not executable"
@@ -178,7 +178,7 @@ fn explicit_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
     }
 }
 
-fn explicit_hash(flags: &FlagArgs) -> CliOutcome<ExternalExpectedSha256> {
+pub(super) fn explicit_hash(flags: &FlagArgs) -> CliOutcome<ExternalExpectedSha256> {
     match flags.optional("--expected-sha256") {
         None => Err(CliError::package_invalid(
             "semantic commands require externally supplied --expected-sha256 <hash>",

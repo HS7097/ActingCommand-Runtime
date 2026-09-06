@@ -42,6 +42,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod online_observation;
+pub use online_observation::VerifiedPageObservation;
+
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
     ObservationOperation, ObservationOutcome, ObservationStage, ObservationThreadRole,
@@ -4175,6 +4178,7 @@ pub(super) fn receipt_response_timeout(
     match operation {
         RuntimeOperation::AcquireLease { .. }
         | RuntimeOperation::ObserveReadonly { .. }
+        | RuntimeOperation::ObserveContainedPage { .. }
         | RuntimeOperation::SafeReset { .. } => backend_open_timeout,
         _ => io_timeout,
     }

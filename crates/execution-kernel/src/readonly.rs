@@ -353,6 +353,7 @@ fn page_target_evaluation_response(
         role: format!("{:?}", evaluation.role),
         passed: evaluation.passed,
         message: evaluation.message.clone(),
+        actual: evaluation.clone(),
     }
 }
 
@@ -522,6 +523,8 @@ pub struct PageTargetEvaluationResponse {
     pub role: String,
     pub passed: bool,
     pub message: String,
+    #[serde(skip)]
+    pub actual: PageTargetEvaluation,
 }
 
 #[cfg(test)]
