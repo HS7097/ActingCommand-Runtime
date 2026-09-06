@@ -380,6 +380,13 @@ impl SelectedTouchBackend {
 }
 
 impl InputBackend for SelectedTouchBackend {
+    fn selection_context(&self) -> Option<crate::InputSelectionContext> {
+        Some(crate::InputSelectionContext {
+            backend: self.backend_name(),
+            serial: self.serial().to_owned(),
+        })
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         self.run_touch_action("tap", &[(x, y)], |backend| backend.tap(x, y))
     }

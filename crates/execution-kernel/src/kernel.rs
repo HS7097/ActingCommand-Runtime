@@ -55,14 +55,14 @@ impl ExecutionKernel {
 
     pub fn input(&self, instance_alias: &str, action: InputAction) -> ExecutionKernelResult<()> {
         let action = self.prepare_input(action)?;
-        self.input_prepared(instance_alias, action)
+        self.input_prepared(instance_alias, action).map(|_| ())
     }
 
     pub fn input_prepared(
         &self,
         instance_alias: &str,
         action: PreparedInputAction,
-    ) -> ExecutionKernelResult<()> {
+    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
         let session = self.session(instance_alias)?;
         let result = session.input_prepared(action);
         self.finish_session_operation(&session, result)
