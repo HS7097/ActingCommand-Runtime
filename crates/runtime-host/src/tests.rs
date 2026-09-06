@@ -11966,7 +11966,7 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     else {
         panic!("step input action");
     };
-    assert_eq!(provenance.input_action, action);
+    assert_eq!(&provenance.input_action, action);
     let outcomes = events
         .iter()
         .filter(|event| event.event_type == EventType::InputCommitted)
