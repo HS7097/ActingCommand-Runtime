@@ -1480,12 +1480,21 @@ pub struct PreparedContainedTask {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ContainedTaskRunOptions {
     post_admission_ocr: PostAdmissionOcrExecution,
+    entry: ContainedTaskEntry,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ContainedTaskEntry {
+    #[default]
+    Ordinary,
+    BoundRecovery,
 }
 
 impl ContainedTaskRunOptions {
     pub(crate) const fn offline_simulation() -> Self {
         Self {
             post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
+            entry: ContainedTaskEntry::Ordinary,
         }
     }
 }
@@ -1561,13 +1570,7 @@ impl PreparedContainedTask {
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
         program.validate(&control, &bundle, &detector)?;
-        let entry_page = program
-            .entry_page
-            .as_deref()
-            .filter(|page| crate::canonical_page_anchor(&control.game, page) == "home")
-            .map(|page| resolve_page_reference(&control.game, page, &detector))
-            .transpose()?
-            .filter(|page| detector.page_uses_any_of(page));
+        let entry_page = program.required_home_entry_page(&control, &detector)?;
         let post_admission_ocr =
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
@@ -1737,7 +1740,6 @@ impl PreparedContainedTask {
             .record(ContainedTaskTrace::RunStarted)
             .map_err(ContainedTaskRunError::Boundary)?;
 
-        let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let step_timeout = Duration::from_millis(self.control.step_timeout().milliseconds);
         let task_timeout = Duration::from_millis(self.control.task_timeout().milliseconds);
         let started = Instant::now();
@@ -1755,10 +1757,10 @@ impl PreparedContainedTask {
         let result = self.run_with_collector(
             runtime,
             &mut ocr_collector,
-            capture_interval,
             step_timeout,
             task_timeout,
             started,
+            options.entry,
         );
         // Task and owner-classified nonfatal operation failures retain parsed facts.
         // Record failures and fatal/unknown operation failures forbid another write.
@@ -1775,17 +1777,44 @@ impl PreparedContainedTask {
         result
     }
 
+    /// Executes a compatible, already hash-admitted entry recovery package.
+    pub fn run_entry_recovery<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        if !self.is_entry_recovery_compatible() {
+            return Err(ContainedTaskError::new(
+                "contained_task_home_recovery_package_incompatible",
+            )
+            .into());
+        }
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                entry: ContainedTaskEntry::BoundRecovery,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
+    }
+
     fn run_with_collector<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
-        capture_interval: Duration,
         step_timeout: Duration,
         task_timeout: Duration,
         started: Instant,
+        entry: ContainedTaskEntry,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        let mut observation =
-            self.capture_until_page(runtime, ocr_collector, step_timeout, capture_interval)?;
+        let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        let mut observation = if entry == ContainedTaskEntry::Ordinary
+            && let Some(required_page) = self.required_home_entry_page()
+        {
+            self.capture_page(runtime, ocr_collector, Some(required_page))?
+                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
+        } else {
+            self.capture_until_page(runtime, ocr_collector, step_timeout, capture_interval)?
+        };
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -2387,7 +2416,7 @@ impl PreparedContainedTask {
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         loop {
-            if let Some(observation) = self.capture_page(runtime, ocr_collector)? {
+            if let Some(observation) = self.capture_page(runtime, ocr_collector, None)? {
                 return Ok(observation);
             }
             if started.elapsed() >= timeout {
@@ -2401,6 +2430,7 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        required_entry_page: Option<&str>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let frame = runtime
             .capture()
@@ -2461,9 +2491,7 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if self.program.operations.is_empty()
-            && let Some(required_page) = self.required_home_entry_page()
-        {
+        if let Some(required_page) = required_entry_page {
             let matched = page.as_deref() == Some(required_page);
             runtime
                 .record(ContainedTaskTrace::EntryRecognition {
@@ -2511,7 +2539,7 @@ impl PreparedContainedTask {
         let started = Instant::now();
         let mut last_observation = None;
         loop {
-            if let Some(observation) = self.capture_page(runtime, ocr_collector)? {
+            if let Some(observation) = self.capture_page(runtime, ocr_collector, None)? {
                 let destination_matches =
                     operation.matching_destination_count(&self.control, &observation)?;
                 let hit_error_page = self
@@ -3034,7 +3062,9 @@ impl TaskProgram {
         }
         if let Some(declaration) = &self.scheduling_outcome {
             let observable_pages = detector.page_ids().map(str::to_owned).collect::<Vec<_>>();
+            let required_home = self.required_home_entry_page(control, detector)?;
             validate_scheduling_outcome_coverage(
+                required_home.as_deref(),
                 &control.game,
                 &target_pages,
                 &observable_pages,
@@ -3044,6 +3074,20 @@ impl TaskProgram {
         }
         self.validate_recovery(bundle)?;
         Ok(())
+    }
+
+    fn required_home_entry_page(
+        &self,
+        control: &TaskControl,
+        detector: &PageDetector,
+    ) -> Result<Option<String>, ContainedTaskError> {
+        Ok(self
+            .entry_page
+            .as_deref()
+            .filter(|page| crate::canonical_page_anchor(&control.game, page) == "home")
+            .map(|page| resolve_page_reference(&control.game, page, detector))
+            .transpose()?
+            .filter(|page| detector.page_uses_any_of(page)))
     }
 
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
@@ -3675,6 +3719,7 @@ fn validate_scheduling_outcome_execution_mode(
 }
 
 fn validate_scheduling_outcome_coverage(
+    required_home: Option<&str>,
     game: &str,
     target_pages: &[String],
     observable_pages: &[String],
@@ -3689,6 +3734,7 @@ fn validate_scheduling_outcome_coverage(
         .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
     let mut pending = observable_pages
         .iter()
+        .filter(|page| required_home.is_none_or(|home| page.as_str() == home))
         .map(|page| (page.clone(), SchedulingEffectCondition::NoDesignatedEffect))
         .collect::<VecDeque<_>>();
     let mut visited = BTreeSet::new();
@@ -5731,6 +5777,169 @@ mod post_admission_ocr_tests {
                 assert!(report.records[0].fields[0].value.is_none());
             }
         }
+        for result_first in [false, true] {
+            let ids = vec!["fixture/name".to_owned(), "fixture/quantity".to_owned()];
+            let provider = Arc::new(EvidenceProvider {
+                observations: Mutex::new(VecDeque::from([
+                    provider_observation("completion-name", &["alias".into()]),
+                    provider_observation("completion-quantity", &["7".into()]),
+                ])),
+                requests: Mutex::new(Vec::new()),
+                calls: AtomicU32::new(0),
+            });
+            let declaration = json!({"mode":"fields_v1","page_ids":["result"],"fields":[
+                {"id":"name","group":"item","target_id":ids[0],"required":false,"privacy":"public","trim":"whitespace_v1",
+                    "value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"c".repeat(64)}}},
+                {"id":"quantity","group":"item","target_id":ids[1],"required":false,
+                    "privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":100}}
+            ],"limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
+            let program: TaskProgram = serde_json::from_value(json!({"schema_version":"0.8","task_id":"task","game":"neutral",
+                "server_scope":["test"],"coordinate_space":{"width":2,"height":1},"entry_page":"home","target_page":"result",
+                "operations":[{"id":"collect","from":"home","to":"result","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}],
+                "post_admission_ocr":declaration,"scheduling_outcome":{"designated_operation":"collect","mappings":[
+                    {"outcome_key":"fields_recorded","effect":"designated_effect_completed","terminal_pages":["result"]}]}
+            })).unwrap();
+            let fields = PreparedOcrFields {
+                declaration: serde_json::from_value(declaration).unwrap(),
+                dictionaries: BTreeMap::from([(
+                    "name".to_owned(),
+                    serde_json::from_value(json!({
+                        "schema_version":"actingcommand.ocr-truth-set.v2","items":["TokenA"],
+                        "aliases":[{"observed":"alias","canonical":"TokenA"}]
+                    }))
+                    .unwrap(),
+                )]),
+            };
+            fields.declaration.validate().unwrap();
+            let control: TaskControl = serde_json::from_value(json!({"schema_version":CONTROL_SCHEMA,"package_id":"neutral.test.task",
+                "execution_mode":"navigable_route","game":"neutral","server":"test","resolution":{"width":2,"height":1},
+                "entry_task_id":"task","capture_interval_ms":1,"step_timeout_ms":50,"timeout_ms":1000})).unwrap();
+            let evaluator = RecognitionEvaluator::with_vision_provider(
+                ordered_ocr_pack(&ids, 2),
+                Arc::new(FsAssetResolver::new(PathBuf::new())),
+                provider.clone(),
+            )
+            .unwrap();
+            let detector = PageDetector::new(
+                serde_json::from_value(json!({"schema_version":"0.6","pages":[
+                    {"id":"neutral/home","required":[],"any_of":[["page/operator"]]},
+                    {"id":"neutral/result","required":["page/operator_end"]}
+                ]}))
+                .unwrap(),
+            )
+            .unwrap();
+            detector.validate(&evaluator).unwrap();
+            let entry_page = program
+                .required_home_entry_page(&control, &detector)
+                .unwrap();
+            let task = PreparedContainedTask {
+                control,
+                entry_page,
+                scheduling_outcome: program.scheduling_outcome.clone(),
+                program,
+                evaluator,
+                detector,
+                post_admission_ocr: None,
+                post_admission_fields: Some(fields),
+                package_sha256: "fixture".into(),
+                entry_count: 1,
+                task_count: 1,
+            };
+            let home = Frame::from_pixels(
+                2,
+                1,
+                vec![1, 1, 1, 0, 0, 0],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .unwrap();
+            let result = Frame::from_pixels(
+                2,
+                1,
+                vec![0, 0, 0, 2, 2, 2],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .unwrap();
+            let mut runtime = super::retry_wiring_tests::ScriptedRuntime {
+                frames: if result_first {
+                    VecDeque::from([result.clone()])
+                } else {
+                    VecDeque::from([home, result.clone()])
+                },
+                last_frame: result,
+                captures: 0,
+                inputs: 0,
+                traces: Vec::new(),
+            };
+            let outcome = task.run(&mut runtime);
+            if result_first {
+                assert!(
+                    matches!(outcome, Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_home_entry_not_matched")
+                );
+                assert_eq!(runtime.captures, 1);
+                assert_eq!(runtime.inputs, 0);
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+                assert!(!runtime.traces.iter().any(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::PostAdmissionOcrFields { .. }
+                        | ContainedTaskTrace::PostAdmissionOcrObservation { .. }
+                )));
+                continue;
+            }
+            assert_eq!(runtime.captures, 2);
+            assert_eq!(runtime.inputs, 1);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+            let (report_index, report) = runtime
+                .traces
+                .iter()
+                .enumerate()
+                .find_map(|(index, trace)| match trace {
+                    ContainedTaskTrace::PostAdmissionOcrFields { report } => Some((index, report)),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(report.records.len(), 1);
+            assert_eq!(report.records[0].page_id, "neutral/result");
+            assert_eq!(
+                report.records[0].fields[0].value,
+                Some(OcrFieldValue::DictionaryEntry("TokenA".into()))
+            );
+            assert_eq!(report.failure, None);
+            assert_eq!(
+                report.records[0].fields[1].value,
+                Some(OcrFieldValue::UnsignedInteger(7))
+            );
+            let outcome = outcome.unwrap();
+            assert_eq!(
+                outcome.selected_scheduling_outcome.as_deref(),
+                Some("fields_recorded")
+            );
+            assert_eq!(outcome.executed_steps, 1);
+            assert_eq!(outcome.outcome, TaskOutcome::Success);
+            let finalizing = runtime
+                .traces
+                .iter()
+                .position(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+                .unwrap();
+            assert!(report_index < finalizing);
+            assert_eq!(
+                runtime
+                    .traces
+                    .iter()
+                    .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                runtime
+                    .traces
+                    .iter()
+                    .filter(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
+                    .count(),
+                1
+            );
+        }
     }
 
     // Specification 6: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
@@ -6979,6 +7188,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned(), "alternate".to_owned()],
             &[
@@ -7007,6 +7217,7 @@ mod retry_wiring_tests {
             ]
         }));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -7035,6 +7246,7 @@ mod retry_wiring_tests {
             ]
         }));
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned(), "alternate".to_owned()],
             &[
@@ -7046,6 +7258,70 @@ mod retry_wiring_tests {
             &complete,
         )
         .expect("unreachable designated-effect alternate terminal is not required");
+        let detector = PageDetector::new(
+            serde_json::from_value(json!({
+                "schema_version":"0.6","pages":[
+                    {"id":"neutral/home","required":[],"any_of":[["page/home"]]},
+                    {"id":"neutral/terminal","required":["page/terminal"]}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut program: TaskProgram = serde_json::from_value(json!({
+            "schema_version":"0.6","task_id":"task","game":"neutral","server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},"entry_page":"home","target_page":"terminal","operations":[]
+        })).unwrap();
+        let only_designated = scheduling_declaration(
+            json!({"designated_operation":"open_terminal",
+            "mappings":[{"outcome_key":"effect-terminal","effect":"designated_effect_completed","terminal_pages":["terminal"]}]}),
+        );
+        let required = program
+            .required_home_entry_page(&control(), &detector)
+            .unwrap()
+            .unwrap();
+        assert_eq!(required, "neutral/home");
+        validate_scheduling_outcome_coverage(
+            Some(&required),
+            "neutral",
+            &["terminal".into()],
+            &detector.page_ids().map(str::to_owned).collect::<Vec<_>>(),
+            &operations,
+            &only_designated,
+        )
+        .unwrap();
+        program.entry_page = Some("any".into());
+        assert!(
+            program
+                .required_home_entry_page(&control(), &detector)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            validate_scheduling_outcome_coverage(
+                None,
+                "neutral",
+                &["terminal".into()],
+                &detector.page_ids().map(str::to_owned).collect::<Vec<_>>(),
+                &operations,
+                &only_designated
+            )
+            .is_err()
+        );
+        program.entry_page = Some("neutral/home".into());
+        let no_any_of = PageDetector::new(
+            serde_json::from_value(json!({
+                "schema_version":"0.6","pages":[{"id":"neutral/home","required":["page/home"]}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            program
+                .required_home_entry_page(&control(), &no_any_of)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -7076,6 +7352,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &[
@@ -7118,6 +7395,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -7155,6 +7433,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -7204,6 +7483,7 @@ mod retry_wiring_tests {
         ];
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["neutral/terminal".to_owned()],
             &observable_pages,
@@ -7228,6 +7508,7 @@ mod retry_wiring_tests {
             ]
         }));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["neutral/terminal".to_owned()],
             &observable_pages,
@@ -7278,6 +7559,7 @@ mod retry_wiring_tests {
             ]
         }));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -7293,6 +7575,7 @@ mod retry_wiring_tests {
         let mut cycle = operation(json!({}), None);
         cycle.to = Some(PageDeclaration::Singleton("home".to_owned()));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],

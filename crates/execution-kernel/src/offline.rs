@@ -358,6 +358,38 @@ mod tests {
         assert_eq!(effecting.decision, offline.decision);
         assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
         assert_eq!(effecting.actions, vec![offline_action]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(package_bytes)).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_owned();
+            let mut value: Value = serde_json::from_reader(&mut entry).unwrap();
+            if name == "resources/recognition/neutral.test.pages.json" {
+                value["pages"][0]["required"] = json!([]);
+                value["pages"][0]["any_of"] = json!([["page/home"]]);
+            }
+            entries.push((name, value));
+        }
+        let bytes = zip_entries(
+            &entries
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let required = prepare(&bytes);
+        assert_eq!(required.required_home_entry_page(), Some("neutral/home"));
+        let offline = simulate_contained_task(&required, vec![home_frame(true)]).unwrap();
+        let effecting = effecting_decision(&required, vec![home_frame(true)]);
+        assert_eq!(offline.decision, effecting.decision);
+        assert_eq!(offline.decision_fingerprint, effecting.decision_fingerprint);
+        assert_eq!(effecting.actions.len(), 1);
+        for frame in [terminal_frame(), solid_frame([0, 0, 0], [0, 0, 0])] {
+            assert_same_refusal(
+                &required,
+                vec![frame],
+                "contained_task_home_entry_not_matched",
+            );
+        }
     }
 
     #[test]

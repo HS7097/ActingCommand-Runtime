@@ -285,6 +285,44 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
         assert_error_code(&output, "package_invalid");
         assert!(!fixture.temp.path().join("invalid-fields.zip").exists());
     }
+    let mut required = entries.clone();
+    let pages_index = required
+        .iter()
+        .position(|(name, _)| name == "resources/recognition/neutral.test.pages.json")
+        .unwrap();
+    required[pages_index].1["pages"][0]["required"] = json!([]);
+    required[pages_index].1["pages"][0]["any_of"] = json!([["page/home"]]);
+    let task = &mut required[task_index].1;
+    task["entry_page"] = json!("neutral/home");
+    task["post_admission_ocr"]["page_ids"] = json!(["terminal"]);
+    task["scheduling_outcome"]["designated_operation"] = task["operations"][0]["id"].clone();
+    task["scheduling_outcome"]["mappings"][0]["effect"] = json!("designated_effect_completed");
+    for at_terminal in [false, true] {
+        let fixture = TestFixture::from_bytes(
+            encode(&required),
+            if at_terminal {
+                terminal_frame()
+            } else {
+                home_frame(true)
+            },
+        );
+        let output = fixture.run(&[], "required-entry.zip");
+        if at_terminal {
+            assert_refusal_receipt(
+                &output,
+                &fixture.temp.path().join("required-entry.zip"),
+                "contained_task_home_entry_not_matched",
+            );
+        } else {
+            assert_success(&output, "would_click");
+        }
+        let record = read_result_record(&fixture.temp.path().join("required-entry.zip"));
+        assert_eq!(record["simulation"]["capture_count"], 1);
+        assert_deferred_post_admission_ocr(&record["simulation"]["post_admission_ocr"]);
+        assert_eq!(record["executed"], false);
+        assert_eq!(record["production_global_ledger_written"], false);
+        assert!(record.get("official_ocr_fields_projection").is_none());
+    }
 }
 
 #[test]
