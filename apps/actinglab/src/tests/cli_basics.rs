@@ -97,9 +97,68 @@
             assert_eq!(rejected.envelope.error.as_ref().unwrap().code, "scheduling_catalog_rejected");
         }
         fs::remove_file(&documents[3].0).unwrap();
-        let missing = run_cli(compile_args, true);
+        let missing = run_cli(compile_args.clone(), true);
         assert_eq!(missing.exit_code(), 2);
         assert_eq!(missing.envelope.error.unwrap().code, "scheduling_source_read_failed");
+
+        // Defect regression: https://github.com/HS7097/ActingCommand-Runtime/pull/316#discussion_r3942723676
+        documents[3].1["events"][0]["id"] = json!("true");
+        let mut true_query = query_args.clone();
+        for flag in ["--event-id", "--instance-id", "--server-id", "--game-id"] {
+            let index = true_query.iter().position(|arg| arg == flag).unwrap();
+            true_query[index + 1] = "true".into();
+        }
+        for scope in [
+            json!({"kind":"instance","instance_id":"true"}),
+            json!({"kind":"server","server_id":"true"}),
+            json!({"kind":"game","game_id":"true"}),
+        ] {
+            documents[3].1["events"][0]["scope"] = scope.clone();
+            fs::write(&documents[3].0, serde_json::to_vec(&documents[3].1).unwrap()).unwrap();
+            let compiled = run_cli(compile_args.clone(), true);
+            assert_eq!(compiled.exit_code(), 0, "{}", compiled.envelope_json());
+            let compilation = compiled.envelope.data.unwrap();
+            assert_eq!(compilation["summary"]["timeline_event_ids"], json!(["true"]));
+            let queried = run_cli(true_query.clone(), true);
+            assert_eq!(queried.exit_code(), 0, "{}", queried.envelope_json());
+            let queried: Value = serde_json::from_str(&queried.envelope_json()).unwrap();
+            let timeline = &queried["data"]["timeline"];
+            assert_eq!(timeline["catalog_hash"], compilation["summary"]["catalog_hash"]);
+            assert_eq!(timeline["context"], json!({"instance_id":"true","server_id":"true","game_id":"true"}));
+            assert_eq!(timeline["events"][0]["event_id"], "true");
+            assert_eq!(timeline["events"][0]["scope"], scope);
+            assert_eq!(timeline["events"][0]["scope_applies"], true);
+            assert_eq!(timeline["events"][0]["availability"]["state"], "true");
+            assert_eq!(timeline["events"][0]["availability"]["active_interval"], json!([1100,1900]));
+        }
+        let true_path = temp.path().join("true");
+        fs::write(&true_path, serde_json::to_vec(&documents[0].1).unwrap()).unwrap();
+        let mut path_args = compile_args.clone();
+        let path_index = path_args.iter().position(|arg| arg == "--tasks").unwrap() + 1;
+        path_args[path_index] = true_path.to_str().unwrap().into();
+        let compiled = run_cli(path_args.clone(), true);
+        assert_eq!(compiled.exit_code(), 0, "{}", compiled.envelope_json());
+        path_args[path_index] = "true".into();
+        let invocation = parse_invocation(path_args, true).unwrap();
+        let flags = FlagArgs::parse_values(&invocation.args).unwrap();
+        assert_eq!(flags.optional("--tasks").as_deref(), Some("true"));
+        for flag in ["--tasks", "--pools", "--activity", "--timeline", "--event-id",
+            "--unix-ms", "--monotonic-ms", "--instance-id", "--server-id", "--game-id"] {
+            let index = true_query.iter().position(|arg| arg == flag).unwrap();
+            let mut missing_value = true_query.clone();
+            missing_value.remove(index + 1);
+            let rejected = run_cli(missing_value, true);
+            assert_eq!(rejected.exit_code(), 2, "missing value for {flag}");
+            let mut empty_value = true_query.clone();
+            empty_value[index + 1].clear();
+            let rejected = run_cli(empty_value, true);
+            assert_eq!(rejected.exit_code(), 2, "empty value for {flag}");
+        }
+        let mut duplicate_event = true_query;
+        duplicate_event.extend(["--event-id".to_owned(), "true".into()]);
+        let rejected = run_cli(duplicate_event, true);
+        assert_eq!(rejected.exit_code(), 2);
+        assert_eq!(rejected.envelope.error.unwrap().code, "policy_evaluation_input_invalid");
         assert!(!runtime_root.exists());
         assert_eq!(fs::read_to_string(&config).unwrap(), "not a Runtime configuration");
         set_missing_config_env();

@@ -35,7 +35,7 @@ pub(crate) fn run_scheduling(
             "scheduling inspection accepts explicit file/query flags and output formatting only",
         ));
     }
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_values(args)?;
     flags.expect_positionals("scheduling", 0)?;
     let allowed = match sub {
         "compile" => &["--tasks", "--pools", "--activity", "--timeline"][..],
@@ -60,20 +60,23 @@ pub(crate) fn run_scheduling(
     for (name, values) in &flags.flags {
         if !allowed.contains(&name.as_str())
             || (name != "--event-id" && values.len() != 1)
-            || values
-                .iter()
-                .any(|value| value == "true" || value.is_empty())
+            || values.iter().any(String::is_empty)
         {
             return Err(CliError::usage(format!(
                 "unexpected, duplicate or missing value for {name}"
             )));
         }
     }
+    let required = |name: &str| {
+        flags
+            .optional(name)
+            .ok_or_else(|| CliError::usage(format!("missing {name} <value>")))
+    };
     let paths = SchedulingCatalogPaths {
-        tasks: flags.required_path("--tasks")?,
-        pools: flags.required_path("--pools")?,
-        activity: flags.required_path("--activity")?,
-        timeline: flags.required_path("--timeline")?,
+        tasks: required("--tasks")?.into(),
+        pools: required("--pools")?.into(),
+        activity: required("--activity")?.into(),
+        timeline: required("--timeline")?.into(),
     };
     match sub {
         "compile" => serde_json::to_value(compile_scheduling_files(&paths)?).map_err(|error| {
@@ -81,8 +84,7 @@ pub(crate) fn run_scheduling(
         }),
         "timeline" => {
             let parse_time = |name| {
-                flags
-                    .required(name)?
+                required(name)?
                     .parse::<u64>()
                     .map_err(|error| CliError::usage(format!("invalid {name}: {error}")))
             };
@@ -91,9 +93,9 @@ pub(crate) fn run_scheduling(
                 monotonic_ms: parse_time("--monotonic-ms")?,
             };
             let context = TimelineQueryContext {
-                instance_id: flags.required("--instance-id")?,
-                server_id: flags.required("--server-id")?,
-                game_id: flags.required("--game-id")?,
+                instance_id: required("--instance-id")?,
+                server_id: required("--server-id")?,
+                game_id: required("--game-id")?,
             };
             serde_json::to_value(inspect_scheduling_timeline_files(
                 &paths,
