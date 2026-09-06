@@ -51,6 +51,12 @@ pub struct OcrFieldDeclaration {
     pub group: String,
     pub target_id: String,
     pub required: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "OcrFieldDeclaration::deserialize_required_on_pages"
+    )]
+    pub required_on_pages: Option<Vec<String>>,
     pub privacy: OcrFieldPrivacy,
     pub trim: OcrFieldTrim,
     pub value: OcrFieldType,
@@ -213,7 +219,30 @@ pub struct OcrFieldDictionaryReference {
     pub sha256: String,
 }
 
+impl OcrFieldDeclaration {
+    fn deserialize_required_on_pages<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Vec::<String>::deserialize(deserializer).map(Some)
+    }
+
+    pub fn is_required_on_page(&self, page_id: &str) -> bool {
+        self.required
+            || self
+                .required_on_pages
+                .as_ref()
+                .is_some_and(|pages| pages.iter().any(|page| page == page_id))
+    }
+}
+
 impl OcrFieldsDeclaration {
+    pub fn uses_required_on_pages(&self) -> bool {
+        self.fields
+            .iter()
+            .any(|field| field.required_on_pages.is_some())
+    }
+
     /// A task without input can only collect fields on its declared terminal pages.
     pub fn validate_zero_input_task(
         &self,
@@ -291,6 +320,16 @@ impl OcrFieldsDeclaration {
             return Err("ocr_fields_declaration_invalid");
         }
         for field in &self.fields {
+            if let Some(required_pages) = &field.required_on_pages {
+                let mut unique = std::collections::BTreeSet::new();
+                if !(1..=2).contains(&required_pages.len())
+                    || required_pages.iter().any(|page| {
+                        !identifier(page) || !self.page_ids.contains(page) || !unique.insert(page)
+                    })
+                {
+                    return Err("ocr_fields_required_pages_invalid");
+                }
+            }
             if let Some(extraction) = &field.text_extraction {
                 if !matches!(field.value, OcrFieldType::DictionaryEntry { .. }) {
                     return Err("ocr_fields_text_extraction_type_invalid");
@@ -327,6 +366,15 @@ impl OcrFieldsDeclaration {
                 }
                 _ => {}
             }
+        }
+        if self.uses_required_on_pages()
+            && self.page_ids.iter().any(|page| {
+                !page.split_once('/').is_some_and(|(game, page)| {
+                    !game.is_empty() && !page.is_empty() && page != "any"
+                })
+            })
+        {
+            return Err("ocr_fields_required_pages_invalid");
         }
         Ok(())
     }

@@ -51,12 +51,34 @@ a declared terminal page produces the ordinary verified report and successful re
 with zero executed steps and zero input calls. A different admitted page cannot advance
 an empty task and fails without fields success or input.
 
-For an explicit required Home entry using `any_of`, the zero-input task confirms that
-entry within the interpreter's first capture, before collecting fields. The Host records
-the existing entry-recognition, no-recovery and target-disposition facts from that decision.
-An unmatched required entry fails on that frame without fields or recovery. The report
-and observation share its FrameId; the run's terminal capture summary pins that same frame.
-Tasks with actions retain the Host's entry preflight and recovery behavior.
+An entry is required Home when `entry_page`, after removing the exact current game prefix,
+is `home` and its resolved page definition has nonempty `any_of`. The same resolver governs
+admission, scheduling outcome coverage and execution, across operation schema versions.
+Ordinary `PreparedContainedTask::run` and `run_with_options`, including offline simulation,
+require the interpreter's original first captured frame to uniquely identify that Home.
+This check follows complete page recognition and precedes fields collection, target
+completion and input planning. A different or missing first page fails with
+`contained_task_home_entry_not_matched` and the existing typed entry-recognition fact.
+Ambiguous recognition retains the existing `contained_task_recognition_conflict` failure.
+Only the first evaluation has this constraint; subsequent legal pages execute normally.
+Scheduling outcome coverage starts at this enforced Home. Without it, coverage still
+starts at every observable page. Operation priority, designated-effect completion and the
+unique scheduling mapping retain their meanings; `entry_page: "any"` keeps its existing path.
+
+For zero-input fields the entry decision and observations use the original single frame.
+The Host records the existing no-recovery and target-disposition facts from that decision.
+Tasks with actions retain the Host's preflight, bound recovery and recheck captures, followed
+by the ordinary interpreter's own first capture. Passing preflight does not authorize a
+later non-Home first interpreter frame. Its failure occurs before target input or fields;
+the previous recovery decision remains the original fact.
+
+The Host's existing hash-bound recovery call uses `run_entry_recovery`, which checks
+`is_entry_recovery_compatible` before using the same interpreter. Compatible recovery
+packages have no scheduling outcome, stability or post-admission OCR/fields declaration.
+This restricted call keeps the recovery package's existing entry applicability; it exposes
+no general entry-skip option or CLI/RPC operation. The Host still owns the exact hash,
+instance and lease binding, actual Home terminal result, subsequent recheck and combined
+step cap. Recovery does not recursively invoke target preflight.
 
 `package dry-run` admits both nonempty and zero-input `0.8` packages through the typed
 Runtime validator, including field, dictionary, privacy and outcome declarations. It
@@ -71,6 +93,34 @@ ID and OCR target; its group ID associates fields within one admitted frame only
 must not form part of its page's recognition gate. Fields are collected at the existing
 post-admission capture points, in declaration order, with one provider observation per
 target. Parsing and dictionary mapping never call OCR again.
+
+Each field can optionally declare `required_on_pages`, containing one or two full detector
+page IDs. When any field uses it, every `page_ids` entry must also be a full detector ID,
+such as `"neutral/result"` or `"neutral/lucky"`. Each condition must be a byte-for-byte
+member of that same `page_ids` array. Source conversion and Runtime admission resolve these
+IDs using the exact current game prefix and require one matching page with the identical
+full ID. Empty, duplicate, `any`, short, foreign, missing and ambiguous references fail
+admission. Existing ID and collection bounds still apply; authored IDs are not rewritten.
+Omitting `required_on_pages` preserves existing behavior and serialization without a null
+member.
+
+For example, a declaration collecting on `["neutral/result", "neutral/lucky"]` may set
+`"required": false, "required_on_pages": ["neutral/lucky"]` on a quantity field. The one
+shared contract predicate is `required || required_on_pages.contains(record.page_id)`.
+Kernel collection and client verification both use it. `required: true` remains mandatory
+on every collection page. Outside the condition, an unresolved optional value is saved as
+unresolved with its original reason; no zero or resolved value is synthesized. Field
+order, groups, counts, provider calls, budgets, original text, normalization, extraction,
+privacy and failure-report persistence keep their existing meanings. In conditional mode
+the client also checks collection membership by exact full ID, without inferring a game
+or loading another manifest.
+
+Selected packages retain collection pages and their required, alternative (`any_of`) and
+forbidden recognition targets, direct relative-template anchors and declared error pages.
+They preserve those page criteria through generated resources and the sealed package.
+Every page still needs its existing positive Template/Color gate; OCR runs after admission.
+An unknown extra-result page can follow the existing error-page path. Actual layouts and
+complete item coverage remain resource calibration and execution-evidence responsibilities.
 
 An OCR target may locate its ROI relative to a template matched in the current frame.
 The source and sealed pack use this same region object:

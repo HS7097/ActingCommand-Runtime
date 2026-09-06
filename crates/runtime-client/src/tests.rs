@@ -92,10 +92,31 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
         "relative_extraction_rule",
         "relative_extraction_missing",
         "relative_extraction_type",
+        "conditional_normal",
+        "conditional_lucky",
+        "conditional_lucky_missing",
+        "conditional_always_required",
+        "conditional_foreign_page",
+        "conditional_personal",
     ] {
         let relative = case.starts_with("relative");
+        let conditional = case.starts_with("conditional");
+        let page_id = if case.starts_with("conditional_lucky") {
+            "fixture/lucky"
+        } else if case == "conditional_foreign_page" {
+            "another/panel"
+        } else {
+            "fixture/panel"
+        };
         let final_sequence = if relative { 8 } else { 5 };
-        let field_failed = case == "failed" || case.starts_with("failed_");
+        let field_failed = case == "failed"
+            || case.starts_with("failed_")
+            || matches!(
+                case,
+                "conditional_lucky_missing" | "conditional_always_required"
+            );
+        let unresolved =
+            field_failed || matches!(case, "conditional_normal" | "conditional_personal");
         let failed = field_failed
             || matches!(
                 case,
@@ -122,7 +143,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             let frame = *ids.mint_frame_id().unwrap().transport();
             let personal = matches!(
                 case,
-                "personal" | "personal_task_failed" | "relative_personal"
+                "personal" | "personal_task_failed" | "relative_personal" | "conditional_personal"
             );
             let extraction = case.starts_with("relative_extraction");
             let name = if extraction {
@@ -137,7 +158,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
             } else {
                 "EntryA"
             };
-            let count = if field_failed { "invalid" } else { "0007" };
+            let count = if unresolved { "invalid" } else { "0007" };
             let mut observation = json!({"schema_version":OCR_OBSERVATION_SCHEMA,"task_id":task,"run_id":run,"frame_id":frame,"frame_index":0,
                 "observation":{"page_id":"fixture/panel","personal":personal,"targets":[
                     {"target_id":"field/name","text":name,"confidence":0.9,"blocks":[],"execution":ocr_provider_fixture("name")},
@@ -163,6 +184,20 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         {"field_id":"count","target_id":"field/count","raw_text":count,"normalized_text":count,
                             "value":if field_failed {Value::Null} else {json!({"type":"unsigned_integer","value":7})},
                             "reason":if field_failed {"invalid_integer"} else {"resolved"},"detail":null,"redacted":false}]}]}});
+            if conditional {
+                observation["observation"]["page_id"] = json!(page_id);
+                report["report"]["records"][0]["page_id"] = json!(page_id);
+                report["report"]["declaration"]["page_ids"] =
+                    json!(["fixture/panel", "fixture/lucky"]);
+                let declared = &mut report["report"]["declaration"]["fields"][1];
+                declared["required"] = json!(case == "conditional_always_required");
+                declared["required_on_pages"] = json!(["fixture/lucky"]);
+                if unresolved {
+                    let field = &mut report["report"]["records"][0]["fields"][1];
+                    field["value"] = Value::Null;
+                    field["reason"] = json!("invalid_integer");
+                }
+            }
             if extraction {
                 report["report"]["declaration"]["fields"][0]["text_extraction"] = json!({
                     "mode":"strip_declared_suffix_v1","suffix":[
@@ -387,7 +422,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         } else {
                             TaskOutcome::Success
                         },
-                        final_page: Some("fixture/panel".into()),
+                        final_page: Some(page_id.into()),
                         executed_steps: 0,
                         failure_code: if field_failed {
                             Some("contained_task_ocr_fields_unresolved".into())
@@ -446,7 +481,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         task_request_id: request.request_id(),
                         response_deadline_monotonic_ms: Some(60_000),
                         outcome: TaskOutcome::Success,
-                        final_page: Some("fixture/panel".into()),
+                        final_page: Some(page_id.into()),
                         executed_steps: 0,
                     },
                 );
@@ -500,6 +535,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 | "relative_extraction_rule"
                 | "relative_extraction_missing"
                 | "relative_extraction_type"
+                | "conditional_foreign_page"
         ) {
             assert!(result.is_err(), "{case} must be rejected");
             let error = result.unwrap_err();
@@ -512,6 +548,49 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 "runtime_official_ocr_projection_failed_after_terminal"
             );
             assert!(error.committed_receipt().is_some());
+        } else if conditional {
+            let output = result.unwrap();
+            let value = serde_json::to_value(&output).unwrap();
+            let projection = &value["official_ocr_fields_projection"];
+            assert_eq!(projection["records"][0]["page_id"], page_id);
+            assert_eq!(
+                projection["records"][0]["frame_id"],
+                projection["observations"][0]["frame_id"]
+            );
+            assert_eq!(
+                projection["failure"],
+                if field_failed {
+                    json!("invalid_integer")
+                } else {
+                    Value::Null
+                }
+            );
+            assert_eq!(
+                output.receipt().state(),
+                if field_failed {
+                    RuntimeReceiptState::Failed
+                } else {
+                    RuntimeReceiptState::Completed
+                }
+            );
+            let count = &projection["records"][0]["fields"][1];
+            assert_eq!(
+                count["raw_text"],
+                if unresolved { "invalid" } else { "0007" }
+            );
+            assert_eq!(
+                count["value"],
+                if unresolved {
+                    Value::Null
+                } else {
+                    json!({"type":"unsigned_integer","value":7})
+                }
+            );
+            if case == "conditional_personal" {
+                let text = serde_json::to_string(&value).unwrap();
+                assert!(!text.contains("PrivateFixture") && !text.contains("PrivateCanonical"));
+                assert_eq!(projection["records"][0]["fields"][0]["redacted"], true);
+            }
         } else if case == "relative_optional" {
             let value = serde_json::to_value(result.unwrap()).unwrap();
             let projection = &value["official_ocr_fields_projection"];

@@ -2823,11 +2823,10 @@ fn project_ocr_fields(
         {
             return Err(invalid());
         }
-        if !declaration
-            .page_ids
-            .iter()
-            .any(|p| p == &page || page.ends_with(&format!("/{p}")))
-            || payload.target_id.is_some()
+        if !declaration.page_ids.iter().any(|p| {
+            p == &page
+                || (!declaration.uses_required_on_pages() && page.ends_with(&format!("/{p}")))
+        }) || payload.target_id.is_some()
             || payload.regions.keys().any(|target| {
                 !declaration
                     .fields
@@ -2932,7 +2931,8 @@ fn project_ocr_fields(
                     OcrFieldReason::LimitExceeded
                         | OcrFieldReason::ProviderFailed
                         | OcrFieldReason::NotCollected
-                ) || (declared.required && field.reason != OcrFieldReason::Resolved)
+                ) || (declared.is_required_on_page(&page)
+                    && field.reason != OcrFieldReason::Resolved)
                 {
                     failure_required = true;
                 }

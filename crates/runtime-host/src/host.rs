@@ -10785,6 +10785,7 @@ impl HostShared {
             step_actions: BTreeMap::new(),
             step_index_offset: 0,
             completed_entry_recovery_steps: 0,
+            entry_preflight_recorded: false,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
             finalizing: None,
@@ -11149,6 +11150,7 @@ impl HostShared {
                 required: !initial_home,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        runtime.entry_preflight_recorded = true;
         if initial_home {
             runtime
                 .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
@@ -11213,7 +11215,7 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
-            recovery.run(&mut recovery_runtime)
+            recovery.run_entry_recovery(&mut recovery_runtime)
         };
         let nonfatal_operation = matches!(
             &recovery_execution,
@@ -14527,6 +14529,7 @@ struct RuntimeContainedTask<'a> {
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     step_index_offset: u32,
     completed_entry_recovery_steps: u32,
+    entry_preflight_recorded: bool,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
@@ -15802,6 +15805,16 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     required_page,
                     matched,
                 })?;
+                if self.entry_preflight_recorded {
+                    return if matched {
+                        Ok(())
+                    } else {
+                        self.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                            disposition: TaskEntryTargetDisposition::FailClosed,
+                            failure_code: Some("contained_task_home_entry_not_matched".to_owned()),
+                        })
+                    };
+                }
                 self.record_entry_fact(TaskSemanticFact::EntryRecoveryDecision {
                     required: false,
                 })?;
