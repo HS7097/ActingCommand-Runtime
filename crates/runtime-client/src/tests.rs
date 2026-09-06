@@ -197,7 +197,10 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         declaration["text_extraction"]["suffix"][5]["value"] = json!("other");
                     }
                     "relative_extraction_missing" => {
-                        declaration.as_object_mut().unwrap().remove("text_extraction");
+                        declaration
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("text_extraction");
                     }
                     "relative_extraction_type" => {
                         declaration["value"] = json!({"type":"unsigned_integer","min":0,"max":100});
