@@ -76,7 +76,9 @@ pub(crate) fn run_scheduling(
         timeline: flags.required_path("--timeline")?,
     };
     match sub {
-        "compile" => compile_scheduling_files(&paths),
+        "compile" => serde_json::to_value(compile_scheduling_files(&paths)?).map_err(|error| {
+            CliError::usage(format!("failed to serialize scheduling response: {error}"))
+        }),
         "timeline" => {
             let parse_time = |name| {
                 flags
@@ -93,7 +95,15 @@ pub(crate) fn run_scheduling(
                 server_id: flags.required("--server-id")?,
                 game_id: flags.required("--game-id")?,
             };
-            inspect_scheduling_timeline_files(&paths, time, &context, &flags.values("--event-id"))
+            serde_json::to_value(inspect_scheduling_timeline_files(
+                &paths,
+                time,
+                &context,
+                &flags.values("--event-id"),
+            )?)
+            .map_err(|error| {
+                CliError::usage(format!("failed to serialize scheduling response: {error}"))
+            })
         }
         _ => Err(CliError::usage(format!(
             "unknown scheduling command: {sub}"

@@ -4,11 +4,12 @@
 
 use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use actingcommand_policy::{
-    CatalogDocumentSource, CatalogSources, CompiledCatalog, MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES,
-    MAX_TEXT_BYTES, compile_catalog, inspect_timeline,
+    CatalogDiagnostic, CatalogDocumentSource, CatalogIrSummary, CatalogSources, CompiledCatalog,
+    DiagnosticStatistics, MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_TEXT_BYTES,
+    TimelineInspection, compile_catalog, inspect_timeline,
 };
 pub use actingcommand_policy::{EvaluationTime, TimelineQueryContext};
-use serde_json::Value;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,39 @@ pub struct SchedulingCatalogPaths {
     pub timeline: PathBuf,
 }
 
-pub fn compile_scheduling_files(paths: &SchedulingCatalogPaths) -> LabResult<Value> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulingCompileStatus {
+    Accepted,
+}
+
+/// Typed adaptation of the compiler's canonical dry-run report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingCompileResponse {
+    pub status: SchedulingCompileStatus,
+    pub summary: CatalogIrSummary,
+    pub warnings: Vec<CatalogDiagnostic>,
+    pub diagnostic_statistics: DiagnosticStatistics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulingInspectionMode {
+    OfflineInspection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingTimelineResponse {
+    pub mode: SchedulingInspectionMode,
+    pub compilation: SchedulingCompileResponse,
+    pub timeline: TimelineInspection,
+}
+
+pub fn compile_scheduling_files(
+    paths: &SchedulingCatalogPaths,
+) -> LabResult<SchedulingCompileResponse> {
     let catalog = load_catalog(paths)?;
     compile_report(&catalog)
 }
@@ -34,15 +67,15 @@ pub fn inspect_scheduling_timeline_files(
     time: EvaluationTime,
     context: &TimelineQueryContext,
     event_ids: &[String],
-) -> LabResult<Value> {
+) -> LabResult<SchedulingTimelineResponse> {
     let catalog = load_catalog(paths)?;
     let timeline = inspect_timeline(&catalog, time, context, event_ids)
         .map_err(|error| scheduling_error(error.code(), error.to_string()))?;
-    let bytes = serde_json::to_vec(&serde_json::json!({
-        "mode": "offline_inspection",
-        "compilation": compile_report(&catalog)?,
-        "timeline": timeline,
-    }))
+    let bytes = serde_json::to_vec(&SchedulingTimelineResponse {
+        mode: SchedulingInspectionMode::OfflineInspection,
+        compilation: compile_report(&catalog)?,
+        timeline,
+    })
     .map_err(|error| scheduling_error("scheduling_output_invalid", error.to_string()))?;
     bounded_output(&bytes)
 }
@@ -112,14 +145,14 @@ fn read_source(path: &Path) -> LabResult<CatalogDocumentSource> {
     Ok(CatalogDocumentSource::new(source_uri, bytes))
 }
 
-fn compile_report(catalog: &CompiledCatalog) -> LabResult<Value> {
+fn compile_report(catalog: &CompiledCatalog) -> LabResult<SchedulingCompileResponse> {
     let bytes = catalog
         .dry_run_json()
         .map_err(|error| scheduling_error("scheduling_output_invalid", error.to_string()))?;
     bounded_output(&bytes)
 }
 
-fn bounded_output(bytes: &[u8]) -> LabResult<Value> {
+fn bounded_output<T: DeserializeOwned>(bytes: &[u8]) -> LabResult<T> {
     if bytes.len() > MAX_SCHEDULING_INSPECTION_OUTPUT_BYTES {
         return Err(scheduling_error(
             "scheduling_output_limit_exceeded",
