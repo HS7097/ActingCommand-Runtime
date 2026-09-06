@@ -10060,7 +10060,8 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
 #[test]
 fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     use actingcommand_contract::{
-        EffectiveConfigurationFacts, EffectiveConfigurationRecord, EffectiveTimingSource,
+        ArtifactRedactionState, EffectiveConfigurationFacts, EffectiveConfigurationRecord,
+        EffectiveTimingSource,
     };
     use actingcommand_device::{
         AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureMumuContext,
@@ -10075,7 +10076,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     use std::io::Read;
 
     #[derive(Debug)]
-    struct FieldEvidenceProvider(Arc<FakeVisionProvider>);
+    struct FieldEvidenceProvider(Arc<FakeVisionProvider>, Option<&'static str>);
     impl VisionProvider for FieldEvidenceProvider {
         fn require_ocr_model(
             &self,
@@ -10106,7 +10107,13 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         ) -> Result<OcrProviderObservation, VisionProviderError> {
             let model_ref = request.model_ref.to_owned();
             let model_sha256 = request.model_sha256.to_owned();
-            let result = self.0.read_text(request)?;
+            let mut result = self.0.read_text(request)?;
+            if let Some(text) = self.1 {
+                result.text = text.to_owned();
+                for block in &mut result.blocks {
+                    block.text = text.to_owned();
+                }
+            }
             Ok(OcrProviderObservation {
                 result,
                 execution: Some(OcrProviderExecutionEvidence {
@@ -10283,7 +10290,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             Arc::new(
                 FakeProvider::one("neutral.instance", configured_instance, state.clone())
                     .with_resolved_override(Arc::new(std::sync::Mutex::new(resolved)))
-                    .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone()))),
+                    .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone(), None))),
             ),
         )
         .expect("formal host with existing fake backends");
@@ -10732,11 +10739,13 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         host.close().unwrap();
     }
 
-    for (declared_page, explicit_home, starts_home) in [
-        ("home", false, true),
-        ("terminal", false, true),
-        ("home", true, true),
-        ("home", true, false),
+    for (declared_page, explicit_home, starts_home, extracted_personal) in [
+        ("home", false, true, None),
+        ("terminal", false, true, None),
+        ("home", true, true, None),
+        ("home", true, false, None),
+        ("home", false, true, Some(false)),
+        ("home", false, true, Some(true)),
     ] {
         let mut files = zero_input_files.clone();
         let mut task = task.clone();
@@ -10744,6 +10753,15 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         task["target_page"] = json!(declared_page);
         task["post_admission_ocr"]["page_ids"] = json!([declared_page]);
         task["scheduling_outcome"]["mappings"][0]["terminal_pages"] = json!([declared_page]);
+        if let Some(personal) = extracted_personal {
+            let field = &mut task["post_admission_ocr"]["fields"][0];
+            field["privacy"] = json!(if personal { "personal" } else { "public" });
+            field["text_extraction"] = json!({"mode":"strip_declared_suffix_v1","suffix":[
+                {"type":"ascii_digits","count":2}, {"type":"literal","value":"/"},
+                {"type":"ascii_digits","count":4}, {"type":"literal","value":":"},
+                {"type":"ascii_digits","count":2}, {"type":"literal","value":"期限"}
+            ]});
+        }
         files.insert(
             "resources/operations/task/task.json".into(),
             serde_json::to_vec(&task).unwrap(),
@@ -10798,7 +10816,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             config(&root),
             Arc::new(
                 FakeProvider::one("neutral.instance", instance_id(), state.clone())
-                    .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone()))),
+                    .with_vision_provider(Arc::new(FieldEvidenceProvider(
+                        vision.clone(),
+                        extracted_personal.map(|_| " home09/2803:59期限 "),
+                    ))),
             ),
         )
         .expect("formal zero-input host");
@@ -10912,7 +10933,34 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 pin.reason() == PinnedFrameReason::Terminal && pin.frame_index() == Some(0)
             }));
             let value = serde_json::to_value(projection).unwrap();
-            assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
+            if extracted_personal == Some(true) {
+                let field = &value["records"][0]["fields"][0];
+                assert_eq!(field["redacted"], true);
+                assert_eq!(field["raw_text"], Value::Null);
+                assert_eq!(field["normalized_text"], Value::Null);
+                assert_eq!(field["value"], Value::Null);
+                assert!(field.get("extraction").is_none());
+                assert!(
+                    !serde_json::to_string(projection)
+                        .unwrap()
+                        .contains("home09/2803:59")
+                );
+            } else {
+                assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
+            }
+            if extracted_personal == Some(false) {
+                let field = &value["records"][0]["fields"][0];
+                assert_eq!(field["raw_text"], " home09/2803:59期限 ");
+                assert_eq!(field["normalized_text"], "home09/2803:59期限");
+                assert_eq!(
+                    field["extraction"],
+                    json!({
+                        "rule_version":"strip_declared_suffix_v1",
+                        "matched_suffix":{"start":4,"end":20},
+                        "extracted_text":"home","extracted_range":{"start":0,"end":4}
+                    })
+                );
+            }
             assert_eq!(
                 value["records"][0]["frame_id"],
                 value["observations"][0]["frame_id"]
@@ -10933,6 +10981,32 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     artifact.frame_id(),
                     Some(&projection.records()[0].frame_id())
                 );
+                if let Some(personal) = extracted_personal {
+                    assert_eq!(
+                        artifact.project(true).redaction_state,
+                        if personal {
+                            ArtifactRedactionState::Pending
+                        } else {
+                            ArtifactRedactionState::NotRequired
+                        }
+                    );
+                    let stored: Value = serde_json::from_slice(
+                        &read_projected_verified(root.path(), &artifact.project(true)).unwrap(),
+                    )
+                    .unwrap();
+                    if let Some(report) = stored.get("report") {
+                        let field = &report["records"][0]["fields"][0];
+                        assert_eq!(field["raw_text"], " home09/2803:59期限 ");
+                        assert_eq!(field["normalized_text"], "home09/2803:59期限");
+                        assert_eq!(field["value"]["value"], "home");
+                        assert_eq!(
+                            field["extraction"]["matched_suffix"],
+                            json!({"start":4,"end":20})
+                        );
+                        assert_eq!(field["extraction"]["extracted_text"], "home");
+                        assert_eq!(report["declaration"], task["post_admission_ocr"]);
+                    }
+                }
             }
         } else {
             assert!(matches!(

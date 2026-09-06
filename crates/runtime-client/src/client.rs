@@ -44,6 +44,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod online_observation;
 pub use online_observation::VerifiedPageObservation;
+mod lab_operation;
+pub use lab_operation::VerifiedLabOperation;
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
@@ -226,6 +228,7 @@ pub struct RuntimeOfficialOcrFieldsProjection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOfficialOcrFieldRecord {
+    frame_artifact: Option<ProjectedArtifactReference>,
     frame_id: FrameId,
     frame_index: u32,
     page_id: String,
@@ -256,6 +259,7 @@ pub struct RuntimeOfficialOcrProjection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOfficialOcrObservation {
+    frame_artifact: Option<ProjectedArtifactReference>,
     frame_id: FrameId,
     frame_index: u32,
     artifact: ProjectedArtifactReference,
@@ -2079,6 +2083,17 @@ impl RuntimeClient {
                 )));
             }
             if let Some(error) = receipt.error_projection() {
+                if matches!(
+                    &operation,
+                    RuntimeOperation::RunContainedLabOperation { .. }
+                ) && matches!(
+                    receipt.result(),
+                    Some(RuntimeResult::ContainedLabOperation { .. })
+                ) && !error.fatal
+                {
+                    // The dedicated verifier consumes the failed operation's committed evidence.
+                    return Ok(receipt);
+                }
                 let mut error = RuntimeClientError::rejected(operation_name, error.clone());
                 if matches!(operation, RuntimeOperation::RunContainedTask { .. })
                     && receipt.terminal().is_some()
@@ -2217,6 +2232,8 @@ struct OcrObservationEnvelope {
     run_id: RunId,
     frame_id: FrameId,
     frame_index: u32,
+    #[serde(default)]
+    frame_artifact: Option<ProjectedArtifactReference>,
     observation: Value,
 }
 
@@ -2233,6 +2250,8 @@ struct OcrComparisonEnvelope {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OcrObservationPayload {
+    #[serde(default)]
+    regions: BTreeMap<String, actingcommand_contract::OcrRegionEvidence>,
     #[serde(default)]
     page_id: Option<String>,
     #[serde(default)]
@@ -2515,6 +2534,63 @@ pub(crate) fn resolve_official_ocr_projection(
                 }
                 let targets =
                     parse_official_ocr_observation(envelope.frame_index, &envelope.observation)?;
+                let region_payload: OcrObservationPayload =
+                    serde_json::from_value(envelope.observation.clone()).map_err(|_| {
+                        official_ocr_error("runtime_official_ocr_observation_malformed")
+                    })?;
+                for region in region_payload.regions.values() {
+                    validate_ocr_region_evidence(region)?;
+                    if !events.iter().any(|event| event.links.frame_id() == Some(&envelope.frame_id)
+                        && event.links.task_id() == Some(task_id) && event.links.run_id() == Some(run_id)
+                        && event.links.correlation_id() == Some(&correlation_id)
+                        && event.sequence < created_sequence
+                        && matches!(&event.payload, ProjectionPayload::Full(payload) if matches!(payload.as_ref(), EventPayload::Task(TaskPayload::Semantic(recognition))
+                            if matches!(recognition.fact(), TaskSemanticFact::RecognitionCompleted { frame_width, frame_height, matched_page, .. }
+                                if *frame_width == region.frame_width && *frame_height == region.frame_height
+                                    && region_payload.page_id.as_ref().is_none_or(|page| matched_page.as_ref() == Some(page))))))
+                    { return Err(official_ocr_error("runtime_official_ocr_region_frame_mismatch")); }
+                }
+                if let Some(frame) = &envelope.frame_artifact {
+                    if frame.kind != ArtifactKind::CaptureFrame
+                        || frame.frame_id != Some(envelope.frame_id)
+                        || frame.run_id != Some(*run_id)
+                        || frame.correlation_id != Some(correlation_id)
+                    {
+                        return Err(official_ocr_error(
+                            "runtime_official_ocr_frame_identity_mismatch",
+                        ));
+                    }
+                    let lifecycle = events
+                        .iter()
+                        .filter(|event| {
+                            event
+                                .artifacts
+                                .iter()
+                                .any(|a| a.artifact_id == frame.artifact_id)
+                        })
+                        .collect::<Vec<_>>();
+                    if lifecycle.len() != 2
+                        || lifecycle.iter().any(|event| {
+                            event.links.task_id() != Some(task_id)
+                                || event.links.run_id() != Some(run_id)
+                                || event.links.frame_id() != Some(&envelope.frame_id)
+                                || event.links.correlation_id() != Some(&correlation_id)
+                                || event.artifacts != [frame.clone()]
+                        })
+                        || lifecycle[0].event_type != EventType::ArtifactCreated
+                        || lifecycle[1].event_type != EventType::ArtifactVerified
+                        || lifecycle[0].sequence >= lifecycle[1].sequence
+                        || lifecycle[1].sequence >= created_sequence
+                    {
+                        return Err(official_ocr_error(
+                            "runtime_official_ocr_frame_lifecycle_mismatch",
+                        ));
+                    }
+                } else if envelope.observation.get("regions").is_some() {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_frame_identity_missing",
+                    ));
+                }
                 if raw_observations
                     .insert(envelope.frame_index, envelope.observation)
                     .is_some()
@@ -2530,6 +2606,7 @@ pub(crate) fn resolve_official_ocr_projection(
                 target_ids.sort();
                 provider_evidence.extend(targets);
                 observations.push(RuntimeOfficialOcrObservation {
+                    frame_artifact: envelope.frame_artifact,
                     frame_id: envelope.frame_id,
                     frame_index: envelope.frame_index,
                     artifact: reference.clone(),
@@ -2655,7 +2732,12 @@ pub(crate) fn resolve_official_ocr_projection(
             ));
         }
         let records = project_ocr_fields(&records_report, &observations, &raw_observations)?;
-        let provider_execution = if provider_evidence.is_empty() && failed {
+        let regions_unresolved = records_report
+            .records
+            .iter()
+            .flat_map(|record| &record.fields)
+            .all(|field| field.reason == OcrFieldReason::RegionUnresolved);
+        let provider_execution = if provider_evidence.is_empty() && (failed || regions_unresolved) {
             None
         } else {
             Some(project_official_ocr_provider(provider_evidence)?)
@@ -2759,6 +2841,12 @@ fn project_ocr_fields(
             .iter()
             .any(|p| p == &page || page.ends_with(&format!("/{p}")))
             || payload.target_id.is_some()
+            || payload.regions.keys().any(|target| {
+                !declaration
+                    .fields
+                    .iter()
+                    .any(|field| &field.target_id == target)
+            })
         {
             return Err(invalid());
         }
@@ -2820,7 +2908,23 @@ fn project_ocr_fields(
                     || field.redacted
                     || field.raw_text.as_deref() != target.map(|t| t.text.as_str())
                     || (field.reason == OcrFieldReason::Resolved) != field.value.is_some()
+                    || field.region.as_ref() != payload.regions.get(&declared.target_id)
                 {
+                    return Err(invalid());
+                }
+                if let Some(region) = &field.region {
+                    validate_ocr_region_evidence(region)?;
+                    if (region.unresolved.is_some())
+                        != (field.reason == OcrFieldReason::RegionUnresolved)
+                        || (region.unresolved.is_some()
+                            && (target.is_some()
+                                || field.raw_text.is_some()
+                                || field.value.is_some()))
+                        || observation.frame_artifact.is_none()
+                    {
+                        return Err(invalid());
+                    }
+                } else if field.reason == OcrFieldReason::RegionUnresolved {
                     return Err(invalid());
                 }
                 match (&declared.value, &field.value) {
@@ -2854,15 +2958,36 @@ fn project_ocr_fields(
                 {
                     return Err(invalid());
                 }
+                if let Some(extraction) = &field.extraction {
+                    if !matches!(
+                        field.reason,
+                        OcrFieldReason::Resolved
+                            | OcrFieldReason::UnknownEntry
+                            | OcrFieldReason::AmbiguousEntry
+                    ) {
+                        return Err(invalid());
+                    }
+                    declared
+                        .text_extraction
+                        .as_ref()
+                        .ok_or_else(invalid)?
+                        .verify(
+                            field.normalized_text.as_deref().ok_or_else(invalid)?,
+                            extraction,
+                        )
+                        .map_err(|_| invalid())?;
+                }
                 if declared.privacy == OcrFieldPrivacy::Personal {
                     field.raw_text = None;
                     field.normalized_text = None;
+                    field.extraction = None;
                     field.value = None;
                     field.detail = None;
                     field.redacted = true;
                 }
             }
             output.push(RuntimeOfficialOcrFieldRecord {
+                frame_artifact: observation.frame_artifact.clone(),
                 frame_id: observation.frame_id,
                 frame_index: observation.frame_index,
                 page_id: page.clone(),
@@ -2922,6 +3047,98 @@ fn official_ocr_marker_expected(
     Ok(expected)
 }
 
+fn validate_ocr_region_evidence(
+    region: &actingcommand_contract::OcrRegionEvidence,
+) -> RuntimeClientResult<()> {
+    use actingcommand_contract::OcrRegionUnresolvedReason as Reason;
+    let invalid = || official_ocr_error("runtime_official_ocr_region_invalid");
+    let within = |rect: &actingcommand_contract::OcrRegionRect| {
+        rect.x >= 0
+            && rect.y >= 0
+            && rect.width > 0
+            && rect.height > 0
+            && i64::from(rect.x) + i64::from(rect.width) <= i64::from(region.frame_width)
+            && i64::from(rect.y) + i64::from(rect.height) <= i64::from(region.frame_height)
+    };
+    if region.frame_width == 0
+        || region.frame_height == 0
+        || region.width <= 0
+        || region.height <= 0
+        || region.width as u32 > region.frame_width
+        || region.height as u32 > region.frame_height
+    {
+        return Err(invalid());
+    }
+    match (
+        &region.anchor_target_id,
+        &region.anchor_match,
+        region.offset,
+    ) {
+        (None, None, None) => {
+            if region.unresolved.is_some()
+                || !region.roi.as_ref().is_some_and(|roi| {
+                    within(roi) && roi.width == region.width && roi.height == region.height
+                })
+            {
+                return Err(invalid());
+            }
+        }
+        (Some(id), Some(anchor), Some(offset)) => {
+            if id.is_empty()
+                || id.len() > 4096
+                || !within(&anchor.rect)
+                || !anchor.raw_score.is_finite()
+                || !anchor.score.is_finite()
+                || !(0.0..=1.0).contains(&anchor.score)
+                || !anchor.threshold.is_finite()
+                || !(0.0..=1.0).contains(&anchor.threshold)
+                || (anchor.passed && anchor.score < anchor.threshold)
+            {
+                return Err(invalid());
+            }
+            if !anchor.passed {
+                if region.unresolved != Some(Reason::AnchorNotMatched) || region.roi.is_some() {
+                    return Err(invalid());
+                }
+                return Ok(());
+            }
+            let origin = anchor
+                .rect
+                .x
+                .checked_add(offset.x)
+                .zip(anchor.rect.y.checked_add(offset.y));
+            let Some((x, y)) = origin else {
+                return if region.unresolved == Some(Reason::CoordinateOverflow)
+                    && region.roi.is_none()
+                {
+                    Ok(())
+                } else {
+                    Err(invalid())
+                };
+            };
+            let roi = region.roi.as_ref().ok_or_else(invalid)?;
+            if roi.x != x || roi.y != y || roi.width != region.width || roi.height != region.height
+            {
+                return Err(invalid());
+            }
+            let expected = if x.checked_add(region.width).is_none()
+                || y.checked_add(region.height).is_none()
+            {
+                Some(Reason::CoordinateOverflow)
+            } else if !within(roi) {
+                Some(Reason::OutOfFrame)
+            } else {
+                None
+            };
+            if region.unresolved != expected {
+                return Err(invalid());
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
 fn parse_official_ocr_observation(
     frame_index: u32,
     value: &Value,
@@ -2931,6 +3148,14 @@ fn parse_official_ocr_observation(
     }
     let payload = serde_json::from_value::<OcrObservationPayload>(value.clone())
         .map_err(|_| official_ocr_error("runtime_official_ocr_observation_malformed"))?;
+    if payload.regions.len() > 32
+        || payload
+            .regions
+            .keys()
+            .any(|id| id.is_empty() || id.len() > 4096)
+    {
+        return Err(official_ocr_limit_error());
+    }
     let direct_shape = payload.target_id.is_some()
         || payload.text.is_some()
         || payload.confidence.is_some()

@@ -64,6 +64,10 @@ execution plan remain exact. The backend receives the original action. The
 Host issues the physical action ID in the intent's event links before executing
 the action, so provenance survives input failure or a later cleanup failure.
 
+Contained Lab operations supply the FrameId from their verified before frame
+to this same input context. They retain existing optional task/run links and
+omit a task-step reference when none exists.
+
 Contained task effect intents link their actual preceding frame and supply
 their step identity to that physical intent. The first attempted capture after
 a successful input links its requested/completed or failed events, and any

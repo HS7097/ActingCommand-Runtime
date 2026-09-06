@@ -19,6 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::*;
 
 mod observation;
+mod operation;
 
 struct Lab2Ids {
     issuer: IdIssuer,
@@ -927,6 +928,9 @@ fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> Cli
 
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--capture") && !(global.dry_run || flags.bool("--dry-run")) {
+        return operation::run_contained_lab_do(global, &flags);
+    }
     let ids = Lab2Ids::new();
     let target = target_argument(&flags, "do")?;
     let instance = lab2_instance(global, &flags);
@@ -1357,9 +1361,13 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "do",
-            summary: "guard a semantic target, derive the click point, optionally execute it, and observe once",
-            required: &["<target>", "--scene <png> or --capture"],
+            summary: "execute one current Runtime element or explicit Tap/Swipe with lease-bound evidence; plan offline semantic targets",
+            required: &["<target> with --scene, or <element-id>/--tap/--swipe with --capture"],
             optional: &[
+                "--tap <x,y>",
+                "--swipe <x1,y1,x2,y2,duration-ms>",
+                "--projection-sequence <sequence>",
+                "--projection-hash <sha256>",
                 "--dry-run",
                 "--allow-destructive",
                 "--destructive",
@@ -1376,6 +1384,10 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "reco_id",
                 "action_id",
                 "actual_click",
+                "effect",
+                "before",
+                "after",
+                "operation_record",
                 "guard_result",
                 "observation",
                 "ledger",

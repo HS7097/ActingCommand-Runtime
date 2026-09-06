@@ -1224,7 +1224,7 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
     };
 
     let bundles = converter
-        .prune_page_rules_for_selected_build(converter.bundles.clone())
+        .prune_page_rules_for_selected_build(converter.bundles.clone(), &[])
         .expect("prune selected page rules");
     let recovery = bundles
         .iter()
@@ -1619,6 +1619,46 @@ fn selected_build_retains_required_ocr_target_closure() {
         outputs.pages.pointer("/pages/0/optional"),
         Some(&json!(["ocr/selected"]))
     );
+    let path = root.path().join("operations/selected/task.json");
+    let mut source: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    source["ocr_targets"][0]["region"] = json!({"mode":"template_relative","anchor_target_id":"page/unselected-page","offset":{"x":-2,"y":3},"width":30,"height":10});
+    source["page_rules"]["selected-page"]["optional"] =
+        json!(["ocr/selected", "page/unselected-page"]);
+    fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
+    let selected = OperationConverter::load(root.path(), None, None, None)
+        .unwrap()
+        .build_selected(&["selected".into()])
+        .unwrap();
+    let targets = selected.pack["targets"].as_array().unwrap();
+    assert!(
+        targets
+            .iter()
+            .any(|target| target["id"] == "page/unselected-page" && target["type"] == "template")
+    );
+    assert!(
+        !targets
+            .iter()
+            .any(|target| target["id"] == "ocr/unselected")
+    );
+    assert_eq!(
+        targets
+            .iter()
+            .find(|target| target["id"] == "ocr/selected")
+            .unwrap()["region"],
+        source["ocr_targets"][0]["region"]
+    );
+    assert_eq!(
+        selected.pages.pointer("/pages/0/optional"),
+        Some(&json!(["ocr/selected", "page/unselected-page"]))
+    );
+    for anchor in ["missing", "ocr/selected"] {
+        source["ocr_targets"][0]["region"]["anchor_target_id"] = json!(anchor);
+        fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
+        OperationConverter::load(root.path(), None, None, None)
+            .unwrap()
+            .build_selected(&["selected".into()])
+            .expect_err("missing or non-template anchor rejected by canonical admission");
+    }
 }
 
 #[test]

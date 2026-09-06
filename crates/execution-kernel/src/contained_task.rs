@@ -301,6 +301,8 @@ pub enum PostAdmissionOcrComparisonMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrObservation {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    regions: BTreeMap<String, actingcommand_contract::OcrRegionEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     page_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -543,6 +545,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         }
     }
 
+    #[cfg(test)]
     fn observe(
         &mut self,
         game: &str,
@@ -550,8 +553,17 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         page_label: &str,
         scene: &Scene,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        self.observe_in_context(game, &evaluator.scene_context(scene), page_label)
+    }
+
+    fn observe_in_context(
+        &mut self,
+        game: &str,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        page_label: &str,
+    ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         if self.fields.is_some() {
-            return self.observe_fields(game, evaluator, page_label, scene);
+            return self.observe_fields(game, context, page_label);
         }
         let Some(prepared) = self.prepared else {
             return Ok(None);
@@ -578,6 +590,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
             .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
         let mut target_observations = Vec::with_capacity(prepared.target_ids.len());
+        let mut regions = BTreeMap::new();
         for target_id in &prepared.target_ids {
             let max_retry_index = if prepared.truth_schema_v2 {
                 POST_ADMISSION_OCR_MAX_RETRY_INDEX
@@ -586,8 +599,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             };
             let mut accepted_observation = None;
             for retry_index in 0..=max_retry_index {
-                let evaluated = evaluator
-                    .evaluate_ocr_observation(scene, target_id)
+                let evaluated = context
+                    .evaluate_ocr_observation(target_id)
                     .map_err(|error| {
                         ContainedTaskError::with_detail(
                             "contained_task_post_admission_ocr_failed",
@@ -782,6 +795,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             let evaluated = accepted_observation.ok_or_else(|| {
                 ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch")
             })?;
+            regions.insert(evaluated.target_id.clone(), evaluated.region.clone());
             target_observations.push(PostAdmissionOcrTargetObservation {
                 target_id: evaluated.target_id,
                 text: evaluated.text,
@@ -821,6 +835,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 ));
             };
             PostAdmissionOcrObservation {
+                regions,
                 page_id: None,
                 personal: None,
                 target_id: Some(observation.target_id.clone()),
@@ -832,6 +847,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             }
         } else {
             PostAdmissionOcrObservation {
+                regions,
                 page_id: None,
                 personal: None,
                 target_id: None,
@@ -848,9 +864,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
     fn observe_fields(
         &mut self,
         game: &str,
-        evaluator: &RecognitionEvaluator,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         page_label: &str,
-        scene: &Scene,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         let prepared = self
             .fields
@@ -866,6 +881,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         }
         let frame_index = self.frames_collected;
         let mut targets = Vec::new();
+        let mut regions = BTreeMap::new();
         let mut records: Vec<OcrFieldRecord> = Vec::new();
         for field in &declaration.fields {
             let mut result = OcrFieldResult {
@@ -876,6 +892,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 value: None,
                 reason: OcrFieldReason::NotCollected,
                 detail: None,
+                region: None,
+                extraction: None,
                 redacted: false,
             };
             if self.field_failure.is_none() {
@@ -883,8 +901,10 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                     self.field_failure = Some(OcrFieldReason::LimitExceeded);
                     result.reason = OcrFieldReason::LimitExceeded;
                 } else {
-                    match evaluator.evaluate_ocr_observation(scene, &field.target_id) {
+                    match context.evaluate_ocr_observation(&field.target_id) {
                         Ok(mut evaluated) => {
+                            result.region = Some(evaluated.region.clone());
+                            regions.insert(field.target_id.clone(), evaluated.region.clone());
                             if evaluated.target_id != field.target_id
                                 || !self
                                     .invocation_ids
@@ -935,11 +955,23 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                             result.raw_text = Some(evaluated.text.clone());
                             if !exceeds {
                                 let normalized = evaluated.text.trim().to_string();
-                                let (value, reason) = parse_ocr_field(
+                                let (mut value, mut reason) = parse_ocr_field(
                                     &field.value,
                                     &normalized,
                                     prepared.dictionaries.get(&field.id),
                                 );
+                                if reason == OcrFieldReason::UnknownEntry
+                                    && let Some(rule) = &field.text_extraction
+                                    && let Some(extraction) = rule.extract(&normalized)
+                                        .map_err(ContainedTaskError::new)?
+                                {
+                                    (value, reason) = parse_ocr_field(
+                                        &field.value,
+                                        &extraction.extracted_text,
+                                        prepared.dictionaries.get(&field.id),
+                                    );
+                                    result.extraction = Some(extraction);
+                                }
                                 result.normalized_text = Some(normalized);
                                 result.value = value;
                                 result.reason = reason;
@@ -952,7 +984,17 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                 execution: evaluated.execution,
                             });
                         }
+                        Err(error) if error.code() == actingcommand_recognition_pack::RecognitionPackErrorCode::RegionUnresolved => {
+                            result.reason = OcrFieldReason::RegionUnresolved;
+                            let region = error.region().ok_or_else(|| ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch"))?.clone();
+                            result.region = Some(region.clone());
+                            regions.insert(field.target_id.clone(), region);
+                        }
                         Err(error) => {
+                            if let Some(region) = error.region() {
+                                result.region = Some(region.clone());
+                                regions.insert(field.target_id.clone(),region.clone());
+                            }
                             result.reason = OcrFieldReason::ProviderFailed;
                             let mut detail = error.to_string();
                             let limit = (declaration.limits.max_string_bytes as usize).min(
@@ -1001,6 +1043,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         Ok(Some((
             frame_index,
             PostAdmissionOcrObservation {
+                regions,
                 page_id: Some(page_label.to_string()),
                 target_id: None,
                 text: None,
@@ -2376,6 +2419,7 @@ impl PreparedContainedTask {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         let scene = scene_from_frame(&frame)?;
+        let context = self.evaluator.scene_context(&scene);
         let candidate_pages = self
             .detector
             .page_ids()
@@ -2390,7 +2434,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::Boundary)?;
         let matched_pages = self
             .detector
-            .evaluate_all(&self.evaluator, &scene)
+            .evaluate_all_in_context(&context)
             .map_err(|error| {
                 ContainedTaskError::with_detail(
                     "contained_task_recognition_failed",
@@ -2437,7 +2481,7 @@ impl PreparedContainedTask {
             return Ok(None);
         };
         if let Some((frame_index, observation)) =
-            ocr_collector.observe(&self.control.game, &self.evaluator, &page_label, &scene)?
+            ocr_collector.observe_in_context(&self.control.game, &context, &page_label)?
         {
             runtime
                 .record(ContainedTaskTrace::PostAdmissionOcrObservation {
@@ -3193,13 +3237,22 @@ impl TaskProgram {
         if self.schema_version != "0.8" {
             return Ok(None);
         }
-        let declaration: OcrFieldsDeclaration = serde_json::from_value(
+        let mut declaration: OcrFieldsDeclaration = serde_json::from_value(
             self.post_admission_ocr
                 .clone()
                 .ok_or_else(|| ContainedTaskError::new("ocr_fields_declaration_missing"))?,
         )
         .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
         declaration.validate().map_err(ContainedTaskError::new)?;
+        if let Some(metadata) = bundle.projection_metadata() {
+            for field in &mut declaration.fields {
+                if metadata.target_privacy(&field.target_id)
+                    == Some(actingcommand_contract::page_projection::Privacy::Personal)
+                {
+                    field.privacy = actingcommand_contract::OcrFieldPrivacy::Personal;
+                }
+            }
+        }
         let target_ids = declaration
             .fields
             .iter()
@@ -3414,6 +3467,20 @@ fn validate_post_admission_ocr_target(
         ));
     };
     match &target.region {
+        PackRegion::TemplateRelative(_) => {
+            evaluator
+                .ocr_anchor_target_id(target_id)
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_post_admission_ocr_target_invalid",
+                        error.to_string(),
+                    )
+                })?
+                .ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_target_invalid")
+                })?;
+            Ok(())
+        }
         PackRegion::Keyword(value) if value == "full_frame" => Ok(()),
         PackRegion::Rect(rect) => {
             let x = i64::from(rect.x);
@@ -5530,6 +5597,140 @@ mod post_admission_ocr_tests {
                 assert_eq!(runtime.inner.inputs, 1);
             }
         }
+        #[derive(Debug)]
+        struct IconAssets(Vec<u8>);
+        impl actingcommand_recognition_pack::AssetResolver for IconAssets {
+            fn read_asset(
+                &self,
+                path: &str,
+            ) -> actingcommand_recognition_pack::RecognitionPackResult<Vec<u8>> {
+                assert_eq!(path, "icon.png");
+                Ok(self.0.clone())
+            }
+        }
+        let icon = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .unwrap()
+        .png_for_artifact()
+        .unwrap();
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                provider_observation("relative-1", &["7".into()]),
+                provider_observation("relative-2", &["8".into()]),
+            ])),
+            requests: Mutex::new(vec![]),
+            calls: AtomicU32::new(0),
+        });
+        let mut pack = ordered_ocr_pack(&["quantity".into()], 4);
+        for target in &mut pack.targets {
+            if let RecognitionTarget::Ocr(target) = target {
+                target.region = serde_json::from_value(json!({"mode":"template_relative","anchor_target_id":"icon","offset":{"x":1,"y":0},"width":1,"height":1})).unwrap();
+            }
+        }
+        pack.targets.push(serde_json::from_value(json!({"type":"template","id":"icon","template_path":"icon.png","region":{"x":1,"y":0,"width":3,"height":1},"threshold":0.99})).unwrap());
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(IconAssets(icon)),
+            provider.clone(),
+        )
+        .unwrap();
+        let detector = PageDetector::new(serde_json::from_value(json!({"schema_version":"0.6","pages":[{"id":"neutral/operator","required":["page/operator"],"optional":["icon"]}]})).unwrap()).unwrap();
+        let declaration: OcrFieldsDeclaration = serde_json::from_value(json!({"mode":"fields_v1","page_ids":["operator"],"fields":[
+            {"id":"quantity","group":"item","target_id":"quantity","required":true,"privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":100}}],
+            "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"})).unwrap();
+        let fields = PreparedOcrFields {
+            declaration: declaration.clone(),
+            dictionaries: BTreeMap::new(),
+        };
+        let mut collector = PostAdmissionOcrCollector {
+            fields: Some(&fields),
+            ..Default::default()
+        };
+        for (index, pixels) in [
+            vec![1, 1, 1, 255, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![1, 1, 1, 0, 0, 0, 255, 0, 0, 0, 0, 0],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let scene = Scene::from_rgb8(4, 1, &pixels).unwrap();
+            let context = evaluator.scene_context(&scene);
+            assert!(detector.evaluate_all_in_context(&context).unwrap()[0].matched);
+            let (_, observation) = collector
+                .observe_in_context("neutral", &context, "neutral/operator")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                observation.regions["quantity"].roi.unwrap().x,
+                index as i32 + 2
+            );
+            assert_eq!(
+                observation.regions["quantity"]
+                    .anchor_match
+                    .as_ref()
+                    .unwrap()
+                    .rect
+                    .x,
+                index as i32 + 1
+            );
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        let report = collector.fields_report().unwrap();
+        assert_eq!(
+            report.records[0].fields[0].field_id,
+            report.records[1].fields[0].field_id
+        );
+        assert_eq!(
+            report.records[0].fields[0].value,
+            Some(OcrFieldValue::UnsignedInteger(7))
+        );
+        assert_eq!(
+            report.records[1].fields[0].value,
+            Some(OcrFieldValue::UnsignedInteger(8))
+        );
+        for required in [true, false] {
+            for pixels in [
+                vec![1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                vec![1, 1, 1, 0, 0, 0, 0, 0, 0, 255, 0, 0],
+            ] {
+                let mut fields = PreparedOcrFields {
+                    declaration: declaration.clone(),
+                    dictionaries: BTreeMap::new(),
+                };
+                fields.declaration.fields[0].required = required;
+                let mut collector = PostAdmissionOcrCollector {
+                    fields: Some(&fields),
+                    ..Default::default()
+                };
+                let scene = Scene::from_rgb8(4, 1, &pixels).unwrap();
+                let context = evaluator.scene_context(&scene);
+                assert!(detector.evaluate_all_in_context(&context).unwrap()[0].matched);
+                collector
+                    .observe_in_context("neutral", &context, "neutral/operator")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    provider.calls.load(Ordering::SeqCst),
+                    2,
+                    "unresolved region must not invoke OCR"
+                );
+                let report = collector.fields_report().unwrap();
+                assert_eq!(
+                    report.failure,
+                    required.then_some(OcrFieldReason::RegionUnresolved)
+                );
+                assert_eq!(
+                    report.records[0].fields[0].reason,
+                    OcrFieldReason::RegionUnresolved
+                );
+                assert!(report.records[0].fields[0].value.is_none());
+            }
+        }
     }
 
     // Specification 6: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
@@ -6248,6 +6449,51 @@ mod post_admission_ocr_tests {
             .code(),
             "contained_task_post_admission_ocr_target_in_page_gate"
         );
+        #[derive(Debug)]
+        struct GateIcon(Vec<u8>);
+        impl actingcommand_recognition_pack::AssetResolver for GateIcon {
+            fn read_asset(
+                &self,
+                path: &str,
+            ) -> actingcommand_recognition_pack::RecognitionPackResult<Vec<u8>> {
+                assert_eq!(path, "icon.png");
+                Ok(self.0.clone())
+            }
+        }
+        let icon = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .unwrap()
+        .png_for_artifact()
+        .unwrap();
+        let mut pack = ordered_ocr_pack(&target_ids, 16);
+        for target in &mut pack.targets {
+            if let RecognitionTarget::Ocr(target) = target {
+                target.region = serde_json::from_value(json!({"mode":"template_relative","anchor_target_id":"icon","offset":{"x":0,"y":0},"width":1,"height":1})).unwrap();
+            }
+        }
+        pack.targets.push(serde_json::from_value(json!({"type":"template","id":"icon","template_path":"icon.png","region":"full_frame","threshold":0.99})).unwrap());
+        let relative =
+            RecognitionEvaluator::with_asset_resolver(pack, Arc::new(GateIcon(icon))).unwrap();
+        validate_post_admission_ocr_page_set(&control, &relative, &good, &page_ids, &target_ids)
+            .unwrap();
+        for id in &target_ids {
+            validate_post_admission_ocr_target(&control, &relative, id).unwrap();
+        }
+        let prepared = prepared_ordered(target_ids.clone(), vec!["unused".into()]);
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+        let scene = Scene::from_rgb8(16, 1, &[0; 48]).unwrap();
+        assert!(
+            collector
+                .observe("neutral", &relative, "neutral/outside", &scene)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(collector.frames_collected, 0);
     }
 
     #[test]

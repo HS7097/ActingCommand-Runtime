@@ -149,39 +149,8 @@ impl HostShared {
                 "observation_evidence_limit_exceeded",
             ));
         }
-        let mut sink = ObservationArtifactSink {
-            ledger: &self.ledger,
-            events: &self.events,
-            verified: None,
-        };
-        let artifact = self
-            .artifacts
-            .put(
-                ArtifactWriteRequest::new(
-                    ArtifactKind::DiagnosticJson,
-                    &bytes,
-                    ArtifactWriteContext::new(
-                        completed.artifact_links,
-                        links.clone(),
-                        unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
-                    ),
-                    ArtifactIssuePolicy::new(
-                        ArtifactProducer::CapturePipeline,
-                        RetentionClass::DebugFull,
-                        ArtifactRedactionState::Pending,
-                    ),
-                ),
-                &mut sink,
-            )
-            .map_err(observation_artifact_failure)?;
-        let verified = sink
-            .verified
-            .ok_or_else(|| observation_integrity_failure("observation_verified_event_missing"))?;
-        if verified.artifacts() != [artifact.reference().clone()] {
-            return Err(observation_integrity_failure(
-                "observation_verified_artifact_mismatch",
-            ));
-        }
+        let (artifact, verified) =
+            self.persist_observation_artifact(&bytes, completed.artifact_links, links.clone())?;
         let recognized = evidence.status == PageObservationStatus::Recognized;
         let incomplete = matches!(
             evidence.status,
@@ -228,7 +197,7 @@ impl HostShared {
             status: evidence.status,
             projection: evidence.projection,
             facts: evidence.facts,
-            artifact: artifact.reference().project(true),
+            artifact,
             projection_sequence: verified.sequence(),
             projection_event_id: *verified.event_id(),
         };
@@ -244,7 +213,54 @@ impl HostShared {
         })
     }
 
-    fn observation_failure(
+    pub(super) fn persist_observation_artifact(
+        &self,
+        bytes: &[u8],
+        artifact_links: ArtifactLinksDraft,
+        links: EventLinksDraft,
+    ) -> Result<(ProjectedArtifactReference, PersistedEvent), RequestFailure> {
+        if bytes.len() > MAX_OBSERVATION_ARTIFACT_BYTES {
+            return Err(observation_integrity_failure(
+                "observation_evidence_limit_exceeded",
+            ));
+        }
+        let mut sink = ObservationArtifactSink {
+            ledger: &self.ledger,
+            events: &self.events,
+            verified: None,
+        };
+        let artifact = self
+            .artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    bytes,
+                    ArtifactWriteContext::new(
+                        artifact_links,
+                        links,
+                        unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+                    ),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CapturePipeline,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::Pending,
+                    ),
+                ),
+                &mut sink,
+            )
+            .map_err(observation_artifact_failure)?;
+        let verified = sink
+            .verified
+            .ok_or_else(|| observation_integrity_failure("observation_verified_event_missing"))?;
+        if verified.artifacts() != [artifact.reference().clone()] {
+            return Err(observation_integrity_failure(
+                "observation_verified_artifact_mismatch",
+            ));
+        }
+        Ok((artifact.reference().project(true), verified))
+    }
+
+    pub(super) fn observation_failure(
         &self,
         error: RuntimeHostError,
         links: EventLinksDraft,
@@ -280,7 +296,7 @@ impl HostShared {
     }
 }
 
-fn observation_admission_error(
+pub(super) fn observation_admission_error(
     code: &'static str,
     stage: &'static str,
     cause: impl ToString,
@@ -288,7 +304,7 @@ fn observation_admission_error(
     RuntimeHostError::request(code, stage, RuntimeErrorCode::InvalidRequest)
         .with_native_detail(cause.to_string())
 }
-fn observation_kernel_error(error: OnlineObservationError) -> RuntimeHostError {
+pub(super) fn observation_kernel_error(error: OnlineObservationError) -> RuntimeHostError {
     RuntimeHostError::request(
         error.code(),
         error.stage(),
@@ -303,14 +319,14 @@ fn observation_kernel_error(error: OnlineObservationError) -> RuntimeHostError {
     )
     .with_native_detail(error.cause().to_string())
 }
-fn observation_integrity_failure(code: &'static str) -> RequestFailure {
+pub(super) fn observation_integrity_failure(code: &'static str) -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         code,
         "persist_contained_page_observation",
         RuntimeErrorCode::RuntimeFatal,
     ))
 }
-fn observation_artifact_failure(error: ArtifactStoreError) -> RequestFailure {
+pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> RequestFailure {
     RequestFailure::poison_without_terminal(
         RuntimeHostError::fatal(
             error.code(),
@@ -322,10 +338,10 @@ fn observation_artifact_failure(error: ArtifactStoreError) -> RequestFailure {
 }
 
 /// This request retains the sequence returned by its own native append.
-struct ObservationArtifactSink<'a> {
-    ledger: &'a GlobalLedger,
-    events: &'a RuntimeEvents,
-    verified: Option<PersistedEvent>,
+pub(super) struct ObservationArtifactSink<'a> {
+    pub(super) ledger: &'a GlobalLedger,
+    pub(super) events: &'a RuntimeEvents,
+    pub(super) verified: Option<PersistedEvent>,
 }
 impl ArtifactEventSink for ObservationArtifactSink<'_> {
     fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
