@@ -50,26 +50,28 @@ use actingcommand_contract::{
     CatalogPromotionAuthorization, CatalogProposal, CatalogTransitionEventData, ClientActionRecord,
     ClientPayload, ClientPayloadDraft, CommandPayloadDraft, ContainedTaskCancellationReason,
     ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRequest,
-    CorrelationId, DiagnosticCode, DiagnosticDetailDraft, EffectDisposition, EventAction,
+    CorrelationId, DiagnosticCode, DiagnosticDetailDraft, EFFECTIVE_CONFIGURATION_SCHEMA,
+    EffectDisposition, EffectiveCaptureSelection, EffectiveConfigurationFacts,
+    EffectiveConfigurationRecord, EffectiveInputSelection, EffectiveMumuInstallation, EventAction,
     EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
     EventSource, EventType, FactPayloadDraft, FactRecord, FrameId, InputAction,
     InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload, InputPayloadDraft,
     InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
     IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES,
-    MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout,
-    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
-    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
-    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
-    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RunId,
-    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
-    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES,
+    MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
+    OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
+    PerformancePayloadDraft, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectDecisionPageRequest,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProposalClass,
+    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
+    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
+    RunId, RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
     RuntimeEvidenceScreenshotCounts, RuntimeForwardProjectionRequest, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
@@ -5433,14 +5435,16 @@ impl HostShared {
                     connection_id,
                 )
             }
-            RuntimeOperation::Input { token, action } => self.input(
-                validated,
-                token,
-                action,
-                connection_id,
-                ExecutionBackendProvenance::PhysicalDevice,
-                None,
-            ),
+            RuntimeOperation::Input { token, action } => self
+                .input(
+                    validated,
+                    token,
+                    action,
+                    connection_id,
+                    ExecutionBackendProvenance::PhysicalDevice,
+                    None,
+                )
+                .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {
                 let event_id = self.publish_fact(record.clone()).map_err(|error| {
                     if error.is_fatal() {
@@ -10227,7 +10231,7 @@ impl HostShared {
             ExecutionBackendProvenance::PhysicalDevice,
             None,
         ) {
-            Ok(success) => success,
+            Ok((success, _)) => success,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure(token, connection_id, failure));
             }
@@ -10838,21 +10842,27 @@ impl HostShared {
             used_action_seeds: BTreeSet::new(),
             finalizing: None,
             capture_evidence: CaptureEvidenceAccumulator::default(),
+            configuration_records: 0,
+            configuration_capture_recorded: false,
+            configuration_input_recorded: false,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
-        let execution = if prepared.required_home_entry_page().is_some()
-            && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
-        {
-            self.run_preflighted_contained_task(
-                instance_alias,
-                task_request,
-                &prepared,
-                &mut runtime,
-            )
-        } else {
-            let execution = prepared.run(&mut runtime);
-            execution
-        };
+        let execution =
+            if let Err(failure) = runtime.record_initial_configuration(task_request, &prepared) {
+                Err(ContainedTaskRunError::Boundary(failure))
+            } else if prepared.required_home_entry_page().is_some()
+                && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
+            {
+                self.run_preflighted_contained_task(
+                    instance_alias,
+                    task_request,
+                    &prepared,
+                    &mut runtime,
+                )
+            } else {
+                let execution = prepared.run(&mut runtime);
+                execution
+            };
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
                 runtime.record_post_admission_ocr_failure(error.code(), error.detail())
@@ -11242,6 +11252,19 @@ impl HostShared {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         let recovery_execution = {
+            if runtime.configuration_records > 0 {
+                runtime
+                    .record_configuration(
+                        EffectiveConfigurationFacts::EntryRecovery {
+                            package_sha256: recovery.package_sha256().to_owned(),
+                            timing: recovery.effective_timing(),
+                        },
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(ContainedTaskRunError::Boundary)?;
+            }
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
             recovery.run(&mut recovery_runtime)
         };
@@ -12256,7 +12279,13 @@ impl HostShared {
         connection_id: ConnectionId,
         execution_provenance: ExecutionBackendProvenance,
         run_links: Option<RuntimeRunLinks>,
-    ) -> Result<OperationSuccess, RequestFailure> {
+    ) -> Result<
+        (
+            OperationSuccess,
+            Option<actingcommand_device::InputSelectionContext>,
+        ),
+        RequestFailure,
+    > {
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
             let admission = lock(&instance_guard, "lock_instance_admission")?;
@@ -12380,8 +12409,8 @@ impl HostShared {
                     .execution
                     .input_prepared(&instance_alias, action_for_worker)
                 {
-                    Ok(()) => CriticalActionReport::Succeeded {
-                        value: (),
+                    Ok(selection) => CriticalActionReport::Succeeded {
+                        value: selection,
                         effect: success_effect,
                     },
                     Err(error) => CriticalActionReport::Failed {
@@ -12435,11 +12464,15 @@ impl HostShared {
             Ok(receipt) => {
                 self.finish_destructive_input(token, connection_id)?;
                 self.transfer_preempted_if_ready(token, connection_id)?;
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Completed,
-                    terminal: Some(terminal(receipt.outcome())),
-                    result: RuntimeResult::InputCommitted { action_id },
-                })
+                let selection = receipt.value().clone();
+                Ok((
+                    OperationSuccess {
+                        state: RuntimeReceiptState::Completed,
+                        terminal: Some(terminal(receipt.outcome())),
+                        result: RuntimeResult::InputCommitted { action_id },
+                    },
+                    selection,
+                ))
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
                 self.record_required_failure(&error.error, &outcome, lifecycle_links)?;
@@ -14551,6 +14584,9 @@ struct RuntimeContainedTask<'a> {
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
     capture_evidence: CaptureEvidenceAccumulator,
+    configuration_records: u8,
+    configuration_capture_recorded: bool,
+    configuration_input_recorded: bool,
 }
 
 struct EntryRecoveryRuntime<'a, 'host> {
@@ -14688,6 +14724,122 @@ struct RuntimeContainedTaskOcrFailureDiagnostic<'a> {
 }
 
 impl RuntimeContainedTask<'_> {
+    fn record_initial_configuration(
+        &mut self,
+        request: &ContainedTaskRequest,
+        prepared: &PreparedContainedTask,
+    ) -> Result<(), RequestFailure> {
+        let resolved = self
+            .host
+            .execution
+            .resolve(self.instance_alias)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "resolve_contained_task_configuration",
+                    &error,
+                ))
+            })?;
+        let observed_at = self
+            .host
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        self.record_configuration(
+            EffectiveConfigurationFacts::Initial {
+                device: resolved.configuration().cloned(),
+                timing: prepared.effective_timing(),
+                request_timeout_ms: request.response_deadline_ms(),
+                host_deadline_monotonic_ms: self.control.deadline(),
+                observed_at_monotonic_ms: observed_at,
+                host_remaining_ms: self.control.deadline().saturating_sub(observed_at),
+                capture_observed: false,
+                input_observed: false,
+            },
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn record_configuration(
+        &mut self,
+        facts: EffectiveConfigurationFacts,
+        frame_id: Option<IssuedFrameId>,
+        action_id: Option<ActionId>,
+        source_sequence: Option<u64>,
+    ) -> Result<(), RequestFailure> {
+        if self.configuration_records >= 4 {
+            return Err(RequestFailure::poison_without_terminal(
+                artifact_store_error("effective_configuration_limit_exceeded"),
+            ));
+        }
+        let record = EffectiveConfigurationRecord {
+            schema_version: EFFECTIVE_CONFIGURATION_SCHEMA.to_owned(),
+            request_id: self.control.request_id,
+            task_id: *self.task_id.transport(),
+            run_id: *self.run_id.transport(),
+            frame_id: frame_id.map(|id| *id.transport()),
+            action_id,
+            source_sequence,
+            facts,
+        };
+        let bytes = serde_json::to_vec(&record).map_err(|_| {
+            RequestFailure::poison_without_terminal(artifact_store_error(
+                "encode_effective_configuration",
+            ))
+        })?;
+        if bytes.len() as u64 > MAX_EFFECTIVE_CONFIGURATION_BYTES {
+            return Err(RequestFailure::poison_without_terminal(
+                artifact_store_error("effective_configuration_too_large"),
+            ));
+        }
+        let mut event_links = self
+            .host
+            .events
+            .request_links(
+                self.request,
+                Some(self.token.instance_id()),
+                Some(self.token.lease_id()),
+                action_id,
+            )
+            .with_task_id(self.task_id)
+            .with_run_id(self.run_id);
+        let mut artifact_links = self.request.task_artifact_links(self.run_id);
+        if let Some(frame_id) = frame_id {
+            event_links = event_links.with_frame_id(frame_id);
+            artifact_links = artifact_links.with_frame_id(frame_id);
+        }
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.host.ledger,
+            events: &self.host.events,
+        };
+        self.host
+            .artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    &bytes,
+                    ArtifactWriteContext::new(
+                        artifact_links,
+                        event_links,
+                        unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+                    ),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::ArtifactStore,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut sink,
+            )
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(artifact_store_error(
+                    "persist_effective_configuration",
+                ))
+            })?;
+        self.configuration_records += 1;
+        Ok(())
+    }
+
     fn ensure_active(&self) -> Result<(), RequestFailure> {
         let Some(reason) = self.control.cancellation_reason(
             self.host
@@ -15450,7 +15602,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
         let links = self.links().with_frame_id(frame_id);
         let (source, module) = self.capture_origin();
-        self.host.append_event(
+        let requested = self.host.append_event(
             EventSeverity::Info,
             source,
             module,
@@ -15503,6 +15655,37 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     })?;
                 self.capture_evidence.persisted(frame_index, &stored)?;
                 self.last_frame_id = Some(frame_id);
+                if self.configuration_records > 0 && !self.configuration_capture_recorded {
+                    let selection =
+                        frame
+                            .selection
+                            .as_ref()
+                            .map(|selection| EffectiveCaptureSelection {
+                                requested_backend: selection.requested.as_str().to_owned(),
+                                configured_adb: selection.configured_adb.clone(),
+                                configured_serial: selection.configured_serial.clone(),
+                                resolved_adb: selection.resolved_adb.clone(),
+                                selected_serial: selection.selected_serial.clone(),
+                                mumu: selection.mumu.as_ref().map(|mumu| {
+                                    EffectiveMumuInstallation {
+                                        root: mumu.root.clone(),
+                                        adb_path: mumu.adb_path.clone(),
+                                        capture_dll_path: mumu.capture_dll_path.clone(),
+                                        source: mumu.source.as_str().to_owned(),
+                                    }
+                                }),
+                            });
+                    self.record_configuration(
+                        EffectiveConfigurationFacts::Capture {
+                            backend: frame.backend_name.as_str().to_owned(),
+                            selection,
+                        },
+                        Some(frame_id),
+                        None,
+                        Some(requested.sequence()),
+                    )?;
+                    self.configuration_capture_recorded = true;
+                }
                 Ok(frame)
             }
             Err(error) => {
@@ -15575,7 +15758,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
         self.ensure_active()?;
-        let success = self.host.input(
+        let (success, selection) = self.host.input(
             self.request,
             self.token,
             &action,
@@ -15584,7 +15767,21 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
         )?;
         self.ensure_active()?;
-        if matches!(success.result, RuntimeResult::InputCommitted { .. }) {
+        if let RuntimeResult::InputCommitted { action_id } = success.result {
+            if self.configuration_records > 0 && !self.configuration_input_recorded {
+                self.record_configuration(
+                    EffectiveConfigurationFacts::Input {
+                        selection: selection.map(|selection| EffectiveInputSelection {
+                            backend: selection.backend.as_str().to_owned(),
+                            serial: selection.serial,
+                        }),
+                    },
+                    self.last_frame_id,
+                    Some(action_id),
+                    success.terminal.map(|terminal| terminal.sequence),
+                )?;
+                self.configuration_input_recorded = true;
+            }
             Ok(())
         } else {
             Err(RequestFailure::poison_without_terminal(

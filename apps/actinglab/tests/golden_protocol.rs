@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{IdentifierIssuer, InstanceId};
+use actingcommand_contract::{IdentifierIssuer, InstanceId, ProjectedArtifactReference};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
@@ -269,7 +269,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         }]
     });
 
-    normalize_value(&mut value, temp.path(), None);
+    normalize_value(&mut value, temp.path(), None, false);
 
     assert_eq!(value["req_id"], "<REQ_ID>");
     assert_eq!(value["reco_id"], "<RECO_ID>");
@@ -300,6 +300,76 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
             .is_none()
     );
     assert_eq!(value["evaluations"][0]["matched"], true);
+
+    let configuration = json!({
+        "artifact_id": "artifact_0123456789abcdef0123456789abcdef",
+        "byte_count": 941,
+        "correlation_id": "correlation_0123456789abcdef0123456789abcdef",
+        "created_at_unix_ms": 123,
+        "frame_id": "frame_0123456789abcdef0123456789abcdef",
+        "kind": "diagnostic.json",
+        "media_type": "application/json",
+        "object_key": "artifacts/aa/artifact_0123456789abcdef0123456789abcdef.json",
+        "producer": "artifact_store",
+        "redaction_state": "not_required",
+        "retention_class": "debug_full",
+        "run_id": "run_0123456789abcdef0123456789abcdef",
+        "sha256": format!("sha256:{}", "aa".repeat(32))
+    });
+    let mut another_configuration = configuration.clone();
+    another_configuration["sha256"] = json!(format!("sha256:{}", "bc".repeat(32)));
+    another_configuration["object_key"] =
+        json!("artifacts/bc/artifact_0123456789abcdef0123456789abcdef.json");
+    another_configuration["byte_count"] = json!(1024);
+    let mut png = configuration.clone();
+    png["kind"] = json!("capture.frame");
+    png["media_type"] = json!("image/png");
+    png["producer"] = json!("capture_store");
+    png["sha256"] =
+        json!("sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979");
+    png["object_key"] = json!("artifacts/0f/artifact_0123456789abcdef0123456789abcdef.png");
+    png["byte_count"] = json!(82);
+    let mut other_producer = configuration.clone();
+    other_producer["producer"] = json!("capture_pipeline");
+    let mut protocol = json!({
+        "artifacts": [configuration, another_configuration, png, other_producer],
+        "event_type": "artifact.verified",
+        "sequence": 17,
+        "links": {
+            "request_id": "request_0123456789abcdef0123456789abcdef",
+            "run_id": "run_0123456789abcdef0123456789abcdef",
+            "frame_id": "frame_0123456789abcdef0123456789abcdef"
+        },
+        "payload": {"outcome": "success", "executed_steps": 0, "timeout_ms": 480000},
+        "sha256": format!("sha256:{}", "aa".repeat(32)),
+        "byte_count": 941
+    });
+    let mut ordinary_case = protocol.clone();
+    normalize_value(&mut ordinary_case, temp.path(), None, false);
+    normalize_value(&mut protocol, temp.path(), None, true);
+    assert_eq!(protocol["artifacts"][0], protocol["artifacts"][1]);
+    assert_eq!(protocol["artifacts"][0]["sha256"], "<SHA256>");
+    assert_eq!(protocol["artifacts"][0]["byte_count"], "<BYTES>");
+    assert_eq!(
+        protocol["artifacts"][0]["object_key"],
+        "artifacts/<SHARD>/<ARTIFACT_ID>.json"
+    );
+    assert_eq!(
+        ordinary_case["artifacts"][0]["sha256"],
+        configuration["sha256"]
+    );
+    assert_eq!(ordinary_case["artifacts"][0]["byte_count"], 941);
+    assert_eq!(
+        ordinary_case["artifacts"][0]["object_key"],
+        "artifacts/aa/<ARTIFACT_ID>.json"
+    );
+    for index in 0..2 {
+        ordinary_case["artifacts"][index]["sha256"] = json!("<SHA256>");
+        ordinary_case["artifacts"][index]["byte_count"] = json!("<BYTES>");
+        ordinary_case["artifacts"][index]["object_key"] =
+            json!("artifacts/<SHARD>/<ARTIFACT_ID>.json");
+    }
+    assert_eq!(protocol, ordinary_case);
 }
 
 #[test]
@@ -325,8 +395,8 @@ fn normalizer_stabilizes_localized_os_error_text() {
         }
     });
 
-    normalize_value(&mut chinese, temp.path(), None);
-    normalize_value(&mut english, temp.path(), None);
+    normalize_value(&mut chinese, temp.path(), None, false);
+    normalize_value(&mut english, temp.path(), None, false);
 
     assert_eq!(chinese, english);
     assert_eq!(chinese["error"]["code"], "device_error");
@@ -427,7 +497,12 @@ fn capture_case(case: &CaseSpec, fixture: Fixture) -> GoldenCase {
     assert_protocol_channels(case, &output);
     let mut envelope = parse_single_envelope(&output.stdout, case.name);
     assert_expected_kind(case, &output, &envelope);
-    normalize_value(&mut envelope, fixture.root(), None);
+    normalize_value(
+        &mut envelope,
+        fixture.root(),
+        None,
+        case.name == "lab_run_success",
+    );
     GoldenCase {
         name: case.name.to_string(),
         command: case.command.to_string(),
@@ -489,17 +564,42 @@ fn parse_single_envelope(stdout: &[u8], case: &str) -> Value {
     value
 }
 
-fn normalize_value(value: &mut Value, root: &Path, key: Option<&str>) {
+fn normalize_value(
+    value: &mut Value,
+    root: &Path,
+    key: Option<&str>,
+    configuration_artifacts: bool,
+) {
     match value {
         Value::Object(object) => {
+            if configuration_artifacts
+                && key == Some("artifacts")
+                && object.get("kind").and_then(Value::as_str) == Some("diagnostic.json")
+                && object.get("producer").and_then(Value::as_str) == Some("artifact_store")
+                && object.get("media_type").and_then(Value::as_str) == Some("application/json")
+                && let Ok(reference) = serde_json::from_value::<ProjectedArtifactReference>(
+                    Value::Object(object.clone()),
+                )
+                && reference.sha256.len() == 71
+                && reference.sha256.is_ascii()
+                && reference.object_key.is_some()
+                && reference.validate().is_ok()
+            {
+                object.insert("sha256".to_string(), json!("<SHA256>"));
+                object.insert("byte_count".to_string(), json!("<BYTES>"));
+                object.insert(
+                    "object_key".to_string(),
+                    json!("artifacts/<SHARD>/<ARTIFACT_ID>.json"),
+                );
+            }
             object.remove("evaluation_duration_ms");
             for (field, child) in object {
-                normalize_value(child, root, Some(field));
+                normalize_value(child, root, Some(field), configuration_artifacts);
             }
         }
         Value::Array(values) => {
             for child in values {
-                normalize_value(child, root, key);
+                normalize_value(child, root, key, configuration_artifacts);
             }
         }
         Value::String(text) => normalize_string(text, root, key),
