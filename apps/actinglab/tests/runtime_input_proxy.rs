@@ -1079,7 +1079,8 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
             "--instance",
             "node.a",
             "do",
-            "home_button",
+            "--tap",
+            "0,0",
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
@@ -1103,9 +1104,9 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
     assert_eq!(
         envelope
-            .pointer("/data/device/backend")
+            .pointer("/data/device/authority")
             .and_then(Value::as_str),
-        Some("runtime_proxy")
+        Some("runtime_execution_kernel")
     );
     assert!(envelope.pointer("/data/needs_detection").is_none());
     assert_eq!(state.captures.load(Ordering::Acquire), 2);
