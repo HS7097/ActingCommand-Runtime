@@ -85,6 +85,13 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
         "relative_missing",
         "relative_optional",
         "relative_math",
+        "relative_extraction_text",
+        "relative_extraction_range",
+        "relative_extraction_utf8",
+        "relative_extraction_version",
+        "relative_extraction_rule",
+        "relative_extraction_missing",
+        "relative_extraction_type",
     ] {
         let relative = case.starts_with("relative");
         let final_sequence = if relative { 8 } else { 5 };
@@ -117,7 +124,14 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 case,
                 "personal" | "personal_task_failed" | "relative_personal"
             );
-            let name = if personal { "PrivateFixture" } else { "EntryA" };
+            let extraction = case.starts_with("relative_extraction");
+            let name = if extraction {
+                "ÉntryA09/2803:59期限"
+            } else if personal {
+                "PrivateFixture"
+            } else {
+                "EntryA"
+            };
             let canonical = if personal {
                 "PrivateCanonical"
             } else {
@@ -149,6 +163,48 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         {"field_id":"count","target_id":"field/count","raw_text":count,"normalized_text":count,
                             "value":if field_failed {Value::Null} else {json!({"type":"unsigned_integer","value":7})},
                             "reason":if field_failed {"invalid_integer"} else {"resolved"},"detail":null,"redacted":false}]}]}});
+            if extraction {
+                report["report"]["declaration"]["fields"][0]["text_extraction"] = json!({
+                    "mode":"strip_declared_suffix_v1","suffix":[
+                        {"type":"ascii_digits","count":2}, {"type":"literal","value":"/"},
+                        {"type":"ascii_digits","count":4}, {"type":"literal","value":":"},
+                        {"type":"ascii_digits","count":2}, {"type":"literal","value":"期限"}
+                    ]
+                });
+                let field = &mut report["report"]["records"][0]["fields"][0];
+                field["value"]["value"] = json!("ÉntryA");
+                field["extraction"] = json!({"rule_version":"strip_declared_suffix_v1",
+                    "matched_suffix":{"start":7,"end":name.len()},
+                    "extracted_text":"ÉntryA","extracted_range":{"start":0,"end":7}});
+                match case {
+                    "relative_extraction_text" => {
+                        field["extraction"]["extracted_text"] = json!("Other");
+                    }
+                    "relative_extraction_range" => {
+                        field["extraction"]["matched_suffix"]["end"] = json!(name.len() + 1);
+                    }
+                    "relative_extraction_utf8" => {
+                        field["extraction"]["extracted_range"]["start"] = json!(1);
+                    }
+                    "relative_extraction_version" => {
+                        field["extraction"]["rule_version"] = json!("unknown");
+                    }
+                    _ => {}
+                }
+                let declaration = &mut report["report"]["declaration"]["fields"][0];
+                match case {
+                    "relative_extraction_rule" => {
+                        declaration["text_extraction"]["suffix"][5]["value"] = json!("other");
+                    }
+                    "relative_extraction_missing" => {
+                        declaration.as_object_mut().unwrap().remove("text_extraction");
+                    }
+                    "relative_extraction_type" => {
+                        declaration["value"] = json!({"type":"unsigned_integer","min":0,"max":100});
+                    }
+                    _ => {}
+                }
+            }
             if legacy {
                 report = json!({"schema_version":"actingcommand.runtime.post-admission-ocr-failure.v1",
                     "task_id":task,"run_id":run,"frame_id":frame,"failure_code":"contained_task_post_admission_ocr_failed",
@@ -434,6 +490,13 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 | "relative_frame"
                 | "relative_missing"
                 | "relative_math"
+                | "relative_extraction_text"
+                | "relative_extraction_range"
+                | "relative_extraction_utf8"
+                | "relative_extraction_version"
+                | "relative_extraction_rule"
+                | "relative_extraction_missing"
+                | "relative_extraction_type"
         ) {
             assert!(result.is_err(), "{case} must be rejected");
             let error = result.unwrap_err();
