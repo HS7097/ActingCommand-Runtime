@@ -390,6 +390,24 @@ impl ArtifactMaterialAccumulator {
     }
 }
 
+/// Actual bytes or previously calculated opaque material for the store's sole issuance entry.
+pub enum ArtifactIssueInput<'a> {
+    Bytes(&'a [u8]),
+    Material(ArtifactMaterial),
+}
+
+impl<'a, T: AsRef<[u8]> + ?Sized> From<&'a T> for ArtifactIssueInput<'a> {
+    fn from(bytes: &'a T) -> Self {
+        Self::Bytes(bytes.as_ref())
+    }
+}
+
+impl From<ArtifactMaterial> for ArtifactIssueInput<'_> {
+    fn from(material: ArtifactMaterial) -> Self {
+        Self::Material(material)
+    }
+}
+
 /// Mints artifact attachment capabilities for the durable artifact-store boundary.
 ///
 /// Workspace architecture guards restrict construction to `actingcommand-artifact-store` and
@@ -405,30 +423,24 @@ impl ArtifactStoreIssuer {
         })
     }
 
-    pub fn issue(
+    pub fn issue<'a>(
         &self,
         kind: ArtifactKind,
         links: ArtifactLinksDraft,
-        bytes: &[u8],
+        input: impl Into<ArtifactIssueInput<'a>>,
         created_at_unix_ms: u64,
         policy: ArtifactIssuePolicy,
     ) -> Result<StoreIssuedArtifact, SanitizationError> {
-        let material = ArtifactMaterial {
-            byte_count: u64::try_from(bytes.len())
-                .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?,
-            sha256: canonical_sha256(bytes),
+        let material = match input.into() {
+            ArtifactIssueInput::Bytes(bytes) => {
+                let mut material = ArtifactMaterialAccumulator::default();
+                material.update(bytes).map_err(|_| {
+                    SanitizationError::new("invalid_artifact_byte_count", "byte_count")
+                })?;
+                material.finish()
+            }
+            ArtifactIssueInput::Material(material) => material,
         };
-        self.issue_material(kind, links, material, created_at_unix_ms, policy)
-    }
-
-    pub fn issue_material(
-        &self,
-        kind: ArtifactKind,
-        links: ArtifactLinksDraft,
-        material: ArtifactMaterial,
-        created_at_unix_ms: u64,
-        policy: ArtifactIssuePolicy,
-    ) -> Result<StoreIssuedArtifact, SanitizationError> {
         if material.byte_count == 0 {
             return Err(SanitizationError::new(
                 "invalid_artifact_byte_count",

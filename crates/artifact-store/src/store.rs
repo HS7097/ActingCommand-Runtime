@@ -351,7 +351,7 @@ impl ArtifactStore {
         }
         let issued = self
             .artifacts
-            .issue_material(
+            .issue(
                 stream.kind,
                 stream.context.artifact_links.clone(),
                 material,

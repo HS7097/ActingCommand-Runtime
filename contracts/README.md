@@ -23,8 +23,10 @@ The stream implements standard `Write` and accepts successive byte chunks;
 neither opening nor appending publishes an artifact or a ledger event. The
 store tracks the actual bytes written. Sealing synchronizes the staging file,
 recomputes its material with a fixed 64 KiB read buffer, and compares length and
-SHA-256 against the write calculation. The contract's opaque material API
-accepts bytes, never a caller-declared final hash. The store then issues the
+SHA-256 against the write calculation. `ArtifactStoreIssuer::issue` accepts
+actual bytes or calculated opaque material through `ArtifactIssueInput`, and
+remains the sole store attachment issuance entry. Material is calculated from
+bytes, never a caller-declared final hash. The store then issues the
 ordinary artifact identity, derives its object key, and performs its existing
 no-overwrite atomic rename and `ArtifactCreated` → verification →
 `ArtifactVerified` publication under the same writer mutex. Both required event
