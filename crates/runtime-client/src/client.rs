@@ -44,6 +44,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod online_observation;
 pub use online_observation::VerifiedPageObservation;
+mod lab_operation;
+pub use lab_operation::VerifiedLabOperation;
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
@@ -2079,6 +2081,17 @@ impl RuntimeClient {
                 )));
             }
             if let Some(error) = receipt.error_projection() {
+                if matches!(
+                    &operation,
+                    RuntimeOperation::RunContainedLabOperation { .. }
+                ) && matches!(
+                    receipt.result(),
+                    Some(RuntimeResult::ContainedLabOperation { .. })
+                ) && !error.fatal
+                {
+                    // The dedicated verifier consumes the failed operation's committed evidence.
+                    return Ok(receipt);
+                }
                 let mut error = RuntimeClientError::rejected(operation_name, error.clone());
                 if matches!(operation, RuntimeOperation::RunContainedTask { .. })
                     && receipt.terminal().is_some()

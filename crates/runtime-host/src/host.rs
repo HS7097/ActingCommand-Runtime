@@ -143,6 +143,7 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
+mod lab_operation;
 mod online_observation;
 
 #[derive(Clone, Copy)]
@@ -1895,6 +1896,7 @@ struct MonitorRecoveryAdmission {
 struct CompletedReadonlyObservation {
     observation: ReadonlyObservation,
     terminal: PersistedEvent,
+    verified: TerminalEvent,
     links: EventLinksDraft,
     artifact_links: ArtifactLinksDraft,
 }
@@ -3044,6 +3046,22 @@ struct OperationSuccess {
     state: RuntimeReceiptState,
     terminal: Option<TerminalEvent>,
     result: RuntimeResult,
+}
+
+impl OperationSuccess {
+    fn into_receipt(self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
+        match self.result {
+            RuntimeResult::ContainedLabOperation { operation } => {
+                RuntimeReceipt::contained_lab_operation(
+                    request,
+                    self.terminal.ok_or_else(receipt_error)?,
+                    operation,
+                )
+            }
+            result => RuntimeReceipt::success(request, self.state, self.terminal, result),
+        }
+        .map_err(|_| receipt_error())
+    }
 }
 
 struct RequestFailure {
@@ -5246,10 +5264,7 @@ impl HostShared {
             }
         };
         match self.process_validated(request, &validated, connection_id) {
-            Ok(success) => {
-                RuntimeReceipt::success(request, success.state, success.terminal, success.result)
-                    .map_err(|_| receipt_error())
-            }
+            Ok(success) => success.into_receipt(request),
             Err(failure) => {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
@@ -5352,6 +5367,21 @@ impl HostShared {
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.observe_contained_page(request, validated, instance_alias, observation)
+            }
+            RuntimeOperation::RunContainedLabOperation {
+                instance_alias,
+                holder_id,
+                request: operation,
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.run_contained_lab_operation(
+                    request,
+                    validated,
+                    instance_alias,
+                    *holder_id,
+                    operation,
+                    connection_id,
+                )
             }
             RuntimeOperation::CaptureSequence {
                 instance_alias,
@@ -9862,6 +9892,27 @@ impl HostShared {
         if let Some((task_id, run_id)) = debug_run {
             links = links.with_task_id(task_id).with_run_id(run_id);
         }
+        let mut artifact_links = capability.artifact_links(request);
+        if let Some((_, run_id)) = debug_run {
+            artifact_links = artifact_links.with_run_id(run_id);
+        }
+        self.capture_observation_with_links(
+            request,
+            instance_alias,
+            links,
+            artifact_links,
+            retain_native_artifact_error,
+        )
+    }
+
+    fn capture_observation_with_links(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        links: EventLinksDraft,
+        artifact_links: ArtifactLinksDraft,
+        retain_native_artifact_error: bool,
+    ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.append_event(
             EventSeverity::Info,
             EventSource::Device,
@@ -9959,18 +10010,15 @@ impl HostShared {
                 ));
             }
         };
-        let mut artifact_links = capability.artifact_links(request);
-        if let Some((_, run_id)) = debug_run {
-            artifact_links = artifact_links.with_run_id(run_id);
-        }
         let write_context = ArtifactWriteContext::new(
             artifact_links.clone(),
             links.clone(),
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
-        let mut sink = RuntimeArtifactEventSink {
+        let mut sink = online_observation::ObservationArtifactSink {
             ledger: &self.ledger,
             events: &self.events,
+            verified: None,
         };
         let stored = self
             .artifacts
@@ -10042,6 +10090,11 @@ impl HostShared {
         Ok(CompletedReadonlyObservation {
             observation,
             terminal: event,
+            verified: terminal(&sink.verified.ok_or_else(|| {
+                online_observation::observation_integrity_failure(
+                    "observation_verified_event_missing",
+                )
+            })?),
             links,
             artifact_links,
         })
