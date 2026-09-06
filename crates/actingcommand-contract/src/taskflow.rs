@@ -7,6 +7,16 @@ use crate::{SchedulingEffectCondition, SchedulingOutcomeDeclaration};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Explicit operation postcondition polling budget; independent of step timeout.
+pub const MAX_POSTCONDITION_TIMEOUT_MS: u64 = 600_000;
+
+pub const fn postcondition_timeout_is_valid(timeout_ms: Option<u64>) -> bool {
+    match timeout_ms {
+        Some(value) => value > 0 && value <= MAX_POSTCONDITION_TIMEOUT_MS,
+        None => true,
+    }
+}
+
 /// Operation 0.8 post-admission fields. Values and their meaning belong to the package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

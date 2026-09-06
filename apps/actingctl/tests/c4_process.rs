@@ -272,6 +272,72 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     .expect("Runtime request");
 
     let first = raw_exchange(&info, &request);
+    if first.state() != RuntimeReceiptState::Completed {
+        // Keep the first receipt and the test-owned ledger's raw sequence/link fields.
+        // The receipt is already bounded by raw_exchange's one-MiB frame limit.
+        let receipt = serde_json::to_string(&first).unwrap_or_else(|error| {
+            format!("receipt serialization failed: {error}; original receipt: {first:?}")
+        });
+        eprintln!("C4 first receipt: {receipt}");
+        let mut remaining = (1024_usize * 1024).saturating_sub(receipt.len());
+        let evidence = (|| -> std::io::Result<()> {
+            let mut found_segment = false;
+            for entry in fs::read_dir(root.path().join("ledger/segments"))? {
+                let entry = entry?;
+                let path = entry.path();
+                if !entry.file_type()?.is_file()
+                    || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+                {
+                    eprintln!(
+                        "C4 ledger evidence incomplete: unexpected entry {}",
+                        path.display()
+                    );
+                    continue;
+                }
+                found_segment = true;
+                let file = fs::File::open(&path)?;
+                let snapshot_bytes = file.metadata()?.len();
+                let mut bytes = Vec::new();
+                let read = file
+                    .take(snapshot_bytes.min(remaining as u64))
+                    .read_to_end(&mut bytes);
+                remaining -= bytes.len();
+                eprintln!(
+                    "C4 ledger segment={} snapshot_bytes={snapshot_bytes} captured_bytes={}; raw event.sequence and links follow (later appends excluded):",
+                    path.display(),
+                    bytes.len()
+                );
+                match std::str::from_utf8(&bytes) {
+                    Ok(text) => eprintln!("{text}"),
+                    Err(error) => {
+                        eprintln!("{}", String::from_utf8_lossy(&bytes[..error.valid_up_to()]));
+                        eprintln!("C4 ledger evidence incomplete: UTF-8 error: {error}");
+                    }
+                }
+                read?;
+                if bytes.len() as u64 != snapshot_bytes || !bytes.ends_with(b"\n") {
+                    eprintln!(
+                        "C4 ledger evidence incomplete: bounded or partial segment; original receipt retained"
+                    );
+                }
+                if remaining == 0 {
+                    eprintln!(
+                        "C4 ledger evidence incomplete: one-MiB receipt/ledger limit reached; further segments omitted"
+                    );
+                    break;
+                }
+            }
+            if !found_segment {
+                eprintln!("C4 ledger evidence incomplete: no segment files found");
+            }
+            Ok(())
+        })();
+        if let Err(error) = evidence {
+            eprintln!(
+                "C4 ledger evidence read failed: {error}; original receipt retained; original assertion follows"
+            );
+        }
+    }
     assert_eq!(first.state(), RuntimeReceiptState::Completed);
     let replayed = raw_exchange(&info, &request);
     assert_eq!(replayed, first);
