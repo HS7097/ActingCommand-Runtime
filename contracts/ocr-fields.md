@@ -51,12 +51,36 @@ a declared terminal page produces the ordinary verified report and successful re
 with zero executed steps and zero input calls. A different admitted page cannot advance
 an empty task and fails without fields success or input.
 
-For an explicit required Home entry using `any_of`, the zero-input task confirms that
-entry within the interpreter's first capture, before collecting fields. The Host records
-the existing entry-recognition, no-recovery and target-disposition facts from that decision.
-An unmatched required entry fails on that frame without fields or recovery. The report
-and observation share its FrameId; the run's terminal capture summary pins that same frame.
-Tasks with actions retain the Host's entry preflight and recovery behavior.
+An entry is required Home when `entry_page`, after removing the exact current game prefix,
+is `home` and its resolved page definition has nonempty `any_of`. The same resolver governs
+admission, scheduling outcome coverage and execution, across operation schema versions.
+Ordinary `PreparedContainedTask::run` and `run_with_options`, including offline simulation,
+require the interpreter's original first captured frame to uniquely identify that Home.
+This check follows complete page recognition and precedes fields collection, target
+completion and input planning. A different or missing first page fails with
+`contained_task_home_entry_not_matched` and the existing typed entry-recognition fact.
+Ambiguous recognition retains the existing `contained_task_recognition_conflict` failure.
+Only the first evaluation has this constraint; subsequent legal pages execute normally.
+Scheduling outcome coverage starts at this enforced Home while retaining the complete
+observable page domain for operation reference resolution. Without an enforced Home,
+coverage still starts at every observable page. Operation priority, designated-effect
+completion and the unique scheduling mapping retain their meanings; `entry_page: "any"`
+keeps its existing path.
+
+For zero-input fields the entry decision and observations use the original single frame.
+The Host records the existing no-recovery and target-disposition facts from that decision.
+Tasks with actions retain the Host's preflight, bound recovery and recheck captures, followed
+by the ordinary interpreter's own first capture. Passing preflight does not authorize a
+later non-Home first interpreter frame. Its failure occurs before target input or fields;
+the previous recovery decision remains the original fact.
+
+The Host's existing hash-bound recovery call uses `run_entry_recovery`, which checks
+`is_entry_recovery_compatible` before using the same interpreter. Compatible recovery
+packages have no scheduling outcome, stability or post-admission OCR/fields declaration.
+This restricted call keeps the recovery package's existing entry applicability; it exposes
+no general entry-skip option or CLI/RPC operation. The Host still owns the exact hash,
+instance and lease binding, actual Home terminal result, subsequent recheck and combined
+step cap. Recovery does not recursively invoke target preflight.
 
 `package dry-run` admits both nonempty and zero-input `0.8` packages through the typed
 Runtime validator, including field, dictionary, privacy and outcome declarations. It

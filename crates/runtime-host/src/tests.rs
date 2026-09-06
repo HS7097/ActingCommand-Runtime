@@ -4544,6 +4544,134 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
     );
     drop(client);
     host.close().expect("close runtime host");
+    for leaves_home in [false, true] {
+        let root = TempDir::new().unwrap();
+        let source =
+            explicit_home_contained_task_package("fixture01.target", [255, 0, 0], [0, 0, 255]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+        let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_owned();
+            let mut value: serde_json::Value = serde_json::from_reader(&mut entry).unwrap();
+            if name == "resources/operations/task/task.json" {
+                value["target_page"] = serde_json::json!("other");
+                value["operations"][0]["id"] = serde_json::json!("reach_result");
+                value["operations"][0]["from"] = serde_json::json!("home");
+                value["operations"][0]["to"] = serde_json::json!("other");
+            }
+            package.start_file(name, FileOptions::default()).unwrap();
+            serde_json::to_writer(&mut package, &value).unwrap();
+        }
+        let bytes = package.finish().unwrap().into_inner();
+        let path = root.path().join("required-home.zip");
+        fs::write(&path, &bytes).unwrap();
+        let state = Arc::new(FakeState::default());
+        if leaves_home {
+            state
+                .transition_capture_after_capture
+                .store(2, Ordering::Release);
+        } else {
+            state
+                .transition_capture_after_input
+                .store(true, Ordering::Release);
+        }
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "fixture01.instance",
+                instance_id(),
+                state.clone(),
+            )),
+        )
+        .unwrap();
+        let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
+        let correlation = client.ids.mint_correlation_id().unwrap();
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "fixture01.instance",
+                client.ids.mint_holder_id().unwrap(),
+                ContainedTaskRequest::new(
+                    path.display().to_string(),
+                    format!("{:x}", Sha256::digest(&bytes)),
+                )
+                .unwrap(),
+            ),
+        );
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            if leaves_home {
+                RuntimeReceiptState::Failed
+            } else {
+                RuntimeReceiptState::Completed
+            }
+        );
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            usize::from(!leaves_home)
+        );
+        assert_eq!(
+            state.capture_count.load(Ordering::Acquire),
+            if leaves_home { 2 } else { 3 }
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let facts = entry_preflight_facts(&events);
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|fact| matches!(fact, TaskSemanticFact::EntryRecognition { .. }))
+                .count(),
+            2
+        );
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TaskSemanticFact::EntryRecognition { matched: true, .. }
+        )));
+        assert_eq!(
+            facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecognition { matched: false, .. }
+            )),
+            leaves_home
+        );
+        assert!(
+            !facts
+                .iter()
+                .any(|fact| matches!(fact, TaskSemanticFact::EntryRecoveryPackageAdmitted { .. }))
+        );
+        if leaves_home {
+            assert!(facts.iter().any(
+                |fact| matches!(fact, TaskSemanticFact::EntryTargetDisposition {
+                disposition:TaskEntryTargetDisposition::FailClosed, failure_code:Some(code)
+            } if code == "contained_task_home_entry_not_matched")
+            ));
+        } else {
+            assert!(
+                matches!(receipt.result(), Some(RuntimeResult::ContainedTaskCompleted {
+                outcome:TaskOutcome::Success, executed_steps:1, final_page:Some(page), ..
+            }) if page == "fixture01/other")
+            );
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskRequested)
+                .count(),
+            1
+        );
+        drop(client);
+        host.close().unwrap();
+    }
 }
 
 // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
@@ -4645,6 +4773,105 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     );
     drop(client);
     host.close().expect("close runtime host");
+    let mut archive = zip::ZipArchive::new(Cursor::new(recovery)).unwrap();
+    let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_owned();
+        let mut value: serde_json::Value = serde_json::from_reader(&mut entry).unwrap();
+        if name == "resources/operations/task/task.json" {
+            value["scheduling_outcome"] = serde_json::json!({"mappings":[{
+                "outcome_key":"at_home","effect":"no_designated_effect","terminal_pages":["home"]
+            }]});
+        }
+        package.start_file(name, FileOptions::default()).unwrap();
+        serde_json::to_writer(&mut package, &value).unwrap();
+    }
+    let incompatible = package.finish().unwrap().into_inner();
+    let hash = format!("{:x}", Sha256::digest(&incompatible));
+    let prepared = PreparedContainedTask::load(
+        "fixture01.instance",
+        &incompatible,
+        ExternalExpectedSha256::parse_hex(&hash).unwrap(),
+    )
+    .unwrap();
+    assert!(!prepared.is_entry_recovery_compatible());
+    struct UnreachableRecovery;
+    impl ContainedTaskRuntime for UnreachableRecovery {
+        type Error = &'static str;
+        fn capture(&mut self) -> Result<Frame, Self::Error> {
+            panic!("incompatible recovery captured")
+        }
+        fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+            panic!("incompatible recovery input")
+        }
+        fn record(&mut self, _trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+            panic!("incompatible recovery started")
+        }
+    }
+    assert!(
+        matches!(prepared.run_entry_recovery(&mut UnreachableRecovery),
+        Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_home_recovery_package_incompatible")
+    );
+    let root = TempDir::new().unwrap();
+    let target_path = root.path().join("target.zip");
+    let recovery_path = root.path().join("incompatible.zip");
+    fs::write(&target_path, &target).unwrap();
+    fs::write(&recovery_path, &incompatible).unwrap();
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "fixture01.instance",
+            instance_id(),
+            state.clone(),
+        )),
+    )
+    .unwrap();
+    let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
+    let correlation = client.ids.mint_correlation_id().unwrap();
+    let correlation_id = *correlation.transport();
+    let binding = ContainedTaskRequest::new(
+        target_path.display().to_string(),
+        format!("{:x}", Sha256::digest(&target)),
+    )
+    .unwrap()
+    .with_recovery(
+        ContainedTaskRecoveryBinding::new(recovery_path.display().to_string(), hash).unwrap(),
+    )
+    .unwrap();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "fixture01.instance",
+            client.ids.mint_holder_id().unwrap(),
+            binding,
+        ),
+    );
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    assert!(entry_preflight_facts(&events).iter().any(
+        |fact| matches!(fact, TaskSemanticFact::EntryTargetDisposition {
+        disposition:TaskEntryTargetDisposition::FailClosed, failure_code:Some(code)
+    } if code == "contained_task_home_recovery_package_incompatible")
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type == EventType::TaskRequested)
+    );
+    drop(client);
+    host.close().unwrap();
 }
 
 // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
