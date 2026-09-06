@@ -5,6 +5,53 @@ through the same compiler and evaluator. This document specifies V1.
 
 The scheduling catalog is a four-document, data-only contract. It cannot contain executable code, scripts, network requests, device actions, or implicit defaults.
 
+## Offline inspection
+
+`actinglab scheduling compile --tasks <tasks.json> --pools <pools.json>
+--activity <activity.json> --timeline <timeline.json>` reads four explicit local
+files through Lab and calls the existing policy `compile_catalog` entrypoint.
+With `--json`, one ordinary CLI envelope contains the compiler's `dry_run_json`
+report, including summary and catalog hash. Rejection returns exit 2 and the
+original structured compiler diagnostics under `error.details`. File read errors
+also fail explicitly. V1 compilation and catalog identities retain their contract.
+
+`actinglab scheduling timeline` takes those same file flags plus repeated
+`--event-id <id>`, `--unix-ms <u64>`, `--monotonic-ms <u64>`,
+`--instance-id <id>`, `--server-id <id>` and `--game-id <id>`. All are explicit;
+instance context must correspond to the configuration being inspected. The
+command reads no system clock, Runtime configuration, session, facts, capabilities
+or task state. Routing/backend/execution global flags are rejected. Both commands
+are `offline` and `read_only` and create no state directory or persistent facts.
+
+The timeline response contains the compilation report and the pure policy query:
+catalog ID/version/hash, supplied time and context, requested events in request
+order, each event's declared scope and `scope_applies`, `availability.state`
+(`true`, `false` or `unknown`), `active_interval` as `[start, end]` Unix milliseconds
+representing the half-open interval `[start,end)`, and `next_wake_unix_ms`.
+An inactive event has a null active interval. The top-level query wake is the
+minimum wake across the selected events; it is not the full scheduler's wake.
+Unknown or duplicate event IDs and empty selections are input errors.
+
+Policy `inspect_timeline` shares the availability and scope owner used by
+`TimelineActive`, including its existing clock, duration and validity semantics.
+Positive availability requires explicit V2 validity. Zero-duration reset events
+remain unknown for availability, including V1 reset events; their production
+invalidation purpose is unchanged. Applicable closed/expired events are false,
+and inapplicable scopes are unknown. Arithmetic failures retain policy errors.
+
+Each source is limited to 1 MiB, and the compiler enforces the 4 MiB catalog bound.
+The reader uses at most one additional sentinel byte per document to preserve the
+compiler's size diagnostic. Paths use the existing 1024-byte source-text bound;
+context/event IDs use 128 bytes and selection is limited to 4096 events. CLI query
+arguments are bounded to 8210 tokens and 1 MiB, enough for all events and nine
+single-value flags. Output payloads are limited to 16 MiB (four catalog budgets)
+to allow structured source locations and diagnostics. Exceeding a bound fails
+visibly without silently truncating a decision.
+
+These commands verify compilation and event availability at a supplied time.
+Production catalog activation, PolicyHost binding, admission and execution remain
+the Runtime's normal chain; an offline query establishes no production run fact.
+
 ## Frozen V1 Documents
 
 - `tasks.schema.json`: task entrypoints, bounded triggers, feedback stop conditions, effects, failure policy, load profile, loop budget, and instance overrides.

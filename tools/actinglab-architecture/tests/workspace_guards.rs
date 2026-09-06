@@ -2736,7 +2736,7 @@ fn actinglab_flag_args_glue_stays_out_of_main() {
 
     assert_eq!(
         flag_args.matches("pub(super) ").count(),
-        16,
+        17,
         "flag args owner visibility changed"
     );
     for line in flag_args.lines() {
@@ -2754,17 +2754,17 @@ fn actinglab_flag_args_glue_stays_out_of_main() {
     let normalized_owner = format!("{marker}{owner_tail}").replace("pub(super) ", "");
     assert_eq!(
         normalized_owner.lines().count(),
-        120,
+        131,
         "flag args owner line count changed"
     );
     assert_eq!(
         normalized_owner.len(),
-        3_791,
+        4_215,
         "flag args owner byte count changed"
     );
     assert_eq!(
         format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "16bb08d7468541b06df651ee3169ee14066ad98620c060b2ae60344262326a30",
+        "30176f62f169bbdb02a0a354c3a21f32c5e5b1a5469fd3f71d0d783914064fc3",
         "flag args owner body changed"
     );
 }
