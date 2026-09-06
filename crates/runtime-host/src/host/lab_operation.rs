@@ -216,7 +216,7 @@ impl HostShared {
                 resolved.provenance(),
                 run_links,
             ) {
-                Ok(success) => (success.terminal, None),
+                Ok((success, _)) => (success.terminal, None),
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
                     return Err(failure);
                 }
