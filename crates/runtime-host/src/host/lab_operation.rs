@@ -214,7 +214,15 @@ impl HostShared {
                 record.prepared.action.as_ref().expect("prepared action"),
                 connection_id,
                 resolved.provenance(),
-                run_links,
+                RuntimeInputContext {
+                    run_links,
+                    source_step_action_id: None,
+                    before_frame_id: record
+                        .prepared
+                        .before_frame
+                        .as_ref()
+                        .and_then(|frame| frame.observation.artifact().frame_id().copied()),
+                },
             ) {
                 Ok((success, _)) => (success.terminal, None),
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
