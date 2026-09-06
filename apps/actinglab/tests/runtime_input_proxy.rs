@@ -40,6 +40,598 @@ struct FakeState {
 }
 
 #[test]
+fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records() {
+    use actingcommand_contract::{
+        ContainedLabOperationRequest, InputAction, LabOperationEvidence, LabOperationSelection,
+        LabProjectionHint, verify_lab_operation_evidence,
+    };
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let package = root.path().join("lab-evidence.zip");
+    let mut package_files: Vec<(&str, &[u8])> = vec![
+        ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"seed"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"seed"}"#),
+        ("resources/operations/seed/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","game":"neutral","server":"test","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"private-value","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["anchor"],"optional":["private-value"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+        ("resources/navigation/neutral.test.projection.json", br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#),
+    ];
+    let hashes: serde_json::Map<String, Value> = package_files
+        .iter()
+        .filter(|(path, _)| path.starts_with("resources/") && *path != "resources/manifest.json")
+        .map(|(path, bytes)| {
+            (
+                path.strip_prefix("resources/").unwrap().to_string(),
+                serde_json::json!(format!("{:x}", Sha256::digest(bytes))),
+            )
+        })
+        .collect();
+    let manifest =
+        serde_json::to_vec(&serde_json::json!({"entry_task_id":"seed","hashes":hashes})).unwrap();
+    package_files
+        .iter_mut()
+        .find(|(path, _)| *path == "resources/manifest.json")
+        .unwrap()
+        .1 = &manifest;
+    write_zip(&package, &package_files);
+    let hash = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"lab-evidence-spec"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        actingcommand_contract::EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    for selection in [
+        LabOperationSelection::Coordinates {
+            action: InputAction::Tap { x: 0, y: 0 },
+        },
+        LabOperationSelection::Element {
+            id: "undeclared".into(),
+        },
+    ] {
+        let complete = matches!(selection, LabOperationSelection::Coordinates { .. });
+        let session = client.begin_debug_session().unwrap();
+        let verified = session
+            .run_contained_lab_operation(
+                "node.a",
+                ContainedLabOperationRequest {
+                    package_path: package.to_str().unwrap().to_string(),
+                    expected_sha256: hash.clone(),
+                    selection,
+                    projection_hint: LabProjectionHint {
+                        sequence: None,
+                        content_sha256: None,
+                    },
+                },
+            )
+            .unwrap();
+        let operation = verified.operation().clone();
+        let prepared = &operation.record.prepared;
+        let events = client
+            .query_events(
+                EventQuery {
+                    request_id: Some(prepared.request_id),
+                    correlation_id: Some(prepared.correlation_id),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .unwrap();
+        let lease_events = client
+            .query_events(
+                EventQuery {
+                    lease_id: prepared.lease_id,
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .unwrap();
+        let action_events = if let Some(action_id) = operation.record.input_action_id {
+            client
+                .query_events(
+                    EventQuery {
+                        action_id: Some(action_id),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+                .unwrap()
+        } else {
+            Vec::new()
+        };
+        let artifacts = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .flat_map(|event| &event.artifacts)
+            .map(|reference| {
+                (
+                    reference.artifact_id,
+                    actingcommand_artifact_store::read_projected_verified(&runtime_root, reference)
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let evidence = LabOperationEvidence {
+            operation,
+            terminal: verified.receipt().terminal().unwrap(),
+            events,
+            lease_events,
+            action_events,
+            artifacts,
+        };
+        verify_lab_operation_evidence(&evidence).unwrap();
+        assert_eq!(evidence.operation.record.failure.is_none(), complete);
+        assert_eq!(evidence.operation.record.after_frame.is_some(), complete);
+        assert_eq!(evidence.operation.record.input_event.is_some(), complete);
+        let projection = evidence
+            .operation
+            .record
+            .prepared
+            .before_projection
+            .as_ref()
+            .unwrap();
+        let internal: actingcommand_contract::ContainedObservationEvidence =
+            serde_json::from_slice(&evidence.artifacts[&projection.artifact.artifact_id]).unwrap();
+        assert!(
+            internal
+                .private_facts
+                .rows
+                .iter()
+                .any(|row| row["target"]["target_id"] == "private-value")
+        );
+        assert!(
+            projection
+                .facts
+                .rows
+                .iter()
+                .any(|row| row["target"]["target_id"] == "private-value"
+                    && row["target"]["redacted"] == true)
+        );
+        assert!(
+            !serde_json::to_string(&evidence.operation)
+                .unwrap()
+                .contains("private_facts")
+        );
+        let mut mismatched = evidence.clone();
+        mismatched.operation.record.prepared.request_id = *IdentifierIssuer::new()
+            .unwrap()
+            .mint_request_id()
+            .unwrap()
+            .transport();
+        assert!(verify_lab_operation_evidence(&mismatched).is_err());
+        let mut corrupt = evidence.clone();
+        corrupt
+            .artifacts
+            .get_mut(
+                &evidence
+                    .operation
+                    .record
+                    .prepared_artifact
+                    .artifact
+                    .artifact_id,
+            )
+            .unwrap()[0] ^= 1;
+        assert_eq!(
+            verify_lab_operation_evidence(&corrupt).unwrap_err().code(),
+            "runtime_lab_artifact_hash_mismatch"
+        );
+        if complete {
+            let mut missing_intent = evidence.clone();
+            missing_intent.action_events.clear();
+            assert!(verify_lab_operation_evidence(&missing_intent).is_err());
+        }
+        client.status().unwrap();
+    }
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().unwrap();
+}
+
+#[test]
+fn resource_restore_uses_native_evidence_and_existing_package_chain() {
+    use actingcommand_contract::{
+        ContainedLabOperationRequest, LabOperationSelection, LabProjectionHint,
+    };
+    use actingcommand_resource_tooling::open_published_package;
+    use serde_json::json;
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let source = root.path().join("source");
+    let seed_dir = source.join("ours/operations/seed");
+    fs::create_dir_all(seed_dir.join("assets")).unwrap();
+    fs::create_dir_all(source.join("ours/navigation")).unwrap();
+    let template = Frame::from_pixels(
+        1,
+        1,
+        vec![255, 0, 0],
+        PixelFormat::Rgb8,
+        CaptureBackendName::AdbScreencap,
+    )
+    .unwrap()
+    .encode_png_fast()
+    .unwrap();
+    fs::write(seed_dir.join("assets/HOME.png"), &template).unwrap();
+    let source_task = json!({"schema_version":"0.6","task_id":"seed","game":"neutral","server_scope":["test"],"locale":"en-US",
+        "coordinate_space":{"width":2,"height":2},"defaults":{"template_threshold":0.9,"color_max_distance":0.0},
+        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.9}],
+        "color_probes":[{"id":"private-value","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}],
+        "entry_page":"home","target_page":"home","goal":"Explicit neutral author goal",
+        "operations":[{"id":"seed-tap","purpose":"source purpose","from":"home","to":null,"click":{"kind":"point","x":1,"y":1},
+            "guard":{"page_id":"home","target_id":"page/home","expected_rect":{"x":1,"y":1,"width":1,"height":1},"verify_template":"assets/HOME.png"},"consumes":[],"produces":[]}]});
+    fs::write(
+        seed_dir.join("task.json"),
+        serde_json::to_vec_pretty(&source_task).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        source.join("ours/operations/resources.json"),
+        br#"{"schema_version":"1.0","resources":[],"resource_count":0}"#,
+    )
+    .unwrap();
+    fs::write(source.join("ours/navigation/neutral.test.projection.json"),br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#).unwrap();
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "convert",
+            "--repo",
+            source.to_str().unwrap(),
+        ],
+    );
+    let original = root.path().join("original.zip");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "package",
+            "build-task",
+            "--repo",
+            source.to_str().unwrap(),
+            "--task",
+            "seed",
+            "--out",
+            original.to_str().unwrap(),
+        ],
+    );
+    let source_bytes = open_published_package(&original)
+        .unwrap()
+        .read_all()
+        .unwrap();
+    let hash = format!("{:x}", Sha256::digest(&source_bytes));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"restore-native-spec"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 2,
+        }),
+    )
+    .unwrap();
+    let mut request_ids = Vec::new();
+    let mut frame_hashes = Vec::new();
+    for (flag, coordinates) in [("--tap", "1,1"), ("--swipe", "1,1,1,0,1")] {
+        let output = run_actinglab_json(
+            &config,
+            &runtime_root,
+            &local,
+            [
+                "--json",
+                "--instance",
+                "node.a",
+                "do",
+                flag,
+                coordinates,
+                "--capture",
+                "--zip",
+                original.to_str().unwrap(),
+                "--expected-sha256",
+                &hash,
+                "--verbose",
+            ],
+        );
+        assert_eq!(output["data"]["executed"], true);
+        request_ids.push(output["data"]["req_id"].as_str().unwrap().to_string());
+        let operation: actingcommand_contract::ContainedLabOperationResult =
+            serde_json::from_value(output["data"]["operation_record"].clone()).unwrap();
+        frame_hashes.push(
+            operation
+                .record
+                .prepared
+                .before_frame
+                .unwrap()
+                .observation
+                .artifact()
+                .sha256
+                .clone(),
+        );
+    }
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    let session = client.begin_debug_session().unwrap();
+    let published_source = open_published_package(&original).unwrap();
+    let incomplete = session
+        .run_contained_lab_operation(
+            "node.a",
+            ContainedLabOperationRequest {
+                package_path: published_source.path().to_str().unwrap().into(),
+                expected_sha256: hash.clone(),
+                selection: LabOperationSelection::Element {
+                    id: "undeclared".into(),
+                },
+                projection_hint: LabProjectionHint {
+                    sequence: None,
+                    content_sha256: None,
+                },
+            },
+        )
+        .unwrap();
+    request_ids.push(
+        serde_json::to_value(incomplete.receipt().request_id())
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string(),
+    );
+    assert_eq!(
+        incomplete.operation().record.effect,
+        actingcommand_contract::EffectDisposition::NotPerformed
+    );
+    drop(session);
+    drop(client);
+    host.close().unwrap();
+    let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(runtime_root.join("ledger")),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
+                    .unwrap(),
+            )
+        },
+    )
+    .unwrap();
+    let through = snapshot.latest_sequence().to_string();
+    let native_before = serde_json::to_vec(snapshot.events()).unwrap();
+    let restored = root.path().join("restored");
+    let output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            restored.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[1],
+            "--request-id",
+            &request_ids[0],
+            "--request-id",
+            &request_ids[2],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "restored",
+            "--entry-page",
+            "home",
+            "--target-page",
+            "home",
+            "--goal",
+            "Explicit restored goal",
+        ],
+    );
+    assert_eq!(output["data"]["record_count"], 3);
+    assert_eq!(output["data"]["operation_count"], 2);
+    assert_eq!(output["data"]["awaiting_author_input"], json!([]));
+    assert_eq!(output["data"]["gaps"].as_array().unwrap().len(), 1);
+    let task_bytes = fs::read(restored.join("ours/operations/restored/task.json")).unwrap();
+    let task: Value = serde_json::from_slice(&task_bytes).unwrap();
+    assert_eq!(task["schema_version"], "0.6");
+    assert_eq!(task["target_page"], "home");
+    assert_eq!(task["operations"][0]["click"]["kind"], "point");
+    assert_eq!(task["operations"][1]["click"]["kind"], "drag");
+    assert_eq!(task["operations"][1]["click"]["duration_ms"], 1);
+    assert_eq!(task["operations"][0]["purpose"], "");
+    assert_eq!(task["operations"][0]["to"], Value::Null);
+    assert_eq!(
+        task["operations"][0]["expect_after"]["page_id"],
+        "neutral/home"
+    );
+    assert!(
+        task["operations"][0]["provenance"]["input_intent"]["sequence"]
+            .as_u64()
+            .unwrap()
+            < task["operations"][1]["provenance"]["input_intent"]["sequence"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(
+        !String::from_utf8(task_bytes.clone())
+            .unwrap()
+            .contains("private_facts")
+    );
+    assert!(task["color_probes"].as_array().unwrap().is_empty());
+    let assets = fs::read_dir(restored.join("ours/operations/restored/assets"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(fs::read(&assets[0]).unwrap(), template);
+    assert!(!frame_hashes.contains(&format!(
+        "sha256:{:x}",
+        Sha256::digest(fs::read(&assets[0]).unwrap())
+    )));
+    let metadata: Value = serde_json::from_slice(
+        &fs::read(restored.join("ours/navigation/neutral.test.projection.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        metadata["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|action| action["safety"] == "dangerous")
+    );
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "convert",
+            "--repo",
+            restored.to_str().unwrap(),
+        ],
+    );
+    let built = root.path().join("restored.zip");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "package",
+            "build-task",
+            "--repo",
+            restored.to_str().unwrap(),
+            "--task",
+            "restored",
+            "--out",
+            built.to_str().unwrap(),
+        ],
+    );
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "package",
+            "validate",
+            "--zip",
+            built.to_str().unwrap(),
+        ],
+    );
+    let pending = root.path().join("pending");
+    let pending_output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            pending.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[0],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "pending",
+        ],
+    );
+    assert_eq!(
+        pending_output["data"]["awaiting_author_input"],
+        json!(["target_page", "entry_page"])
+    );
+    let pending_task: Value = serde_json::from_slice(
+        &fs::read(pending.join("ours/operations/pending/task.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(pending_task.get("target_page").is_none() && pending_task.get("entry_page").is_none());
+    run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            restored.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[0],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "restored",
+        ],
+    );
+    assert_eq!(
+        fs::read(restored.join("ours/operations/restored/task.json")).unwrap(),
+        task_bytes
+    );
+    let after = actingcommand_ledger::GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(runtime_root.join("ledger")),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
+                    .unwrap(),
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_vec(after.events()).unwrap(), native_before);
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}
+
+#[test]
 fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contracts() {
     let root = TempDir::new().unwrap();
     let runtime_root = root.path().join("runtime");

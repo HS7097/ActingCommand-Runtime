@@ -3556,6 +3556,48 @@ fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &s
         || observed_or_anchor == format!("{game}/{expected_anchor}")
 }
 
+pub(super) fn validate_restored_geometry(
+    geometry: &actingcommand_contract::page_projection::Geometry,
+    width: u32,
+    height: u32,
+) -> CliOutcome<()> {
+    let coordinate = |value: u32| {
+        i32::try_from(value).map_err(|_| {
+            CliError::package_invalid("restored geometry exceeds existing coordinate range")
+        })
+    };
+    coordinate(width)?;
+    coordinate(height)?;
+    let resolution = Resolution { width, height };
+    match geometry {
+        actingcommand_contract::page_projection::Geometry::Tap { point, .. } => {
+            validate_click_point(
+                coordinate(point.x)?,
+                coordinate(point.y)?,
+                &resolution,
+                false,
+            )
+        }
+        actingcommand_contract::page_projection::Geometry::Drag {
+            from_rect, to_rect, ..
+        } => {
+            for rect in [from_rect, to_rect] {
+                validate_click_rect(
+                    PackRect {
+                        x: coordinate(rect.x)?,
+                        y: coordinate(rect.y)?,
+                        width: coordinate(rect.width)?,
+                        height: coordinate(rect.height)?,
+                    },
+                    &resolution,
+                    false,
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
 fn validate_click_rect(
     rect: PackRect,
     resolution: &Resolution,

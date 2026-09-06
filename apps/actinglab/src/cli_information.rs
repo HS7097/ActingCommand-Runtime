@@ -33,6 +33,12 @@ pub(super) fn help_data() -> Value {
             "--version"
         ],
         "command_options": {
+            "resource restore": [
+                "--repo <new directory>", "--state-root <Runtime state>",
+                "--request-id <ID> (repeatable, 1–32 unique)", "--through-sequence <upper bound>",
+                "--zip <package>", "--expected-sha256 <external hash>", "--task-id <draft ID>",
+                "--entry-page <page>", "--target-page <page> (repeatable)", "--goal <author text>"
+            ],
             "resource convert": [
                 "--operations <dir>",
                 "--out <dir>",
