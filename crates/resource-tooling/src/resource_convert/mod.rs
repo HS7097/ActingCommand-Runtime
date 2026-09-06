@@ -666,40 +666,6 @@ impl OperationConverter {
         };
         validate_pack_targets_exist(&self.root, &pack)?;
         let pages = self.build_pages()?;
-        for bundle in &self.bundles {
-            if bundle
-                .data
-                .pointer("/post_admission_ocr/mode")
-                .and_then(Value::as_str)
-                == Some("fields_v1")
-            {
-                let fields: OcrFieldsDeclaration =
-                    serde_json::from_value(bundle.data["post_admission_ocr"].clone())
-                        .map_err(|error| CliError::package_invalid(error.to_string()))?;
-                fields.validate().map_err(CliError::package_invalid)?;
-                if fields.uses_required_on_pages() {
-                    let prefix = format!("{}/", self.game);
-                    for page in &fields.page_ids {
-                        let mut matches = array_field(&pages, "pages")
-                            .iter()
-                            .filter_map(|candidate| candidate["id"].as_str())
-                            .filter(|candidate| {
-                                crate::package_build::page_anchor_matches(
-                                    &self.game, candidate, page,
-                                )
-                            });
-                        if !page.starts_with(&prefix)
-                            || matches.next() != Some(page.as_str())
-                            || matches.next().is_some()
-                        {
-                            return Err(CliError::package_invalid(
-                                "ocr_fields_required_pages_invalid",
-                            ));
-                        }
-                    }
-                }
-            }
-        }
         validate_page_rule_targets(&pack, &self.bundles)?;
         let navigation = self.build_navigation()?;
         let index = self.build_index()?;
@@ -728,7 +694,7 @@ impl OperationConverter {
                 task_ids.join(", ")
             )));
         }
-        let dependencies = self.selected_recognition_dependencies(&selected)?;
+        let dependencies = self.relative_ocr_dependencies(&selected)?;
         let selected = self.prune_page_rules_for_selected_build(selected, &dependencies)?;
         let subset = Self {
             root: self.root.clone(),
@@ -831,43 +797,10 @@ impl OperationConverter {
         Ok(task)
     }
 
-    fn selected_recognition_dependencies(&self, selected: &[Bundle]) -> CliOutcome<Vec<Bundle>> {
+    fn relative_ocr_dependencies(&self, selected: &[Bundle]) -> CliOutcome<Vec<Bundle>> {
         let available = selected_available_target_ids(selected)?;
-        let selected_pages = selected_available_page_ids(&self.game, selected)?;
         let mut required = BTreeSet::new();
         for bundle in selected {
-            if bundle
-                .data
-                .pointer("/post_admission_ocr/mode")
-                .and_then(Value::as_str)
-                == Some("fields_v1")
-                && let Some(rules) = bundle.data.get("page_rules").and_then(Value::as_object)
-            {
-                for (page, rule) in rules {
-                    if !selected_pages.contains(&normalize_page_rule_id(&self.game, page)) {
-                        continue;
-                    }
-                    for field in ["required", "forbidden"] {
-                        for target in array_field(rule, field).iter().filter_map(Value::as_str) {
-                            if !available.contains(target) {
-                                required.insert(target.to_owned());
-                            }
-                        }
-                    }
-                    for group in array_field(rule, "any_of") {
-                        for target in group
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(Value::as_str)
-                        {
-                            if !available.contains(target) {
-                                required.insert(target.to_owned());
-                            }
-                        }
-                    }
-                }
-            }
             for target in ocr_target_declarations(bundle)? {
                 if target.pointer("/region/mode").and_then(Value::as_str)
                     == Some("template_relative")
@@ -905,20 +838,12 @@ impl OperationConverter {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            let colors = array_field(&bundle.data, "color_probes")
-                .iter()
-                .filter(|row| row["id"].as_str().is_some_and(|id| required.contains(id)))
-                .cloned()
-                .collect::<Vec<_>>();
-            if anchors.is_empty()
-                && templates.is_empty()
-                && operations.is_empty()
-                && colors.is_empty()
-            {
+            if anchors.is_empty() && templates.is_empty() && operations.is_empty() {
                 continue;
             }
-            // Direct recognition dependencies enter the pack without selecting donor tasks.
-            dependency.data = json!({"anchors":anchors,"verify_templates":templates,"operations":operations,"color_probes":colors});
+            // Only direct template declarations enter the pack; no donor task/page/OCR is selected.
+            dependency.data =
+                json!({"anchors":anchors,"verify_templates":templates,"operations":operations});
             if let Some(defaults) = bundle.data.get("defaults") {
                 dependency.data["defaults"] = defaults.clone();
             }
@@ -969,25 +894,10 @@ impl OperationConverter {
                 .and_then(Value::as_object)
                 && let Ok(page_ids) = post_admission_ocr_page_ids(declaration)
             {
-                let full_ids = array_field(&bundle.data["post_admission_ocr"], "fields")
-                    .iter()
-                    .any(|field| field.get("required_on_pages").is_some());
-                let page_ids = page_ids
-                    .into_iter()
-                    .map(|page| {
-                        if full_ids {
-                            page.strip_prefix(&format!("{}/", self.game))
-                                .unwrap_or(page)
-                        } else {
-                            page
-                        }
-                        .to_owned()
-                    })
-                    .collect::<Vec<_>>();
                 validate_declared_page_set(
                     &bundle.task_json_path(),
                     "post_admission_ocr page declaration",
-                    &page_ids,
+                    &page_ids.into_iter().map(str::to_owned).collect::<Vec<_>>(),
                     &declared_anchor_ids,
                     &mut errors,
                 );
@@ -1346,27 +1256,6 @@ impl OperationConverter {
                     &mut pages,
                     &mut order,
                 );
-            }
-            if bundle
-                .data
-                .pointer("/post_admission_ocr/mode")
-                .and_then(Value::as_str)
-                == Some("fields_v1")
-                && let Some(fields) = bundle
-                    .data
-                    .get("post_admission_ocr")
-                    .and_then(Value::as_object)
-            {
-                for page in post_admission_ocr_page_ids(fields)? {
-                    let prefix = format!("{}/", self.game);
-                    add_page(
-                        &self.game,
-                        page.strip_prefix(&prefix).unwrap_or(page),
-                        &declared_anchor_ids,
-                        &mut pages,
-                        &mut order,
-                    );
-                }
             }
             for anchor_id in declared_terminal_page_ids(bundle)?.into_iter().flatten() {
                 add_page(
@@ -3645,20 +3534,6 @@ fn validate_declared_page_set(
 fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
     let mut pages = BTreeSet::new();
     for bundle in bundles {
-        if bundle
-            .data
-            .pointer("/post_admission_ocr/mode")
-            .and_then(Value::as_str)
-            == Some("fields_v1")
-            && let Some(fields) = bundle
-                .data
-                .get("post_admission_ocr")
-                .and_then(Value::as_object)
-        {
-            for page in post_admission_ocr_page_ids(fields)? {
-                insert_selected_page_id(game, page, &mut pages);
-            }
-        }
         if let Some(page) = bundle.data.get("entry_page").and_then(Value::as_str) {
             insert_selected_page_id(game, page, &mut pages);
         }
@@ -3718,10 +3593,6 @@ fn prune_selected_page_rules(
     available_pages: &BTreeSet<String>,
     available_targets: &BTreeSet<String>,
 ) -> Value {
-    let fields_mode = data
-        .pointer("/post_admission_ocr/mode")
-        .and_then(Value::as_str)
-        == Some("fields_v1");
     let Some(object) = data.as_object_mut() else {
         return data;
     };
@@ -3737,7 +3608,7 @@ fn prune_selected_page_rules(
         if !available_pages.contains(&normalize_page_rule_id(game, &page_key)) {
             continue;
         }
-        filter_selected_rule_targets(&mut rule, available_targets, fields_mode);
+        filter_selected_rule_targets(&mut rule, available_targets);
         filtered.insert(page_key, rule);
     }
     if !filtered.is_empty() {
@@ -3746,18 +3617,11 @@ fn prune_selected_page_rules(
     data
 }
 
-fn filter_selected_rule_targets(
-    rule: &mut Value,
-    available_targets: &BTreeSet<String>,
-    preserve_forbidden: bool,
-) {
+fn filter_selected_rule_targets(rule: &mut Value, available_targets: &BTreeSet<String>) {
     let Some(object) = rule.as_object_mut() else {
         return;
     };
     for field in ["optional", "forbidden"] {
-        if field == "forbidden" && preserve_forbidden {
-            continue;
-        }
         if let Some(values) = object.get_mut(field).and_then(Value::as_array_mut) {
             values.retain(|value| {
                 value

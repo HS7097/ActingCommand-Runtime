@@ -871,13 +871,11 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             .fields
             .ok_or_else(|| ContainedTaskError::new("ocr_fields_missing"))?;
         let declaration = &prepared.declaration;
-        if !declaration.page_ids.iter().any(|p| {
-            if declaration.uses_required_on_pages() {
-                p == page_label
-            } else {
-                crate::page_anchor_matches(game, page_label, p)
-            }
-        }) || self.frames_collected >= declaration.limits.max_frames
+        if !declaration
+            .page_ids
+            .iter()
+            .any(|p| crate::page_anchor_matches(game, page_label, p))
+            || self.frames_collected >= declaration.limits.max_frames
         {
             return Ok(None);
         }
@@ -1034,7 +1032,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             if declaration
                 .fields
                 .iter()
-                .any(|f| f.id == result.field_id && f.is_required_on_page(page_label))
+                .any(|f| f.id == result.field_id && f.required)
                 && result.reason != OcrFieldReason::Resolved
             {
                 self.field_failure.get_or_insert(result.reason);
@@ -3305,16 +3303,6 @@ impl TaskProgram {
             .map(|f| f.target_id.clone())
             .collect::<Vec<_>>();
         validate_page_references(&control.game, &declaration.page_ids, detector)?;
-        if declaration.uses_required_on_pages() {
-            let prefix = format!("{}/", control.game);
-            for page in &declaration.page_ids {
-                if !page.starts_with(&prefix)
-                    || resolve_page_reference(&control.game, page, detector)? != *page
-                {
-                    return Err(ContainedTaskError::new("ocr_fields_required_pages_invalid"));
-                }
-            }
-        }
         validate_post_admission_ocr_page_gate(
             control,
             bundle,
@@ -5789,34 +5777,27 @@ mod post_admission_ocr_tests {
                 assert!(report.records[0].fields[0].value.is_none());
             }
         }
-        for (result_first, page, quantity, always_required) in [
-            (false, "normal", "7", false),
-            (false, "normal", "invalid", false),
-            (false, "lucky", "8", false),
-            (false, "lucky", "invalid", false),
-            (false, "normal", "invalid", true),
-            (true, "normal", "7", false),
-        ] {
+        for result_first in [false, true] {
             let ids = vec!["fixture/name".to_owned(), "fixture/quantity".to_owned()];
             let provider = Arc::new(EvidenceProvider {
                 observations: Mutex::new(VecDeque::from([
                     provider_observation("completion-name", &["alias".into()]),
-                    provider_observation("completion-quantity", &[quantity.into()]),
+                    provider_observation("completion-quantity", &["7".into()]),
                 ])),
                 requests: Mutex::new(Vec::new()),
                 calls: AtomicU32::new(0),
             });
-            let declaration = json!({"mode":"fields_v1","page_ids":["neutral/normal","neutral/lucky"],"fields":[
-                {"id":"name","group":"item","target_id":ids[0],"required":true,"privacy":"public","trim":"whitespace_v1",
+            let declaration = json!({"mode":"fields_v1","page_ids":["result"],"fields":[
+                {"id":"name","group":"item","target_id":ids[0],"required":false,"privacy":"public","trim":"whitespace_v1",
                     "value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"c".repeat(64)}}},
-                {"id":"quantity","group":"item","target_id":ids[1],"required":always_required,"required_on_pages":["neutral/lucky"],
+                {"id":"quantity","group":"item","target_id":ids[1],"required":false,
                     "privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":100}}
             ],"limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
             let program: TaskProgram = serde_json::from_value(json!({"schema_version":"0.8","task_id":"task","game":"neutral",
-                "server_scope":["test"],"coordinate_space":{"width":2,"height":1},"entry_page":"home","target_page":["normal","lucky"],
-                "operations":[{"id":"collect","from":"home","to":["normal","lucky"],"click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}],
+                "server_scope":["test"],"coordinate_space":{"width":2,"height":1},"entry_page":"home","target_page":"result",
+                "operations":[{"id":"collect","from":"home","to":"result","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}],
                 "post_admission_ocr":declaration,"scheduling_outcome":{"designated_operation":"collect","mappings":[
-                    {"outcome_key":"fields_recorded","effect":"designated_effect_completed","terminal_pages":["normal","lucky"]}]}
+                    {"outcome_key":"fields_recorded","effect":"designated_effect_completed","terminal_pages":["result"]}]}
             })).unwrap();
             let fields = PreparedOcrFields {
                 declaration: serde_json::from_value(declaration).unwrap(),
@@ -5833,22 +5814,15 @@ mod post_admission_ocr_tests {
             let control: TaskControl = serde_json::from_value(json!({"schema_version":CONTROL_SCHEMA,"package_id":"neutral.test.task",
                 "execution_mode":"navigable_route","game":"neutral","server":"test","resolution":{"width":2,"height":1},
                 "entry_task_id":"task","capture_interval_ms":1,"step_timeout_ms":50,"timeout_ms":1000})).unwrap();
-            let mut pack = ordered_ocr_pack(&ids, 2);
-            pack.targets.push(
-                serde_json::from_value(json!({"type":"color","id":"page/lucky",
-                "region":{"x":1,"y":0,"width":1,"height":1},"expected":[3,3,3]}))
-                .unwrap(),
-            );
             let evaluator = RecognitionEvaluator::with_vision_provider(
-                pack,
+                ordered_ocr_pack(&ids, 2),
                 Arc::new(FsAssetResolver::new(PathBuf::new())),
                 provider.clone(),
             )
             .unwrap();
             let detector = PageDetector::new(serde_json::from_value(json!({"schema_version":"0.6","pages":[
                 {"id":"neutral/home","required":[],"any_of":[["page/operator"]]},
-                {"id":"neutral/normal","required":["page/operator_end"],"forbidden":["page/lucky"]},
-                {"id":"neutral/lucky","required":["page/lucky"],"forbidden":["page/operator_end"]}
+                {"id":"neutral/result","required":["page/operator_end"]}
             ]})).unwrap()).unwrap();
             detector.validate(&evaluator).unwrap();
             let entry_page = program
@@ -5875,11 +5849,10 @@ mod post_admission_ocr_tests {
                 actingcommand_device::CaptureBackendName::FixtureSimulation,
             )
             .unwrap();
-            let color = if page == "normal" { 2 } else { 3 };
             let result = Frame::from_pixels(
                 2,
                 1,
-                vec![0, 0, 0, color, color, color],
+                vec![0, 0, 0, 2, 2, 2],
                 PixelFormat::Rgb8,
                 actingcommand_device::CaptureBackendName::FixtureSimulation,
             )
@@ -5923,60 +5896,45 @@ mod post_admission_ocr_tests {
                 })
                 .unwrap();
             assert_eq!(report.records.len(), 1);
-            assert_eq!(report.records[0].page_id, format!("neutral/{page}"));
+            assert_eq!(report.records[0].page_id, "neutral/result");
             assert_eq!(
                 report.records[0].fields[0].value,
                 Some(OcrFieldValue::DictionaryEntry("TokenA".into()))
             );
-            let unresolved = quantity == "invalid";
-            let required_failure = unresolved && (always_required || page == "lucky");
-            assert_eq!(
-                report.failure,
-                required_failure.then_some(OcrFieldReason::InvalidInteger)
-            );
+            assert_eq!(report.failure, None);
             assert_eq!(
                 report.records[0].fields[1].value,
-                if unresolved {
-                    None
-                } else {
-                    Some(OcrFieldValue::UnsignedInteger(quantity.parse().unwrap()))
-                }
+                Some(OcrFieldValue::UnsignedInteger(7))
             );
-            if required_failure {
-                assert!(
-                    matches!(outcome, Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_ocr_fields_unresolved")
-                );
-            } else {
-                let outcome = outcome.unwrap();
-                assert_eq!(
-                    outcome.selected_scheduling_outcome.as_deref(),
-                    Some("fields_recorded")
-                );
-                assert_eq!(outcome.executed_steps, 1);
-                assert_eq!(outcome.outcome, TaskOutcome::Success);
-                let finalizing = runtime
+            let outcome = outcome.unwrap();
+            assert_eq!(
+                outcome.selected_scheduling_outcome.as_deref(),
+                Some("fields_recorded")
+            );
+            assert_eq!(outcome.executed_steps, 1);
+            assert_eq!(outcome.outcome, TaskOutcome::Success);
+            let finalizing = runtime
+                .traces
+                .iter()
+                .position(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+                .unwrap();
+            assert!(report_index < finalizing);
+            assert_eq!(
+                runtime
                     .traces
                     .iter()
-                    .position(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
-                    .unwrap();
-                assert!(report_index < finalizing);
-                assert_eq!(
-                    runtime
-                        .traces
-                        .iter()
-                        .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
-                        .count(),
-                    1
-                );
-                assert_eq!(
-                    runtime
-                        .traces
-                        .iter()
-                        .filter(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
-                        .count(),
-                    1
-                );
-            }
+                    .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                runtime
+                    .traces
+                    .iter()
+                    .filter(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
+                    .count(),
+                1
+            );
         }
     }
 

@@ -3549,11 +3549,7 @@ fn canonical_page_anchor(game: &str, page_id: &str) -> String {
     page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
 }
 
-pub(super) fn page_anchor_matches(
-    game: &str,
-    observed_or_anchor: &str,
-    expected_anchor: &str,
-) -> bool {
+fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &str) -> bool {
     expected_anchor == "any"
         || observed_or_anchor == expected_anchor
         || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
@@ -4977,7 +4973,7 @@ mod tests {
             task["ocr_targets"][0]["region"] = relative.clone();
         });
         let relative_out = temp.path().join("relative-ocr-task.zip");
-        build_task(build_task_request(repo.clone(), relative_out.clone()))
+        build_task(build_task_request(repo, relative_out.clone()))
             .expect("relative OCR canonical package");
         let relative_entries = read_zip_entries(&relative_out);
         let relative_pack: Value =
@@ -5007,90 +5003,6 @@ mod tests {
         )
         .unwrap();
         assert!(manifest.contains(&hex_sha256(asset)));
-        update_fixture_operation(&repo, |task| {
-            task["schema_version"] = json!("0.8");
-            task["post_admission_ocr"] = json!({"mode":"fields_v1",
-                "page_ids":["arknights/operator", "arknights/mall"],
-                "fields":[{"id":"count","group":"item","target_id":ocr_id,"required":false,
-                    "required_on_pages":["arknights/mall"],"privacy":"public","trim":"whitespace_v1",
-                    "value":{"type":"unsigned_integer","min":0,"max":100}}],
-                "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},
-                "outcome_key":"fields_recorded"});
-            task["scheduling_outcome"] = json!({"mappings":[{"outcome_key":"fields_recorded",
-                "effect":"no_designated_effect","terminal_pages":["mall"]}]});
-            task["page_rules"] = json!({
-                "operator":{"required":[],"any_of":[["page/operator_0", "page/operator_1"]]},
-                "mall":{"required":["page/mall"],"forbidden":["page/middle"]}
-            });
-        });
-        let source_path = repo.join("operations/operator_task/task.json");
-        let source: Value = serde_json::from_slice(&fs::read(&source_path).unwrap()).unwrap();
-        let fields_out = temp.path().join("conditional-fields.zip");
-        build_task(build_task_request(repo.clone(), fields_out.clone()))
-            .expect("conditional fields source admission");
-        let inspected = crate::package_validate::validate_package(crate::PackageValidateRequest {
-            zip_path: fields_out.clone(),
-            include_entries: true,
-            expected_input_sha256: None,
-        })
-        .expect("sealed conditional fields Containment validation");
-        assert_eq!(inspected.status, "valid");
-        let sealed = read_zip_entries(&fields_out);
-        let task: Value =
-            serde_json::from_slice(&sealed["resources/operations/operator_task/task.json"])
-                .unwrap();
-        assert_eq!(task["post_admission_ocr"], source["post_admission_ocr"]);
-        let pages: Value =
-            serde_json::from_slice(&sealed["resources/recognition/arknights.cn.pages.json"])
-                .unwrap();
-        let mall = pages["pages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|page| page["id"] == "arknights/mall")
-            .unwrap();
-        assert_eq!(mall["required"], json!(["page/mall"]));
-        assert_eq!(mall["forbidden"], json!(["page/middle"]));
-        let declared: actingcommand_contract::OcrFieldsDeclaration =
-            serde_json::from_value(task["post_admission_ocr"].clone()).unwrap();
-        declared.validate().unwrap();
-        assert!(!declared.fields[0].is_required_on_page("arknights/operator"));
-        assert!(declared.fields[0].is_required_on_page("arknights/mall"));
-        for (pages, required) in [
-            (json!(["arknights/operator", "arknights/mall"]), Value::Null),
-            (json!(["arknights/operator", "arknights/mall"]), json!([])),
-            (
-                json!(["arknights/operator", "arknights/mall"]),
-                json!(["arknights/mall", "arknights/mall"]),
-            ),
-            (
-                json!(["arknights/operator", "arknights/mall"]),
-                json!(["arknights/middle"]),
-            ),
-            (json!(["operator", "mall"]), json!(["mall"])),
-            (
-                json!(["other/operator", "other/mall"]),
-                json!(["other/mall"]),
-            ),
-            (
-                json!(["arknights/operator", "arknights/missing"]),
-                json!(["arknights/missing"]),
-            ),
-            (
-                json!(["arknights/operator", "arknights/any"]),
-                json!(["arknights/any"]),
-            ),
-        ] {
-            let mut invalid = source.clone();
-            invalid["post_admission_ocr"]["page_ids"] = pages;
-            invalid["post_admission_ocr"]["fields"][0]["required_on_pages"] = required;
-            fs::write(&source_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
-            build_task(build_task_request(
-                repo.clone(),
-                temp.path().join("invalid-fields.zip"),
-            ))
-            .expect_err("invalid full ID or subset must fail source admission");
-        }
     }
 
     #[test]

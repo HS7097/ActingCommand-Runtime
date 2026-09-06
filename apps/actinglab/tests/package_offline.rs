@@ -294,9 +294,7 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
     required[pages_index].1["pages"][0]["any_of"] = json!([["page/home"]]);
     let task = &mut required[task_index].1;
     task["entry_page"] = json!("neutral/home");
-    task["post_admission_ocr"]["page_ids"] = json!(["neutral/terminal"]);
-    task["post_admission_ocr"]["fields"][1]["required"] = json!(false);
-    task["post_admission_ocr"]["fields"][1]["required_on_pages"] = json!(["neutral/terminal"]);
+    task["post_admission_ocr"]["page_ids"] = json!(["terminal"]);
     task["scheduling_outcome"]["designated_operation"] = task["operations"][0]["id"].clone();
     task["scheduling_outcome"]["mappings"][0]["effect"] = json!("designated_effect_completed");
     for at_terminal in [false, true] {
@@ -324,32 +322,6 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
         assert_eq!(record["executed"], false);
         assert_eq!(record["production_global_ledger_written"], false);
         assert!(record.get("official_ocr_fields_projection").is_none());
-    }
-    for (page, condition) in [
-        ("terminal", json!(["terminal"])),
-        ("other/terminal", json!(["other/terminal"])),
-        ("neutral/missing", json!(["neutral/missing"])),
-        ("neutral/terminal", json!(["neutral/home"])),
-        (
-            "neutral/terminal",
-            json!(["neutral/terminal", "neutral/terminal"]),
-        ),
-        ("neutral/terminal", json!([])),
-        ("neutral/terminal", Value::Null),
-    ] {
-        let mut invalid = required.clone();
-        invalid[task_index].1["post_admission_ocr"]["page_ids"] = json!([page]);
-        invalid[task_index].1["post_admission_ocr"]["fields"][1]["required_on_pages"] = condition;
-        let fixture = TestFixture::from_bytes(encode(&invalid), home_frame(true));
-        let output = fixture.run(&[], "invalid-conditional-fields.zip");
-        assert_error_code(&output, "package_invalid");
-        assert!(
-            !fixture
-                .temp
-                .path()
-                .join("invalid-conditional-fields.zip")
-                .exists()
-        );
     }
 }
 
