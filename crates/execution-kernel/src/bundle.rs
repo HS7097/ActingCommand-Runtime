@@ -62,6 +62,24 @@ pub struct ExternallyVerifiedBundle {
 }
 
 impl ExternallyVerifiedBundle {
+    pub fn load_observation(
+        instance_label: &str,
+        zip_bytes: &[u8],
+        expected: ExternalExpectedSha256,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+    ) -> Result<Self, ExecutionBundleError> {
+        let instance = InstanceId::new(instance_label)?;
+        let mut containment = match vision_provider {
+            Some(provider) => Containment::with_vision_provider(provider),
+            None => Containment::new(),
+        };
+        containment.load_observation(&instance, zip_bytes, &expected.hash())?;
+        let bundle = containment
+            .take_loaded(&instance)
+            .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
+        Ok(Self { bundle })
+    }
+
     pub fn load(
         instance_label: &str,
         zip_bytes: &[u8],

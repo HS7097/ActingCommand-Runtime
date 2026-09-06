@@ -431,13 +431,19 @@ pub fn read_projected_verified(
         )
     })?;
     let path = safe_object_path(&root, object_key)?;
-    let bytes = fs::read(path).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_read_failed",
-            "read_projected_artifact",
-            error.to_string(),
-        )
-    })?;
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| {
+            file.take(reference.byte_count.saturating_add(1))
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_read_failed",
+                "read_projected_artifact",
+                error.to_string(),
+            )
+        })?;
     verify_projected_bytes(&bytes, reference)?;
     Ok(bytes)
 }

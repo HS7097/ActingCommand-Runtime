@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_recognition::Scene;
-use actingcommand_recognition_pack::{RecognitionEvaluator, TargetKind};
-use serde::Deserialize;
+use actingcommand_recognition_pack::{
+    RecognitionEvaluator, RecognitionPackError, TargetEvaluation, TargetKind,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -11,15 +13,26 @@ use std::time::{Duration, Instant};
 pub type PageDetectorResult<T> = Result<T, PageDetectorError>;
 pub type PageBatchResult = Result<Vec<PageOutcome>, BatchLevelError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PageDetectorErrorSeverity {
     Fatal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageDetectorError {
     severity: PageDetectorErrorSeverity,
     message: String,
+    pub completed_targets: Vec<PageTargetEvaluation>,
+    pub failed_target: Option<Box<PageTargetFailure>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PageTargetFailure {
+    pub target_id: String,
+    pub role: PageTargetRole,
+    pub group_index: Option<usize>,
+    pub target_index: usize,
+    pub cause: RecognitionPackError,
 }
 
 impl PageDetectorError {
@@ -27,6 +40,8 @@ impl PageDetectorError {
         Self {
             severity: PageDetectorErrorSeverity::Fatal,
             message: message.into(),
+            completed_targets: Vec::new(),
+            failed_target: None,
         }
     }
 
@@ -36,6 +51,13 @@ impl PageDetectorError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    fn after(mut self, earlier: impl IntoIterator<Item = PageTargetEvaluation>) -> Self {
+        let mut completed = earlier.into_iter().collect::<Vec<_>>();
+        completed.append(&mut self.completed_targets);
+        self.completed_targets = completed;
+        self
     }
 }
 
@@ -75,7 +97,7 @@ pub struct PageDetector {
     page_indexes: HashMap<String, usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageEvaluation {
     pub page_id: String,
     pub matched: bool,
@@ -91,20 +113,20 @@ pub struct PageEvaluation {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TimedPageEvaluation {
     pub evaluation: PageEvaluation,
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageOutcome {
     pub index: usize,
     pub page_id: String,
     pub result: PageDetectorResult<PageEvaluation>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PageUnexecutedReason {
     BatchValidationFailed,
     BatchTerminated,
@@ -119,14 +141,14 @@ impl fmt::Display for PageUnexecutedReason {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnexecutedPage {
     pub index: usize,
     pub page_id: String,
     pub reason: PageUnexecutedReason,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BatchLevelError {
     pub cause: PageDetectorError,
     pub completed: Vec<PageOutcome>,
@@ -151,15 +173,18 @@ impl Error for BatchLevelError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageTargetEvaluation {
     pub target_id: String,
     pub role: PageTargetRole,
     pub passed: bool,
     pub message: String,
+    pub group_index: Option<usize>,
+    pub target_index: usize,
+    pub evaluation: TargetEvaluation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PageTargetRole {
     Required,
     AnyOf,
@@ -239,6 +264,10 @@ impl PageDetector {
 
     pub fn page_ids(&self) -> impl Iterator<Item = &str> {
         self.page_set.pages.iter().map(|page| page.id.as_str())
+    }
+
+    pub fn page_definitions(&self) -> &[PageDefinition] {
+        &self.page_set.pages
     }
 
     pub fn page_uses_any_of(&self, page_id: &str) -> bool {
@@ -416,13 +445,46 @@ impl PageDetector {
         scene: &Scene,
         page: &PageDefinition,
     ) -> PageDetectorResult<PageEvaluation> {
-        let required_results =
-            evaluate_targets(evaluator, scene, &page.required, PageTargetRole::Required)?;
-        let any_of_results = evaluate_any_of_groups(evaluator, scene, &page.any_of)?;
-        let optional_results =
-            evaluate_targets(evaluator, scene, &page.optional, PageTargetRole::Optional)?;
-        let forbidden_results =
-            evaluate_targets(evaluator, scene, &page.forbidden, PageTargetRole::Forbidden)?;
+        let required_results = evaluate_targets(
+            evaluator,
+            scene,
+            &page.required,
+            PageTargetRole::Required,
+            None,
+        )?;
+        let any_of_results = evaluate_any_of_groups(evaluator, scene, &page.any_of)
+            .map_err(|error| error.after(required_results.clone()))?;
+        let optional_results = evaluate_targets(
+            evaluator,
+            scene,
+            &page.optional,
+            PageTargetRole::Optional,
+            None,
+        )
+        .map_err(|error| {
+            error.after(
+                required_results
+                    .iter()
+                    .chain(any_of_results.iter().flatten())
+                    .cloned(),
+            )
+        })?;
+        let forbidden_results = evaluate_targets(
+            evaluator,
+            scene,
+            &page.forbidden,
+            PageTargetRole::Forbidden,
+            None,
+        )
+        .map_err(|error| {
+            error.after(
+                required_results
+                    .iter()
+                    .chain(any_of_results.iter().flatten())
+                    .chain(optional_results.iter())
+                    .cloned(),
+            )
+        })?;
 
         let required_passed = count_passed(&required_results);
         let any_of_passed = count_passed_groups(&any_of_results);
@@ -601,21 +663,36 @@ fn evaluate_targets(
     scene: &Scene,
     target_ids: &[String],
     role: PageTargetRole,
+    group_index: Option<usize>,
 ) -> PageDetectorResult<Vec<PageTargetEvaluation>> {
-    target_ids
-        .iter()
-        .map(|target_id| {
-            let evaluation = evaluator
-                .evaluate_target(scene, target_id)
-                .map_err(pack_error)?;
-            Ok(PageTargetEvaluation {
-                target_id: target_id.clone(),
-                role,
-                passed: evaluation.passed,
-                message: evaluation.message,
-            })
-        })
-        .collect()
+    let mut results = Vec::new();
+    for (target_index, target_id) in target_ids.iter().enumerate() {
+        let evaluation = match evaluator.evaluate_target(scene, target_id) {
+            Ok(evaluation) => evaluation,
+            Err(cause) => {
+                let mut error = pack_error(cause.clone());
+                error.completed_targets = results;
+                error.failed_target = Some(Box::new(PageTargetFailure {
+                    target_id: target_id.clone(),
+                    role,
+                    group_index,
+                    target_index,
+                    cause,
+                }));
+                return Err(error);
+            }
+        };
+        results.push(PageTargetEvaluation {
+            target_id: target_id.clone(),
+            role,
+            passed: evaluation.passed,
+            message: evaluation.message.clone(),
+            group_index,
+            target_index,
+            evaluation,
+        });
+    }
+    Ok(results)
 }
 
 fn evaluate_any_of_groups(
@@ -623,10 +700,14 @@ fn evaluate_any_of_groups(
     scene: &Scene,
     groups: &[Vec<String>],
 ) -> PageDetectorResult<Vec<Vec<PageTargetEvaluation>>> {
-    groups
-        .iter()
-        .map(|group| evaluate_targets(evaluator, scene, group, PageTargetRole::AnyOf))
-        .collect()
+    let mut results: Vec<Vec<PageTargetEvaluation>> = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        let evaluated =
+            evaluate_targets(evaluator, scene, group, PageTargetRole::AnyOf, Some(index))
+                .map_err(|error| error.after(results.iter().flatten().cloned()))?;
+        results.push(evaluated);
+    }
+    Ok(results)
 }
 
 fn count_passed(results: &[PageTargetEvaluation]) -> usize {
@@ -699,6 +780,71 @@ mod tests {
     use std::time::Duration;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn online_page_results_preserve_native_values_groups_and_partial_uses() {
+        let fixture = Fixture::new();
+        let scene = scene_colors(true, true, false);
+        let outcomes = fixture
+            .detector
+            .evaluate_all_outcomes(&fixture.evaluator, &scene)
+            .unwrap();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|page| page.result.as_ref().unwrap().matched)
+                .count(),
+            2
+        );
+        for page in &outcomes {
+            for target in &page.result.as_ref().unwrap().target_results {
+                assert_eq!(
+                    target.evaluation,
+                    fixture
+                        .evaluator
+                        .evaluate_target(&scene, &target.target_id)
+                        .unwrap()
+                );
+                assert_eq!(target.passed, target.evaluation.passed);
+                assert_eq!(target.message, target.evaluation.message);
+            }
+        }
+        let groups = vec![
+            vec!["fixture/home_anchor".to_string()],
+            vec!["fixture/settings_anchor".to_string()],
+        ];
+        let values = evaluate_any_of_groups(&fixture.evaluator, &scene, &groups).unwrap();
+        for (index, group) in values.iter().enumerate() {
+            assert_eq!(group[0].group_index, Some(index));
+            assert_eq!(group[0].target_index, 0);
+            assert_eq!(group[0].role, PageTargetRole::AnyOf);
+        }
+        let error = evaluate_targets(
+            &fixture.evaluator,
+            &scene,
+            &["fixture/home_anchor".into(), "absent".into()],
+            PageTargetRole::Required,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.completed_targets.len(), 1);
+        assert_eq!(
+            error.completed_targets[0].evaluation.color.unwrap().mean,
+            [255, 0, 0]
+        );
+        let failed = error.failed_target.unwrap();
+        assert_eq!(failed.target_id, "absent");
+        assert_eq!(failed.target_index, 1);
+        let unmatched = fixture
+            .detector
+            .evaluate_all_outcomes(&fixture.evaluator, &scene_colors(false, false, false))
+            .unwrap();
+        assert!(
+            unmatched
+                .iter()
+                .all(|page| !page.result.as_ref().unwrap().matched)
+        );
+    }
 
     #[test]
     fn page_set_parses() {
@@ -819,6 +965,17 @@ mod tests {
                 ("fixture/popup", PageTargetRole::Forbidden, true),
             ]
         );
+        let ocr = evaluation.target_results[0]
+            .evaluation
+            .ocr
+            .as_ref()
+            .unwrap();
+        assert_eq!(ocr.text, "home");
+        assert_eq!(ocr.confidence, Some(0.99));
+        assert!(ocr.blocks.is_empty());
+        let nn = evaluation.target_results[1].evaluation.nn.as_ref().unwrap();
+        assert!(serde_json::to_string(nn).unwrap().contains("popup"));
+        assert!(serde_json::to_string(nn).unwrap().contains("0.99"));
     }
 
     #[test]

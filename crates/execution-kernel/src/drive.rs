@@ -385,7 +385,7 @@ fn parse_control_point(value: &Value) -> Result<String, DriveDecisionError> {
     Ok(name)
 }
 
-fn parse_control_point_rect(value: &Value) -> Result<PackRect, DriveDecisionError> {
+pub(crate) fn parse_control_point_rect(value: &Value) -> Result<PackRect, DriveDecisionError> {
     if let Some(point) = value.get("point") {
         let (x, y) = parse_point_value(point)?;
         return Ok(PackRect {
@@ -429,7 +429,9 @@ fn parse_navigation_edge(value: &Value) -> Result<DriveNavigationEdge, DriveDeci
     })
 }
 
-fn parse_navigation_input(value: &Value) -> Result<DriveSemanticInput, DriveDecisionError> {
+pub(crate) fn parse_navigation_input(
+    value: &Value,
+) -> Result<DriveSemanticInput, DriveDecisionError> {
     match value.get("kind").and_then(Value::as_str) {
         Some("point") | Some("rect") => {
             let rect = parse_navigation_tap_rect(value)?;

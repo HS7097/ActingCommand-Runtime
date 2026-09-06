@@ -32,6 +32,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+
+mod online_observation;
+pub use online_observation::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
@@ -2317,6 +2320,10 @@ pub enum RuntimeOperation {
     ObserveReadonly {
         instance_alias: String,
     },
+    ObserveContainedPage {
+        instance_alias: String,
+        request: ContainedObservationRequest,
+    },
     CaptureSequence {
         instance_alias: String,
         spec: CaptureSequenceSpec,
@@ -2548,6 +2555,13 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 request.validate()
             }
+            Self::ObserveContainedPage {
+                instance_alias,
+                request,
+            } => {
+                validate_instance_alias(instance_alias)?;
+                request.validate()
+            }
         }
     }
 
@@ -2557,6 +2571,7 @@ impl RuntimeOperation {
             | Self::QueueLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::CaptureSequence { instance_alias, .. }
+            | Self::ObserveContainedPage { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
             | Self::RunContainedTask { instance_alias, .. }
@@ -2603,6 +2618,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
             Self::ObserveReadonly { .. } => "RuntimeOperation::ObserveReadonly(<redacted>)",
+            Self::ObserveContainedPage { .. } => {
+                "RuntimeOperation::ObserveContainedPage(<contained-resource>)"
+            }
             Self::CaptureSequence { .. } => "RuntimeOperation::CaptureSequence(<redacted>)",
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::ApplicationLifecycle { .. } => {
@@ -2869,6 +2887,7 @@ impl ValidatedRuntimeRequest<'_> {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeReceiptState {
     Admitted,
+    Observed,
     Queued,
     Denied,
     Completed,
@@ -3145,6 +3164,9 @@ pub enum RuntimeResult {
     ReadonlyObservationCompleted {
         observation: ReadonlyObservation,
     },
+    ContainedPageObserved {
+        observation: Box<ContainedPageObservation>,
+    },
     CaptureSequenceCompleted {
         sequence: CaptureSequence,
     },
@@ -3296,6 +3318,7 @@ impl RuntimeReceipt {
         let success_state = matches!(
             self.state,
             RuntimeReceiptState::Admitted
+                | RuntimeReceiptState::Observed
                 | RuntimeReceiptState::Queued
                 | RuntimeReceiptState::Completed
                 | RuntimeReceiptState::Cancelled
@@ -3305,6 +3328,14 @@ impl RuntimeReceipt {
         }
         if !success_state && (self.error.is_none() || self.result.is_some()) {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));
+        }
+        if self.state == RuntimeReceiptState::Observed
+            && !matches!(
+                self.result,
+                Some(RuntimeResult::ContainedPageObserved { .. })
+            )
+        {
+            return Err(RuntimeContractError::new("invalid_observation_receipt"));
         }
         if self.terminal.is_some_and(|terminal| terminal.sequence == 0) {
             return Err(RuntimeContractError::new("invalid_terminal_event"));
@@ -3336,6 +3367,14 @@ impl RuntimeReceipt {
             ) => status.validate()?,
             Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
                 observation.validate()?
+            }
+            Some(RuntimeResult::ContainedPageObserved { observation }) => {
+                if self.state != RuntimeReceiptState::Observed || self.terminal.is_none() {
+                    return Err(RuntimeContractError::new(
+                        "invalid_page_observation_receipt",
+                    ));
+                }
+                observation.validate()?;
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
             Some(RuntimeResult::EventPage { page }) => page.validate()?,

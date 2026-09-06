@@ -39,6 +39,138 @@ struct FakeState {
     tap_delay_ms: AtomicUsize,
 }
 
+#[test]
+fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contracts() {
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let package = root.path().join("observe.zip");
+    let frame = root.path().join("frame.png");
+    write_zip(&package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let expected = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"online-observation-cli"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    let output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected,
+            "--targets",
+            "anchor",
+            "--with-frame",
+            frame.to_str().unwrap(),
+            "--verbose",
+        ],
+    );
+    assert_eq!(output["data"]["state"], "recognized");
+    assert_eq!(output["data"]["observation"]["page"], "page");
+    assert_eq!(output["data"]["facts"]["target_evaluation_count"], 1);
+    assert_eq!(
+        output["data"]["projection_source"]["actual_package_sha256"],
+        expected
+    );
+    assert!(
+        output["data"]["terminal"]["sequence"].as_u64().unwrap()
+            > output["data"]["projection_source"]["projection_sequence"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(frame.is_file());
+    let minimum = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected,
+        ],
+    );
+    assert!(
+        serde_json::to_vec(&minimum["data"]).unwrap().len()
+            <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
+    );
+    assert_eq!(minimum["data"]["observation"]["page"], "page");
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    let raw = client.observe_readonly("node.a").unwrap();
+    assert!(
+        matches!(raw.receipt().result(), Some(actingcommand_contract::RuntimeResult::ReadonlyObservationCompleted { observation }) if observation.verdict() == actingcommand_contract::RecognitionVerdict::FrameDecoded)
+    );
+    let before = state.captures.load(Ordering::Acquire);
+    let offline = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "observe",
+            "--scene",
+            frame.to_str().unwrap(),
+            "--zip",
+            package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected,
+            "--verbose",
+        ],
+    );
+    assert_eq!(offline["data"]["observation"]["page"], "page");
+    assert_eq!(state.captures.load(Ordering::Acquire), before);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != EventType::LeaseGranted)
+    );
+    drop(client);
+    host.close().unwrap();
+}
+
 struct FakeBackend {
     state: Arc<FakeState>,
     closed: bool,

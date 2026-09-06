@@ -24,12 +24,12 @@ const MAX_VISION_RESULTS: usize = 1_024;
 const MAX_TEMPLATE_REGION_EVALUATIONS: usize = 64;
 const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecognitionPackErrorSeverity {
     Fatal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecognitionPackErrorCode {
     InvalidPackage,
     UnsupportedTarget,
@@ -38,7 +38,7 @@ pub enum RecognitionPackErrorCode {
     VisionProviderInvalidResponse,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecognitionPackError {
     severity: RecognitionPackErrorSeverity,
     code: RecognitionPackErrorCode,
