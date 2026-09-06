@@ -250,7 +250,10 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
                 matches!(
                     event.event_type,
                     EventType::CommandValidated | EventType::CommandRejected
-                ) && matches!(&event.payload, ProjectionPayload::Full(payload)
+                ) && event.sequence > operation.terminal_artifact.verified.sequence
+                    && event.links.instance_id() == Some(&prepared.instance_id)
+                    && event.links.lease_id() == prepared.lease_id.as_ref()
+                    && matches!(&event.payload, ProjectionPayload::Full(payload)
                     if payload.action() == RuntimeDebugOperation::Do.event_action())
             })
             .collect::<Vec<_>>();

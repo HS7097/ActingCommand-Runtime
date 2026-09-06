@@ -224,6 +224,26 @@ pub fn restore_authoring_draft(
     let task_root = PathBuf::from("ours/operations").join(&request.task_id);
     let mut assets = BTreeMap::<String, Vec<u8>>::new();
     let mut source_entries = BTreeMap::<String, String>::new();
+    for path in [
+        Some(package.manifest_path()),
+        package.recognition_pack_path(),
+        package.pages_path(),
+        package.navigation_path(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let bytes = package
+            .entry(path)
+            .ok_or_else(|| invalid("admitted declaration entry is missing"))?;
+        source_entries.insert(path.to_string(), format!("{:x}", Sha256::digest(bytes)));
+    }
+    if let Some(path) = package.navigation_path() {
+        let projection_path = path.replace(".navigation.json", ".projection.json");
+        if let Some(bytes) = package.entry(&projection_path) {
+            source_entries.insert(projection_path, format!("{:x}", Sha256::digest(bytes)));
+        }
+    }
     let mut anchors = BTreeMap::new();
     let mut colors = BTreeMap::new();
     let mut templates = BTreeMap::new();
