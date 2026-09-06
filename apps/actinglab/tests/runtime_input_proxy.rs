@@ -475,10 +475,11 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
     assert_eq!(task["operations"][1]["click"]["duration_ms"], 1);
     assert_eq!(task["operations"][0]["purpose"], "");
     assert_eq!(task["operations"][0]["to"], Value::Null);
-    assert_eq!(
-        task["operations"][0]["expect_after"]["page_id"],
-        "neutral/home"
-    );
+    let source_operation = &task["operations"][0];
+    assert_eq!(source_operation["from"], "home");
+    assert_eq!(source_operation["expect_after"]["page_id"], "home");
+    let recorded_after = &source_operation["provenance"]["after"]["projection"];
+    assert_eq!(recorded_after["page"], "neutral/home");
     assert!(
         task["operations"][0]["provenance"]["input_intent"]["sequence"]
             .as_u64()

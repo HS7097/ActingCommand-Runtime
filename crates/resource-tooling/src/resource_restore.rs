@@ -2,6 +2,7 @@
 
 //! Convert verified Lab records and admitted source declarations into an authoring draft.
 
+use crate::package_build::canonical_page_anchor;
 use crate::{
     AuthoringDraft, AuthoringFile, AuthoringProvenance, AuthoringWriteMode,
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, canonical_game, canonical_locale, canonical_server,
@@ -356,6 +357,7 @@ pub fn restore_authoring_draft(
                 record_source["bundle_geometry_error"] = json!(error.message);
             }
             let short = from.strip_prefix(&format!("{game}/")).unwrap_or(from);
+            let destination = canonical_page_anchor(&game, to);
             let selected = selected_source(&sources, operation)?;
             let mut guard = selected
                 .and_then(|(_, source)| source.get("guard"))
@@ -387,7 +389,7 @@ pub fn restore_authoring_draft(
             if guard.is_none()
                 && let Some(anchor) = anchors.get(short)
             {
-                guard = Some(json!({"page_id":from,"target_id":format!("page/{short}"),
+                guard = Some(json!({"page_id":short,"target_id":format!("page/{short}"),
                     "expected_rect":geometry_start_rect(geometry),"verify_template":anchor["template"]}));
             }
             let target = guard
@@ -419,12 +421,12 @@ pub fn restore_authoring_draft(
                     .and_then(|(_, source)| source.get("purpose"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                let mut restored = json!({"id":id,"purpose":purpose,"from":from,
-                    "to":if from == to { Value::Null } else { json!(to) },
+                let mut restored = json!({"id":id,"purpose":purpose,"from":short,
+                    "to":if from == to { Value::Null } else { json!(destination) },
                     "click":geometry_click(geometry), "guard":guard,"consumes":[],"produces":[],
                     "provenance":record_source});
                 if from == to {
-                    restored["expect_after"] = json!({"page_id":to});
+                    restored["expect_after"] = json!({"page_id":destination});
                 }
                 let (safety, safety_source) = prepared
                     .selected_element
@@ -463,15 +465,21 @@ pub fn restore_authoring_draft(
         "verify_templates":templates.values().collect::<Vec<_>>(),"page_rules":page_rules,"operations":operations,
         "provenance":{"source":"global_ledger","package_sha256":package.verified_hash().to_string(),
             "through_sequence":request.through_sequence,"records":provenance,"gaps":gaps,
+            "author_inputs":{"entry_page":request.entry_page,"target_pages":request.target_pages,"goal":request.goal},
             "source_entries":source_entries.iter().map(|(path,sha256)| json!({"path":path,"sha256":sha256})).collect::<Vec<_>>()}});
     if let Some(page) = &request.entry_page {
-        task["entry_page"] = json!(page);
+        task["entry_page"] = json!(canonical_page_anchor(&game, page));
     }
     if !request.target_pages.is_empty() {
-        task["target_page"] = if request.target_pages.len() == 1 {
-            json!(request.target_pages[0])
+        let targets = request
+            .target_pages
+            .iter()
+            .map(|page| canonical_page_anchor(&game, page))
+            .collect::<Vec<_>>();
+        task["target_page"] = if targets.len() == 1 {
+            json!(targets[0])
         } else {
-            json!(request.target_pages)
+            json!(targets)
         };
     }
     if let Some(goal) = &request.goal {

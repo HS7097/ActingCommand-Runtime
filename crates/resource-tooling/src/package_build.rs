@@ -3544,7 +3544,7 @@ fn validate_ratio_f64(name: &str, value: f64) -> Result<(), String> {
     }
 }
 
-fn canonical_page_anchor(game: &str, page_id: &str) -> String {
+pub(super) fn canonical_page_anchor(game: &str, page_id: &str) -> String {
     let prefix = format!("{game}/");
     page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
 }
