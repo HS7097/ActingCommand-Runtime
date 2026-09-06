@@ -3,7 +3,7 @@
   "source": "apps/actinglab/src/**/*.rs",
   "dispatch_function": "execute",
   "denominator_kind": "top_level_dispatch_arm",
-  "dispatch_arm_count": 45,
+  "dispatch_arm_count": 46,
   "dispatch_arms": [
     "help",
     "version",
@@ -44,6 +44,7 @@
     "operation <subcommand>",
     "control <subcommand>",
     "scheduler <subcommand>",
+    "scheduling <subcommand>",
     "resource <subcommand>",
     "runtime <subcommand>",
     "ledger <subcommand>",
@@ -51,7 +52,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 126,
+  "command_count": 128,
   "commands": [
     "help",
     "version",
@@ -125,6 +126,8 @@
     "scheduler resume",
     "scheduler start",
     "scheduler stop",
+    "scheduling compile",
+    "scheduling timeline",
     "resource validate",
     "resource convert",
     "resource compile-maa",

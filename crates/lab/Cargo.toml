@@ -16,6 +16,7 @@ actingcommand-execution-kernel = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-page-detector = { workspace = true }
+actingcommand-policy = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-resource-tooling = { workspace = true }
