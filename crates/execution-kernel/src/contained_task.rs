@@ -9,6 +9,7 @@ use crate::{
     select_run_operation,
 };
 use actingcommand_contract::{
+    EffectiveOperationTiming, EffectiveTaskTiming, EffectiveTimingSource, EffectiveTimingValue,
     InputAction, InputSamplingEvidence, InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA,
     OcrFieldDictionary, OcrFieldReason, OcrFieldRecord, OcrFieldResult, OcrFieldType,
     OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -1600,6 +1601,22 @@ impl PreparedContainedTask {
         }
     }
 
+    pub fn effective_timing(&self) -> EffectiveTaskTiming {
+        EffectiveTaskTiming {
+            task_timeout_ms: self.program.timeout_ms,
+            control_timeout_ms: self.control.timeout_ms,
+            task_timeout: self.control.task_timeout(),
+            step_timeout: self.control.step_timeout(),
+            capture_interval: self.control.capture_interval(),
+            operations: self
+                .program
+                .operations
+                .iter()
+                .map(|operation| operation.effective_timing(&self.control))
+                .collect(),
+        }
+    }
+
     pub fn recognize_required_home<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1677,18 +1694,9 @@ impl PreparedContainedTask {
             .record(ContainedTaskTrace::RunStarted)
             .map_err(ContainedTaskRunError::Boundary)?;
 
-        let capture_interval = Duration::from_millis(
-            self.control
-                .capture_interval_ms
-                .unwrap_or(DEFAULT_CAPTURE_INTERVAL_MS),
-        );
-        let step_timeout = Duration::from_millis(
-            self.control
-                .step_timeout_ms
-                .unwrap_or(DEFAULT_STEP_TIMEOUT_MS),
-        );
-        let task_timeout =
-            Duration::from_millis(self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS));
+        let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        let step_timeout = Duration::from_millis(self.control.step_timeout().milliseconds);
+        let task_timeout = Duration::from_millis(self.control.task_timeout().milliseconds);
         let started = Instant::now();
         let post_admission_ocr = match options.post_admission_ocr {
             PostAdmissionOcrExecution::Enabled => self.post_admission_ocr.as_ref(),
@@ -1911,20 +1919,11 @@ impl PreparedContainedTask {
                             }
                             break;
                         }
-                        let confirmation_timeout = Duration::from_millis(
-                            operation
-                                .expect_after
-                                .as_ref()
-                                .and_then(|expectation| expectation.timeout_ms)
-                                .unwrap_or(step_timeout.as_millis() as u64),
-                        );
-                        let confirmation_interval = Duration::from_millis(
-                            operation
-                                .expect_after
-                                .as_ref()
-                                .and_then(|expectation| expectation.interval_ms)
-                                .unwrap_or(capture_interval.as_millis() as u64),
-                        );
+                        let timing = operation.effective_timing(&self.control);
+                        let confirmation_timeout =
+                            Duration::from_millis(timing.timeout.milliseconds);
+                        let confirmation_interval =
+                            Duration::from_millis(timing.interval.milliseconds);
                         let (failed_observation, hit_error_page) = match self.await_postcondition(
                             runtime,
                             ocr_collector,
@@ -2737,6 +2736,41 @@ struct TaskControl {
 }
 
 impl TaskControl {
+    fn task_timeout(&self) -> EffectiveTimingValue {
+        EffectiveTimingValue {
+            milliseconds: self.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
+            source: if self.timeout_ms.is_some() {
+                EffectiveTimingSource::Control
+            } else {
+                EffectiveTimingSource::Default
+            },
+        }
+    }
+
+    fn step_timeout(&self) -> EffectiveTimingValue {
+        EffectiveTimingValue {
+            milliseconds: self.step_timeout_ms.unwrap_or(DEFAULT_STEP_TIMEOUT_MS),
+            source: if self.step_timeout_ms.is_some() {
+                EffectiveTimingSource::Control
+            } else {
+                EffectiveTimingSource::Default
+            },
+        }
+    }
+
+    fn capture_interval(&self) -> EffectiveTimingValue {
+        EffectiveTimingValue {
+            milliseconds: self
+                .capture_interval_ms
+                .unwrap_or(DEFAULT_CAPTURE_INTERVAL_MS),
+            source: if self.capture_interval_ms.is_some() {
+                EffectiveTimingSource::Control
+            } else {
+                EffectiveTimingSource::Default
+            },
+        }
+    }
+
     fn validate(&self) -> Result<(), ContainedTaskError> {
         if self.schema_version != CONTROL_SCHEMA
             || self.package_id.trim().is_empty()
@@ -3869,6 +3903,43 @@ struct TaskOperation {
 }
 
 impl TaskOperation {
+    fn effective_timing(&self, control: &TaskControl) -> EffectiveOperationTiming {
+        let timeout = self
+            .expect_after
+            .as_ref()
+            .and_then(|expectation| expectation.timeout_ms);
+        let interval = self
+            .expect_after
+            .as_ref()
+            .and_then(|expectation| expectation.interval_ms);
+        EffectiveOperationTiming {
+            operation_id: self.id.clone(),
+            expect_after: self.expect_after.is_some(),
+            timeout: timeout.map_or_else(
+                || control.step_timeout(),
+                |milliseconds| EffectiveTimingValue {
+                    milliseconds,
+                    source: EffectiveTimingSource::ExpectAfter,
+                },
+            ),
+            interval: interval.map_or_else(
+                || control.capture_interval(),
+                |milliseconds| EffectiveTimingValue {
+                    milliseconds,
+                    source: EffectiveTimingSource::ExpectAfter,
+                },
+            ),
+            postdelay: EffectiveTimingValue {
+                milliseconds: self.post_delay_ms.unwrap_or(0),
+                source: if self.post_delay_ms.is_some() {
+                    EffectiveTimingSource::Operation
+                } else {
+                    EffectiveTimingSource::NotSpecified
+                },
+            },
+        }
+    }
+
     fn validate(
         &self,
         control: &TaskControl,

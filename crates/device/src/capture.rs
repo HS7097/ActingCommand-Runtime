@@ -22,7 +22,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -142,6 +142,8 @@ pub struct Frame {
     pub original_png: Option<Vec<u8>>,
     pub captured_at: SystemTime,
     pub backend_name: CaptureBackendName,
+    /// Context from the same selected producer; decoded or synthetic frames have none.
+    pub selection: Option<Arc<CaptureSelectionContext>>,
 }
 
 impl Frame {
@@ -158,6 +160,7 @@ impl Frame {
             original_png: Some(png),
             captured_at: SystemTime::now(),
             backend_name,
+            selection: None,
         })
     }
 
@@ -177,6 +180,7 @@ impl Frame {
             original_png: None,
             captured_at: SystemTime::now(),
             backend_name,
+            selection: None,
         })
     }
 
@@ -192,6 +196,24 @@ impl Frame {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureMumuContext {
+    pub root: PathBuf,
+    pub adb_path: PathBuf,
+    pub capture_dll_path: PathBuf,
+    pub source: crate::MumuInstallSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureSelectionContext {
+    pub requested: CaptureBackendChoice,
+    pub configured_adb: String,
+    pub configured_serial: Option<String>,
+    pub resolved_adb: String,
+    pub selected_serial: String,
+    pub mumu: Option<CaptureMumuContext>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CaptureBackendConfig {
     pub adb_config: AdbConfig,
@@ -200,6 +222,7 @@ pub struct CaptureBackendConfig {
     pub capture_timeout: Duration,
     pub droidcast: DroidcastRawConfig,
     pub nemu: NemuIpcConfig,
+    pub resolved_mumu: Option<CaptureMumuContext>,
 }
 
 impl CaptureBackendConfig {
@@ -211,6 +234,7 @@ impl CaptureBackendConfig {
             capture_timeout: DEFAULT_CAPTURE_TIMEOUT,
             droidcast: DroidcastRawConfig::default(),
             nemu: NemuIpcConfig::default(),
+            resolved_mumu: None,
         }
     }
 
@@ -289,18 +313,42 @@ pub struct CaptureBackendDiagnostics {
 pub struct SelectedCaptureBackend {
     pub backend: Box<dyn CaptureBackend>,
     pub diagnostics: CaptureBackendDiagnostics,
+    pub selection: Option<Arc<CaptureSelectionContext>>,
+}
+
+impl CaptureBackend for SelectedCaptureBackend {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        let mut frame = self.backend.capture()?;
+        frame.selection = self.selection.clone();
+        Ok(frame)
+    }
+
+    fn vendor_stdio(&self) -> &[VendorStdioCapture] {
+        self.backend.vendor_stdio()
+    }
 }
 
 pub fn create_capture_backend(
     config: CaptureBackendConfig,
 ) -> DeviceResult<SelectedCaptureBackend> {
+    let configured_adb = config.adb_config.adb_path.clone();
+    let configured_serial = config.target.serial.clone();
     let config = prepare_capture_backend_config(config)?;
-    match config.requested {
+    let selection = CaptureSelectionContext {
+        requested: config.requested,
+        configured_adb,
+        configured_serial,
+        resolved_adb: config.adb_config.adb_path.clone(),
+        selected_serial: config.target.resolved_serial(),
+        mumu: config.resolved_mumu.clone(),
+    };
+    let mut selected = match config.requested {
         CaptureBackendChoice::Auto => create_auto_capture_backend(config),
         CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config),
         CaptureBackendChoice::Adb => {
             let used = CaptureBackendName::AdbScreencap;
             Ok(SelectedCaptureBackend {
+                selection: None,
                 backend: Box::new(
                     ScreencapBackend::new(config.adb_config, config.target)
                         .with_capture_timeout(config.capture_timeout),
@@ -338,7 +386,9 @@ pub fn create_capture_backend(
                 Box::new(backend),
             ))
         }
-    }
+    }?;
+    selected.selection = Some(Arc::new(selection));
+    Ok(selected)
 }
 
 fn prepare_capture_backend_config(
@@ -469,6 +519,12 @@ where
             };
             match resolved {
                 Some(paths) => {
+                    config.resolved_mumu = Some(CaptureMumuContext {
+                        root: paths.installation.root.clone(),
+                        adb_path: paths.adb_path.clone(),
+                        capture_dll_path: paths.capture_dll_path.clone(),
+                        source: paths.installation.source,
+                    });
                     if !explicit_capture_identity {
                         config.adb_config.adb_path = paths.adb_path.to_string_lossy().to_string();
                     }
@@ -502,6 +558,7 @@ fn selected_explicit(
     backend: Box<dyn CaptureBackend>,
 ) -> SelectedCaptureBackend {
     SelectedCaptureBackend {
+        selection: None,
         backend,
         diagnostics: CaptureBackendDiagnostics {
             requested,
@@ -571,6 +628,7 @@ where
                 attempts.push(attempt);
                 if mode == AutoCaptureMode::Priority {
                     return Ok(SelectedCaptureBackend {
+                        selection: None,
                         backend,
                         diagnostics: CaptureBackendDiagnostics {
                             requested,
@@ -591,6 +649,7 @@ where
             .min_by_key(|(_name, elapsed_ms, _backend)| *elapsed_ms)
     {
         return Ok(SelectedCaptureBackend {
+            selection: None,
             backend,
             diagnostics: CaptureBackendDiagnostics {
                 requested,
@@ -2971,6 +3030,47 @@ mod tests {
         );
         assert!(prepared.nemu.mumu_identity_resolved);
         assert_eq!(prepared.nemu.mumu_identity_unavailable, None);
+        let provenance = prepared
+            .resolved_mumu
+            .as_ref()
+            .expect("resolved installation context");
+        assert_eq!(provenance.source, crate::MumuInstallSource::RunningProcess);
+        assert_eq!(Some(&provenance.root), prepared.nemu.nemu_folder.as_ref());
+        assert_eq!(
+            Some(&provenance.capture_dll_path),
+            prepared.nemu.dll_path.as_ref()
+        );
+        assert_eq!(provenance.adb_path, fs::canonicalize(&generic_adb).unwrap());
+        assert_eq!(prepared.adb_config.adb_path, original_adb);
+        struct SuccessfulCapture;
+        impl CaptureBackend for SuccessfulCapture {
+            fn capture(&mut self) -> DeviceResult<Frame> {
+                Frame::from_pixels(
+                    1,
+                    1,
+                    vec![1, 2, 3],
+                    PixelFormat::Rgb8,
+                    CaptureBackendName::NemuIpc,
+                )
+            }
+        }
+        let context = CaptureSelectionContext {
+            requested: prepared.requested,
+            configured_adb: original_adb.clone(),
+            configured_serial: prepared.target.serial.clone(),
+            resolved_adb: prepared.adb_config.adb_path.clone(),
+            selected_serial: prepared.target.resolved_serial(),
+            mumu: prepared.resolved_mumu.clone(),
+        };
+        let mut selected = selected_explicit(
+            prepared.requested,
+            CaptureBackendName::NemuIpc,
+            Box::new(SuccessfulCapture),
+        );
+        selected.selection = Some(Arc::new(context.clone()));
+        let frame = selected.capture().expect("successful selected producer");
+        assert_eq!(frame.backend_name, CaptureBackendName::NemuIpc);
+        assert_eq!(frame.selection.as_deref(), Some(&context));
         let _ = fs::remove_dir_all(temp);
     }
 

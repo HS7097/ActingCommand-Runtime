@@ -1018,6 +1018,10 @@ impl DeviceRegistryInputDiagnosticBackend {
 }
 
 impl InputBackend for DeviceRegistryInputDiagnosticBackend {
+    fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
+        self.backend.selection_context()
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         self.run("tap", |backend| backend.tap(x, y))
     }
