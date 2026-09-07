@@ -15480,6 +15480,7 @@ struct RuntimeContainedTaskStabilityDiagnostic<'a> {
     prior_consecutive_unchanged: u32,
     new_consecutive_unchanged: u32,
     consecutive_unchanged_threshold: u32,
+    max_steps: u32,
     terminal_reason: Option<StabilityTerminalReason>,
 }
 
@@ -16192,6 +16193,7 @@ impl RuntimeContainedTask<'_> {
             prior_consecutive_unchanged,
             new_consecutive_unchanged,
             consecutive_unchanged_threshold: declaration.consecutive_unchanged_threshold,
+            max_steps: declaration.max_steps,
             terminal_reason,
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {

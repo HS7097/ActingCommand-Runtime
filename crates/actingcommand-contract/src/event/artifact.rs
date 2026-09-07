@@ -425,6 +425,39 @@ pub struct TaskDiagnosticArtifactData {
     pub artifact: ProjectedArtifactReference,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTimingScope {
+    Task,
+    PageRecognition,
+    Postcondition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTimingStage {
+    EntryRecognition,
+    Dispatch,
+    BeforeInput,
+    PostInputDelay,
+    PageRecognition,
+    Postcondition,
+    RetryDelay,
+}
+
+/// The owner's monotonic observation at the existing timing decision.
+/// A required delay means the remaining budget could not admit that wait;
+/// absence means the measured limit had elapsed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTimingFailure {
+    pub scope: TaskTimingScope,
+    pub stage: TaskTimingStage,
+    pub elapsed_ms: u64,
+    pub limit_ms: u64,
+    pub required_delay_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "execution", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskDiagnosticTerminalData {
@@ -437,6 +470,8 @@ pub enum TaskDiagnosticTerminalData {
         code: String,
         detail: Option<String>,
         executed_steps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<TaskTimingFailure>,
     },
     OperationError {
         code: String,
