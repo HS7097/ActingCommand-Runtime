@@ -21,6 +21,58 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Workflow #257 SIGNATURE-REPLAY-v1: B's explicit roots and incomplete exit contract.
+#[test]
+fn signatures_cli_requires_two_frozen_roots_and_exposes_incomplete_catalog() {
+    let input = tempfile::tempdir().unwrap();
+    let catalog = tempfile::tempdir().unwrap();
+    for root in [input.path(), catalog.path()] {
+        GlobalLedger::open(GlobalLedgerConfig::new(
+            root.join("ledger"),
+            "empty-signature-cli",
+        ))
+        .unwrap()
+        .close()
+        .unwrap();
+    }
+    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let command = vec![
+        "signatures".into(),
+        "--through".into(),
+        "1".into(),
+        "--catalog-state-root".into(),
+        catalog.path().to_str().unwrap().into(),
+        "--catalog-through".into(),
+        "1".into(),
+    ];
+    let output = invoke(binary, input.path(), &command);
+    assert!(!output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["command"], "signatures");
+    assert_eq!(result["data"]["evidence_complete"], false);
+    assert!(
+        result["data"]["page"]["gaps"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("catalog_empty"))
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("signature_replay_incomplete"));
+    for extra in [
+        vec!["--through", "2"],
+        vec!["--limit", "0"],
+        vec!["--unknown", "true"],
+        vec!["--cursor", "{}"],
+    ] {
+        let mut invalid = command.clone();
+        invalid.extend(extra.into_iter().map(str::to_owned));
+        let output = invoke(binary, input.path(), &invalid);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(fs::read_dir(input.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(catalog.path()).unwrap().count(), 1);
+}
+
 // Specification criterion 6: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
 #[test]
 fn b3_actingledger_projects_resource_samples_and_unknowns() {

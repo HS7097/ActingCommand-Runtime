@@ -151,6 +151,7 @@ const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 mod device_diagnostic;
 mod lab_operation;
 mod online_observation;
+mod signatures;
 mod task_diagnostic;
 
 #[derive(Clone, Copy)]
@@ -698,6 +699,7 @@ impl RuntimeHost {
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
+            signature_write_gate: Mutex::new(()),
             device_diagnostics: Mutex::new(device_diagnostic::DeviceDiagnosticBudget::new(
                 owner_epoch,
                 config.device_diagnostic_mode,
@@ -3065,6 +3067,8 @@ struct HostShared {
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    // Serialize explicit catalog transitions; the catalog itself is rebuilt by Ledger.
+    signature_write_gate: Mutex<()>,
     device_diagnostics: Mutex<device_diagnostic::DeviceDiagnosticBudget>,
     lifecycle_append_failed: AtomicBool,
     // Detection quota preview, ledger append, and replay-state commit are one ordered transition.
@@ -5931,6 +5935,15 @@ impl HostShared {
                 page,
             } => self.query_events(query, *profile, page),
             RuntimeOperation::SubscribeEvents { request } => self.subscribe_events(request),
+            RuntimeOperation::RegisterDiagnosticSignature { definition } => {
+                self.register_signature(validated, definition)
+            }
+            RuntimeOperation::MatchDiagnosticSignatures { request } => {
+                self.match_signatures(validated, request)
+            }
+            RuntimeOperation::RetireDiagnosticSignature { registration } => {
+                self.retire_signature(validated, registration)
+            }
             RuntimeOperation::DebugPackage { request } => self.debug_package(validated, request),
             RuntimeOperation::ExportEvidence { request } => {
                 self.export_evidence(validated, request)
@@ -15191,7 +15204,9 @@ impl HostShared {
         outcome: &PersistedEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
-        let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
+        if error.lifecycle.native_detail.is_none() {
+            let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
+        }
         self.append_lifecycle_failure(
             RuntimeLifecycleFailureStage::OperationCleanup,
             RuntimeLifecycleFailure::Host(error),
