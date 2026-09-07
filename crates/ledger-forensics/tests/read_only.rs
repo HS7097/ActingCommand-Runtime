@@ -448,6 +448,18 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         .expect("sanitize filter event");
         writer.append(draft).expect("append filter event");
     }
+    let shared_query = EventQuery {
+        origin_module: Some(OriginModule::Runtime),
+        diagnostic_code: Some(DiagnosticCode::CommandRejected),
+        correlation_id: Some(*correlation_a.transport()),
+        ..EventQuery::default()
+    };
+    let shared_events = writer
+        .query(shared_query.clone())
+        .expect("live shared query");
+    let shared_page = writer
+        .query_page(shared_query, 2, 6, 1)
+        .expect("live shared page");
     writer.close().expect("close filter source");
 
     let page = |filter: ForensicEventFilter, after, through, limit| {
@@ -470,6 +482,31 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         )
         .expect("valid event filter")
     };
+
+    let shared_filter = filter(
+        Some("runtime"),
+        Some("command.rejected"),
+        None,
+        Some(&correlation_a_text),
+    );
+    assert_eq!(
+        page(shared_filter.clone(), 0, Some(6), 10).events,
+        shared_events
+    );
+    assert_eq!(page(shared_filter, 2, Some(6), 1).events, shared_page);
+    let exact = filter(None, None, Some("error"), None);
+    let first_exact = page(exact.clone(), 0, Some(6), 1);
+    assert_eq!(first_exact.events[0].sequence(), 3);
+    assert_eq!(first_exact.next_after_sequence, Some(3));
+    let second_exact = page(exact.clone(), 3, Some(6), 1);
+    assert_eq!(second_exact.events[0].sequence(), 4);
+    assert_eq!(second_exact.next_after_sequence, Some(4));
+    let final_exact = page(exact, 4, Some(6), 1);
+    assert_eq!(final_exact.events[0].sequence(), 5);
+    assert_eq!(
+        final_exact.next_after_sequence, None,
+        "higher severity is not another exact match"
+    );
 
     assert_eq!(
         page(filter(Some("runtime"), None, None, None), 0, Some(6), 10)

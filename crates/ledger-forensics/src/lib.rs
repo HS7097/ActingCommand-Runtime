@@ -9,7 +9,7 @@ use actingcommand_artifact_store::{
 use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
     ActionId, ArtifactKind, ArtifactRedactionState, EFFECTIVE_CONFIGURATION_SCHEMA,
-    EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventType, FrameId,
+    EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventQuery, EventType, FrameId,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, ProjectedArtifactReference, RunId, TaskId,
 };
 use actingcommand_ledger::{
@@ -78,30 +78,29 @@ impl ForensicEventFilter {
         severity: Option<String>,
         correlation_id: Option<String>,
     ) -> ForensicResult<Self> {
-        if origin_module
-            .as_deref()
-            .is_some_and(|value| !valid_origin_module(value))
-            || diagnostic_code
-                .as_deref()
-                .is_some_and(|value| !valid_diagnostic_code(value))
-            || severity
-                .as_deref()
-                .is_some_and(|value| !valid_severity(value))
-            || correlation_id
-                .as_deref()
-                .is_some_and(|value| !valid_correlation_id(value))
-        {
-            return Err(ForensicError::new(
-                "invalid_event_filter",
-                "validate_event_filter",
-                "event filter contains an unknown enum or invalid token",
-            ));
-        }
-        Ok(Self {
+        let filter = Self {
             origin_module,
             diagnostic_code,
             severity,
             correlation_id,
+        };
+        filter.query()?;
+        Ok(filter)
+    }
+
+    fn query(&self) -> ForensicResult<EventQuery> {
+        serde_json::from_value(json!({
+            "origin_module": self.origin_module,
+            "diagnostic_code": self.diagnostic_code,
+            "minimum_severity": self.severity,
+            "correlation_id": self.correlation_id,
+        }))
+        .map_err(|_| {
+            ForensicError::new(
+                "invalid_event_filter",
+                "validate_event_filter",
+                "event filter contains an unknown enum or invalid token",
+            )
         })
     }
 }
@@ -1056,21 +1055,34 @@ fn events_report(
             "after sequence exceeds the frozen through sequence",
         ));
     }
+    let query = request.filter.query()?;
     let mut events = Vec::with_capacity(request.limit);
-    let mut has_more = false;
-    for event in snapshot.events() {
-        if event.sequence() <= request.after_sequence || event.sequence() > through_sequence {
-            continue;
-        }
-        if !event_matches_filter(event, &request.filter)? {
-            continue;
-        }
-        if events.len() == request.limit {
-            has_more = true;
+    let mut after = request.after_sequence;
+    while after < through_sequence && events.len() <= request.limit {
+        let page = snapshot
+            .query_page(
+                &query,
+                after,
+                through_sequence,
+                (request.limit + 1 - events.len()).min(MAX_FORENSIC_EVENTS),
+            )
+            .map_err(map_ledger_error)?;
+        let Some(last) = page.last() else {
             break;
-        }
-        events.push(event.clone());
+        };
+        after = last.sequence();
+        // The offline --severity contract is exact equality; the shared lower bound
+        // narrows candidates without admitting higher severities into this page.
+        events.extend(page.into_iter().filter(|event| {
+            request
+                .filter
+                .severity
+                .as_deref()
+                .is_none_or(|severity| event.severity().as_str() == severity)
+        }));
     }
+    let has_more = events.len() > request.limit;
+    events.truncate(request.limit);
     let next_after_sequence = has_more.then(|| {
         events
             .last()
@@ -1394,103 +1406,6 @@ fn project_stability(
         return Err(invalid("stability_source_links_mismatch"));
     }
     Ok(Some(comparison))
-}
-
-fn event_matches_filter(
-    event: &PersistedEvent,
-    filter: &ForensicEventFilter,
-) -> ForensicResult<bool> {
-    if filter
-        .origin_module
-        .as_deref()
-        .is_some_and(|value| event.origin().module().as_str() != value)
-        || filter.diagnostic_code.as_deref().is_some_and(|value| {
-            event.payload().diagnostic_code().map(|code| code.as_str()) != Some(value)
-        })
-        || filter
-            .severity
-            .as_deref()
-            .is_some_and(|value| event.severity().as_str() != value)
-    {
-        return Ok(false);
-    }
-    let Some(expected) = filter.correlation_id.as_deref() else {
-        return Ok(true);
-    };
-    let actual = event
-        .links()
-        .correlation_id()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(serialization_error)?;
-    Ok(actual.as_ref().and_then(serde_json::Value::as_str) == Some(expected))
-}
-
-fn valid_origin_module(value: &str) -> bool {
-    matches!(
-        value,
-        "actingctl"
-            | "actinglab"
-            | "runtime"
-            | "scheduler"
-            | "policy"
-            | "device-proxy"
-            | "capture"
-            | "capture-pipeline"
-            | "recognition"
-            | "resource-tooling"
-            | "artifact-store"
-            | "evidence-exporter"
-            | "global-ledger"
-            | "performance-monitor"
-            | "fact-store"
-            | "governance"
-            | "agent-dispatcher"
-            | "process-test"
-    )
-}
-
-fn valid_diagnostic_code(value: &str) -> bool {
-    matches!(
-        value,
-        "runtime.diagnostic"
-            | "runtime.owner_conflict"
-            | "runtime.protocol_invalid"
-            | "lease.busy"
-            | "lease.cooldown"
-            | "lease.expired"
-            | "lease.fencing_denied"
-            | "lease.queue_cancelled"
-            | "lease.queue_expired"
-            | "lease.queue_disconnected"
-            | "backend.open_failed"
-            | "backend.operation_failed"
-            | "capture.failed"
-            | "artifact.write_failed"
-            | "artifact.verify_failed"
-            | "artifact.export_failed"
-            | "artifact.pinned_frame_missing"
-            | "recognition.failed"
-            | "input.failed"
-            | "application.failed"
-            | "command.rejected"
-            | "policy.rejected"
-            | "catalog.transition_failed"
-            | "release.transition_failed"
-    )
-}
-
-fn valid_severity(value: &str) -> bool {
-    matches!(value, "debug" | "info" | "warning" | "error" | "fatal")
-}
-
-fn valid_correlation_id(value: &str) -> bool {
-    value.strip_prefix("correlation_").is_some_and(|hex| {
-        hex.len() == 32
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    })
 }
 
 fn open_report(snapshot: &GlobalLedgerReadOnly) -> OpenReport {

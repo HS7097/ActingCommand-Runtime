@@ -5,7 +5,7 @@ use super::contained_resources::finish_package_use;
 use super::{CliError, CliOutcome, FlagArgs, runtime_state_root};
 use actingcommand_artifact_store::verify_evidence_archive;
 use actingcommand_contract::{
-    CorrelationId, EventActor, EventQuery, EventSource, PackageDebugRequest, ProjectionProfile,
+    EventActor, EventQuery, EventSource, PackageDebugRequest, ProjectionProfile,
     RuntimeEvidenceExportRequest, RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor,
     TaskOutcome,
 };
@@ -14,6 +14,37 @@ use actingcommand_resource_tooling::{PublishedPackageReader, open_published_pack
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use std::fs;
+
+const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
+    ("--from-sequence", "from_sequence"),
+    ("--to-sequence", "to_sequence"),
+    ("--event-type", "event_type"),
+    ("--minimum-severity", "minimum_severity"),
+    ("--source", "source"),
+    ("--origin-module", "origin_module"),
+    ("--diagnostic-code", "diagnostic_code"),
+    ("--instance-id", "instance_id"),
+    ("--request-id", "request_id"),
+    ("--correlation-id", "correlation_id"),
+    ("--req", "correlation_id"),
+    ("--causation-id", "causation_id"),
+    ("--task-id", "task_id"),
+    ("--run-id", "run_id"),
+    ("--lease-id", "lease_id"),
+    ("--frame-id", "frame_id"),
+    ("--action-id", "action_id"),
+    ("--recognition-id", "recognition_id"),
+];
+
+pub(super) fn watch_options() -> Value {
+    json!({
+        "query_flags": WATCH_QUERY_FLAGS.iter().map(|(flag, _)| *flag).collect::<Vec<_>>(),
+        "cursor_flags": ["--after", "--wait-ms", "--max-events"],
+        "req_alias": "correlation_id",
+        "sequence_bounds": "inclusive; --after remains exclusive",
+        "minimum_severity": "inclusive lower bound"
+    })
+}
 
 pub(super) fn run_runtime_debug(subcommand: &str, args: &[String]) -> CliOutcome<Value> {
     match subcommand {
@@ -32,7 +63,11 @@ pub(super) fn capabilities() -> [Value; 6] {
         command_cap("lab status", ["running_runtime"], "available"),
         command_cap("lab receipt", ["running_runtime"], "available"),
         command_cap("lab debug-package", ["running_runtime"], "available"),
-        command_cap("lab watch", ["running_runtime"], "available"),
+        {
+            let mut command = command_cap("lab watch", ["running_runtime"], "available");
+            command["options"] = watch_options();
+            command
+        },
         command_cap("lab export-evidence", ["running_runtime"], "available"),
         command_cap("lab replay-evidence", ["offline"], "available"),
     ]
@@ -199,25 +234,14 @@ fn parse_task_outcome(value: Option<&str>) -> CliOutcome<TaskOutcome> {
 }
 
 pub(super) fn run_watch(args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
+    let flags = FlagArgs::parse_values(args)?;
     flags.expect_positionals("lab watch", 0)?;
+    let query = watch_query(&flags)?;
     let after_sequence = parse_u64_flag(&flags, "--after", 0)?;
     let wait_ms = parse_u64_flag(&flags, "--wait-ms", 1_000)?;
     let max_events = parse_u16_flag(&flags, "--max-events", 64)?;
-    let correlation_id = flags
-        .optional("--req")
-        .filter(|value| value != "true")
-        .map(|value| {
-            serde_json::from_value::<CorrelationId>(json!(value)).map_err(|_| {
-                CliError::usage("lab watch --req must be a Runtime correlation identifier")
-            })
-        })
-        .transpose()?;
     let request = RuntimeSubscriptionRequest::new(
-        EventQuery {
-            correlation_id,
-            ..EventQuery::default()
-        },
+        query.clone(),
         ProjectionProfile::Lab,
         SubscriptionCursor { after_sequence },
         wait_ms,
@@ -244,7 +268,7 @@ pub(super) fn run_watch(args: &[String]) -> CliOutcome<Value> {
     Ok(json!({
         "schema_version": "actingcommand.lab.watch.v1",
         "authority": "runtime_global_ledger",
-        "filter": { "correlation_id": correlation_id },
+        "filter": query,
         "progress": {
             "state": if batch.timed_out() { "idle" } else { "advanced" },
             "after_sequence": after_sequence,
@@ -254,6 +278,36 @@ pub(super) fn run_watch(args: &[String]) -> CliOutcome<Value> {
         },
         "events": batch.events(),
     }))
+}
+
+fn watch_query(flags: &FlagArgs) -> CliOutcome<EventQuery> {
+    let mut query = serde_json::Map::new();
+    for (flag, values) in &flags.flags {
+        if values.len() != 1 {
+            return Err(CliError::usage(format!(
+                "duplicate lab watch option {flag}"
+            )));
+        }
+        if matches!(flag.as_str(), "--after" | "--wait-ms" | "--max-events") {
+            continue;
+        }
+        let (_, field) = WATCH_QUERY_FLAGS
+            .iter()
+            .find(|(name, _)| *name == flag.as_str())
+            .ok_or_else(|| CliError::usage(format!("unknown lab watch option {flag}")))?;
+        let value = if matches!(*field, "from_sequence" | "to_sequence") {
+            json!(parse_u64_flag(flags, flag, 0)?)
+        } else {
+            json!(values[0])
+        };
+        if query.insert((*field).to_owned(), value).is_some() {
+            return Err(CliError::usage(
+                "--req and --correlation-id select the same correlation condition; use one",
+            ));
+        }
+    }
+    serde_json::from_value(Value::Object(query))
+        .map_err(|error| CliError::usage(format!("invalid lab watch query: {error}")))
 }
 
 fn parse_u64_flag(flags: &FlagArgs, name: &str, default: u64) -> CliOutcome<u64> {
