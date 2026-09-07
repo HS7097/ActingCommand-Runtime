@@ -9,8 +9,8 @@ use crate::{
 };
 use actingcommand_contract::page_projection::{Geometry, Privacy};
 use actingcommand_contract::{
-    ContainedLabOperationResult, EffectDisposition, EventType, LabError, LabOperationStage,
-    LabResult, TerminalEvent,
+    ContainedLabOperationResult, EffectDisposition, EventType, LabArrivalStatus, LabError,
+    LabOperationStage, LabResult, TerminalEvent,
 };
 use actingcommand_pack_containment::LoadedBundle;
 use serde_json::{Map, Value, json};
@@ -327,6 +327,15 @@ pub fn restore_authoring_draft(
         let prepared = &record.prepared;
         let mut record_source = record_provenance(input);
         let mut record_gaps = Vec::new();
+        if prepared.after.is_some()
+            && (record
+                .arrival
+                .as_ref()
+                .is_none_or(|arrival| arrival.status != LabArrivalStatus::Reached)
+                || record.failure.is_some())
+        {
+            record_gaps.push("lab_arrival_not_reached");
+        }
         let before = prepared
             .before_projection
             .as_ref()
@@ -600,6 +609,7 @@ fn record_provenance(input: &ResourceRestoreRecord) -> Value {
         "command_terminal":input.terminal,"input_action_id":record.input_action_id,"input_intent":record.input_intent,
         "input_event":record.input_event,"input_event_type":input.input_event_type,"input_returned":record.input_returned,
         "effect":record.effect,"actual_action":prepared.action,"actual_geometry":prepared.geometry,
+        "after_condition":prepared.after,"arrival":record.arrival,
         "before":observation(&prepared.before_frame,&prepared.before_projection),"after":observation(&record.after_frame,&record.after_projection),
         "failure":record.failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event})),
         "cleanup_failure":record.cleanup_failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event}))})

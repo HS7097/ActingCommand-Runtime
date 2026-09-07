@@ -7,6 +7,13 @@ It contains an absolute package path, external expected SHA-256, and optional
 source projection sequence/content hash hints. Hints are recorded; resolution
 uses only the newly captured Runtime projection.
 
+An optional typed `after` condition supplies an exact package page ID and
+`timeout_ms`. Online `do --capture` exposes it as `--after-page <full-page-id>`
+and `--after-timeout-ms <ms>` (default 5000, range 100–10000). The timeout flag
+requires a page, and both flags require online capture. Runtime verifies that
+the target belongs to the hash-verified package before lease acquisition or
+input. Omitting the condition retains the single-after-frame mode.
+
 The online CLI forms are:
 
 ```
@@ -53,6 +60,21 @@ four existing backend-open timeout allowances, the existing maximum input
 duration, and the existing I/O allowance. The scheduler retains its configured
 lease TTL.
 
+With an arrival condition, input is still performed exactly once. The same
+request/correlation/lease captures and projects up to 20 after frames, with a
+500 ms interval bounded by the remaining RuntimeClock deadline. The first
+sample can be immediate. Each capture is fenced before and after; target
+recognition also requires a still-valid token after projection. Only a unique,
+complete match of the requested page before the deadline is `reached`.
+No-match or another complete page may be sampled again; partial/conflicting
+evaluation or a native failure aborts. Deadline or sample-budget exhaustion is
+`timed_out`. The original token's transfer, expiration, cancellation or shutdown
+ends waiting. The request thread waits without instance/owner locks; it creates
+no additional input, lease or background worker. Client response allowance
+includes the explicit wait and 23 existing backend-open timeout allowances for
+the bounded capture/input/cleanup work. The existing I/O allowance and lease TTL
+remain applicable.
+
 ## Durable records
 
 The schemas are:
@@ -75,6 +97,16 @@ stage/code/native event reference. A secondary ordinary release failure is
 retained separately. Each frame states whether its token remained valid after
 capture. Frame IDs come from the existing issuer; no task/run/frame identity is
 invented for a missing stage.
+
+Prepared records include the exact optional arrival condition. Terminal records
+include its `reached`, `timed_out` or `aborted` result, actual RuntimeClock elapsed
+milliseconds and ordered, bounded frame/projection artifact references for all
+returned samples. The existing after-frame/projection fields are the last
+actual sample, including an absent projection when that stage failed. All
+intermediate observations are persisted by the same original owners. Failure
+before waiting is `aborted` with zero elapsed time and no samples. Timeout and
+abort retain the native input effect and produce a failed receipt and nonzero
+CLI result; a later release failure cannot replace the original failure.
 
 `ContainedLabOperationResult` returns the record and its verified terminal
 artifact. The outer receipt is `completed` only for the complete same-lease
@@ -100,9 +132,12 @@ existing fatal path, retaining already committed native facts without recursive
 diagnostic appends.
 
 At most one before projection, one prepared record, one after projection, and
-one terminal record are stored as DiagnosticJson. Each is at most 256 KiB,
-giving an aggregate ceiling of 1 MiB. At most two frames use the existing frame
-budget. References retain their own ArtifactVerified event returned by append;
+one terminal record are stored as DiagnosticJson in single-frame mode. Each is
+at most 256 KiB, giving an aggregate ceiling of 1 MiB. Arrival mode allows at most
+23 such objects (before, up to 20 after, prepared and terminal), totaling at most
+5888 KiB, and at most 21 frames under the existing per-frame budget. The record
+contains references to intermediate projections, not their duplicated contents.
+References retain their own ArtifactVerified event returned by append;
 no latest-ledger position is used as a substitute. Existing recognition
 no-match/conflict/partial statuses and omission counts remain actual observation
 results and do not create a page assertion for coordinate input.
@@ -115,6 +150,14 @@ hashes, projection artifacts, prepared/terminal content, input action/event and
 effect, stage order, and final command event. Complete results also require
 distinct before/after frame IDs with no intervening native lease terminal.
 Integrity failure latches the existing client fatal state.
+
+The shared verifier checks every recorded arrival sample's artifact lifecycle,
+hash, frame/projection identity and order, the bounded object set and the final
+condition/result consistency. Offline `resource restore` uses that same
+verification. A requested arrival that did not succeed with a complete chain is
+a `lab_arrival_not_reached` gap and contributes no executable operation. An
+author-supplied target cannot replace an observed page. Original operations
+without an arrival condition retain their existing verification path.
 
 Lab renders only the verified result. Its normal result and error details use
 the existing profile projector; `--verbose` includes the verified public

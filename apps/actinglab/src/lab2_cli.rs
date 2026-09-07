@@ -931,6 +931,11 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     if flags.bool("--capture") && !(global.dry_run || flags.bool("--dry-run")) {
         return operation::run_contained_lab_do(global, &flags);
     }
+    if flags.optional("--after-page").is_some() || flags.optional("--after-timeout-ms").is_some() {
+        return Err(CliError::usage(
+            "arrival conditions require online do --capture",
+        ));
+    }
     let ids = Lab2Ids::new();
     let target = target_argument(&flags, "do")?;
     let instance = lab2_instance(global, &flags);
@@ -1368,6 +1373,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--swipe <x1,y1,x2,y2,duration-ms>",
                 "--projection-sequence <sequence>",
                 "--projection-hash <sha256>",
+                "--after-page <full-page-id>",
+                "--after-timeout-ms <100..10000; default 5000>",
                 "--dry-run",
                 "--allow-destructive",
                 "--destructive",
@@ -1388,6 +1395,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "before",
                 "after",
                 "operation_record",
+                "after_condition",
+                "arrival",
                 "guard_result",
                 "observation",
                 "ledger",
