@@ -10,6 +10,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `ocr-fields.md` — operation 0.8 typed post-admission fields and task-run projection.
 - `task-diagnostic-stream.md` — task-owned raw evaluation records, verified streaming and bounded read-only export.
 - `device-diagnostic-budget.md` — owner-epoch Shadow diagnostics, source references and bounded close summaries.
+- `nemu-owned-resource-close.md` — fenced connection retirement and bounded completion of Runtime-owned Nemu resources.
 - `sqlite/schema.sql` — authoritative versioned Runtime state, migration, and release-set schema.
 - `runtime-project-interface.md` — versioned read-only project projection and compatibility matrix.
 - `ledger-performance-export.md` — read-only, raw-event-paginated stutter and clock-jump export.
