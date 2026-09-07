@@ -5879,7 +5879,8 @@ mod post_admission_ocr_tests {
                             &mut collector,
                             &task.program.operations[0],
                             Duration::ZERO,
-                            Duration::from_millis(5)
+                            Duration::from_millis(5),
+                            Instant::now() + Duration::from_secs(1),
                         )
                         .unwrap(),
                         PostconditionResolution::Reached(_)
