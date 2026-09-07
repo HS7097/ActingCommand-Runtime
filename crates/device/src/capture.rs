@@ -1994,7 +1994,11 @@ impl NemuIpcWorkerState {
         })
     }
 
-    fn disconnect(&mut self, authority: DeviceCloseAuthority) -> DeviceResult<()> {
+    fn disconnect(
+        &mut self,
+        authority: DeviceCloseAuthority,
+        resolve: impl FnOnce(&Self) -> DeviceResult<NemuDisconnect>,
+    ) -> DeviceResult<()> {
         if self.connect_id <= 0 {
             return Ok(());
         }
@@ -2012,35 +2016,24 @@ impl NemuIpcWorkerState {
                 1,
             ));
         }
-        let disconnect =
-            unsafe { self.symbol::<NemuDisconnect>(b"nemu_disconnect\0") }.map_err(|error| {
-                error.with_resource_close_cause(
-                    DeviceResourceKind::ProviderConnection,
-                    DeviceResourceClosePhase::DisconnectSymbol,
-                    "nemu_ipc",
-                    None,
-                    Some(self.instance_id),
-                    DeviceResourceQuiescence::Unconfirmed,
-                    1,
-                )
-            })?;
+        let disconnect = resolve(self).map_err(|error| {
+            error.with_resource_close_cause(
+                DeviceResourceKind::ProviderConnection,
+                DeviceResourceClosePhase::DisconnectSymbol,
+                "nemu_ipc",
+                None,
+                Some(self.instance_id),
+                DeviceResourceQuiescence::Unconfirmed,
+                1,
+            )
+        })?;
         let connect_id = self.connect_id;
         unsafe { disconnect(connect_id) };
-        let primary = DeviceError::fatal(
-            "Nemu IPC void disconnect has no independent termination acknowledgement",
-        )
-        .with_resource_close_cause(
-            DeviceResourceKind::ProviderConnection,
-            DeviceResourceClosePhase::DisconnectCall,
-            "nemu_ipc",
-            None,
-            Some(self.instance_id),
-            DeviceResourceQuiescence::Unconfirmed,
-            1,
-        );
-        Err(match self.record_vendor_stdio_snapshot() {
-            Ok(()) => primary,
-            Err(cleanup) => primary.merge_resource_cleanup(cleanup.with_resource_close_cause(
+        // The serial worker observed the call return. Retire only this owned opaque handle;
+        // owned-resource quiescence still requires stdio, library and worker completion.
+        self.connect_id = 0;
+        self.record_vendor_stdio_snapshot().map_err(|error| {
+            error.with_resource_close_cause(
                 DeviceResourceKind::VendorStdio,
                 DeviceResourceClosePhase::SnapshotRead,
                 "nemu_ipc",
@@ -2048,7 +2041,7 @@ impl NemuIpcWorkerState {
                 Some(self.instance_id),
                 DeviceResourceQuiescence::Unconfirmed,
                 1,
-            )),
+            )
         })
     }
 
@@ -2059,7 +2052,9 @@ impl NemuIpcWorkerState {
         let mut resource_count = u16::from(self.connect_id > 0)
             .saturating_add(u16::from(self.stdio_session.is_some()))
             .saturating_add(u16::from(self.library.is_some()));
-        self.disconnect(authority)?;
+        self.disconnect(authority, |state| unsafe {
+            state.symbol::<NemuDisconnect>(b"nemu_disconnect\0")
+        })?;
         let mut failure = None;
         if let Some(stdio) = self.stdio_session.as_mut() {
             match stdio.finish() {
@@ -2750,6 +2745,211 @@ mod tests {
         assert_eq!(first.resource_count(), 2);
         assert_eq!(close_calls.get(), 1);
         assert!(backend.primed.is_none());
+    }
+
+    // Workflow #257 / C1-NEMU-CLOSE-v1, Defect regression.
+    // First red: Workflow #269 issuecomment-5569993174 (W30 native ledger).
+    #[cfg(windows)]
+    #[test]
+    fn nemu_owned_close_retires_sync_handle_and_preserves_real_failures() {
+        use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        static LAST_ID: AtomicI32 = AtomicI32::new(0);
+        unsafe extern "C" fn returned_disconnect(id: i32) {
+            LAST_ID.store(id, Ordering::SeqCst);
+            CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        for mode in 0..5 {
+            let before = CALLS.load(Ordering::SeqCst);
+            let (tx, rx) = mpsc::channel();
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let handle = thread::spawn(move || {
+                let mut state = NemuIpcWorkerState {
+                    // An existing OS library reference exercises real local unload, not an SDK.
+                    library: Some(unsafe { Library::new("kernel32.dll") }.expect("OS library")),
+                    stdio_session: Some(VendorStdioSession::start().expect("owned stdio")),
+                    nemu_folder: Vec::new(),
+                    instance_id: 1,
+                    display_id: 0,
+                    connect_id: 40 + mode,
+                    raw_buffer: Vec::new(),
+                    frame_width: 0,
+                    frame_height: 0,
+                    vendor_stdio: Vec::new(),
+                };
+                ready_tx.send(()).expect("worker ready");
+                let NemuIpcCommand::Shutdown {
+                    authority,
+                    response,
+                } = rx.recv().expect("shutdown")
+                else {
+                    panic!("only shutdown is expected");
+                };
+                if mode == 4 {
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("release delayed worker");
+                }
+                if mode == 2 {
+                    state
+                        .stdio_session
+                        .as_mut()
+                        .expect("stdio")
+                        .finish()
+                        .expect("close stdio before snapshot");
+                }
+                let result = state.disconnect(authority, |_| {
+                    if mode == 1 {
+                        Err(DeviceError::fatal("missing disconnect symbol"))
+                    } else {
+                        Ok(returned_disconnect as NemuDisconnect)
+                    }
+                });
+                if matches!(mode, 1 | 3) {
+                    assert_eq!(
+                        state.connect_id,
+                        40 + mode,
+                        "no native call retired this handle"
+                    );
+                    // Release the in-test opaque ID; it never belonged to a native provider.
+                    state.connect_id = 0;
+                } else {
+                    assert_eq!(
+                        state.connect_id, 0,
+                        "a returned call must retire its handle"
+                    );
+                }
+                state
+                    .disconnect(DeviceCloseAuthority::FencedDeviceWrite, |_| {
+                        panic!("a retired handle must not resolve or call disconnect again")
+                    })
+                    .expect("retired disconnect");
+                let cleanup = state.close(DeviceCloseAuthority::FencedDeviceWrite);
+                assert!(state.stdio_session.is_none());
+                assert!(state.library.is_none());
+                let result = match result {
+                    Ok(()) => cleanup,
+                    Err(primary) => match cleanup {
+                        Ok(_) => Err(primary),
+                        Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
+                    },
+                };
+                if mode == 4 {
+                    assert!(
+                        response.send(result.clone()).is_err(),
+                        "the original waiter timed out"
+                    );
+                } else {
+                    response.send(result.clone()).expect("close response");
+                }
+                assert!(
+                    rx.try_recv().is_err(),
+                    "close-once cannot enqueue another shutdown"
+                );
+                result.map(|_| ())
+            });
+            ready_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("initialized local worker");
+            let mut backend = NemuIpcBackend {
+                worker: Some(NemuIpcWorker {
+                    tx,
+                    handle: Some(handle),
+                    timeout: if mode == 4 {
+                        Duration::from_millis(25)
+                    } else {
+                        Duration::from_secs(2)
+                    },
+                    poisoned: false,
+                    close_result: None,
+                }),
+                frame_width: 0,
+                frame_height: 0,
+                vendor_stdio: Vec::new(),
+                close_result: None,
+            };
+            let authority = if mode == 3 {
+                DeviceCloseAuthority::LocalOnly
+            } else {
+                DeviceCloseAuthority::FencedDeviceWrite
+            };
+            let first = backend.close_once(authority);
+            let second = backend.close_once(authority);
+            match (&first, &second) {
+                (Ok(first), Ok(second)) => assert_eq!(first, second),
+                (Err(first), Err(second)) => {
+                    assert_eq!(
+                        first.resource_close_causes(),
+                        second.resource_close_causes()
+                    );
+                    assert_eq!(first.resource_quiescence(), second.resource_quiescence());
+                    assert_eq!(first.to_string(), second.to_string());
+                }
+                _ => panic!("the first terminal result must be stable"),
+            }
+            if mode == 4 {
+                assert!(
+                    !backend
+                        .worker
+                        .as_ref()
+                        .unwrap()
+                        .handle
+                        .as_ref()
+                        .unwrap()
+                        .is_finished()
+                );
+                release_tx
+                    .send(())
+                    .expect("release owned test worker after timeout");
+                let worker = backend.worker.as_mut().unwrap();
+                worker.timeout = Duration::from_secs(2);
+                worker.join_bounded().expect("finish local test cleanup");
+                let late = backend.close_once(authority).expect_err("cached timeout");
+                assert_eq!(
+                    late.resource_close_causes(),
+                    first.as_ref().unwrap_err().resource_close_causes(),
+                    "late join cannot overwrite first failure"
+                );
+                assert_eq!(
+                    late.resource_quiescence(),
+                    Some(DeviceResourceQuiescence::Unconfirmed)
+                );
+            }
+            if mode == 0 {
+                let outcome = first.expect("complete local close chain");
+                assert_eq!(outcome.quiescence(), DeviceResourceQuiescence::Confirmed);
+                assert!(outcome.resource_count() >= 3);
+                assert!(backend.worker.is_none());
+            } else {
+                let error = first.expect_err("real close failure remains visible");
+                assert_eq!(
+                    error.resource_quiescence(),
+                    Some(DeviceResourceQuiescence::Unconfirmed)
+                );
+                let expected = match mode {
+                    1 => DeviceResourceClosePhase::DisconnectSymbol,
+                    2 => DeviceResourceClosePhase::SnapshotRead,
+                    3 => DeviceResourceClosePhase::DisconnectCall,
+                    4 => DeviceResourceClosePhase::WorkerReceive,
+                    _ => unreachable!(),
+                };
+                assert!(
+                    error
+                        .resource_close_causes()
+                        .iter()
+                        .any(|cause| cause.phase() == expected)
+                );
+            }
+            assert_eq!(
+                CALLS.load(Ordering::SeqCst) - before,
+                usize::from(matches!(mode, 0 | 2 | 4))
+            );
+            if matches!(mode, 0 | 2 | 4) {
+                assert_eq!(LAST_ID.load(Ordering::SeqCst), 40 + mode);
+            }
+        }
     }
 
     #[test]
