@@ -75,7 +75,7 @@ impl MonitorRegistry {
                             EffectDisposition::NotPerformed,
                             actingcommand_contract::DiagnosticDetailDraft::new(
                                 "monitor_registry",
-                                "startup_restore",
+                                "runtime.monitor.restore",
                                 "runtime",
                                 error.operation(),
                                 error.code(),
@@ -802,16 +802,24 @@ mod tests {
                 bytes
             );
         }
-        assert!(
-            ledger
-                .query(EventQuery::default())
-                .unwrap()
-                .iter()
-                .all(|event| !matches!(
-                    event.payload().runtime_state(),
-                    Some(RuntimeStateFact::MonitorImported { .. })
-                ))
-        );
+        let recorded = ledger.query(EventQuery::default()).unwrap();
+        assert!(recorded.iter().all(|event| !matches!(
+            event.payload().runtime_state(),
+            Some(RuntimeStateFact::MonitorImported { .. })
+        )));
+        assert_eq!(recorded.len(), 3);
+        for event in &recorded {
+            let actingcommand_contract::EventPayload::Runtime(
+                actingcommand_contract::RuntimePayload::Failed(failure),
+            ) = event.payload()
+            else {
+                panic!("committed monitor restore failure");
+            };
+            let detail = failure.detail().expect("original monitor cause");
+            assert_eq!(detail.category(), "monitor_registry");
+            assert_eq!(detail.stage(), "runtime.monitor.restore");
+            assert_eq!(detail.message(), "monitor_record_invalid");
+        }
         ledger.close().unwrap();
     }
 
