@@ -7889,8 +7889,11 @@ impl HostShared {
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
 
-        self.mark_resources_in_use()?;
-        let frame = match self.execution.capture_retained(&probe.instance_alias) {
+        let registration = self.mark_resources_in_use()?;
+        let frame = match self
+            .execution
+            .capture_retained_with_registration_guard(&probe.instance_alias, registration)
+        {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
@@ -9955,9 +9958,13 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        self.mark_resources_in_use()
+        let registration = self
+            .mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let frame = match self.execution.capture_retained(instance_alias) {
+        let frame = match self
+            .execution
+            .capture_retained_with_registration_guard(instance_alias, registration)
+        {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
@@ -12503,16 +12510,20 @@ impl HostShared {
                         effect: EffectDisposition::NotPerformed,
                     };
                 }
-                if let Err(error) = self.mark_resources_in_use() {
-                    return CriticalActionReport::Failed {
-                        error: ActionFailure::poison(error),
-                        effect: EffectDisposition::NotPerformed,
-                    };
-                }
-                match self
-                    .execution
-                    .input_prepared(&instance_alias, action_for_worker)
-                {
+                let registration = match self.mark_resources_in_use() {
+                    Ok(registration) => registration,
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::poison(error),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
+                match self.execution.input_prepared_with_registration_guard(
+                    &instance_alias,
+                    action_for_worker,
+                    registration,
+                ) {
                     Ok(selection) => CriticalActionReport::Succeeded {
                         value: selection,
                         effect: success_effect,
@@ -12702,13 +12713,20 @@ impl HostShared {
                         effect: EffectDisposition::NotPerformed,
                     };
                 }
-                if let Err(error) = self.mark_resources_in_use() {
-                    return CriticalActionReport::Failed {
-                        error: ActionFailure::poison(error),
-                        effect: EffectDisposition::NotPerformed,
-                    };
-                }
-                match self.execution.control_application(&instance_alias, action) {
+                let registration = match self.mark_resources_in_use() {
+                    Ok(registration) => registration,
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::poison(error),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
+                match self.execution.control_application_with_registration_guard(
+                    &instance_alias,
+                    action,
+                    registration,
+                ) {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
                         effect: DefiniteEffectDisposition::Performed,
@@ -12862,9 +12880,25 @@ impl HostShared {
             })
     }
 
-    fn mark_resources_in_use(&self) -> RuntimeHostResult<()> {
-        lock(&self.owner, "mark_owner_resources_in_use")?
-            .set_resource_disposition(OwnerResourceDisposition::InUse)
+    fn mark_resources_in_use(&self) -> RuntimeHostResult<MutexGuard<'_, OwnerGuard>> {
+        let mut owner = lock(&self.owner, "mark_owner_resources_in_use")?;
+        owner.set_resource_disposition(OwnerResourceDisposition::InUse)?;
+        Ok(owner)
+    }
+
+    fn record_owner_resource_close(&self) -> RuntimeHostResult<OwnerResourceDisposition> {
+        // The same owner lock spans InUse and session registration on every acquisition.
+        let mut owner = lock(&self.owner, "record_owner_resource_close")?;
+        let has_sessions = self.execution.has_sessions().map_err(|error| {
+            RuntimeHostError::execution("inspect_remaining_execution_sessions", &error)
+        })?;
+        let disposition = if has_sessions {
+            OwnerResourceDisposition::InUse
+        } else {
+            OwnerResourceDisposition::ConfirmedClosed
+        };
+        owner.set_resource_disposition(disposition)?;
+        Ok(disposition)
     }
 
     fn retain_unconfirmed_resources(
@@ -12907,6 +12941,7 @@ impl HostShared {
                 ))
             })?;
         if !has_session {
+            self.record_owner_resource_close()?;
             return Ok(());
         }
         lock(&self.scheduler, "begin_destructive_resource_close")?
@@ -12923,19 +12958,17 @@ impl HostShared {
             .close_instance(token.instance_id(), DeviceCloseAuthority::FencedDeviceWrite)
         {
             Ok(outcome) => {
+                let owner_disposition = self.record_owner_resource_close()?;
                 self.append_lifecycle_observed(
                     RuntimeLifecyclePhase::ResourceQuiescence {
                         instance_id: token.instance_id(),
                         resource_count: outcome.resource_count(),
                         quiescence: outcome.quiescence(),
-                        owner_disposition: OwnerResourceDisposition::ConfirmedClosed,
+                        owner_disposition,
                     },
                     links,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
-                // The live Host can acquire another session concurrently; only Host drain clears InUse.
-                lock(&self.owner, "record_owner_resource_close")?
-                    .set_resource_disposition(OwnerResourceDisposition::InUse)?;
                 lock(&self.scheduler, "finish_destructive_resource_close")?
                     .finish_destructive_step(token, connection_id)
                     .map_err(|error| {
@@ -12964,8 +12997,7 @@ impl HostShared {
                     return Err(RequestFailure::poison_without_terminal(error));
                 }
                 lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
-                lock(&self.owner, "record_owner_resource_close_failure")?
-                    .set_resource_disposition(OwnerResourceDisposition::InUse)?;
+                self.record_owner_resource_close()?;
                 lock(&self.scheduler, "finish_destructive_resource_close")?
                     .finish_destructive_step(token, connection_id)
                     .map_err(|scheduler_error| {
@@ -15974,8 +16006,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             links.clone(),
             CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
         )?;
-        self.host.mark_resources_in_use()?;
-        match self.host.execution.capture_retained(self.instance_alias) {
+        let registration = self.host.mark_resources_in_use()?;
+        match self
+            .host
+            .execution
+            .capture_retained_with_registration_guard(self.instance_alias, registration)
+        {
             Ok(frame) => {
                 self.ensure_active()?;
                 let frame_index = self.capture_evidence.captured()?;

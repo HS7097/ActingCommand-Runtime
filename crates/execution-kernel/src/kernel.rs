@@ -68,7 +68,18 @@ impl ExecutionKernel {
         instance_alias: &str,
         action: PreparedInputAction,
     ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+        self.input_prepared_with_registration_guard(instance_alias, action, ())
+    }
+
+    /// Release the Host journal lock after session registration, before backend work.
+    pub fn input_prepared_with_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        action: PreparedInputAction,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
         let session = self.session(instance_alias)?;
+        drop(registration_guard);
         let result = session.input_prepared(action);
         self.finish_session_operation(&session, result)
     }
@@ -81,7 +92,16 @@ impl ExecutionKernel {
 
     /// Host retains the session while deciding whether a real close lease is available.
     pub fn capture_retained(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
+        self.capture_retained_with_registration_guard(instance_alias, ())
+    }
+
+    pub fn capture_retained_with_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<Frame> {
         let session = self.session(instance_alias)?;
+        drop(registration_guard);
         session
             .capture_retained()
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
@@ -106,7 +126,17 @@ impl ExecutionKernel {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> ExecutionKernelResult<()> {
+        self.control_application_with_registration_guard(instance_alias, action, ())
+    }
+
+    pub fn control_application_with_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<()> {
         let session = self.session(instance_alias)?;
+        drop(registration_guard);
         let result = session.control_application(action);
         self.finish_session_operation(&session, result)
     }
