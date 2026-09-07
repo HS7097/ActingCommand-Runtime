@@ -145,10 +145,34 @@ schema and provider/backend identities are unchanged. Actual icons/layouts and r
 calibration remain resource-authoring and Final Audit work.
 
 `whitespace_v1` trims Unicode whitespace using Rust `str::trim`. An `unsigned_integer`
-then requires a nonempty, complete ASCII decimal string. Zero and leading zeros are legal;
-signs, separators, decimal points, non-ASCII digits and suffixes are not. The value must fit
+then parses the complete text using its explicit `format`. Omitting `format` selects
+`ascii_decimal`, which requires ASCII decimal digits; zero and leading zeros are legal.
+Default declarations retain their existing serialized shape. The parsed value must fit
 `u64` and the inclusive declared `min..=max`. Empty, invalid, overflow and out-of-range
-results are distinct. No display abbreviation is expanded into an exact value.
+results remain distinct. No display abbreviation is expanded into an exact value.
+
+```json
+{ "type": "unsigned_integer", "min": 0, "max": 10000000, "format": "comma_grouped" }
+```
+
+`comma_grouped` accepts canonical decimal grouping: `0`, an unpadded one-to-three-digit
+integer, or a nonzero-leading group of one to three digits followed by one or more comma
+groups of exactly three digits. Thus `1,234,567` resolves to `1234567`; `1234`, `01,234`,
+`0,123` and `1,23` are invalid in this format. It does not delete arbitrary punctuation.
+
+`current_capacity` accepts exactly two nonempty ASCII decimal strings separated by one
+`/`. Both components must fit `u64`; only the current (left) value is returned and checked
+against `min..=max`. Capacity is validated but is not an output, a range bound or a divisor.
+Zero capacity and a current value greater than capacity are legal. `17/20` resolves to
+`17`; `17/20x`, `17/ 20` and a capacity overflow fail. Leading zeros follow the ordinary
+ASCII decimal rule on both sides. Internal whitespace, signs, decimal points and
+non-ASCII digits are invalid in all three formats. Group separators are exclusive to
+`comma_grouped`; unknown formats fail declaration admission.
+
+The contract owner's pure `OcrUnsignedIntegerFormat::parse` entry is shared by execution
+and official client value verification. It retains the original raw/trimmed text,
+ROI/FrameId binding, observation budgets and existing field value/reason types; parsing
+does not invoke OCR or create another observation or ledger event.
 
 The other value type is:
 

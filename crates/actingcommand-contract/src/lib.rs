@@ -54,6 +54,126 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unsigned_integer_comma_grouping_is_explicit_and_canonical() {
+        use serde_json::json;
+
+        let source = json!({"type":"unsigned_integer","min":0,"max":u64::MAX});
+        let declared: OcrFieldType = serde_json::from_value(source.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&declared).unwrap(), source);
+        let OcrFieldType::UnsignedInteger { min, max, format } = declared else {
+            panic!("unsigned integer declaration expected");
+        };
+        assert_eq!(format, OcrUnsignedIntegerFormat::AsciiDecimal);
+        for (text, expected) in [("0", 0), ("00017", 17), ("18446744073709551615", u64::MAX)] {
+            assert_eq!(format.parse(text, min, max), Ok(expected), "{text}");
+        }
+        for text in ["1,234", "1/2", "+1", "-1", "1.0", "１", " 1"] {
+            assert_eq!(
+                format.parse(text, min, max),
+                Err(OcrFieldReason::InvalidInteger),
+                "{text}"
+            );
+        }
+        assert_eq!(format.parse("", min, max), Err(OcrFieldReason::Empty));
+        assert_eq!(
+            format.parse("18446744073709551616", min, max),
+            Err(OcrFieldReason::Overflow)
+        );
+
+        let grouped_source = json!({
+            "type":"unsigned_integer","min":0,"max":u64::MAX,"format":"comma_grouped"
+        });
+        let grouped: OcrFieldType = serde_json::from_value(grouped_source.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&grouped).unwrap(), grouped_source);
+        let OcrFieldType::UnsignedInteger { format, .. } = grouped else {
+            panic!("unsigned integer declaration expected");
+        };
+        for (text, expected) in [
+            ("0", 0),
+            ("17", 17),
+            ("999", 999),
+            ("1,000", 1000),
+            ("1,234,567", 1_234_567),
+            ("18,446,744,073,709,551,615", u64::MAX),
+        ] {
+            assert_eq!(format.parse(text, 0, u64::MAX), Ok(expected), "{text}");
+        }
+        for text in [
+            "1000", "1,00", "12,34,567", "1,,000", ",123", "123,", "0,123", "01,234", "00",
+            "1.234", "1 234", "+1,234", "１,234", "1,234x",
+        ] {
+            assert_eq!(
+                format.parse(text, 0, u64::MAX),
+                Err(OcrFieldReason::InvalidInteger),
+                "{text}"
+            );
+        }
+        assert_eq!(format.parse("", 0, u64::MAX), Err(OcrFieldReason::Empty));
+        assert_eq!(
+            format.parse("18,446,744,073,709,551,616", 0, u64::MAX),
+            Err(OcrFieldReason::Overflow)
+        );
+        assert_eq!(format.parse("1,234", 1234, 1234), Ok(1234));
+        assert_eq!(format.parse("1,234", 1235, 2000), Err(OcrFieldReason::OutOfRange));
+        assert_eq!(format.parse("1,234", 0, 1233), Err(OcrFieldReason::OutOfRange));
+        let mut unknown = grouped_source;
+        unknown["format"] = json!("automatic");
+        assert!(serde_json::from_value::<OcrFieldType>(unknown).is_err());
+    }
+
+    #[test]
+    fn unsigned_integer_current_capacity_validates_both_complete_parts() {
+        use serde_json::json;
+
+        let source = json!({
+            "type":"unsigned_integer","min":0,"max":u64::MAX,"format":"current_capacity"
+        });
+        let declared: OcrFieldType = serde_json::from_value(source.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&declared).unwrap(), source);
+        let OcrFieldType::UnsignedInteger { format, .. } = declared else {
+            panic!("unsigned integer declaration expected");
+        };
+        for (text, expected) in [
+            ("17/20", 17),
+            ("30/20", 30),
+            ("0/0", 0),
+            ("0007/0009", 7),
+            ("18446744073709551615/0", u64::MAX),
+            ("0/18446744073709551615", 0),
+        ] {
+            assert_eq!(format.parse(text, 0, u64::MAX), Ok(expected), "{text}");
+            assert_eq!(
+                OcrUnsignedIntegerFormat::AsciiDecimal.parse(text, 0, u64::MAX),
+                Err(OcrFieldReason::InvalidInteger)
+            );
+        }
+        for text in [
+            "17", "/20", "17/", "17/20/1", "17 /20", "17/ 20", "+17/20", "17/-20", "17/20x",
+            "17/2,000", "1,000/2000", "17/20.0", "17/２０",
+        ] {
+            assert_eq!(
+                format.parse(text, 0, u64::MAX),
+                Err(OcrFieldReason::InvalidInteger),
+                "{text}"
+            );
+        }
+        assert_eq!(format.parse("", 0, u64::MAX), Err(OcrFieldReason::Empty));
+        for text in ["18446744073709551616/1", "1/18446744073709551616"] {
+            assert_eq!(
+                format.parse(text, 0, u64::MAX),
+                Err(OcrFieldReason::Overflow),
+                "{text}"
+            );
+        }
+        assert_eq!(format.parse("17/999", 17, 17), Ok(17));
+        assert_eq!(format.parse("17/20", 18, 30), Err(OcrFieldReason::OutOfRange));
+        assert_eq!(format.parse("17/20", 0, 16), Err(OcrFieldReason::OutOfRange));
+        let raw = " 17/20 ";
+        assert_eq!(format.parse(raw.trim(), 0, u64::MAX), Ok(17));
+        assert_eq!(raw, " 17/20 ");
+    }
+
+    #[test]
     fn declared_suffix_extraction_preserves_exact_dictionary_input() {
         use serde_json::json;
         let rule_json = json!({"mode":"strip_declared_suffix_v1","suffix":[
@@ -130,7 +250,11 @@ mod tests {
         let roundtrip: OcrFieldsDeclaration =
             serde_json::from_value(serde_json::to_value(&declaration).unwrap()).unwrap();
         assert_eq!(roundtrip, declaration);
-        declaration.fields[0].value = OcrFieldType::UnsignedInteger { min: 0, max: 99 };
+        declaration.fields[0].value = OcrFieldType::UnsignedInteger {
+            min: 0,
+            max: 99,
+            format: OcrUnsignedIntegerFormat::default(),
+        };
         assert_eq!(
             declaration.validate(),
             Err("ocr_fields_text_extraction_type_invalid")
