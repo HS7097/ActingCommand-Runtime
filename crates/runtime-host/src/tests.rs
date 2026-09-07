@@ -12147,7 +12147,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                         "id":"open_terminal","from":"home",
                         "click":{"kind":"point","x":1,"y":0},
                         "unguarded_trusted_coordinate":true,"retryable":false,
-                        "post_delay_ms":60000}]}"#,
+                        "post_delay_ms":5000}]}"#,
                 5_000,
             ),
             _ => neutral_contained_task_package(),
@@ -12239,7 +12239,12 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
         )
         .unwrap();
         let terminal: actingcommand_contract::TaskDiagnosticRecord = serde_json::from_value(
-            document["records"].as_array().unwrap().last().unwrap().clone(),
+            document["records"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .clone(),
         )
         .expect("typed terminal readback");
         if case != "success" {
@@ -12250,7 +12255,8 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                     timing,
                     ..
                 },
-            ) = &terminal.payload else {
+            ) = &terminal.payload
+            else {
                 panic!("original task error")
             };
             let timing = timing.as_ref().expect("actual timing decision");
@@ -12268,7 +12274,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                     actingcommand_contract::TaskTimingStage::PostInputDelay
                 );
                 assert_eq!(timing.limit_ms, 5_000);
-                assert_eq!(timing.required_delay_ms, Some(60_000));
+                assert_eq!(timing.required_delay_ms, Some(5_000));
                 let step = events
                     .iter()
                     .find(|event| event.event_type == EventType::TaskStepStarted)

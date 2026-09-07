@@ -2090,7 +2090,11 @@ impl PreparedContainedTask {
                             .map_err(ContainedTaskRunError::Boundary)?;
                         if started.elapsed() >= task_timeout {
                             return Err(self
-                                .task_timeout_error(TaskTimingStage::BeforeInput, task_deadline, None)
+                                .task_timeout_error(
+                                    TaskTimingStage::BeforeInput,
+                                    task_deadline,
+                                    None,
+                                )
                                 .into());
                         }
                         runtime
@@ -2146,7 +2150,8 @@ impl PreparedContainedTask {
                             confirmation_interval,
                             task_deadline,
                         )?;
-                        let (failed_observation, hit_error_page, timing_failure) = match resolution {
+                        let (failed_observation, hit_error_page, timing_failure) = match resolution
+                        {
                             PostconditionResolution::Reached(reached) => {
                                 observation = reached;
                                 if let Some(reason) = self.complete_successful_step(
