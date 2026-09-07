@@ -197,9 +197,7 @@ impl RuntimeContainedTask<'_> {
             stream.append(b",").map_err(failure)?;
         }
         let mut writer = RecordWriter { bytes: Vec::new() };
-        // Preserve the original JSON number precision within this one bounded record.
-        let encoded = serde_json::to_value(&record).map_err(failure)?;
-        serde_json::to_writer(&mut writer, &encoded).map_err(failure)?;
+        serde_json::to_writer(&mut writer, &record).map_err(failure)?;
         stream.append(&writer.bytes).map_err(failure)?;
         stream.append(b"\n").map_err(failure)?;
         self.diagnostic_records = index;

@@ -6,7 +6,7 @@ use super::{
 };
 use super::{IdentifierIssuanceError, IdentifierIssuer};
 use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::Read;
@@ -48,7 +48,7 @@ pub enum TaskDiagnosticKind {
     Terminal,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TaskDiagnosticRecord {
     pub index: u64,
     pub frame_id: Option<FrameId>,
@@ -56,8 +56,34 @@ pub struct TaskDiagnosticRecord {
     pub physical_action_id: Option<super::ActionId>,
     /// Index of the actual page/target record that owns this row, when applicable.
     pub parent_index: Option<u64>,
-    #[serde(flatten)]
     pub payload: TaskDiagnosticPayload,
+}
+
+impl Serialize for TaskDiagnosticRecord {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            index: u64,
+            frame_id: Option<FrameId>,
+            step_action_id: Option<super::ActionId>,
+            physical_action_id: Option<super::ActionId>,
+            parent_index: Option<u64>,
+            #[serde(flatten)]
+            payload: &'a TaskDiagnosticPayload,
+        }
+        // Expand native f32 values identically in the artifact and its read-only export.
+        // This intermediate contains one bounded record, never the whole task.
+        serde_json::to_value(Wire {
+            index: self.index,
+            frame_id: self.frame_id,
+            step_action_id: self.step_action_id,
+            physical_action_id: self.physical_action_id,
+            parent_index: self.parent_index,
+            payload: &self.payload,
+        })
+        .map_err(serde::ser::Error::custom)?
+        .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
