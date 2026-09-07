@@ -153,6 +153,12 @@ fn c1b9_d02_readonly_close_authority() {
         assert!(error.cleanup_cause().is_none());
         assert_eq!(state.lock().expect("state").capture_closes, 0);
         assert_eq!(state.lock().expect("state").input_closes, 0);
+        let observation = retained
+            .capture_retained("node.a")
+            .expect_err("observer cannot consume close handoff");
+        assert_eq!(observation.code(), "execution_session_close_pending");
+        assert!(!observation.is_fatal());
+        assert_eq!(state.lock().expect("state").capture_closes, 0);
         assert!(
             retained
                 .has_owned_resources(id)

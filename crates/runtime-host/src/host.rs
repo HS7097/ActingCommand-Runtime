@@ -13844,6 +13844,9 @@ impl HostShared {
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<ExecutionKernelError> {
+        if primary.code() == "execution_session_close_pending" {
+            return Ok(primary);
+        }
         let Some(instance_id) = primary.instance_id() else {
             return Ok(primary);
         };

@@ -16261,21 +16261,26 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
     };
     use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 
-    for (contained, open_failure, close_failure) in [
-        (false, true, false),
-        (true, true, false),
-        (false, false, false),
-        (true, false, false),
-        (false, true, true),
-        (true, true, true),
-        (false, false, true),
-        (true, false, true),
+    for (contained, open_failure, close_failure, concurrent_observation) in [
+        (false, true, false, false),
+        (true, true, false, false),
+        (false, false, false, false),
+        (true, false, false, false),
+        (false, true, true, false),
+        (true, true, true, false),
+        (false, false, true, false),
+        (true, false, true, false),
+        (false, false, false, true),
+        (true, false, false, true),
     ] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
         state
             .require_fenced_capture_close
             .store(true, Ordering::Release);
+        state
+            .block_input
+            .store(concurrent_observation, Ordering::Release);
         let primary_text =
             "child_operation=screen_size; source_error=private synthetic input failure";
         let primary = DeviceError::transient(primary_text)
@@ -16323,27 +16328,75 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
             EventSource::Cli,
         ))
         .expect("official RuntimeClient");
-        let error = if contained {
-            let bytes = neutral_contained_task_package();
-            let package = root.path().join("input-failure-task.zip");
-            fs::write(&package, &bytes).expect("existing inline package");
-            let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
-            client
-                .run_contained_task(
-                    "node.a",
-                    ContainedTaskRequest::new(package.display().to_string(), expected)
-                        .expect("task request"),
-                )
-                .expect_err("contained input failure")
-        } else {
-            client
-                .observe_readonly("node.a")
-                .expect("retained capture before input");
-            let token = client.acquire_lease("node.a").expect("business lease");
-            client
-                .input(&token, InputAction::Reset)
-                .expect_err("ordinary input failure")
+        let execute_input = || {
+            if contained {
+                let bytes = neutral_contained_task_package();
+                let package = root.path().join("input-failure-task.zip");
+                fs::write(&package, &bytes).expect("existing inline package");
+                let expected =
+                    actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+                client
+                    .run_contained_task(
+                        "node.a",
+                        ContainedTaskRequest::new(package.display().to_string(), expected)
+                            .expect("task request"),
+                    )
+                    .expect_err("contained input failure")
+            } else {
+                client
+                    .observe_readonly("node.a")
+                    .expect("retained capture before input");
+                let token = client.acquire_lease("node.a").expect("business lease");
+                client
+                    .input(&token, InputAction::Reset)
+                    .expect_err("ordinary input failure")
+            }
         };
+        let error = thread::scope(|scope| {
+            let input = scope.spawn(execute_input);
+            if concurrent_observation {
+                // D1: https://github.com/HS7097/ActingCommand-Runtime/pull/340#pullrequestreview-5135506634
+                let observer = RuntimeClient::connect(RuntimeClientConfig::new(
+                    root.path(),
+                    EventActor::Cli,
+                    EventSource::Cli,
+                ))
+                .expect("independent ordinary observer");
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !state.input_started.load(Ordering::Acquire) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let input_started = state.input_started.load(Ordering::Acquire);
+                let observation = scope.spawn(move || observer.observe_readonly("node.a"));
+                let mut observer_admitted = false;
+                while input_started && Instant::now() < deadline {
+                    let events = host
+                        .query_persisted_events_for_test(EventQuery {
+                            event_type: Some(EventType::CaptureRequested),
+                            ..EventQuery::default()
+                        })
+                        .expect("actual observer admission");
+                    observer_admitted = events.len() == 2;
+                    if observer_admitted {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                state.block_input.store(false, Ordering::Release);
+                let result = observation.join().expect("observer thread");
+                assert!(
+                    input_started && observer_admitted,
+                    "observer must wait behind active input"
+                );
+                let error = result.expect_err("observer sees retained close in progress");
+                assert!(!error.is_fatal());
+                assert_eq!(
+                    error.projection().expect("visible capture refusal").code,
+                    RuntimeErrorCode::CaptureFailed
+                );
+            }
+            input.join().expect("input owner thread")
+        });
         assert_eq!(
             error.projection().expect("original input failure").code,
             if open_failure {

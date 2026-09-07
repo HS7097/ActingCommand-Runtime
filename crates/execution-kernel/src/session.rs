@@ -174,12 +174,14 @@ impl ExecutionSession {
     ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
         match self.input_prepared_retained(action) {
             Ok(selection) => Ok(selection),
-            Err(primary) => Err(
-                match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
+            Err(primary) => {
+                let error = match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
                     Ok(_) => primary,
                     Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
-                },
-            ),
+                };
+                let mut state = self.lock_state("execution_session_state_poisoned")?;
+                finish_after_result(&mut state, Err(error))
+            }
         }
     }
 
@@ -535,27 +537,56 @@ fn close_retained_after_failure(
     order: ResourceCloseOrder,
 ) -> ExecutionKernelResult<()> {
     // Keep the actual backends here until the Host chooses close admission.
-    match receiver.recv() {
-        Ok(SessionCommand::Close {
-            authority,
-            response,
-        }) => {
-            let result = close_resources(capture.take(), input.take(), authority, order);
-            if response.send(result.clone()).is_err() {
-                return Err(match result {
-                    Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
-                    Err(cleanup) => cleanup,
-                });
+    loop {
+        match receiver.recv() {
+            Ok(SessionCommand::Close {
+                authority,
+                response,
+            }) => {
+                let result = close_resources(capture.take(), input.take(), authority, order);
+                if response.send(result.clone()).is_err() {
+                    return Err(match result {
+                        Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
+                        Err(cleanup) => cleanup,
+                    });
+                }
+                return result.map(|_| ());
             }
-            result.map(|_| ())
+            Ok(SessionCommand::Capture { response }) => {
+                // A concurrent observer can already be waiting behind the failed input.
+                // Refuse that observation without consuming the input owner's close handoff.
+                if response
+                    .send(Err(ExecutionKernelError::device(
+                        "execution_session_close_pending",
+                        &DeviceError::transient(
+                            "capture is unavailable while the resource owner closes the session",
+                        ),
+                    )))
+                    .is_ok()
+                {
+                    continue;
+                }
+                return Err(close_after_failure(
+                    capture.take(),
+                    input.take(),
+                    ExecutionKernelError::merge(
+                        primary,
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                    ),
+                    order,
+                    DeviceCloseAuthority::LocalOnly,
+                ));
+            }
+            _ => {
+                return Err(close_after_failure(
+                    capture.take(),
+                    input.take(),
+                    primary,
+                    order,
+                    DeviceCloseAuthority::LocalOnly,
+                ));
+            }
         }
-        _ => Err(close_after_failure(
-            capture.take(),
-            input.take(),
-            primary,
-            order,
-            DeviceCloseAuthority::LocalOnly,
-        )),
     }
 }
 
