@@ -173,7 +173,12 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
     let ledger = actingcommand_ledger::GlobalLedger::open_read_only(
         actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
-        |_| None,
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(root.path(), reference)
+                    .expect("verify closed daemon artifact"),
+            )
+        },
     )
     .expect("closed ledger");
     assert!(ledger.corrupt_tail().is_none());
@@ -1231,7 +1236,15 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         }
         let ledger = actingcommand_ledger::GlobalLedger::open_read_only(
             actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
-            |_| None,
+            |reference| {
+                Some(
+                    actingcommand_artifact_store::verify_projected_read_only(
+                        root.path(),
+                        reference,
+                    )
+                    .expect("verify closed policy artifact"),
+                )
+            },
         )
         .expect("closed policy ledger");
         assert!(ledger.corrupt_tail().is_none());
