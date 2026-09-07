@@ -10352,7 +10352,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
                 if target["type"] == "ocr" {
                     target["region"]["width"] = 2.into();
                     target["expected"][0] =
-                        format!("{} marker", target["expected"][0].as_str().unwrap()).into();
+                        format!("{}\nmarker", target["expected"][0].as_str().unwrap()).into();
                 }
             }
             pack["targets"].as_array_mut().unwrap().push(
@@ -10491,7 +10491,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
         .collect::<Vec<_>>();
     assert_eq!(ocr.len(), 6);
     assert_eq!(ocr[0]["data"]["raw_text"], "provider aggregate home");
-    assert_eq!(ocr[0]["data"]["derived_text"], "home marker");
+    assert_eq!(ocr[0]["data"]["derived_text"], "home\nmarker");
     let blocks = records
         .iter()
         .filter(|record| record["kind"] == "ocr_block")
