@@ -52,7 +52,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 129,
+  "command_count": 130,
   "commands": [
     "help",
     "version",
