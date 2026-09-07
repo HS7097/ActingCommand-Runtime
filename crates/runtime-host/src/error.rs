@@ -24,6 +24,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
     pub(crate) recorded_event: Arc<OnceLock<EventId>>,
@@ -40,6 +41,8 @@ impl PartialEq for RuntimeHostError {
             && self.projection == other.projection
             && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
             && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
+            && self.lifecycle.incomplete_device_diagnostic_summary
+                == other.lifecycle.incomplete_device_diagnostic_summary
     }
 }
 impl Eq for RuntimeHostError {}
@@ -134,6 +137,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                incomplete_device_diagnostic_summary: None,
                 diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
                 cleanup_cause: error.cleanup_cause().cloned().map(Box::new),
                 recorded_event: Arc::clone(error.recorded_event()),
@@ -185,6 +189,10 @@ impl fmt::Debug for RuntimeHostError {
             .field("code", &self.code)
             .field("operation", &self.operation)
             .field("fatal", &self.is_fatal())
+            .field(
+                "incomplete_device_diagnostic_summary",
+                &self.lifecycle.incomplete_device_diagnostic_summary,
+            )
             .finish()
     }
 }
@@ -195,7 +203,14 @@ impl fmt::Display for RuntimeHostError {
             formatter,
             "runtime host error {} during {}",
             self.code, self.operation
-        )
+        )?;
+        if let Some((code, operation)) = self.lifecycle.incomplete_device_diagnostic_summary {
+            write!(
+                formatter,
+                "; device diagnostic summary incomplete: {code} during {operation}"
+            )?;
+        }
+        Ok(())
     }
 }
 

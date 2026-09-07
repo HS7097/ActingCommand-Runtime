@@ -1435,6 +1435,29 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         |event| event.event_type() == EventType::RuntimeLifecycleObserved
             && event.sequence() < failures[0].sequence()
     ));
+    let summaries = events.iter().filter(|event| matches!(
+        event.payload(),
+        EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(value))
+            if value.phase() == actingcommand_contract::RuntimeLifecyclePhase::DeviceDiagnosticSummary
+    )).collect::<Vec<_>>();
+    assert_eq!(
+        summaries.len(),
+        1,
+        "one epoch summary after all close facts"
+    );
+    summaries[0]
+        .payload()
+        .validate()
+        .expect("valid close budget");
+    assert!(
+        failures
+            .iter()
+            .all(|failure| failure.sequence() < summaries[0].sequence())
+    );
+    assert_eq!(
+        events.last().expect("last ledger fact").event_id(),
+        summaries[0].event_id()
+    );
 }
 
 const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
@@ -10046,7 +10069,11 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
         RuntimeErrorCode::CaptureFailed
     );
     assert!(failed.result().is_none());
-    let events = event_types_for_correlation(&mut client, correlation_id);
+    let events = projected_events(&mut client, EventQuery {
+        correlation_id: Some(correlation_id), ..EventQuery::default()
+    }).into_iter().filter(|event| !matches!(
+        &event.payload, ProjectionPayload::Full(payload) if payload.device_diagnostics().is_some()
+    )).map(|event| event.event_type).collect::<Vec<_>>();
     assert_eq!(
         &events[events.len() - 2..],
         [EventType::CaptureFailed, EventType::RecognitionFailed]
@@ -10055,8 +10082,105 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
     assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
     assert!(host.fatal_error().expect("runtime health").is_none());
+
+    // Workflow #257 C-M4-v1: existing diagnostic specification across real appends.
+    for _ in 1..17 {
+        let request = client.request(RuntimeOperation::ObserveReadonly {
+            instance_alias: "node.a".to_owned(),
+        });
+        assert_eq!(client.send(&request).state(), RuntimeReceiptState::Failed);
+    }
+    let observed = projected_events(&mut client, EventQuery::default());
+    let sources = observed
+        .iter()
+        .filter(|event| event.event_type == EventType::CaptureFailed)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sources.len(),
+        17,
+        "all required failures survive the supplemental budget"
+    );
+    let details = observed
+        .iter()
+        .filter_map(|event| {
+            let ProjectionPayload::Full(payload) = &event.payload else {
+                return None;
+            };
+            payload
+                .device_diagnostics()
+                .map(|budget| (event, payload, budget))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(details.len(), 16);
+    for (index, (event, payload, budget)) in details.iter().enumerate() {
+        assert_eq!(budget.emitted_count as usize, index + 1);
+        assert_eq!(budget.folded_count, 0);
+        let first = budget.first.as_ref().expect("first source");
+        let last = budget.last.as_ref().expect("last source");
+        assert_eq!(first.source_event_id, sources[0].event_id);
+        assert_eq!(last.source_event_id, sources[index].event_id);
+        assert_eq!(last.source_sequence, sources[index].sequence);
+        assert!(last.source_sequence < event.sequence);
+        assert_eq!(
+            last.detail.as_ref().expect("full detail").message(),
+            "injected capture failure"
+        );
+        assert_eq!(event.links, sources[index].links);
+        payload.validate().expect("valid supplemental payload");
+        let public = serde_json::to_string(&payload.public_projection()).expect("public budget");
+        assert!(!public.contains("injected capture failure"));
+        let mut invalid = serde_json::to_value(payload).expect("budget JSON");
+        invalid["payload"]["data"]["device_diagnostics"]["emitted_count"] = serde_json::json!(17);
+        // Full typed admission remains authoritative; malformed transport cannot admit an over-budget record.
+        let invalid = serde_json::from_value::<EventPayload>(invalid)
+            .expect("structurally typed over-budget payload");
+        assert!(invalid.validate().is_err());
+    }
+    let epoch = host.runtime_info().owner_epoch();
     drop(client);
     host.close().expect("close host");
+    let ledger = GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+        |_| None,
+    )
+    .expect("read closed authoritative ledger");
+    let closed = ledger.query(&EventQuery::default());
+    let summaries = closed
+        .iter()
+        .filter_map(|event| {
+            let EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(
+                value,
+            )) = event.payload()
+            else {
+                return None;
+            };
+            (value.phase()
+                == actingcommand_contract::RuntimeLifecyclePhase::DeviceDiagnosticSummary)
+                .then(|| (event, value.device_diagnostics().expect("summary budget")))
+        })
+        .collect::<Vec<_>>();
+    let [(summary, budget)] = summaries.as_slice() else {
+        panic!("one close summary");
+    };
+    assert_eq!(budget.owner_epoch, epoch);
+    assert_eq!((budget.emitted_count, budget.folded_count), (16, 1));
+    assert_eq!(
+        budget.first.as_ref().unwrap().source_event_id,
+        sources[0].event_id
+    );
+    assert_eq!(
+        budget.last.as_ref().unwrap().source_event_id,
+        sources[16].event_id
+    );
+    assert_eq!(
+        budget.last.as_ref().unwrap().source_sequence,
+        sources[16].sequence
+    );
+    assert_eq!(closed.last().unwrap().event_id(), summary.event_id());
+    summary
+        .payload()
+        .validate()
+        .expect("complete validated summary");
 }
 
 #[test]
@@ -15565,6 +15689,23 @@ fn required_failure_events_preserve_cleanup_detail() {
             let mut types = Vec::new();
             let mut resource_causes = 0;
             for event in &events {
+                if let ProjectionPayload::Full(payload) = &event.payload
+                    && let Some(budget) = payload.device_diagnostics()
+                {
+                    payload
+                        .validate()
+                        .expect("supplemental detail preserves admission");
+                    assert!(
+                        budget.emitted_count
+                            <= actingcommand_contract::DEVICE_DIAGNOSTIC_DETAIL_LIMIT
+                    );
+                    assert!(
+                        !serde_json::to_string(&payload.public_projection())
+                            .unwrap()
+                            .contains("cleanup_failed")
+                    );
+                    continue;
+                }
                 if let ProjectionPayload::Full(payload) = &event.payload
                     && let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
                         failure,
