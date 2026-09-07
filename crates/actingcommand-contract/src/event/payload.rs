@@ -29,6 +29,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 
+mod device_diagnostic;
+pub use device_diagnostic::*;
+
 pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
 pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
@@ -311,6 +314,8 @@ pub enum EffectDisposition {
 #[serde(deny_unknown_fields)]
 pub struct ObservationPayload {
     action: EventAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_diagnostics: Option<DeviceDiagnosticConfig>,
     audit: SanitizedAudit,
 }
 
@@ -1505,6 +1510,8 @@ pub struct DiagnosticOutcomePayload {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
+    DeviceDiagnosticDetail,
+    DeviceDiagnosticSummary,
     PolicyForwardEntered,
     PolicyForwardReturned {
         entered_event_id: EventId,
@@ -1528,10 +1535,15 @@ pub struct RuntimeLifecyclePayload {
     action: EventAction,
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_diagnostics: Option<Box<DeviceDiagnosticBudgetRecord>>,
     audit: SanitizedAudit,
 }
 
 impl RuntimeLifecyclePayload {
+    pub fn device_diagnostics(&self) -> Option<&DeviceDiagnosticBudgetRecord> {
+        self.device_diagnostics.as_deref()
+    }
     pub const fn owner_epoch(&self) -> OwnerEpoch {
         self.owner_epoch
     }
@@ -3579,6 +3591,10 @@ trait PayloadDetail {
     fn effect_disposition(&self) -> Option<EffectDisposition>;
     fn audit(&self) -> &SanitizedAudit;
 
+    fn device_diagnostic_config(&self) -> Option<DeviceDiagnosticConfig> {
+        None
+    }
+
     fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
         None
     }
@@ -4054,6 +4070,9 @@ impl ArtifactExportFailurePayload {
 }
 
 impl PayloadDetail for ObservationPayload {
+    fn device_diagnostic_config(&self) -> Option<DeviceDiagnosticConfig> {
+        self.device_diagnostics
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -4513,6 +4532,7 @@ impl PayloadDetail for RecoveryPayload {
 
 struct ObservationDraft {
     action: EventAction,
+    device_diagnostics: Option<DeviceDiagnosticConfig>,
     audit: AuditInput,
 }
 
@@ -5885,7 +5905,11 @@ fn validate_catalog_hash(value: &str, field: &'static str) -> Result<(), Sanitiz
 
 impl ObservationDraft {
     fn new(action: EventAction, audit: AuditInput) -> Self {
-        Self { action, audit }
+        Self {
+            action,
+            device_diagnostics: None,
+            audit,
+        }
     }
 
     fn sanitize(
@@ -5894,6 +5918,7 @@ impl ObservationDraft {
     ) -> Result<ObservationPayload, SanitizationError> {
         Ok(ObservationPayload {
             action: self.action,
+            device_diagnostics: self.device_diagnostics,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6364,6 +6389,7 @@ enum RuntimeDraftKind {
 struct RuntimeLifecycleDraft {
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
+    device_diagnostics: Option<Box<DeviceDiagnosticBudgetRecord>>,
     audit: AuditInput,
 }
 
@@ -6376,6 +6402,7 @@ impl RuntimeLifecycleDraft {
             action: EventAction::RuntimeAction,
             owner_epoch: self.owner_epoch,
             phase: self.phase,
+            device_diagnostics: self.device_diagnostics,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6384,6 +6411,41 @@ impl RuntimeLifecycleDraft {
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
 
 impl RuntimePayloadDraft {
+    pub fn start_with_device_diagnostics(
+        takeover: bool,
+        mode: DeviceDiagnosticMode,
+        audit: AuditInput,
+    ) -> Self {
+        let action = if takeover {
+            EventAction::RuntimeTakeover
+        } else {
+            EventAction::RuntimeStart
+        };
+        let mut draft = ObservationDraft::new(action, audit);
+        draft.device_diagnostics = Some(DeviceDiagnosticConfig::new(mode));
+        Self(if takeover {
+            RuntimeDraftKind::Takeover(draft)
+        } else {
+            RuntimeDraftKind::Started(draft)
+        })
+    }
+
+    pub fn device_diagnostics(
+        owner_epoch: OwnerEpoch,
+        record: DeviceDiagnosticBudgetRecord,
+        summary: bool,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            owner_epoch,
+            phase: if summary {
+                RuntimeLifecyclePhase::DeviceDiagnosticSummary
+            } else {
+                RuntimeLifecyclePhase::DeviceDiagnosticDetail
+            },
+            device_diagnostics: Some(Box::new(record)),
+            audit: AuditInput::new(),
+        }))
+    }
     pub fn failed_with_lifecycle(
         diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
@@ -6409,6 +6471,7 @@ impl RuntimePayloadDraft {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
             owner_epoch,
             phase,
+            device_diagnostics: None,
             audit,
         }))
     }
@@ -8616,6 +8679,13 @@ impl EventPayloadDraft {
 }
 
 impl EventPayload {
+    pub fn device_diagnostics(&self) -> Option<&DeviceDiagnosticBudgetRecord> {
+        match self {
+            Self::Runtime(RuntimePayload::LifecycleObserved(value)) => value.device_diagnostics(),
+            _ => None,
+        }
+    }
+
     pub fn performance_summary(&self) -> Option<&PerformanceSummaryPayload> {
         performance_summary(self)
     }
@@ -8667,6 +8737,9 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
+        if let Some(budget) = self.device_diagnostics() {
+            sensitivity = sensitivity.max(budget.declared_sensitivity);
+        }
         if let Some(lifecycle) = detail.lifecycle_failure() {
             sensitivity = sensitivity.max(lifecycle.sensitivity());
         }
@@ -8725,6 +8798,40 @@ impl EventPayload {
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(config) = detail.device_diagnostic_config() {
+            if !matches!(
+                self.event_type(),
+                EventType::RuntimeStarted | EventType::RuntimeTakeover
+            ) {
+                return Err(SanitizationError::new(
+                    "invalid_device_diagnostic_config_owner",
+                    "runtime_payload",
+                ));
+            }
+            config.validate()?;
+        }
+        if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            let diagnostic = matches!(
+                value.phase,
+                RuntimeLifecyclePhase::DeviceDiagnosticDetail
+                    | RuntimeLifecyclePhase::DeviceDiagnosticSummary
+            );
+            if diagnostic != value.device_diagnostics.is_some() {
+                return Err(SanitizationError::new(
+                    "invalid_device_diagnostic_phase",
+                    "runtime_payload",
+                ));
+            }
+            if let Some(budget) = &value.device_diagnostics {
+                if budget.owner_epoch != value.owner_epoch {
+                    return Err(SanitizationError::new(
+                        "device_diagnostic_owner_mismatch",
+                        "runtime_payload",
+                    ));
+                }
+                budget.validate(value.phase == RuntimeLifecyclePhase::DeviceDiagnosticSummary)?;
+            }
+        }
         if let Some(lifecycle) = detail.lifecycle_failure() {
             if self.event_type() != EventType::RuntimeFailed {
                 return Err(SanitizationError::new(
@@ -8920,6 +9027,10 @@ impl EventPayload {
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
+            device_diagnostic_config: detail.device_diagnostic_config(),
+            device_diagnostics: self
+                .device_diagnostics()
+                .map(|record| Box::new(record.public_summary())),
             effect_disposition: detail.effect_disposition(),
             lifecycle_failure: detail
                 .lifecycle_failure()
@@ -9331,6 +9442,10 @@ fn catalog_transition(payload: &EventPayload) -> Option<&CatalogTransitionPayloa
 pub struct PublicPayload {
     event_type: EventType,
     action: EventAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_diagnostic_config: Option<DeviceDiagnosticConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_diagnostics: Option<Box<DeviceDiagnosticBudgetRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     effect_disposition: Option<EffectDisposition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -9474,6 +9589,10 @@ pub struct PublicPayload {
 }
 
 impl PublicPayload {
+    pub fn device_diagnostics(&self) -> Option<&DeviceDiagnosticBudgetRecord> {
+        self.device_diagnostics.as_deref()
+    }
+
     pub fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
         self.lifecycle_failure.as_deref()
     }

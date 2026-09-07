@@ -146,6 +146,7 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
+mod device_diagnostic;
 mod lab_operation;
 mod online_observation;
 mod task_diagnostic;
@@ -252,6 +253,7 @@ fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
     state_root: PathBuf,
+    device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
     bind_address: SocketAddr,
     scheduler: SchedulerConfig,
     policy_cadence: PolicyCadence,
@@ -272,6 +274,7 @@ impl RuntimeHostConfig {
     pub fn new(state_root: impl Into<PathBuf>, secret_fingerprint_salt: impl AsRef<[u8]>) -> Self {
         Self {
             state_root: state_root.into(),
+            device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode::default(),
             bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             scheduler: SchedulerConfig::default(),
             policy_cadence: PolicyCadence::default(),
@@ -291,6 +294,14 @@ impl RuntimeHostConfig {
 
     pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
         self.bind_address = bind_address;
+        self
+    }
+
+    pub fn with_device_diagnostic_mode(
+        mut self,
+        mode: actingcommand_contract::DeviceDiagnosticMode,
+    ) -> Self {
+        self.device_diagnostic_mode = mode;
         self
     }
 
@@ -401,6 +412,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .debug_struct("RuntimeHostConfig")
             .field("state_root", &"<redacted>")
             .field("bind_address", &self.bind_address)
+            .field("device_diagnostic_mode", &self.device_diagnostic_mode)
             .field("scheduler", &self.scheduler)
             .field("policy_cadence", &self.policy_cadence)
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
@@ -545,33 +557,72 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        append_runtime_start_event(&ledger, &events, &config.state_root, takeover)?;
-        let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
-        let performance = match config.performance_monitor.clone() {
-            Some(performance_config) => {
-                PerformanceMonitor::enabled(performance_config, system_performance_sampler())?
-            }
-            None => PerformanceMonitor::disabled(),
-        };
-        let performance_interval = performance.sample_interval();
-        let performance_control =
-            PerformanceBalanceController::new(config.performance_control.clone())?;
-        let info = RuntimeInfo::new(
-            std::process::id(),
-            local_address.ip().to_string(),
-            local_address.port(),
-            owner_epoch,
-            started_at_unix_ms,
-        )
-        .map_err(|_| {
-            RuntimeHostError::fatal(
-                "runtime_info_invalid",
-                "start_runtime_host",
-                RuntimeErrorCode::RuntimeFatal,
+        append_runtime_start_event(
+            &ledger,
+            &events,
+            &config.state_root,
+            takeover,
+            config.device_diagnostic_mode,
+        )?;
+        let prepared = (|| {
+            let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
+            let performance = match config.performance_monitor.clone() {
+                Some(performance_config) => {
+                    PerformanceMonitor::enabled(performance_config, system_performance_sampler())?
+                }
+                None => PerformanceMonitor::disabled(),
+            };
+            let performance_interval = performance.sample_interval();
+            let performance_control =
+                PerformanceBalanceController::new(config.performance_control.clone())?;
+            let info = RuntimeInfo::new(
+                std::process::id(),
+                local_address.ip().to_string(),
+                local_address.port(),
+                owner_epoch,
+                started_at_unix_ms,
             )
-        })?;
-        let info_path = config.state_root.join(RUNTIME_INFO_FILE);
-        publish_runtime_info(&info_path, &info)?;
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "runtime_info_invalid",
+                    "start_runtime_host",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let info_path = config.state_root.join(RUNTIME_INFO_FILE);
+            publish_runtime_info(&info_path, &info)?;
+            Ok::<_, RuntimeHostError>((
+                facts,
+                performance,
+                performance_interval,
+                performance_control,
+                info,
+                info_path,
+            ))
+        })();
+        let (facts, performance, performance_interval, performance_control, info, info_path) =
+            match prepared {
+                Ok(prepared) => prepared,
+                Err(original) => {
+                    if let Err(error) = device_diagnostic::append_device_diagnostic_record(
+                        &ledger,
+                        &events,
+                        owner_epoch,
+                        actingcommand_contract::DeviceDiagnosticBudgetRecord::new(
+                            owner_epoch,
+                            config.device_diagnostic_mode,
+                        ),
+                        true,
+                        EventLinksDraft::default(),
+                    ) {
+                        return Err(device_diagnostic::summary_incomplete(
+                            Some(original),
+                            &error,
+                        ));
+                    }
+                    return Err(original);
+                }
+            };
         let fatal = FatalState::default();
         let shared = Arc::new(HostShared {
             owner_epoch,
@@ -583,6 +634,10 @@ impl RuntimeHost {
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
+            device_diagnostics: Mutex::new(device_diagnostic::DeviceDiagnosticBudget::new(
+                owner_epoch,
+                config.device_diagnostic_mode,
+            )),
             lifecycle_append_failed: AtomicBool::new(false),
             detection_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
@@ -1642,16 +1697,19 @@ impl RuntimeHost {
             );
         }
         match Arc::try_unwrap(shared) {
-            Ok(shared) => record_failure(&mut failure, shared.close()),
-            Err(shared) => shared.record_lifecycle_result(
-                RuntimeLifecycleFailureStage::RetainedReference,
-                &mut failure,
-                Err(RuntimeHostError::fatal(
-                    "runtime_reference_leaked",
-                    "close_runtime_host",
-                    RuntimeErrorCode::RuntimeFatal,
-                )),
-            ),
+            Ok(shared) => device_diagnostic::record_host_close_result(&mut failure, shared.close()),
+            Err(shared) => {
+                shared.record_lifecycle_result(
+                    RuntimeLifecycleFailureStage::RetainedReference,
+                    &mut failure,
+                    Err(RuntimeHostError::fatal(
+                        "runtime_reference_leaked",
+                        "close_runtime_host",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )),
+                );
+                shared.finish_device_diagnostics(&mut failure);
+            }
         }
         failure.map_or(Ok(()), Err)
     }
@@ -2884,6 +2942,7 @@ struct HostShared {
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    device_diagnostics: Mutex<device_diagnostic::DeviceDiagnosticBudget>,
     lifecycle_append_failed: AtomicBool,
     // Detection quota preview, ledger append, and replay-state commit are one ordered transition.
     detection_write_gate: Mutex<()>,
@@ -13752,19 +13811,30 @@ impl HostShared {
         let tokens = match lock(&self.scheduler, "list_runtime_leases") {
             Ok(scheduler) => scheduler.active_tokens(),
             Err(error) => {
-                self.append_lifecycle_failure(
+                let mut failure = None;
+                self.record_lifecycle_result(
                     RuntimeLifecycleFailureStage::HostClose,
-                    RuntimeLifecycleFailure::Host(&error),
-                    EventLinksDraft::default(),
-                    None,
-                )?;
-                return Err(error);
+                    &mut failure,
+                    Err(error),
+                );
+                self.finish_device_diagnostics(&mut failure);
+                return failure.map_or(Ok(()), Err);
             }
         };
         let mut failure = None;
         for token in tokens {
-            if self.fatal.current()?.is_some() {
-                break;
+            match self.fatal.current() {
+                Ok(Some(_)) => break,
+                Ok(None) => {}
+                Err(error) => {
+                    self.record_lifecycle_result(
+                        RuntimeLifecycleFailureStage::HostClose,
+                        &mut failure,
+                        Err(error),
+                    );
+                    self.finish_device_diagnostics(&mut failure);
+                    return failure.map_or(Ok(()), Err);
+                }
             }
             let connection_id =
                 lock(&self.scheduler, "read_lease_connection").and_then(|scheduler| {
@@ -13850,15 +13920,16 @@ impl HostShared {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.append_lifecycle_failure(
+                self.record_lifecycle_result(
                     RuntimeLifecycleFailureStage::HostClose,
-                    RuntimeLifecycleFailure::Host(&error),
-                    EventLinksDraft::default(),
-                    None,
-                )?;
-                return Err(error);
+                    &mut failure,
+                    Err(error),
+                );
+                self.finish_device_diagnostics(&mut failure);
+                return failure.map_or(Ok(()), Err);
             }
         }
+        self.finish_device_diagnostics(&mut failure);
         let HostShared { owner, ledger, .. } = self;
         if ledger.close().is_err() {
             record_failure(&mut failure, Err(ledger_error("close_global_ledger")));
@@ -14449,12 +14520,17 @@ impl HostShared {
         }
         let draft = self
             .events
-            .draft(severity, source, module, actor, links, payload)?;
+            .draft(severity, source, module, actor, links.clone(), payload)?;
         let draft = self.events.sanitize(draft)?;
         let event = self.ledger.append(draft).map_err(|_| {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             ledger_error("append_runtime_event")
         })?;
+        if let Err(error) = self.observe_device_diagnostics_under_fact_gate(&event, &links) {
+            self.lifecycle_append_failed.store(true, Ordering::Release);
+            self.fatal.mark(error.clone())?;
+            return Err(error);
+        }
         Ok(event)
     }
 
@@ -17394,17 +17470,13 @@ fn append_runtime_start_event(
     events: &RuntimeEvents,
     state_root: &Path,
     takeover: bool,
+    device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
 ) -> RuntimeHostResult<()> {
-    let action = if takeover {
-        EventAction::RuntimeTakeover
-    } else {
-        EventAction::RuntimeStart
-    };
-    let payload = if takeover {
-        RuntimePayloadDraft::takeover(action, audit_path(state_root))
-    } else {
-        RuntimePayloadDraft::started(action, audit_path(state_root))
-    };
+    let payload = RuntimePayloadDraft::start_with_device_diagnostics(
+        takeover,
+        device_diagnostic_mode,
+        audit_path(state_root),
+    );
     let draft = events.draft(
         EventSeverity::Info,
         EventSource::Runtime,
@@ -18418,16 +18490,19 @@ fn failed_start_cleanup(
         );
     }
     match Arc::try_unwrap(shared) {
-        Ok(shared) => record_failure(&mut failure, shared.close()),
-        Err(shared) => shared.record_lifecycle_result(
-            RuntimeLifecycleFailureStage::RetainedReference,
-            &mut failure,
-            Err(RuntimeHostError::fatal(
-                "runtime_reference_leaked",
-                "abort_runtime_start",
-                RuntimeErrorCode::RuntimeFatal,
-            )),
-        ),
+        Ok(shared) => device_diagnostic::record_host_close_result(&mut failure, shared.close()),
+        Err(shared) => {
+            shared.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::RetainedReference,
+                &mut failure,
+                Err(RuntimeHostError::fatal(
+                    "runtime_reference_leaked",
+                    "abort_runtime_start",
+                    RuntimeErrorCode::RuntimeFatal,
+                )),
+            );
+            shared.finish_device_diagnostics(&mut failure);
+        }
     }
     failure.map_or(Ok(()), Err)
 }

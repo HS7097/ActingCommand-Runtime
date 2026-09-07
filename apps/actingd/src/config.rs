@@ -50,6 +50,8 @@ pub(super) struct ActingdConfigFile {
     bind_port: u16,
     secret_fingerprint_salt: String,
     #[serde(default)]
+    device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
+    #[serde(default)]
     governance_capability: Option<String>,
     #[serde(default)]
     agent_dispatcher: Option<AgentDispatcherConfigFile>,
@@ -292,6 +294,7 @@ impl ActingdConfigFile {
         let policy_cadence = PolicyCadence::default();
         let mut host =
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
+                .with_device_diagnostic_mode(self.device_diagnostic_mode)
                 .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
                 .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());
