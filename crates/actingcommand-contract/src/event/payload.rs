@@ -29,6 +29,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 
+mod provider;
+pub use provider::*;
+
 mod device_diagnostic;
 pub use device_diagnostic::*;
 
@@ -7761,6 +7764,7 @@ const fn release_action(kind: ReleaseTransitionKind) -> EventAction {
 }
 
 pub enum EventPayloadDraft {
+    Provider(ProviderPayloadDraft),
     Runtime(RuntimePayloadDraft),
     Monitor(MonitorPayloadDraft),
     Performance(PerformancePayloadDraft),
@@ -7796,6 +7800,7 @@ macro_rules! payload_draft_from {
 }
 
 payload_draft_from!(CommandPayloadDraft, Command);
+payload_draft_from!(ProviderPayloadDraft, Provider);
 payload_draft_from!(RuntimePayloadDraft, Runtime);
 payload_draft_from!(MonitorPayloadDraft, Monitor);
 payload_draft_from!(PerformancePayloadDraft, Performance);
@@ -8340,6 +8345,7 @@ family_payload!(LedgerPayload, {
     deny_unknown_fields
 )]
 pub enum EventPayload {
+    Provider(ProviderPayload),
     Runtime(RuntimePayload),
     Monitor(MonitorPayload),
     Performance(PerformancePayload),
@@ -8370,6 +8376,7 @@ impl EventPayloadDraft {
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<EventPayload, SanitizationError> {
         Ok(match self {
+            Self::Provider(value) => EventPayload::Provider(value.sanitize(fingerprinter)?),
             Self::Runtime(value) => EventPayload::Runtime(match value.0 {
                 RuntimeDraftKind::Started(detail) => {
                     RuntimePayload::Started(detail.sanitize(fingerprinter)?)
@@ -8735,6 +8742,7 @@ impl EventPayload {
 
     pub fn schema(&self) -> &'static str {
         match self {
+            Self::Provider(_) => PROVIDER_PAYLOAD_SCHEMA,
             Self::Runtime(_) => RUNTIME_PAYLOAD_SCHEMA,
             Self::Monitor(_) => MONITOR_PAYLOAD_SCHEMA,
             Self::Performance(_) => PERFORMANCE_PAYLOAD_SCHEMA,
@@ -8763,6 +8771,9 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
+        if matches!(self, Self::Provider(_)) {
+            sensitivity = sensitivity.max(Sensitivity::Sensitive);
+        }
         if let Some(budget) = self.device_diagnostics() {
             sensitivity = sensitivity.max(budget.declared_sensitivity);
         }
@@ -8876,6 +8887,9 @@ impl EventPayload {
                 ));
             }
             lifecycle.validate()?;
+        }
+        if let Self::Provider(value) = self {
+            value.record.validate()?;
         }
         detail.audit().validate()?;
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
@@ -9192,6 +9206,7 @@ impl EventPayload {
                 .or_else(|| agent_session.map(|value| value.status().budget().max_attempts())),
         };
         match self {
+            Self::Provider(_) => PublicEventPayload::Provider(payload),
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
             Self::Monitor(_) => PublicEventPayload::Monitor(payload),
             Self::Performance(_) => PublicEventPayload::Performance(payload),
@@ -9219,6 +9234,7 @@ impl EventPayload {
 
     fn family_payload(&self) -> &dyn FamilyPayload {
         match self {
+            Self::Provider(value) => value,
             Self::Runtime(value) => value,
             Self::Monitor(value) => value,
             Self::Performance(value) => value,
@@ -9927,6 +9943,7 @@ impl PublicPayload {
     deny_unknown_fields
 )]
 pub enum PublicEventPayload {
+    Provider(PublicPayload),
     Runtime(PublicPayload),
     Monitor(PublicPayload),
     Performance(PublicPayload),

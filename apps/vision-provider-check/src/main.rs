@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_vision_ffi::{
-    CudaDeviceSelector, FastDeployPpocrArtifacts, FastDeployPpocrBackend, NnEngine,
-    NnInferenceRequest, OcrEngine, OcrExecutionAttestation, OcrInferenceOutput,
-    OcrInferenceRequest, OnnxExecutionProvider, OnnxRuntimeArtifacts, OnnxRuntimeBackend,
-    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrame, VisionPixelFormat,
-    VisionProviderArtifactManifest, VisionRect, validate_fastdeploy_ppocr_provider_abi,
-    validate_onnxruntime_provider_abi, validate_runtime_library_loadable,
+    CudaDeviceSelector, FastDeployPpocrArtifacts, OnnxExecutionProvider, OnnxRuntimeArtifacts,
+    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionProviderArtifactManifest,
 };
-use image::ImageFormat;
+mod ledger;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
@@ -27,19 +23,10 @@ struct CheckOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CheckMode {
     Manifest,
-    OcrSmoke {
-        frame: PathBuf,
-        region: Option<VisionRect>,
-    },
-    NnSmoke {
-        frame: PathBuf,
-        model_id: Option<String>,
-    },
     ArtifactLock {
         out: Option<PathBuf>,
         expected: Option<PathBuf>,
     },
-    AbiCheck,
     ExportAudit {
         library: PathBuf,
         expectation: ExportExpectation,
@@ -95,31 +82,6 @@ struct BackendReport {
     strict_no_fallback: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
-struct InferenceSmokeReport<T> {
-    ok: bool,
-    backend: &'static str,
-    frame: FrameReport,
-    result: T,
-}
-
-#[derive(Debug, Serialize)]
-struct OcrSmokeReport<T> {
-    ok: bool,
-    backend: &'static str,
-    frame: FrameReport,
-    result: T,
-    execution_attestation: OcrExecutionAttestation,
-}
-
-#[derive(Debug, Serialize)]
-struct FrameReport {
-    path: String,
-    width: u32,
-    height: u32,
-    pixel_format: &'static str,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ArtifactLockReport {
     ok: bool,
@@ -139,14 +101,6 @@ struct ArtifactLockEntry {
 }
 
 #[derive(Debug, Serialize)]
-struct AbiCheckReport {
-    ok: bool,
-    schema_version: String,
-    backend: &'static str,
-    backends: Vec<ProviderAbiReport>,
-}
-
-#[derive(Debug, Serialize)]
 struct ExportAuditReport {
     ok: bool,
     library_path: String,
@@ -156,13 +110,6 @@ struct ExportAuditReport {
     missing_symbols: Vec<&'static str>,
     msvc_cxx_symbol_count: usize,
     sample_exports: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ProviderAbiReport {
-    id: &'static str,
-    provider_library_path: String,
-    required_symbols: Vec<&'static str>,
 }
 
 fn main() {
@@ -176,12 +123,14 @@ fn run<I>(args: I) -> VisionFfiResult<()>
 where
     I: IntoIterator<Item = String>,
 {
+    let args = args.into_iter().collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--state-root") {
+        return ledger::run(args);
+    }
     let options = parse_args(args)?;
     let mut gate_failure = None;
     let json = match &options.mode {
         CheckMode::Manifest => serde_json::to_string_pretty(&build_report(&options)?),
-        CheckMode::OcrSmoke { .. } => serde_json::to_string_pretty(&run_ocr_smoke(&options)?),
-        CheckMode::NnSmoke { .. } => serde_json::to_string_pretty(&run_nn_smoke(&options)?),
         CheckMode::ArtifactLock { .. } => {
             let report = run_artifact_lock(&options)?;
             if !report.ok {
@@ -189,7 +138,6 @@ where
             }
             serde_json::to_string_pretty(&report)
         }
-        CheckMode::AbiCheck => serde_json::to_string_pretty(&run_abi_check(&options)?),
         CheckMode::ExportAudit { .. } => {
             let report = run_export_audit(&options)?;
             if !report.ok {
@@ -204,7 +152,10 @@ where
             format!("failed to serialize provider check report: {err}"),
         )
     })?;
-    println!("{json}");
+    println!(
+        "{}",
+        serde_json::json!({"observation": "mechanical_files", "report": serde_json::from_str::<serde_json::Value>(&json).map_err(|error| VisionFfiError::fatal("vision-provider-check", error.to_string()))?})
+    );
     if let Some(message) = gate_failure {
         return Err(VisionFfiError::fatal("vision-provider-check", message));
     }
@@ -217,124 +168,36 @@ where
 {
     let mut manifest = None;
     let mut backend = BackendSelection::All;
-    let mut require_existing = false;
-    let mut ocr_frame = None;
-    let mut ocr_region = None;
-    let mut nn_frame = None;
-    let mut nn_model_id = None;
-    let mut artifact_lock = false;
-    let mut abi_check = false;
-    let mut export_audit = None;
-    let mut export_expectation = ExportExpectation::None;
     let mut backend_set = false;
+    let mut require_existing = false;
+    let mut artifact_lock = false;
     let mut lock_out = None;
     let mut lock_expected = None;
+    let mut export_audit = None;
+    let mut export_expectation = ExportExpectation::None;
     let mut args = args.into_iter();
-
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--manifest" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--manifest requires a file path",
-                    )
-                })?;
-                manifest = Some(PathBuf::from(value));
-            }
+            "--manifest" => manifest = Some(PathBuf::from(argument_value(&mut args, &arg)?)),
             "--backend" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--backend requires all, fastdeploy_ppocr, or onnxruntime",
-                    )
-                })?;
-                backend = parse_backend(&value)?;
+                backend = parse_backend(&argument_value(&mut args, &arg)?)?;
                 backend_set = true;
             }
             "--require-existing" => require_existing = true,
-            "--ocr-frame" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--ocr-frame requires a PNG path",
-                    )
-                })?;
-                ocr_frame = Some(PathBuf::from(value));
-            }
-            "--ocr-region" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--ocr-region requires x,y,width,height",
-                    )
-                })?;
-                ocr_region = Some(parse_region(&value)?);
-            }
-            "--nn-frame" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal("vision-provider-check", "--nn-frame requires a PNG path")
-                })?;
-                nn_frame = Some(PathBuf::from(value));
-            }
-            "--nn-model-id" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--nn-model-id requires a non-empty value",
-                    )
-                })?;
-                if value.trim().is_empty() {
-                    return Err(VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--nn-model-id must be non-empty",
-                    ));
-                }
-                nn_model_id = Some(value);
-            }
-            "--artifact-lock" => artifact_lock = true,
-            "--lock-verify" => artifact_lock = true,
-            "--abi-check" => abi_check = true,
-            "--export-audit" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--export-audit requires a DLL path",
-                    )
-                })?;
-                export_audit = Some(PathBuf::from(value));
-            }
-            "--expect" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--expect requires none, fastdeploy_ppocr_provider, or onnxruntime_provider",
-                    )
-                })?;
-                export_expectation = parse_export_expectation(&value)?;
-            }
+            "--artifact-lock" | "--lock-verify" => artifact_lock = true,
             "--lock-out" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--lock-out requires a JSON output path",
-                    )
-                })?;
                 artifact_lock = true;
-                lock_out = Some(PathBuf::from(value));
+                lock_out = Some(PathBuf::from(argument_value(&mut args, &arg)?));
             }
             "--expected" => {
-                let value = args.next().ok_or_else(|| {
-                    VisionFfiError::fatal(
-                        "vision-provider-check",
-                        "--expected requires a pinned artifact lock JSON path",
-                    )
-                })?;
                 artifact_lock = true;
-                lock_expected = Some(PathBuf::from(value));
+                lock_expected = Some(PathBuf::from(argument_value(&mut args, &arg)?));
             }
-            "--help" | "-h" => {
-                return Err(VisionFfiError::fatal("vision-provider-check", usage()));
+            "--export-audit" => {
+                export_audit = Some(PathBuf::from(argument_value(&mut args, &arg)?))
+            }
+            "--expect" => {
+                export_expectation = parse_export_expectation(&argument_value(&mut args, &arg)?)?
             }
             _ => {
                 return Err(VisionFfiError::fatal(
@@ -344,39 +207,10 @@ where
             }
         }
     }
-
-    if ocr_frame.is_some() && nn_frame.is_some() {
+    if export_audit.is_some() && (artifact_lock || backend_set || require_existing) {
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
-            "--ocr-frame and --nn-frame cannot be used in the same invocation",
-        ));
-    }
-    if artifact_lock && (ocr_frame.is_some() || nn_frame.is_some()) {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--artifact-lock cannot be used with --ocr-frame or --nn-frame",
-        ));
-    }
-    if abi_check && (artifact_lock || ocr_frame.is_some() || nn_frame.is_some()) {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--abi-check cannot be used with --artifact-lock, --ocr-frame, or --nn-frame",
-        ));
-    }
-    if export_audit.is_some()
-        && (artifact_lock || abi_check || ocr_frame.is_some() || nn_frame.is_some())
-    {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--export-audit cannot be used with --artifact-lock, --abi-check, --ocr-frame, or --nn-frame",
-        ));
-    }
-    if export_audit.is_some()
-        && (backend_set || require_existing || lock_out.is_some() || lock_expected.is_some())
-    {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--export-audit cannot be used with --backend, --require-existing, --lock-out, or --expected",
+            "--export-audit cannot be used with manifest options",
         ));
     }
     if export_audit.is_none() && export_expectation != ExportExpectation::None {
@@ -385,51 +219,18 @@ where
             "--expect requires --export-audit",
         ));
     }
-    if ocr_region.is_some() && ocr_frame.is_none() {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--ocr-region requires --ocr-frame",
-        ));
-    }
-    if nn_model_id.is_some() && nn_frame.is_none() {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--nn-model-id requires --nn-frame",
-        ));
-    }
-    if ocr_frame.is_some() && backend == BackendSelection::OnnxRuntime {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--ocr-frame cannot be used with --backend onnxruntime",
-        ));
-    }
-    if nn_frame.is_some() && backend == BackendSelection::FastDeployPpocr {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--nn-frame cannot be used with --backend fastdeploy_ppocr",
-        ));
-    }
-
-    let mode = match (export_audit, abi_check, artifact_lock, ocr_frame, nn_frame) {
-        (Some(library), false, false, None, None) => CheckMode::ExportAudit {
+    let mode = if let Some(library) = export_audit {
+        CheckMode::ExportAudit {
             library,
             expectation: export_expectation,
-        },
-        (None, true, false, None, None) => CheckMode::AbiCheck,
-        (None, false, true, None, None) => CheckMode::ArtifactLock {
+        }
+    } else if artifact_lock {
+        CheckMode::ArtifactLock {
             out: lock_out,
             expected: lock_expected,
-        },
-        (None, false, false, Some(frame), None) => CheckMode::OcrSmoke {
-            frame,
-            region: ocr_region,
-        },
-        (None, false, false, None, Some(frame)) => CheckMode::NnSmoke {
-            frame,
-            model_id: nn_model_id,
-        },
-        (None, false, false, None, None) => CheckMode::Manifest,
-        _ => unreachable!("checked above"),
+        }
+    } else {
+        CheckMode::Manifest
     };
     let manifest = if matches!(mode, CheckMode::ExportAudit { .. }) {
         manifest.unwrap_or_default()
@@ -441,7 +242,6 @@ where
             )
         })?
     };
-
     Ok(CheckOptions {
         manifest,
         backend,
@@ -450,6 +250,13 @@ where
     })
 }
 
+fn argument_value(args: &mut impl Iterator<Item = String>, arg: &str) -> VisionFfiResult<String> {
+    args.next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            VisionFfiError::fatal("vision-provider-check", format!("{arg} requires a value"))
+        })
+}
 fn parse_export_expectation(value: &str) -> VisionFfiResult<ExportExpectation> {
     match value {
         "none" => Ok(ExportExpectation::None),
@@ -472,30 +279,6 @@ fn parse_backend(value: &str) -> VisionFfiResult<BackendSelection> {
             format!("unsupported backend: {value}"),
         )),
     }
-}
-
-fn parse_region(value: &str) -> VisionFfiResult<VisionRect> {
-    let parts: Vec<_> = value.split(',').map(str::trim).collect();
-    if parts.len() != 4 {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "--ocr-region must use x,y,width,height",
-        ));
-    }
-    let parse_i32 = |part: &str, label: &str| {
-        part.parse::<i32>().map_err(|err| {
-            VisionFfiError::fatal(
-                "vision-provider-check",
-                format!("failed to parse {label} in --ocr-region: {err}"),
-            )
-        })
-    };
-    Ok(VisionRect {
-        x: parse_i32(parts[0], "x")?,
-        y: parse_i32(parts[1], "y")?,
-        width: parse_i32(parts[2], "width")?,
-        height: parse_i32(parts[3], "height")?,
-    })
 }
 
 fn build_report(options: &CheckOptions) -> VisionFfiResult<CheckReport> {
@@ -530,97 +313,6 @@ fn build_report(options: &CheckOptions) -> VisionFfiResult<CheckReport> {
         backend: options.backend.as_str(),
         require_existing: options.require_existing,
         backends,
-    })
-}
-
-fn run_ocr_smoke(options: &CheckOptions) -> VisionFfiResult<OcrSmokeReport<serde_json::Value>> {
-    let CheckMode::OcrSmoke { frame, region } = &options.mode else {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "OCR smoke was called without --ocr-frame",
-        ));
-    };
-    let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
-    let artifacts = manifest.require_production_fastdeploy_ppocr()?.clone();
-    let mut backend = FastDeployPpocrBackend::from_artifacts(artifacts.clone())?;
-    let (frame_report, vision_frame) = load_png_frame(frame)?;
-    let region = match region {
-        Some(region) => *region,
-        None => VisionRect::full_frame(&vision_frame)?,
-    };
-    let output = backend.read_text_with_attestation(OcrInferenceRequest {
-        frame: vision_frame,
-        region,
-        languages: artifacts.supported_languages,
-        timeout_ms: artifacts.default_timeout_ms,
-    })?;
-    build_ocr_smoke_report(frame_report, output)
-}
-
-fn build_ocr_smoke_report(
-    frame: FrameReport,
-    output: OcrInferenceOutput,
-) -> VisionFfiResult<OcrSmokeReport<serde_json::Value>> {
-    let execution_attestation = output.execution_attestation.ok_or_else(|| {
-        VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidResponse,
-            "vision-provider-check",
-            "OCR smoke response is missing the validated execution attestation",
-        )
-    })?;
-    let result = serde_json::to_value(output.result).map_err(|err| {
-        VisionFfiError::fatal(
-            "vision-provider-check",
-            format!("failed to serialize OCR smoke result: {err}"),
-        )
-    })?;
-    Ok(OcrSmokeReport {
-        ok: true,
-        backend: "fastdeploy_ppocr",
-        frame,
-        result,
-        execution_attestation,
-    })
-}
-
-fn run_nn_smoke(
-    options: &CheckOptions,
-) -> VisionFfiResult<InferenceSmokeReport<serde_json::Value>> {
-    let CheckMode::NnSmoke { frame, model_id } = &options.mode else {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "NN smoke was called without --nn-frame",
-        ));
-    };
-    let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
-    let artifacts = manifest.require_production_onnxruntime()?.clone();
-    let mut backend = OnnxRuntimeBackend::from_artifacts(artifacts.clone())?;
-    let (frame_report, vision_frame) = load_png_frame(frame)?;
-    let result = backend.classify(NnInferenceRequest {
-        frame: vision_frame,
-        model_id: model_id
-            .clone()
-            .or_else(|| artifacts.model_ref.clone())
-            .ok_or_else(|| {
-                VisionFfiError::fatal(
-                    "vision-provider-check",
-                    "production NN artifacts are missing model_ref",
-                )
-            })?,
-        labels: artifacts.labels,
-        timeout_ms: artifacts.default_timeout_ms,
-    })?;
-    let result = serde_json::to_value(result).map_err(|err| {
-        VisionFfiError::fatal(
-            "vision-provider-check",
-            format!("failed to serialize NN smoke result: {err}"),
-        )
-    })?;
-    Ok(InferenceSmokeReport {
-        ok: true,
-        backend: "onnxruntime",
-        frame: frame_report,
-        result,
     })
 }
 
@@ -702,61 +394,6 @@ fn artifact_lock_diffs(
         diffs.push("artifact entries differ".to_string());
     }
     Ok(diffs)
-}
-
-fn run_abi_check(options: &CheckOptions) -> VisionFfiResult<AbiCheckReport> {
-    if options.mode != CheckMode::AbiCheck {
-        return Err(VisionFfiError::fatal(
-            "vision-provider-check",
-            "ABI check was called without --abi-check",
-        ));
-    }
-    let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
-    let mut backends = Vec::new();
-
-    if matches!(
-        options.backend,
-        BackendSelection::All | BackendSelection::FastDeployPpocr
-    ) {
-        let artifacts = manifest.require_fastdeploy_ppocr()?;
-        artifacts.validate_existing_files()?;
-        validate_fastdeploy_ppocr_provider_abi(&artifacts.provider_library_path)?;
-        for runtime_library in &artifacts.runtime_library_paths {
-            validate_runtime_library_loadable("fastdeploy-ppocr-runtime", runtime_library)?;
-        }
-        backends.push(ProviderAbiReport {
-            id: "fastdeploy_ppocr",
-            provider_library_path: path_string(&artifacts.provider_library_path),
-            required_symbols: vec![
-                "ac_fastdeploy_ppocr_read_text_json",
-                "ac_vision_free_buffer",
-            ],
-        });
-    }
-
-    if matches!(
-        options.backend,
-        BackendSelection::All | BackendSelection::OnnxRuntime
-    ) {
-        let artifacts = manifest.require_onnxruntime()?;
-        artifacts.validate_existing_files()?;
-        validate_onnxruntime_provider_abi(&artifacts.provider_library_path)?;
-        if let Some(runtime_library) = &artifacts.runtime_library_path {
-            validate_runtime_library_loadable("onnxruntime-runtime", runtime_library)?;
-        }
-        backends.push(ProviderAbiReport {
-            id: "onnxruntime",
-            provider_library_path: path_string(&artifacts.provider_library_path),
-            required_symbols: vec!["ac_onnxruntime_classify_json", "ac_vision_free_buffer"],
-        });
-    }
-
-    Ok(AbiCheckReport {
-        ok: true,
-        schema_version: manifest.schema_version,
-        backend: options.backend.as_str(),
-        backends,
-    })
 }
 
 fn run_export_audit(options: &CheckOptions) -> VisionFfiResult<ExportAuditReport> {
@@ -1217,34 +854,6 @@ fn hex_sha256(bytes: &[u8]) -> String {
     out
 }
 
-fn load_png_frame(path: &Path) -> VisionFfiResult<(FrameReport, VisionFrame)> {
-    let bytes = fs::read(path).map_err(|err| {
-        VisionFfiError::fatal(
-            "vision-provider-check",
-            format!("failed to read frame PNG {}: {err}", path.display()),
-        )
-    })?;
-    let image = image::load_from_memory_with_format(&bytes, ImageFormat::Png).map_err(|err| {
-        VisionFfiError::fatal(
-            "vision-provider-check",
-            format!("failed to decode frame PNG {}: {err}", path.display()),
-        )
-    })?;
-    let rgb = image.to_rgb8();
-    let width = rgb.width();
-    let height = rgb.height();
-    let frame = VisionFrame::new(width, height, VisionPixelFormat::Rgb8, rgb.into_raw())?;
-    Ok((
-        FrameReport {
-            path: path_string(path),
-            width,
-            height,
-            pixel_format: "rgb8",
-        },
-        frame,
-    ))
-}
-
 fn fastdeploy_report(artifacts: &FastDeployPpocrArtifacts) -> BackendReport {
     let mut required_paths = vec![
         path_string(&artifacts.detector_model_path),
@@ -1312,9 +921,8 @@ impl BackendSelection {
 }
 
 fn usage() -> &'static str {
-    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>] [--expected <lock.json>] | --abi-check]\n       actingcommand-vision-provider-check --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]"
+    "Usage: actingcommand-vision-provider-check --state-root <runtime-state> [--after <sequence>] [--through <sequence>] [--limit <1..1024>]\nMechanical files: --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--artifact-lock [--lock-out <json>] [--expected <lock.json>]]\nMechanical PE exports: --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]"
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1365,52 +973,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_ocr_smoke_frame_and_region() {
-        let options = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--ocr-frame".to_string(),
-            "frame.png".to_string(),
-            "--ocr-region".to_string(),
-            "1,2,30,40".to_string(),
-        ])
-        .expect("parse");
-
-        assert_eq!(
-            options.mode,
-            CheckMode::OcrSmoke {
-                frame: PathBuf::from("frame.png"),
-                region: Some(VisionRect {
-                    x: 1,
-                    y: 2,
-                    width: 30,
-                    height: 40
-                })
-            }
-        );
+    fn parses_ledger_cursor_and_bounded_limit() {
+        let options = ledger::parse(
+            [
+                "--state-root",
+                "runtime-state",
+                "--after",
+                "4",
+                "--through",
+                "9",
+                "--limit",
+                "2",
+            ]
+            .map(str::to_owned),
+        )
+        .expect("read-only options");
+        assert_eq!(options.state_root, PathBuf::from("runtime-state"));
+        assert_eq!(options.after, 4);
+        assert_eq!(options.through, Some(9));
+        assert_eq!(options.limit, 2);
     }
-
     #[test]
-    fn parses_nn_smoke_frame_and_model_id() {
-        let options = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--nn-frame".to_string(),
-            "frame.png".to_string(),
-            "--nn-model-id".to_string(),
-            "page-classifier".to_string(),
-        ])
-        .expect("parse");
-
-        assert_eq!(
-            options.mode,
-            CheckMode::NnSmoke {
-                frame: PathBuf::from("frame.png"),
-                model_id: Some("page-classifier".to_string())
-            }
-        );
+    fn rejects_invalid_ledger_cursor_and_missing_root() {
+        for arguments in [
+            vec![],
+            vec!["--state-root"],
+            vec!["--state-root", ""],
+            vec!["--state-root", "state", "--after", "10", "--through", "9"],
+            vec!["--state-root", "state", "--limit", "0"],
+            vec!["--state-root", "state", "--limit", "1025"],
+            vec!["--state-root", "state", "--through", "invalid"],
+            vec!["--state-root", "state", "--manifest", "provider.json"],
+        ] {
+            assert!(ledger::parse(arguments.into_iter().map(str::to_owned)).is_err());
+        }
     }
-
     #[test]
     fn parses_artifact_lock_with_output_path() {
         let options = parse_args([
@@ -1455,20 +1052,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_abi_check_mode() {
-        let options = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--backend".to_string(),
-            "fastdeploy_ppocr".to_string(),
-            "--abi-check".to_string(),
-        ])
-        .expect("parse");
-
-        assert_eq!(options.backend, BackendSelection::FastDeployPpocr);
-        assert_eq!(options.mode, CheckMode::AbiCheck);
+    fn rejects_execution_arguments() {
+        for arguments in [
+            vec!["--ocr-frame", "frame.png"],
+            vec!["--nn-frame", "frame.png"],
+            vec!["--ocr-region", "0,0,1,1"],
+            vec!["--nn-model-id", "neutral"],
+            vec!["--abi-check"],
+            vec!["--artifact-lock", "--ocr-frame", "frame.png"],
+            vec!["--artifact-lock", "--abi-check"],
+            vec!["--abi-check", "--ocr-frame", "frame.png"],
+            vec!["--ocr-frame", "frame.png", "--nn-frame", "frame.png"],
+            vec!["--backend", "onnxruntime", "--ocr-frame", "frame.png"],
+        ] {
+            let error = parse_args(arguments.into_iter().map(str::to_owned))
+                .expect_err("file observation cannot execute a provider");
+            assert!(error.to_string().contains("unknown argument"));
+        }
     }
-
     #[test]
     fn parses_export_audit_without_manifest() {
         let options = parse_args([
@@ -1515,85 +1116,6 @@ mod tests {
 
         assert_eq!(err.module(), "vision-provider-check");
         assert!(err.message().contains("--export-audit cannot be used"));
-    }
-
-    #[test]
-    fn rejects_artifact_lock_mixed_with_smoke() {
-        let err = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--artifact-lock".to_string(),
-            "--ocr-frame".to_string(),
-            "frame.png".to_string(),
-        ])
-        .expect_err("mixed artifact lock and smoke rejected");
-
-        assert_eq!(err.module(), "vision-provider-check");
-        assert!(err.message().contains("cannot be used"));
-    }
-
-    #[test]
-    fn rejects_abi_check_mixed_with_artifact_lock() {
-        let err = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--abi-check".to_string(),
-            "--artifact-lock".to_string(),
-        ])
-        .expect_err("mixed ABI check and artifact lock rejected");
-
-        assert_eq!(err.module(), "vision-provider-check");
-        assert!(err.message().contains("--abi-check cannot be used"));
-    }
-
-    #[test]
-    fn rejects_abi_check_mixed_with_smoke() {
-        let err = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--abi-check".to_string(),
-            "--nn-frame".to_string(),
-            "frame.png".to_string(),
-        ])
-        .expect_err("mixed ABI check and smoke rejected");
-
-        assert_eq!(err.module(), "vision-provider-check");
-        assert!(err.message().contains("--abi-check cannot be used"));
-    }
-
-    #[test]
-    fn rejects_mixed_ocr_and_nn_smoke() {
-        let err = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--ocr-frame".to_string(),
-            "ocr.png".to_string(),
-            "--nn-frame".to_string(),
-            "nn.png".to_string(),
-        ])
-        .expect_err("mixed smoke modes rejected");
-
-        assert_eq!(err.module(), "vision-provider-check");
-        assert!(
-            err.message()
-                .contains("cannot be used in the same invocation")
-        );
-    }
-
-    #[test]
-    fn rejects_wrong_backend_for_smoke_mode() {
-        let err = parse_args([
-            "--manifest".to_string(),
-            "manifest.json".to_string(),
-            "--backend".to_string(),
-            "onnxruntime".to_string(),
-            "--ocr-frame".to_string(),
-            "frame.png".to_string(),
-        ])
-        .expect_err("wrong backend rejected");
-
-        assert_eq!(err.module(), "vision-provider-check");
-        assert!(err.message().contains("--ocr-frame cannot be used"));
     }
 
     #[test]
@@ -1668,93 +1190,6 @@ mod tests {
         .expect_err("missing files rejected");
 
         assert_eq!(err.module(), "fastdeploy-ppocr");
-        assert!(err.message().contains("required artifact"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn ocr_smoke_requires_existing_artifacts_before_fake_success() {
-        let root = temp_fixture_dir("ocr-smoke-missing-files");
-        let manifest = root.join("manifest.json");
-        fs::write(&manifest, example_manifest_json()).expect("manifest");
-
-        let err = run_ocr_smoke(&CheckOptions {
-            manifest,
-            backend: BackendSelection::FastDeployPpocr,
-            require_existing: false,
-            mode: CheckMode::OcrSmoke {
-                frame: root.join("frame.png"),
-                region: None,
-            },
-        })
-        .expect_err("missing provider files rejected");
-
-        assert_eq!(err.module(), "fastdeploy-ppocr");
-        assert!(err.message().contains("required artifact"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn ocr_smoke_report_preserves_result_and_exposes_typed_attestation() {
-        let report = build_ocr_smoke_report(
-            synthetic_frame_report(),
-            synthetic_ocr_output(Some(synthetic_ocr_attestation())),
-        )
-        .expect("attested OCR smoke report");
-        let json = serde_json::to_value(report).expect("serialize OCR smoke report");
-
-        assert_eq!(json["ok"], true);
-        assert_eq!(json["backend"], "fastdeploy_ppocr");
-        assert_eq!(json["frame"]["path"], "fixture.png");
-        assert_eq!(json["frame"]["width"], 2);
-        assert_eq!(json["frame"]["height"], 1);
-        assert_eq!(json["result"]["text"], "fixture text");
-        assert_eq!(
-            json["execution_attestation"]["schema_version"],
-            "actingcommand.ocr_execution_attestation.v1"
-        );
-        assert_eq!(
-            json["execution_attestation"]["session"]["key"]["requested_backend"],
-            "cpu"
-        );
-        assert_eq!(
-            json["execution_attestation"]["resolved_execution_provider"],
-            "cpu"
-        );
-        assert_eq!(json["execution_attestation"]["complete"], true);
-    }
-
-    #[test]
-    fn ocr_smoke_report_rejects_missing_attestation_before_success() {
-        let err = build_ocr_smoke_report(synthetic_frame_report(), synthetic_ocr_output(None))
-            .expect_err("missing execution attestation rejected");
-
-        assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse);
-        assert_eq!(err.module(), "vision-provider-check");
-        assert!(
-            err.message()
-                .contains("missing the validated execution attestation")
-        );
-    }
-
-    #[test]
-    fn nn_smoke_requires_existing_artifacts_before_fake_success() {
-        let root = temp_fixture_dir("nn-smoke-missing-files");
-        let manifest = root.join("manifest.json");
-        fs::write(&manifest, example_manifest_json()).expect("manifest");
-
-        let err = run_nn_smoke(&CheckOptions {
-            manifest,
-            backend: BackendSelection::OnnxRuntime,
-            require_existing: false,
-            mode: CheckMode::NnSmoke {
-                frame: root.join("frame.png"),
-                model_id: None,
-            },
-        })
-        .expect_err("missing provider files rejected");
-
-        assert_eq!(err.module(), "onnxruntime");
         assert!(err.message().contains("required artifact"));
         let _ = fs::remove_dir_all(root);
     }
@@ -2092,70 +1527,6 @@ mod tests {
     }
 
     #[test]
-    fn abi_check_rejects_missing_artifacts_before_symbol_success() {
-        let root = temp_fixture_dir("abi-missing-files");
-        let manifest = root.join("manifest.json");
-        fs::write(&manifest, example_manifest_json()).expect("manifest");
-
-        let err = run_abi_check(&CheckOptions {
-            manifest,
-            backend: BackendSelection::FastDeployPpocr,
-            require_existing: false,
-            mode: CheckMode::AbiCheck,
-        })
-        .expect_err("missing artifacts rejected");
-
-        assert_eq!(err.module(), "fastdeploy-ppocr");
-        assert!(err.message().contains("required artifact"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn abi_check_rejects_existing_file_without_provider_abi() {
-        let root = temp_fixture_dir("abi-bad-provider");
-        let artifacts = root.join("artifacts");
-        fs::create_dir_all(&artifacts).expect("artifact dir");
-        write_artifact(&artifacts.join("provider.dll"), b"not a dynamic library");
-        write_artifact(&artifacts.join("runtime.dll"), b"runtime");
-        write_artifact(&artifacts.join("model.onnx"), b"model");
-        let manifest = root.join("manifest.json");
-        fs::write(
-            &manifest,
-            format!(
-                r#"{{
-                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
-                    "fastdeploy_ppocr": null,
-                    "onnxruntime": {{
-                        "provider_library_path": "{}",
-                        "runtime_library_path": "{}",
-                        "model_path": "{}",
-                        "labels": ["home"],
-                        "labels_path": null,
-                        "execution_provider": "cpu",
-                        "default_timeout_ms": 1000
-                    }}
-                }}"#,
-                json_path(&artifacts.join("provider.dll")),
-                json_path(&artifacts.join("runtime.dll")),
-                json_path(&artifacts.join("model.onnx")),
-            ),
-        )
-        .expect("manifest");
-
-        let err = run_abi_check(&CheckOptions {
-            manifest,
-            backend: BackendSelection::OnnxRuntime,
-            require_existing: false,
-            mode: CheckMode::AbiCheck,
-        })
-        .expect_err("invalid provider library rejected");
-
-        assert_eq!(err.module(), "onnxruntime");
-        assert!(err.message().contains("failed to load FFI library"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn pe_export_parser_reads_synthetic_exports() {
         let exports = parse_pe_exports(&synthetic_pe_with_exports(&[
             "ac_vision_free_buffer",
@@ -2250,74 +1621,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fixture root");
         root
-    }
-
-    fn synthetic_frame_report() -> FrameReport {
-        FrameReport {
-            path: "fixture.png".to_string(),
-            width: 2,
-            height: 1,
-            pixel_format: "rgb8",
-        }
-    }
-
-    fn synthetic_ocr_output(
-        execution_attestation: Option<OcrExecutionAttestation>,
-    ) -> OcrInferenceOutput {
-        OcrInferenceOutput {
-            result: actingcommand_vision_ffi::OcrInferenceResult {
-                text: "fixture text".to_string(),
-                blocks: Vec::new(),
-                confidence: Some(1.0),
-                backend: actingcommand_vision_ffi::VisionBackendKind::FastDeployPpocr,
-                warnings: Vec::new(),
-            },
-            execution_attestation,
-        }
-    }
-
-    fn synthetic_ocr_attestation() -> OcrExecutionAttestation {
-        serde_json::from_value(serde_json::json!({
-            "schema_version": "actingcommand.ocr_execution_attestation.v1",
-            "invocation_id": "ocr-invocation-0000000000000001",
-            "session": {
-                "session_id": "ocr-session-0000000000000001",
-                "generation": 1,
-                "key": {
-                    "provider_library_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "runtime_library_path": "onnxruntime.dll",
-                    "runtime_library_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    "onnxruntime_version": "1.24.4",
-                    "model_ref": "PP-OCRv6_medium",
-                    "model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                    "requested_backend": "cpu",
-                    "requested_cuda_device": null,
-                    "resolved_cuda_device": null,
-                    "provider_options_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-                }
-            },
-            "resolved_execution_provider": "cpu",
-            "provider": {
-                "implementation": "actingcommand-ppocr-onnx-json",
-                "crate_version": "0.1.0",
-                "build_git_sha": null,
-                "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            },
-            "runtime": {
-                "onnxruntime_version": "1.24.4",
-                "onnxruntime_build_info": "synthetic provider-check test",
-                "cuda_driver_version": null,
-                "cuda_runtime_version": null,
-                "cudnn_version": null
-            },
-            "registered_execution_providers": ["cpu"],
-            "cpu_ep_registered": true,
-            "cpu_fallback_disabled": false,
-            "fallback_policy": "forbidden",
-            "fallback_observed": null,
-            "complete": true
-        }))
-        .expect("typed synthetic OCR execution attestation")
     }
 
     fn write_artifact(path: &Path, bytes: &[u8]) {
