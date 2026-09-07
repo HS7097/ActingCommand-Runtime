@@ -683,7 +683,7 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
     ) -> Result<(CompletedReadonlyObservation, Result<(), RequestFailure>), RequestFailure> {
         let instance_guard = self.instance_guard(token.instance_id())?;
-        let _admission = lock(&instance_guard, "lock_lab_operation_capture")?;
+        let admission = lock(&instance_guard, "lock_lab_operation_capture")?;
         let instance = self.validated_instance(request, token, connection_id)?;
         let frame_id = self
             .events
@@ -710,6 +710,7 @@ impl HostShared {
             links,
             artifact_links,
             true,
+            &admission,
         )?;
         let fence = self
             .validated_instance(request, token, connection_id)

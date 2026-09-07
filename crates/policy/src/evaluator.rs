@@ -395,6 +395,53 @@ impl Error for PolicyEvaluationError {}
 
 pub type PolicyEvaluationResult<T> = Result<T, PolicyEvaluationError>;
 
+/// Derives pool values from the very same scoped fact projection; never persists a balance.
+pub fn project_fact_pools(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+) -> EvaluationResources {
+    let mut projected = resources.clone();
+    for pool in &catalog.catalog().pools.pools {
+        if pool.value_source.is_static() {
+            continue;
+        }
+        projected.pools.retain(|value| value.pool_id != pool.id);
+        if let Some(observation) = pool_fact(pool, facts)
+            && let FactValue::Integer(value) = observation.value
+            && let Ok(value) = u64::try_from(value)
+            && value <= pool.capacity
+        {
+            projected.pools.push(PoolValueSnapshot {
+                pool_id: pool.id.clone(),
+                value,
+                observed_at_unix_ms: observation.observed_at_unix_ms,
+            });
+        }
+    }
+    projected
+        .pools
+        .sort_by(|left, right| left.pool_id.cmp(&right.pool_id));
+    projected
+}
+
+fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a ObservedFact> {
+    let crate::PoolValueSource::LedgerFact {
+        minimum_confidence_milli,
+    } = pool.value_source
+    else {
+        return None;
+    };
+    let ObservationRef::Fact { fact_key } = &pool.observation else {
+        return None;
+    };
+    facts.facts.iter().find(|fact| {
+        fact.scope == pool.scope
+            && fact.fact_key == *fact_key
+            && fact.confidence_milli >= minimum_confidence_milli
+    })
+}
+
 /// Evaluates one pinned snapshot without reading clocks, storage, devices, or process state.
 pub fn evaluate(
     catalog: &CompiledCatalog,
@@ -420,6 +467,19 @@ pub fn evaluate(
     let pool_values: BTreeMap<&str, &PoolValueSnapshot> = resources
         .pools
         .iter()
+        .filter(|snapshot| {
+            pool_specs
+                .get(snapshot.pool_id.as_str())
+                .is_some_and(|pool| {
+                    pool.value_source.is_static()
+                        || pool_fact(pool, facts).is_some_and(|fact| {
+                            fact.observed_at_unix_ms <= time.unix_ms
+                                && fact
+                                    .expires_at_unix_ms
+                                    .is_none_or(|expiry| time.unix_ms <= expiry)
+                        })
+                })
+        })
         .map(|pool| (pool.pool_id.as_str(), pool))
         .collect();
     let host_resources: BTreeMap<&str, HostRemaining> = resources
@@ -428,7 +488,14 @@ pub fn evaluate(
         .map(|host| (host.host_id.as_str(), HostRemaining::from(host)))
         .collect();
 
-    let mut next_wake = None;
+    let pool_fresh_until = catalog_bundle
+        .pools
+        .pools
+        .iter()
+        .filter_map(|pool| pool_fact(pool, facts).and_then(|fact| fact.expires_at_unix_ms))
+        .filter(|expiry| *expiry >= time.unix_ms)
+        .min();
+    let mut next_wake = pool_fresh_until.and_then(|expiry| expiry.checked_add(1));
     let timeline_events: BTreeMap<&str, &TimelineEvent> = catalog_bundle
         .timeline
         .events
@@ -577,7 +644,7 @@ pub fn evaluate(
                             ));
                             let facts_fresh_until_unix_ms = min_wake(
                                 min_wake(trigger.fresh_until_unix_ms, stop.fresh_until_unix_ms),
-                                timeline_fresh_until,
+                                min_wake(timeline_fresh_until, pool_fresh_until),
                             );
                             let cooldown_until = state
                                 .and_then(|state| state.last_dispatched_unix_ms)
@@ -1401,10 +1468,19 @@ fn evaluate_predicate(
                     "projected pool '{pool_id}' value exceeds i64"
                 ))
             })?;
-            Ok(PredicateEvaluation::known(
+            let mut result = PredicateEvaluation::known(
                 compare_i64(projected, *comparison, *value)?,
                 next_pool_projection_change(spec, snapshot, time.unix_ms)?,
-            ))
+            );
+            result.fresh_until_unix_ms =
+                pool_fact(spec, facts).and_then(|fact| fact.expires_at_unix_ms);
+            result.next_wake_unix_ms = min_wake(
+                result.next_wake_unix_ms,
+                result
+                    .fresh_until_unix_ms
+                    .and_then(|expiry| expiry.checked_add(1)),
+            );
+            Ok(result)
         }
         PredicateSpec::Fact {
             scope,
@@ -3589,6 +3665,99 @@ mod tests {
 
         assert_eq!(result.decisions[0].eligibility, EligibilityState::False);
         assert_eq!(result.next_wake_unix_ms, Some(NOW + 360_000));
+
+        // LIVE-FACT-POOL-v1: one scoped observation supplies predicate and pool freshness.
+        let mut docs = example_documents();
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"all","predicates":[
+            {"kind":"resource_projection","pool_id":"fixture-pool-a","comparison":"greater_than_or_equal","value":11},
+            {"kind":"fact","scope":docs.1["pools"][0]["scope"].clone(),"fact_key":"resource.current","comparison":"greater_than_or_equal","value":{"type":"integer","value":11},"max_age_ms":null}
+        ]});
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        docs.1["pools"][0]["observation"] =
+            serde_json::json!({"kind":"fact","fact_key":"resource.current"});
+        docs.1["pools"][0]["value_source"] =
+            serde_json::json!({"kind":"ledger_fact","minimum_confidence_milli":900});
+        let scope: ScopeSelector =
+            serde_json::from_value(docs.1["pools"][0]["scope"].clone()).unwrap();
+        let catalog = compile_documents(docs);
+        let mut facts = base_facts();
+        facts.facts.push(ObservedFact {
+            scope,
+            fact_key: "resource.current".into(),
+            value: FactValue::Integer(11),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: Some(NOW + 100),
+            confidence_milli: 900,
+        });
+        let mut inputs = base_resources();
+        inputs.pools.clear();
+        let resources = project_fact_pools(&catalog, &facts, &inputs);
+        assert_eq!(
+            (
+                resources.pools[0].value,
+                resources.pools[0].observed_at_unix_ms
+            ),
+            (11, NOW)
+        );
+        for (now, eligible) in [
+            (NOW, true),
+            (NOW + 100, true),
+            (NOW + 101, false),
+            (NOW + 360_000, false),
+        ] {
+            let result = evaluate(
+                &catalog,
+                &facts,
+                &resources,
+                EvaluationTime {
+                    unix_ms: now,
+                    monotonic_ms: now,
+                },
+                12,
+            )
+            .unwrap();
+            assert_eq!(!result.dispatch_intents.is_empty(), eligible);
+            if eligible {
+                assert_eq!(
+                    result.dispatch_intents[0]
+                        .prerequisites
+                        .facts_fresh_until_unix_ms,
+                    Some(NOW + 100)
+                );
+            }
+        }
+        for (value, confidence) in [
+            (FactValue::Integer(11), 899),
+            (FactValue::Boolean(true), 900),
+            (FactValue::Integer(-1), 900),
+            (FactValue::Integer(i64::MAX), 900),
+        ] {
+            let record = facts.facts.last_mut().unwrap();
+            record.value = value;
+            record.confidence_milli = confidence;
+            assert!(
+                project_fact_pools(&catalog, &facts, &inputs)
+                    .pools
+                    .is_empty()
+            );
+        }
+        let record = facts.facts.last_mut().unwrap();
+        record.value = FactValue::Integer(11);
+        record.confidence_milli = 900;
+        record.scope = ScopeSelector::Instance {
+            instance_id: "other-instance".into(),
+        };
+        assert!(
+            project_fact_pools(&catalog, &facts, &inputs)
+                .pools
+                .is_empty()
+        );
+        facts.facts.pop();
+        assert!(
+            project_fact_pools(&catalog, &facts, &inputs)
+                .pools
+                .is_empty()
+        );
     }
 
     #[test]

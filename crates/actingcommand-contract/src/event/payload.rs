@@ -1658,6 +1658,10 @@ pub struct PerformanceControlPayload {
 pub struct FactPublishedPayload {
     action: EventAction,
     record: Box<FactRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    related_records: Vec<FactRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scope_instances: Vec<crate::InstanceId>,
     audit: SanitizedAudit,
 }
 
@@ -3821,6 +3825,14 @@ impl FactPublishedPayload {
     pub fn record(&self) -> &FactRecord {
         self.record.as_ref()
     }
+
+    pub fn records(&self) -> impl Iterator<Item = &FactRecord> {
+        std::iter::once(self.record()).chain(self.related_records.iter())
+    }
+
+    pub fn scope_instances(&self) -> &[crate::InstanceId] {
+        &self.scope_instances
+    }
 }
 
 impl FactInvalidatedPayload {
@@ -4753,6 +4765,8 @@ struct PerformanceControlDraft {
 
 struct FactPublishedDraft {
     record: Box<FactRecord>,
+    related_records: Vec<FactRecord>,
+    scope_instances: Vec<crate::InstanceId>,
     audit: AuditInput,
 }
 
@@ -5017,10 +5031,14 @@ impl FactPublishedDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<FactPublishedPayload, SanitizationError> {
-        self.record.validate()?;
+        crate::fact::validate_fact_observation(
+            std::iter::once(self.record.as_ref()).chain(self.related_records.iter()),
+        )?;
         Ok(FactPublishedPayload {
             action: EventAction::FactPublish,
             record: self.record,
+            related_records: self.related_records,
+            scope_instances: self.scope_instances,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -5564,7 +5582,24 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
 fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError> {
     match payload {
         FactPayload::Published(value) if value.action == EventAction::FactPublish => {
-            value.record.validate()
+            crate::fact::validate_fact_observation(value.records())?;
+            if value.scope_instances.len() > 1024
+                || value
+                    .scope_instances
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != value.scope_instances.len()
+            {
+                return Err(SanitizationError::new(
+                    "invalid_fact_scope_binding",
+                    "scope_instances",
+                ));
+            }
+            let observation = crate::FactObservation {
+                records: value.records().cloned().collect(),
+            };
+            observation.validate()
         }
         FactPayload::Invalidated(value) if value.action == EventAction::FactInvalidate => {
             validate_fact_invalidation(&value.invalidation)
@@ -7449,8 +7484,28 @@ impl FactPayloadDraft {
     pub fn published(record: FactRecord, audit: AuditInput) -> Self {
         Self(FactDraftKind::Published(FactPublishedDraft {
             record: Box::new(record),
+            related_records: Vec::new(),
+            scope_instances: Vec::new(),
             audit,
         }))
+    }
+
+    pub fn observation(
+        mut observation: crate::FactObservation,
+        scope_instances: Vec<crate::InstanceId>,
+        audit: AuditInput,
+    ) -> Result<Self, SanitizationError> {
+        observation.validate()?;
+        observation
+            .records
+            .sort_by(|left, right| left.key.cmp(&right.key));
+        let record = observation.records.remove(0);
+        Ok(Self(FactDraftKind::Published(FactPublishedDraft {
+            record: Box::new(record),
+            related_records: observation.records,
+            scope_instances,
+            audit,
+        })))
     }
 
     pub fn invalidated(invalidation: FactInvalidationEventData, audit: AuditInput) -> Self {
@@ -9367,14 +9422,18 @@ fn fact_sensitivity(payload: &FactPayload) -> Sensitivity {
     let FactPayload::Published(value) = payload else {
         return Sensitivity::Internal;
     };
-    let crate::FactContent::Artifact { artifact } = &value.record().content else {
-        return Sensitivity::Internal;
-    };
-    match artifact.redaction_state() {
-        ArtifactRedactionState::Pending => Sensitivity::Secret,
-        ArtifactRedactionState::Applied => Sensitivity::Sensitive,
-        ArtifactRedactionState::NotRequired => Sensitivity::Internal,
-    }
+    value
+        .records()
+        .fold(Sensitivity::Internal, |sensitivity, record| {
+            let crate::FactContent::Artifact { artifact } = &record.content else {
+                return sensitivity;
+            };
+            sensitivity.max(match artifact.redaction_state() {
+                ArtifactRedactionState::Pending => Sensitivity::Secret,
+                ArtifactRedactionState::Applied => Sensitivity::Sensitive,
+                ArtifactRedactionState::NotRequired => Sensitivity::Internal,
+            })
+        })
 }
 
 fn monitor_recovery(payload: &EventPayload) -> Option<MonitorRecoveryKind> {
