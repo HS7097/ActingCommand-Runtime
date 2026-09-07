@@ -438,7 +438,7 @@ fn monitor_policy(
             EventQuery::default(),
             ProjectionProfile::Concise,
             cursor,
-            POLICY_EVENT_WAIT_MS,
+            0,
             MAX_RUNTIME_SUBSCRIPTION_EVENTS,
         ) {
             Ok(request) => request,
@@ -465,6 +465,10 @@ fn monitor_policy(
             && let Err(error) = control.notify(trigger)
         {
             break Err(error);
+        }
+        if batch.events().is_empty() {
+            // Idle policy waiting belongs to the daemon, outside in-flight IPC admission.
+            thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
         }
     };
 
