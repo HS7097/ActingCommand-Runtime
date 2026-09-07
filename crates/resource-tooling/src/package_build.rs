@@ -4910,7 +4910,7 @@ mod tests {
         });
         let out = temp.path().join("ocr-task.zip");
 
-        let response = build_task(build_task_request(repo, out.clone()))
+        let response = build_task(build_task_request(repo.clone(), out.clone()))
             .expect("official package build and validation");
 
         assert_eq!(
@@ -4967,6 +4967,42 @@ mod tests {
                 "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             })
         );
+        let mut relative = Value::Null;
+        update_fixture_operation(&repo, |task| {
+            relative = json!({"mode":"template_relative","anchor_target_id":format!("page/{}",task["anchors"][0]["id"].as_str().unwrap()),"offset":{"x":-5,"y":12},"width":100,"height":20});
+            task["ocr_targets"][0]["region"] = relative.clone();
+        });
+        let relative_out = temp.path().join("relative-ocr-task.zip");
+        build_task(build_task_request(repo, relative_out.clone()))
+            .expect("relative OCR canonical package");
+        let relative_entries = read_zip_entries(&relative_out);
+        let relative_pack: Value =
+            serde_json::from_slice(relative_entries.get(pack_path).unwrap()).unwrap();
+        let target = relative_pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["id"] == ocr_id)
+            .unwrap();
+        assert_eq!(target["region"], relative);
+        let anchor = relative_pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["id"] == relative["anchor_target_id"])
+            .unwrap();
+        let asset_path = format!("resources/{}", anchor["template_path"].as_str().unwrap());
+        let asset = relative_entries
+            .get(&asset_path)
+            .expect("dependency template asset sealed");
+        let manifest = String::from_utf8(
+            relative_entries
+                .get("resources/manifest.json")
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
+        assert!(manifest.contains(&hex_sha256(asset)));
     }
 
     #[test]

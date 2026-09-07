@@ -20,7 +20,9 @@ actingcommand-execution-kernel = { workspace = true }
 actingcommand-host-metrics = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
+actingcommand-page-detector = { workspace = true }
 actingcommand-policy = { workspace = true }
+actingcommand-recognition-pack = { workspace = true }
 actingcommand-runtime-state = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 serde = { workspace = true }
@@ -28,7 +30,6 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
-actingcommand-recognition-pack = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

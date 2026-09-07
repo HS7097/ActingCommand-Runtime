@@ -19,7 +19,9 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
-use actingcommand_page_detector::{PageDetector, PageSet};
+use actingcommand_page_detector::{
+    PageBatchResult, PageDetector, PageOutcome, PageSet, require_all_page_evaluations,
+};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     OcrProviderExecutionEvidence, OcrTextEvidence, PackRegion, RecognitionEvaluator,
@@ -118,6 +120,14 @@ pub enum ContainedTaskRunError<E> {
     NonfatalOperation(E),
     Task(ContainedTaskError),
 }
+
+type OcrEvaluationObserver<'a> = dyn FnMut(
+        &str,
+        &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), ContainedTaskError>
+    + 'a;
 
 impl<E> ContainedTaskRunError<E> {
     pub fn task(code: &'static str) -> Self {
@@ -301,6 +311,8 @@ pub enum PostAdmissionOcrComparisonMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrObservation {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    regions: BTreeMap<String, actingcommand_contract::OcrRegionEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     page_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -543,6 +555,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         }
     }
 
+    #[cfg(test)]
     fn observe(
         &mut self,
         game: &str,
@@ -550,8 +563,28 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         page_label: &str,
         scene: &Scene,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        self.observe_in_context(game, &evaluator.scene_context(scene), page_label)
+    }
+
+    #[cfg(test)]
+    fn observe_in_context(
+        &mut self,
+        game: &str,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        page_label: &str,
+    ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        self.observe_in_context_recorded(game, context, page_label, &mut |_, _| Ok(()))
+    }
+
+    fn observe_in_context_recorded(
+        &mut self,
+        game: &str,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        page_label: &str,
+        observer: &mut OcrEvaluationObserver<'_>,
+    ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         if self.fields.is_some() {
-            return self.observe_fields(game, evaluator, page_label, scene);
+            return self.observe_fields(game, context, page_label, observer);
         }
         let Some(prepared) = self.prepared else {
             return Ok(None);
@@ -578,6 +611,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
             .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
         let mut target_observations = Vec::with_capacity(prepared.target_ids.len());
+        let mut regions = BTreeMap::new();
         for target_id in &prepared.target_ids {
             let max_retry_index = if prepared.truth_schema_v2 {
                 POST_ADMISSION_OCR_MAX_RETRY_INDEX
@@ -586,14 +620,14 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             };
             let mut accepted_observation = None;
             for retry_index in 0..=max_retry_index {
-                let evaluated = evaluator
-                    .evaluate_ocr_observation(scene, target_id)
-                    .map_err(|error| {
-                        ContainedTaskError::with_detail(
-                            "contained_task_post_admission_ocr_failed",
-                            error.to_string(),
-                        )
-                    })?;
+                let result = context.evaluate_ocr_observation(target_id);
+                observer(target_id, &result)?;
+                let evaluated = result.map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_post_admission_ocr_failed",
+                        error.to_string(),
+                    )
+                })?;
                 if evaluated.target_id != *target_id
                     || !invocation_ids.insert(evaluated.execution.invocation_id.clone())
                     || stream_binding.as_ref().is_some_and(|binding| {
@@ -782,6 +816,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             let evaluated = accepted_observation.ok_or_else(|| {
                 ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch")
             })?;
+            regions.insert(evaluated.target_id.clone(), evaluated.region.clone());
             target_observations.push(PostAdmissionOcrTargetObservation {
                 target_id: evaluated.target_id,
                 text: evaluated.text,
@@ -821,6 +856,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 ));
             };
             PostAdmissionOcrObservation {
+                regions,
                 page_id: None,
                 personal: None,
                 target_id: Some(observation.target_id.clone()),
@@ -832,6 +868,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             }
         } else {
             PostAdmissionOcrObservation {
+                regions,
                 page_id: None,
                 personal: None,
                 target_id: None,
@@ -848,9 +885,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
     fn observe_fields(
         &mut self,
         game: &str,
-        evaluator: &RecognitionEvaluator,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         page_label: &str,
-        scene: &Scene,
+        observer: &mut OcrEvaluationObserver<'_>,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         let prepared = self
             .fields
@@ -866,6 +903,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         }
         let frame_index = self.frames_collected;
         let mut targets = Vec::new();
+        let mut regions = BTreeMap::new();
         let mut records: Vec<OcrFieldRecord> = Vec::new();
         for field in &declaration.fields {
             let mut result = OcrFieldResult {
@@ -876,6 +914,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 value: None,
                 reason: OcrFieldReason::NotCollected,
                 detail: None,
+                region: None,
+                extraction: None,
                 redacted: false,
             };
             if self.field_failure.is_none() {
@@ -883,8 +923,12 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                     self.field_failure = Some(OcrFieldReason::LimitExceeded);
                     result.reason = OcrFieldReason::LimitExceeded;
                 } else {
-                    match evaluator.evaluate_ocr_observation(scene, &field.target_id) {
+                    let evaluation = context.evaluate_ocr_observation(&field.target_id);
+                    observer(&field.target_id, &evaluation)?;
+                    match evaluation {
                         Ok(mut evaluated) => {
+                            result.region = Some(evaluated.region.clone());
+                            regions.insert(field.target_id.clone(), evaluated.region.clone());
                             if evaluated.target_id != field.target_id
                                 || !self
                                     .invocation_ids
@@ -935,11 +979,23 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                             result.raw_text = Some(evaluated.text.clone());
                             if !exceeds {
                                 let normalized = evaluated.text.trim().to_string();
-                                let (value, reason) = parse_ocr_field(
+                                let (mut value, mut reason) = parse_ocr_field(
                                     &field.value,
                                     &normalized,
                                     prepared.dictionaries.get(&field.id),
                                 );
+                                if reason == OcrFieldReason::UnknownEntry
+                                    && let Some(rule) = &field.text_extraction
+                                    && let Some(extraction) = rule.extract(&normalized)
+                                        .map_err(ContainedTaskError::new)?
+                                {
+                                    (value, reason) = parse_ocr_field(
+                                        &field.value,
+                                        &extraction.extracted_text,
+                                        prepared.dictionaries.get(&field.id),
+                                    );
+                                    result.extraction = Some(extraction);
+                                }
                                 result.normalized_text = Some(normalized);
                                 result.value = value;
                                 result.reason = reason;
@@ -952,7 +1008,17 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                 execution: evaluated.execution,
                             });
                         }
+                        Err(error) if error.code() == actingcommand_recognition_pack::RecognitionPackErrorCode::RegionUnresolved => {
+                            result.reason = OcrFieldReason::RegionUnresolved;
+                            let region = error.region().ok_or_else(|| ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch"))?.clone();
+                            result.region = Some(region.clone());
+                            regions.insert(field.target_id.clone(), region);
+                        }
                         Err(error) => {
+                            if let Some(region) = error.region() {
+                                result.region = Some(region.clone());
+                                regions.insert(field.target_id.clone(),region.clone());
+                            }
                             result.reason = OcrFieldReason::ProviderFailed;
                             let mut detail = error.to_string();
                             let limit = (declaration.limits.max_string_bytes as usize).min(
@@ -1001,6 +1067,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         Ok(Some((
             frame_index,
             PostAdmissionOcrObservation {
+                regions,
                 page_id: Some(page_label.to_string()),
                 target_id: None,
                 text: None,
@@ -1409,6 +1476,34 @@ pub trait ContainedTaskRuntime {
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error>;
 
+    /// Transports the already computed results; implementations must not evaluate them again.
+    fn record_page_evaluations(
+        &mut self,
+        _phase: &'static str,
+        _results: &PageBatchResult,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn record_guard_evaluation(
+        &mut self,
+        _target_id: Option<&str>,
+        _result: Option<&actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>>,
+        _reason: &'static str,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn record_ocr_evaluation(
+        &mut self,
+        _target_id: &str,
+        _result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error>;
 }
 
@@ -1437,12 +1532,21 @@ pub struct PreparedContainedTask {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ContainedTaskRunOptions {
     post_admission_ocr: PostAdmissionOcrExecution,
+    entry: ContainedTaskEntry,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ContainedTaskEntry {
+    #[default]
+    Ordinary,
+    BoundRecovery,
 }
 
 impl ContainedTaskRunOptions {
     pub(crate) const fn offline_simulation() -> Self {
         Self {
             post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
+            entry: ContainedTaskEntry::Ordinary,
         }
     }
 }
@@ -1518,13 +1622,7 @@ impl PreparedContainedTask {
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
         program.validate(&control, &bundle, &detector)?;
-        let entry_page = program
-            .entry_page
-            .as_deref()
-            .filter(|page| crate::canonical_page_anchor(&control.game, page) == "home")
-            .map(|page| resolve_page_reference(&control.game, page, &detector))
-            .transpose()?
-            .filter(|page| detector.page_uses_any_of(page));
+        let entry_page = program.required_home_entry_page(&control, &detector)?;
         let post_admission_ocr =
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
@@ -1642,9 +1740,23 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let matched = self
+        let result = self
             .detector
-            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page)
+            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page);
+        let results = Ok(vec![PageOutcome {
+            index: 0,
+            page_id: page.to_owned(),
+            result,
+        }]);
+        runtime
+            .record_page_evaluations("home_preflight", &results)
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let matched = results
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("single page")
+            .result
             .map_err(|error| {
                 ContainedTaskError::with_detail(
                     "contained_task_recognition_failed",
@@ -1694,7 +1806,6 @@ impl PreparedContainedTask {
             .record(ContainedTaskTrace::RunStarted)
             .map_err(ContainedTaskRunError::Boundary)?;
 
-        let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let step_timeout = Duration::from_millis(self.control.step_timeout().milliseconds);
         let task_timeout = Duration::from_millis(self.control.task_timeout().milliseconds);
         let started = Instant::now();
@@ -1712,10 +1823,10 @@ impl PreparedContainedTask {
         let result = self.run_with_collector(
             runtime,
             &mut ocr_collector,
-            capture_interval,
             step_timeout,
             task_timeout,
             started,
+            options.entry,
         );
         // Task and owner-classified nonfatal operation failures retain parsed facts.
         // Record failures and fatal/unknown operation failures forbid another write.
@@ -1732,17 +1843,44 @@ impl PreparedContainedTask {
         result
     }
 
+    /// Executes a compatible, already hash-admitted entry recovery package.
+    pub fn run_entry_recovery<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        if !self.is_entry_recovery_compatible() {
+            return Err(ContainedTaskError::new(
+                "contained_task_home_recovery_package_incompatible",
+            )
+            .into());
+        }
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                entry: ContainedTaskEntry::BoundRecovery,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
+    }
+
     fn run_with_collector<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
-        capture_interval: Duration,
         step_timeout: Duration,
         task_timeout: Duration,
         started: Instant,
+        entry: ContainedTaskEntry,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        let mut observation =
-            self.capture_until_page(runtime, ocr_collector, step_timeout, capture_interval)?;
+        let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        let mut observation = if entry == ContainedTaskEntry::Ordinary
+            && let Some(required_page) = self.required_home_entry_page()
+        {
+            self.capture_page(runtime, ocr_collector, Some(required_page))?
+                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
+        } else {
+            self.capture_until_page(runtime, ocr_collector, step_timeout, capture_interval)?
+        };
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -1831,9 +1969,10 @@ impl PreparedContainedTask {
                             &self.control,
                             &observation,
                             &self.evaluator,
+                            runtime,
                         ) {
                             Ok(outcome) => outcome,
-                            Err(error) => {
+                            Err(ContainedTaskRunError::Task(error)) => {
                                 let Some(policy) = retry_policy.as_ref() else {
                                     return Err(error.into());
                                 };
@@ -1865,6 +2004,7 @@ impl PreparedContainedTask {
                                     }
                                 }
                             }
+                            Err(error) => return Err(error),
                         };
                         let action_seed = runtime
                             .action_seed(step_index, &operation_id)
@@ -2344,7 +2484,7 @@ impl PreparedContainedTask {
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         loop {
-            if let Some(observation) = self.capture_page(runtime, ocr_collector)? {
+            if let Some(observation) = self.capture_page(runtime, ocr_collector, None)? {
                 return Ok(observation);
             }
             if started.elapsed() >= timeout {
@@ -2358,6 +2498,7 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        required_entry_page: Option<&str>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let frame = runtime
             .capture()
@@ -2376,6 +2517,7 @@ impl PreparedContainedTask {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         let scene = scene_from_frame(&frame)?;
+        let context = self.evaluator.scene_context(&scene);
         let candidate_pages = self
             .detector
             .page_ids()
@@ -2388,9 +2530,15 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let matched_pages = self
-            .detector
-            .evaluate_all(&self.evaluator, &scene)
+        let results = self.detector.evaluate_all_outcomes_in_context(&context);
+        runtime
+            .record_page_evaluations("page", &results)
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let matched_pages = results
+            .map_err(|error| {
+                actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
+            })
+            .and_then(require_all_page_evaluations)
             .map_err(|error| {
                 ContainedTaskError::with_detail(
                     "contained_task_recognition_failed",
@@ -2417,9 +2565,7 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if self.program.operations.is_empty()
-            && let Some(required_page) = self.required_home_entry_page()
-        {
+        if let Some(required_page) = required_entry_page {
             let matched = page.as_deref() == Some(required_page);
             runtime
                 .record(ContainedTaskTrace::EntryRecognition {
@@ -2436,9 +2582,25 @@ impl PreparedContainedTask {
         let Some(page_label) = page else {
             return Ok(None);
         };
-        if let Some((frame_index, observation)) =
-            ocr_collector.observe(&self.control.game, &self.evaluator, &page_label, &scene)?
-        {
+        // Preserve a recorder failure's original boundary type across the collector's task error API.
+        let mut recording_failure = None;
+        let observation = ocr_collector.observe_in_context_recorded(
+            &self.control.game,
+            &context,
+            &page_label,
+            &mut |target, result| {
+                runtime
+                    .record_ocr_evaluation(target, result)
+                    .map_err(|error| {
+                        recording_failure = Some(error);
+                        ContainedTaskError::new("contained_task_record_boundary")
+                    })
+            },
+        );
+        if let Some(error) = recording_failure {
+            return Err(ContainedTaskRunError::Boundary(error));
+        }
+        if let Some((frame_index, observation)) = observation? {
             runtime
                 .record(ContainedTaskTrace::PostAdmissionOcrObservation {
                     frame_index,
@@ -2467,7 +2629,7 @@ impl PreparedContainedTask {
         let started = Instant::now();
         let mut last_observation = None;
         loop {
-            if let Some(observation) = self.capture_page(runtime, ocr_collector)? {
+            if let Some(observation) = self.capture_page(runtime, ocr_collector, None)? {
                 let destination_matches =
                     operation.matching_destination_count(&self.control, &observation)?;
                 let hit_error_page = self
@@ -2990,7 +3152,9 @@ impl TaskProgram {
         }
         if let Some(declaration) = &self.scheduling_outcome {
             let observable_pages = detector.page_ids().map(str::to_owned).collect::<Vec<_>>();
+            let required_home = self.required_home_entry_page(control, detector)?;
             validate_scheduling_outcome_coverage(
+                required_home.as_deref(),
                 &control.game,
                 &target_pages,
                 &observable_pages,
@@ -3000,6 +3164,20 @@ impl TaskProgram {
         }
         self.validate_recovery(bundle)?;
         Ok(())
+    }
+
+    fn required_home_entry_page(
+        &self,
+        control: &TaskControl,
+        detector: &PageDetector,
+    ) -> Result<Option<String>, ContainedTaskError> {
+        Ok(self
+            .entry_page
+            .as_deref()
+            .filter(|page| crate::canonical_page_anchor(&control.game, page) == "home")
+            .map(|page| resolve_page_reference(&control.game, page, detector))
+            .transpose()?
+            .filter(|page| detector.page_uses_any_of(page)))
     }
 
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
@@ -3193,13 +3371,22 @@ impl TaskProgram {
         if self.schema_version != "0.8" {
             return Ok(None);
         }
-        let declaration: OcrFieldsDeclaration = serde_json::from_value(
+        let mut declaration: OcrFieldsDeclaration = serde_json::from_value(
             self.post_admission_ocr
                 .clone()
                 .ok_or_else(|| ContainedTaskError::new("ocr_fields_declaration_missing"))?,
         )
         .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
         declaration.validate().map_err(ContainedTaskError::new)?;
+        if let Some(metadata) = bundle.projection_metadata() {
+            for field in &mut declaration.fields {
+                if metadata.target_privacy(&field.target_id)
+                    == Some(actingcommand_contract::page_projection::Privacy::Personal)
+                {
+                    field.privacy = actingcommand_contract::OcrFieldPrivacy::Personal;
+                }
+            }
+        }
         let target_ids = declaration
             .fields
             .iter()
@@ -3414,6 +3601,20 @@ fn validate_post_admission_ocr_target(
         ));
     };
     match &target.region {
+        PackRegion::TemplateRelative(_) => {
+            evaluator
+                .ocr_anchor_target_id(target_id)
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_post_admission_ocr_target_invalid",
+                        error.to_string(),
+                    )
+                })?
+                .ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_target_invalid")
+                })?;
+            Ok(())
+        }
         PackRegion::Keyword(value) if value == "full_frame" => Ok(()),
         PackRegion::Rect(rect) => {
             let x = i64::from(rect.x);
@@ -3608,6 +3809,7 @@ fn validate_scheduling_outcome_execution_mode(
 }
 
 fn validate_scheduling_outcome_coverage(
+    required_home: Option<&str>,
     game: &str,
     target_pages: &[String],
     observable_pages: &[String],
@@ -3622,6 +3824,7 @@ fn validate_scheduling_outcome_coverage(
         .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
     let mut pending = observable_pages
         .iter()
+        .filter(|page| required_home.is_none_or(|home| page.as_str() == home))
         .map(|page| (page.clone(), SchedulingEffectCondition::NoDesignatedEffect))
         .collect::<VecDeque<_>>();
     let mut visited = BTreeSet::new();
@@ -4075,13 +4278,20 @@ impl TaskOperation {
             .count())
     }
 
-    fn guard_outcome(
+    fn guard_outcome<R: ContainedTaskRuntime>(
         &self,
         control: &TaskControl,
         observation: &PageObservation,
         evaluator: &RecognitionEvaluator,
-    ) -> Result<(ContainedTaskGuardOutcome, Option<TargetEvaluation>), ContainedTaskError> {
+        runtime: &mut R,
+    ) -> Result<
+        (ContainedTaskGuardOutcome, Option<TargetEvaluation>),
+        ContainedTaskRunError<R::Error>,
+    > {
         if self.unguarded_trusted_coordinate {
+            runtime
+                .record_guard_evaluation(None, None, "trusted_coordinate")
+                .map_err(ContainedTaskRunError::Boundary)?;
             return Ok((ContainedTaskGuardOutcome::TrustedCoordinate, None));
         }
         let guard = self
@@ -4089,27 +4299,34 @@ impl TaskOperation {
             .as_ref()
             .ok_or_else(|| ContainedTaskError::new("contained_task_guard_missing"))?;
         if !crate::page_anchor_matches(&control.game, &observation.page_label, &guard.page_id) {
+            runtime
+                .record_guard_evaluation(Some(&guard.target_id), None, "page_mismatch")
+                .map_err(ContainedTaskRunError::Boundary)?;
             return Err(ContainedTaskError::with_detail(
                 "contained_task_guard_refused",
                 format!(
                     "operation={} expected_page={} observed_page={}",
                     self.id, guard.page_id, observation.page_label
                 ),
-            ));
+            )
+            .into());
         }
-        let target = evaluator
-            .evaluate_target(&observation.scene, &guard.target_id)
-            .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    "contained_task_guard_evaluation_failed",
-                    error.to_string(),
-                )
-            })?;
+        let result = evaluator.evaluate_target(&observation.scene, &guard.target_id);
+        runtime
+            .record_guard_evaluation(Some(&guard.target_id), Some(&result), "evaluated")
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let target = result.map_err(|error| {
+            ContainedTaskError::with_detail(
+                "contained_task_guard_evaluation_failed",
+                error.to_string(),
+            )
+        })?;
         if !target.passed {
             return Err(ContainedTaskError::with_detail(
                 "contained_task_guard_refused",
                 format!("operation={} target={}", self.id, guard.target_id),
-            ));
+            )
+            .into());
         }
         let outcome = ContainedTaskGuardOutcome::Passed {
             page_label: observation.page_label.clone(),
@@ -5530,6 +5747,303 @@ mod post_admission_ocr_tests {
                 assert_eq!(runtime.inner.inputs, 1);
             }
         }
+        #[derive(Debug)]
+        struct IconAssets(Vec<u8>);
+        impl actingcommand_recognition_pack::AssetResolver for IconAssets {
+            fn read_asset(
+                &self,
+                path: &str,
+            ) -> actingcommand_recognition_pack::RecognitionPackResult<Vec<u8>> {
+                assert_eq!(path, "icon.png");
+                Ok(self.0.clone())
+            }
+        }
+        let icon = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .unwrap()
+        .png_for_artifact()
+        .unwrap();
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                provider_observation("relative-1", &["7".into()]),
+                provider_observation("relative-2", &["8".into()]),
+            ])),
+            requests: Mutex::new(vec![]),
+            calls: AtomicU32::new(0),
+        });
+        let mut pack = ordered_ocr_pack(&["quantity".into()], 4);
+        for target in &mut pack.targets {
+            if let RecognitionTarget::Ocr(target) = target {
+                target.region = serde_json::from_value(json!({"mode":"template_relative","anchor_target_id":"icon","offset":{"x":1,"y":0},"width":1,"height":1})).unwrap();
+            }
+        }
+        pack.targets.push(serde_json::from_value(json!({"type":"template","id":"icon","template_path":"icon.png","region":{"x":1,"y":0,"width":3,"height":1},"threshold":0.99})).unwrap());
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(IconAssets(icon)),
+            provider.clone(),
+        )
+        .unwrap();
+        let detector = PageDetector::new(serde_json::from_value(json!({"schema_version":"0.6","pages":[{"id":"neutral/operator","required":["page/operator"],"optional":["icon"]}]})).unwrap()).unwrap();
+        let declaration: OcrFieldsDeclaration = serde_json::from_value(json!({"mode":"fields_v1","page_ids":["operator"],"fields":[
+            {"id":"quantity","group":"item","target_id":"quantity","required":true,"privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":100}}],
+            "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"})).unwrap();
+        let fields = PreparedOcrFields {
+            declaration: declaration.clone(),
+            dictionaries: BTreeMap::new(),
+        };
+        let mut collector = PostAdmissionOcrCollector {
+            fields: Some(&fields),
+            ..Default::default()
+        };
+        for (index, pixels) in [
+            vec![1, 1, 1, 255, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![1, 1, 1, 0, 0, 0, 255, 0, 0, 0, 0, 0],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let scene = Scene::from_rgb8(4, 1, &pixels).unwrap();
+            let context = evaluator.scene_context(&scene);
+            assert!(detector.evaluate_all_in_context(&context).unwrap()[0].matched);
+            let (_, observation) = collector
+                .observe_in_context("neutral", &context, "neutral/operator")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                observation.regions["quantity"].roi.unwrap().x,
+                index as i32 + 2
+            );
+            assert_eq!(
+                observation.regions["quantity"]
+                    .anchor_match
+                    .as_ref()
+                    .unwrap()
+                    .rect
+                    .x,
+                index as i32 + 1
+            );
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        let report = collector.fields_report().unwrap();
+        assert_eq!(
+            report.records[0].fields[0].field_id,
+            report.records[1].fields[0].field_id
+        );
+        assert_eq!(
+            report.records[0].fields[0].value,
+            Some(OcrFieldValue::UnsignedInteger(7))
+        );
+        assert_eq!(
+            report.records[1].fields[0].value,
+            Some(OcrFieldValue::UnsignedInteger(8))
+        );
+        for required in [true, false] {
+            for pixels in [
+                vec![1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                vec![1, 1, 1, 0, 0, 0, 0, 0, 0, 255, 0, 0],
+            ] {
+                let mut fields = PreparedOcrFields {
+                    declaration: declaration.clone(),
+                    dictionaries: BTreeMap::new(),
+                };
+                fields.declaration.fields[0].required = required;
+                let mut collector = PostAdmissionOcrCollector {
+                    fields: Some(&fields),
+                    ..Default::default()
+                };
+                let scene = Scene::from_rgb8(4, 1, &pixels).unwrap();
+                let context = evaluator.scene_context(&scene);
+                assert!(detector.evaluate_all_in_context(&context).unwrap()[0].matched);
+                collector
+                    .observe_in_context("neutral", &context, "neutral/operator")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    provider.calls.load(Ordering::SeqCst),
+                    2,
+                    "unresolved region must not invoke OCR"
+                );
+                let report = collector.fields_report().unwrap();
+                assert_eq!(
+                    report.failure,
+                    required.then_some(OcrFieldReason::RegionUnresolved)
+                );
+                assert_eq!(
+                    report.records[0].fields[0].reason,
+                    OcrFieldReason::RegionUnresolved
+                );
+                assert!(report.records[0].fields[0].value.is_none());
+            }
+        }
+        for result_first in [false, true] {
+            let ids = vec!["fixture/name".to_owned(), "fixture/quantity".to_owned()];
+            let provider = Arc::new(EvidenceProvider {
+                observations: Mutex::new(VecDeque::from([
+                    provider_observation("completion-name", &["alias".into()]),
+                    provider_observation("completion-quantity", &["7".into()]),
+                ])),
+                requests: Mutex::new(Vec::new()),
+                calls: AtomicU32::new(0),
+            });
+            let declaration = json!({"mode":"fields_v1","page_ids":["result"],"fields":[
+                {"id":"name","group":"item","target_id":ids[0],"required":false,"privacy":"public","trim":"whitespace_v1",
+                    "value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"c".repeat(64)}}},
+                {"id":"quantity","group":"item","target_id":ids[1],"required":false,
+                    "privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":100}}
+            ],"limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},"outcome_key":"fields_recorded"});
+            let program: TaskProgram = serde_json::from_value(json!({"schema_version":"0.8","task_id":"task","game":"neutral",
+                "server_scope":["test"],"coordinate_space":{"width":2,"height":1},"entry_page":"home","target_page":"result",
+                "operations":[{"id":"collect","from":"home","to":"result","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}],
+                "post_admission_ocr":declaration,"scheduling_outcome":{"designated_operation":"collect","mappings":[
+                    {"outcome_key":"fields_recorded","effect":"designated_effect_completed","terminal_pages":["result"]}]}
+            })).unwrap();
+            let fields = PreparedOcrFields {
+                declaration: serde_json::from_value(declaration).unwrap(),
+                dictionaries: BTreeMap::from([(
+                    "name".to_owned(),
+                    serde_json::from_value(json!({
+                        "schema_version":"actingcommand.ocr-truth-set.v2","items":["TokenA"],
+                        "aliases":[{"observed":"alias","canonical":"TokenA"}]
+                    }))
+                    .unwrap(),
+                )]),
+            };
+            fields.declaration.validate().unwrap();
+            let control: TaskControl = serde_json::from_value(json!({"schema_version":CONTROL_SCHEMA,"package_id":"neutral.test.task",
+                "execution_mode":"navigable_route","game":"neutral","server":"test","resolution":{"width":2,"height":1},
+                "entry_task_id":"task","capture_interval_ms":1,"step_timeout_ms":50,"timeout_ms":1000})).unwrap();
+            let evaluator = RecognitionEvaluator::with_vision_provider(
+                ordered_ocr_pack(&ids, 2),
+                Arc::new(FsAssetResolver::new(PathBuf::new())),
+                provider.clone(),
+            )
+            .unwrap();
+            let detector = PageDetector::new(
+                serde_json::from_value(json!({"schema_version":"0.6","pages":[
+                    {"id":"neutral/home","required":[],"any_of":[["page/operator"]]},
+                    {"id":"neutral/result","required":["page/operator_end"]}
+                ]}))
+                .unwrap(),
+            )
+            .unwrap();
+            detector.validate(&evaluator).unwrap();
+            let entry_page = program
+                .required_home_entry_page(&control, &detector)
+                .unwrap();
+            let task = PreparedContainedTask {
+                control,
+                entry_page,
+                scheduling_outcome: program.scheduling_outcome.clone(),
+                program,
+                evaluator,
+                detector,
+                post_admission_ocr: None,
+                post_admission_fields: Some(fields),
+                package_sha256: "fixture".into(),
+                entry_count: 1,
+                task_count: 1,
+            };
+            let home = Frame::from_pixels(
+                2,
+                1,
+                vec![1, 1, 1, 0, 0, 0],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .unwrap();
+            let result = Frame::from_pixels(
+                2,
+                1,
+                vec![0, 0, 0, 2, 2, 2],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .unwrap();
+            let mut runtime = super::retry_wiring_tests::ScriptedRuntime {
+                frames: if result_first {
+                    VecDeque::from([result.clone()])
+                } else {
+                    VecDeque::from([home, result.clone()])
+                },
+                last_frame: result,
+                captures: 0,
+                inputs: 0,
+                traces: Vec::new(),
+            };
+            let outcome = task.run(&mut runtime);
+            if result_first {
+                assert!(
+                    matches!(outcome, Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_home_entry_not_matched")
+                );
+                assert_eq!(runtime.captures, 1);
+                assert_eq!(runtime.inputs, 0);
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+                assert!(!runtime.traces.iter().any(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::PostAdmissionOcrFields { .. }
+                        | ContainedTaskTrace::PostAdmissionOcrObservation { .. }
+                )));
+                continue;
+            }
+            assert_eq!(runtime.captures, 2);
+            assert_eq!(runtime.inputs, 1);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+            let (report_index, report) = runtime
+                .traces
+                .iter()
+                .enumerate()
+                .find_map(|(index, trace)| match trace {
+                    ContainedTaskTrace::PostAdmissionOcrFields { report } => Some((index, report)),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(report.records.len(), 1);
+            assert_eq!(report.records[0].page_id, "neutral/result");
+            assert_eq!(
+                report.records[0].fields[0].value,
+                Some(OcrFieldValue::DictionaryEntry("TokenA".into()))
+            );
+            assert_eq!(report.failure, None);
+            assert_eq!(
+                report.records[0].fields[1].value,
+                Some(OcrFieldValue::UnsignedInteger(7))
+            );
+            let outcome = outcome.unwrap();
+            assert_eq!(
+                outcome.selected_scheduling_outcome.as_deref(),
+                Some("fields_recorded")
+            );
+            assert_eq!(outcome.executed_steps, 1);
+            assert_eq!(outcome.outcome, TaskOutcome::Success);
+            let finalizing = runtime
+                .traces
+                .iter()
+                .position(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+                .unwrap();
+            assert!(report_index < finalizing);
+            assert_eq!(
+                runtime
+                    .traces
+                    .iter()
+                    .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                runtime
+                    .traces
+                    .iter()
+                    .filter(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
+                    .count(),
+                1
+            );
+        }
     }
 
     // Specification 6: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
@@ -6248,6 +6762,51 @@ mod post_admission_ocr_tests {
             .code(),
             "contained_task_post_admission_ocr_target_in_page_gate"
         );
+        #[derive(Debug)]
+        struct GateIcon(Vec<u8>);
+        impl actingcommand_recognition_pack::AssetResolver for GateIcon {
+            fn read_asset(
+                &self,
+                path: &str,
+            ) -> actingcommand_recognition_pack::RecognitionPackResult<Vec<u8>> {
+                assert_eq!(path, "icon.png");
+                Ok(self.0.clone())
+            }
+        }
+        let icon = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .unwrap()
+        .png_for_artifact()
+        .unwrap();
+        let mut pack = ordered_ocr_pack(&target_ids, 16);
+        for target in &mut pack.targets {
+            if let RecognitionTarget::Ocr(target) = target {
+                target.region = serde_json::from_value(json!({"mode":"template_relative","anchor_target_id":"icon","offset":{"x":0,"y":0},"width":1,"height":1})).unwrap();
+            }
+        }
+        pack.targets.push(serde_json::from_value(json!({"type":"template","id":"icon","template_path":"icon.png","region":"full_frame","threshold":0.99})).unwrap());
+        let relative =
+            RecognitionEvaluator::with_asset_resolver(pack, Arc::new(GateIcon(icon))).unwrap();
+        validate_post_admission_ocr_page_set(&control, &relative, &good, &page_ids, &target_ids)
+            .unwrap();
+        for id in &target_ids {
+            validate_post_admission_ocr_target(&control, &relative, id).unwrap();
+        }
+        let prepared = prepared_ordered(target_ids.clone(), vec!["unused".into()]);
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+        let scene = Scene::from_rgb8(16, 1, &[0; 48]).unwrap();
+        assert!(
+            collector
+                .observe("neutral", &relative, "neutral/outside", &scene)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(collector.frames_collected, 0);
     }
 
     #[test]
@@ -6733,6 +7292,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned(), "alternate".to_owned()],
             &[
@@ -6761,6 +7321,7 @@ mod retry_wiring_tests {
             ]
         }));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -6789,6 +7350,7 @@ mod retry_wiring_tests {
             ]
         }));
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned(), "alternate".to_owned()],
             &[
@@ -6800,6 +7362,70 @@ mod retry_wiring_tests {
             &complete,
         )
         .expect("unreachable designated-effect alternate terminal is not required");
+        let detector = PageDetector::new(
+            serde_json::from_value(json!({
+                "schema_version":"0.6","pages":[
+                    {"id":"neutral/home","required":[],"any_of":[["page/home"]]},
+                    {"id":"neutral/terminal","required":["page/terminal"]}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut program: TaskProgram = serde_json::from_value(json!({
+            "schema_version":"0.6","task_id":"task","game":"neutral","server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},"entry_page":"home","target_page":"terminal","operations":[]
+        })).unwrap();
+        let only_designated = scheduling_declaration(
+            json!({"designated_operation":"open_terminal",
+            "mappings":[{"outcome_key":"effect-terminal","effect":"designated_effect_completed","terminal_pages":["terminal"]}]}),
+        );
+        let required = program
+            .required_home_entry_page(&control(), &detector)
+            .unwrap()
+            .unwrap();
+        assert_eq!(required, "neutral/home");
+        validate_scheduling_outcome_coverage(
+            Some(&required),
+            "neutral",
+            &["terminal".into()],
+            &detector.page_ids().map(str::to_owned).collect::<Vec<_>>(),
+            &operations,
+            &only_designated,
+        )
+        .unwrap();
+        program.entry_page = Some("any".into());
+        assert!(
+            program
+                .required_home_entry_page(&control(), &detector)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            validate_scheduling_outcome_coverage(
+                None,
+                "neutral",
+                &["terminal".into()],
+                &detector.page_ids().map(str::to_owned).collect::<Vec<_>>(),
+                &operations,
+                &only_designated
+            )
+            .is_err()
+        );
+        program.entry_page = Some("neutral/home".into());
+        let no_any_of = PageDetector::new(
+            serde_json::from_value(json!({
+                "schema_version":"0.6","pages":[{"id":"neutral/home","required":["page/home"]}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            program
+                .required_home_entry_page(&control(), &no_any_of)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -6830,6 +7456,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &[
@@ -6872,6 +7499,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -6909,6 +7537,7 @@ mod retry_wiring_tests {
         }));
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -6958,6 +7587,7 @@ mod retry_wiring_tests {
         ];
 
         validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["neutral/terminal".to_owned()],
             &observable_pages,
@@ -6982,6 +7612,7 @@ mod retry_wiring_tests {
             ]
         }));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["neutral/terminal".to_owned()],
             &observable_pages,
@@ -7032,6 +7663,7 @@ mod retry_wiring_tests {
             ]
         }));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -7047,6 +7679,7 @@ mod retry_wiring_tests {
         let mut cycle = operation(json!({}), None);
         cycle.to = Some(PageDeclaration::Singleton("home".to_owned()));
         let error = validate_scheduling_outcome_coverage(
+            None,
             "neutral",
             &["terminal".to_owned()],
             &["neutral/home".to_owned(), "neutral/terminal".to_owned()],

@@ -15,6 +15,60 @@ pub const EFFECTIVE_CONFIGURATION_SCHEMA: &str =
     "actingcommand.runtime.effective-task-configuration.v1";
 pub const MAX_EFFECTIVE_CONFIGURATION_BYTES: u64 = 1_048_576;
 
+pub const TASK_DIAGNOSTIC_SCHEMA: &str = "actingcommand.runtime.task-diagnostic.v1";
+pub const MAX_TASK_DIAGNOSTIC_RECORD_BYTES: usize = 1_048_576;
+pub const MAX_TASK_DIAGNOSTIC_PAGE_RECORDS: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticHeader {
+    pub schema_version: String,
+    pub request_id: super::RequestId,
+    pub correlation_id: CorrelationId,
+    pub task_id: super::TaskId,
+    pub run_id: RunId,
+    pub instance_id: super::InstanceId,
+    pub lease_id: super::LeaseId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDiagnosticKind {
+    Page,
+    Target,
+    Ocr,
+    OcrBlock,
+    Nn,
+    NnLabel,
+    Error,
+    Unexecuted,
+    StepStarted,
+    StepElapsed,
+    Artifact,
+    Terminal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticRecord {
+    pub index: u64,
+    pub kind: TaskDiagnosticKind,
+    pub frame_id: Option<FrameId>,
+    pub step_action_id: Option<super::ActionId>,
+    pub physical_action_id: Option<super::ActionId>,
+    /// Index of the actual page/target record that owns this row, when applicable.
+    pub parent_index: Option<u64>,
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticCursor {
+    pub artifact_id: ArtifactId,
+    pub sha256: String,
+    pub after_index: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EffectiveDeviceConfiguration {

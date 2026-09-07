@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::{
+    OcrAnchorMatch, OcrRegionEvidence, OcrRegionOffset, OcrRegionRect, OcrRegionUnresolvedReason,
+};
 use actingcommand_recognition as recognition;
 use recognition::{MatchMetric, Scene};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -27,6 +31,7 @@ const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecognitionPackErrorSeverity {
     Fatal,
+    Unresolved,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -36,6 +41,7 @@ pub enum RecognitionPackErrorCode {
     VisionProviderMissing,
     VisionProviderFailure,
     VisionProviderInvalidResponse,
+    RegionUnresolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -43,6 +49,8 @@ pub struct RecognitionPackError {
     severity: RecognitionPackErrorSeverity,
     code: RecognitionPackErrorCode,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region: Option<Box<OcrRegionEvidence>>,
 }
 
 impl RecognitionPackError {
@@ -55,6 +63,7 @@ impl RecognitionPackError {
             severity: RecognitionPackErrorSeverity::Fatal,
             code,
             message: message.into(),
+            region: None,
         }
     }
 
@@ -69,6 +78,15 @@ impl RecognitionPackError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    pub fn region(&self) -> Option<&OcrRegionEvidence> {
+        self.region.as_deref()
+    }
+
+    fn with_region(mut self, region: &OcrRegionEvidence) -> Self {
+        self.region = Some(Box::new(region.clone()));
+        self
+    }
 }
 
 impl fmt::Display for RecognitionPackError {
@@ -76,6 +94,9 @@ impl fmt::Display for RecognitionPackError {
         match self.severity {
             RecognitionPackErrorSeverity::Fatal => {
                 write!(f, "fatal recognition pack error: {}", self.message)
+            }
+            RecognitionPackErrorSeverity::Unresolved => {
+                write!(f, "recognition region unresolved: {}", self.message)
             }
         }
     }
@@ -111,8 +132,20 @@ pub struct PackPoint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PackRegion {
+    TemplateRelative(TemplateRelativeRegion),
     Rect(PackRect),
     Keyword(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TemplateRelativeRegion {
+    TemplateRelative {
+        anchor_target_id: String,
+        offset: OcrRegionOffset,
+        width: i32,
+        height: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -552,6 +585,9 @@ pub struct ColorEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OcrEvaluation {
+    pub region: Box<OcrRegionEvidence>,
+    pub raw_text: String,
+    pub block_source_order: Vec<usize>,
     pub text: String,
     pub confidence: Option<f32>,
     pub matched_expected: Option<String>,
@@ -568,7 +604,10 @@ pub struct OcrTextEvidence {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OcrObservationEvaluation {
+    pub region: OcrRegionEvidence,
     pub target_id: String,
+    pub raw_text: String,
+    pub block_source_order: Vec<usize>,
     pub text: String,
     pub confidence: Option<f32>,
     pub blocks: Vec<OcrTextEvidence>,
@@ -577,6 +616,7 @@ pub struct OcrObservationEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NnEvaluation {
+    pub requested_region: PackRect,
     pub selected_label: Option<String>,
     pub selected_score: Option<f32>,
     pub selection: NnSelectionMode,
@@ -585,6 +625,7 @@ pub struct NnEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NnLabelEvidence {
+    pub source_index: usize,
     pub label: String,
     pub score: f32,
     pub candidate: bool,
@@ -628,7 +669,178 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
     Ok(pack)
 }
 
+/// A template cache bound to one immutable Scene and its admitted evaluator.
+/// OCR results are never cached; callers cannot import evaluations from another frame.
+pub struct SceneEvaluation<'a> {
+    evaluator: &'a RecognitionEvaluator,
+    scene: &'a Scene,
+    templates: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
+}
+
+impl SceneEvaluation<'_> {
+    pub fn evaluator(&self) -> &RecognitionEvaluator {
+        self.evaluator
+    }
+    pub fn scene(&self) -> &Scene {
+        self.scene
+    }
+
+    pub fn evaluate_target(&self, target_id: &str) -> RecognitionPackResult<TargetEvaluation> {
+        let is_template = self.evaluator.target_kind(target_id)? == TargetKind::Template;
+        if is_template && let Some(result) = self.templates.borrow().get(target_id) {
+            return result.clone();
+        }
+        let result = self.evaluator.evaluate_target_in_scene(self, target_id);
+        if is_template {
+            // target_kind admitted this key; the map cannot exceed the pack's target set.
+            self.templates
+                .borrow_mut()
+                .insert(target_id.to_string(), result.clone());
+        }
+        result
+    }
+
+    pub fn evaluate_ocr_observation(
+        &self,
+        target_id: &str,
+    ) -> RecognitionPackResult<OcrObservationEvaluation> {
+        self.evaluator
+            .evaluate_ocr_observation_in_scene(self, target_id)
+    }
+
+    fn ocr_region(
+        &self,
+        target: &OcrTarget,
+    ) -> RecognitionPackResult<(PackRect, OcrRegionEvidence)> {
+        let PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+            anchor_target_id,
+            offset,
+            width,
+            height,
+        }) = &target.region
+        else {
+            let rect = provider_region(self.scene, &target.id, &target.region)?;
+            return Ok((
+                rect,
+                OcrRegionEvidence {
+                    frame_width: self.scene.width(),
+                    frame_height: self.scene.height(),
+                    anchor_target_id: None,
+                    anchor_match: None,
+                    offset: None,
+                    width: rect.width,
+                    height: rect.height,
+                    roi: Some(rect.into()),
+                    unresolved: None,
+                },
+            ));
+        };
+        let evaluated = self.evaluate_target(anchor_target_id)?;
+        let matched = evaluated
+            .template
+            .ok_or_else(|| RecognitionPackError::fatal("relative OCR anchor is not a template"))?;
+        let mut evidence = OcrRegionEvidence {
+            frame_width: self.scene.width(),
+            frame_height: self.scene.height(),
+            anchor_target_id: Some(anchor_target_id.clone()),
+            anchor_match: Some(OcrAnchorMatch {
+                rect: OcrRegionRect {
+                    x: matched.x,
+                    y: matched.y,
+                    width: matched.width,
+                    height: matched.height,
+                },
+                raw_score: matched.raw_score,
+                score: matched.score,
+                threshold: matched.threshold,
+                passed: evaluated.passed,
+            }),
+            offset: Some(*offset),
+            width: *width,
+            height: *height,
+            roi: None,
+            unresolved: None,
+        };
+        let fail = |mut region: OcrRegionEvidence, reason| {
+            region.unresolved = Some(reason);
+            RecognitionPackError {
+                severity: RecognitionPackErrorSeverity::Unresolved,
+                code: RecognitionPackErrorCode::RegionUnresolved,
+                message: format!("OCR target '{}' region unresolved: {reason:?}", target.id),
+                region: Some(Box::new(region)),
+            }
+        };
+        if !evaluated.passed {
+            return Err(fail(evidence, OcrRegionUnresolvedReason::AnchorNotMatched));
+        }
+        let Some((x, y)) = matched
+            .x
+            .checked_add(offset.x)
+            .zip(matched.y.checked_add(offset.y))
+        else {
+            return Err(fail(
+                evidence,
+                OcrRegionUnresolvedReason::CoordinateOverflow,
+            ));
+        };
+        let rect = PackRect {
+            x,
+            y,
+            width: *width,
+            height: *height,
+        };
+        evidence.roi = Some(rect.into());
+        let Some((right, bottom)) = x.checked_add(*width).zip(y.checked_add(*height)) else {
+            return Err(fail(
+                evidence,
+                OcrRegionUnresolvedReason::CoordinateOverflow,
+            ));
+        };
+        if x < 0
+            || y < 0
+            || right < 0
+            || bottom < 0
+            || right as u32 > self.scene.width()
+            || bottom as u32 > self.scene.height()
+        {
+            return Err(fail(evidence, OcrRegionUnresolvedReason::OutOfFrame));
+        }
+        Ok((rect, evidence))
+    }
+}
+
+impl From<PackRect> for OcrRegionRect {
+    fn from(rect: PackRect) -> Self {
+        Self {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        }
+    }
+}
+
 impl RecognitionEvaluator {
+    pub fn ocr_anchor_target_id(&self, target_id: &str) -> RecognitionPackResult<Option<&str>> {
+        Ok(match self.target(target_id)? {
+            RecognitionTarget::Ocr(OcrTarget {
+                region:
+                    PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+                        anchor_target_id,
+                        ..
+                    }),
+                ..
+            }) => Some(anchor_target_id.as_str()),
+            _ => None,
+        })
+    }
+    pub fn scene_context<'a>(&'a self, scene: &'a Scene) -> SceneEvaluation<'a> {
+        SceneEvaluation {
+            evaluator: self,
+            scene,
+            templates: RefCell::new(HashMap::new()),
+        }
+    }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
         Self::with_asset_resolver(pack, Arc::new(FsAssetResolver::new(pack_root)))
     }
@@ -685,6 +897,15 @@ impl RecognitionEvaluator {
         scene: &Scene,
         target_id: &str,
     ) -> RecognitionPackResult<TargetEvaluation> {
+        self.scene_context(scene).evaluate_target(target_id)
+    }
+
+    fn evaluate_target_in_scene(
+        &self,
+        context: &SceneEvaluation<'_>,
+        target_id: &str,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let scene = context.scene;
         self.validate_coordinate_space(scene)?;
         let target = self.target(target_id)?;
 
@@ -703,7 +924,7 @@ impl RecognitionEvaluator {
                 "click-only target '{}' cannot be evaluated",
                 target.id
             ))),
-            RecognitionTarget::Ocr(target) => self.evaluate_ocr(scene, target),
+            RecognitionTarget::Ocr(target) => self.evaluate_ocr(context, target),
             RecognitionTarget::Nn(target) => self.evaluate_nn(scene, target),
         }
     }
@@ -827,64 +1048,80 @@ impl RecognitionEvaluator {
         scene: &Scene,
         target_id: &str,
     ) -> RecognitionPackResult<OcrObservationEvaluation> {
+        self.scene_context(scene)
+            .evaluate_ocr_observation(target_id)
+    }
+
+    fn evaluate_ocr_observation_in_scene(
+        &self,
+        context: &SceneEvaluation<'_>,
+        target_id: &str,
+    ) -> RecognitionPackResult<OcrObservationEvaluation> {
+        let scene = context.scene;
         self.validate_coordinate_space(scene)?;
         let RecognitionTarget::Ocr(target) = self.target(target_id)? else {
             return Err(RecognitionPackError::fatal(format!(
                 "post-admission OCR target '{target_id}' is not an OCR target"
             )));
         };
-        let provider = self.vision_provider.as_ref().ok_or_else(|| {
-            RecognitionPackError::fatal_with_code(
-                RecognitionPackErrorCode::VisionProviderMissing,
-                format!("ocr target '{}' has no injected vision provider", target.id),
-            )
-        })?;
-        let region = provider_region(scene, &target.id, &target.region)?;
-        provider
-            .require_ocr_model(&target.model_ref, &target.model_sha256)
-            .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-        let observation = provider
-            .read_text_with_execution_evidence(OcrProviderRequest {
-                frame: provider_frame(scene),
-                region,
-                languages: &target.languages,
-                timeout_ms: target.timeout_ms,
-                model_ref: &target.model_ref,
-                model_sha256: &target.model_sha256,
+        let (region, region_evidence) = context.ocr_region(target)?;
+        (|| {
+            let provider = self.vision_provider.as_ref().ok_or_else(|| {
+                RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::VisionProviderMissing,
+                    format!("ocr target '{}' has no injected vision provider", target.id),
+                )
+            })?;
+            provider
+                .require_ocr_model(&target.model_ref, &target.model_sha256)
+                .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
+            let observation = provider
+                .read_text_with_execution_evidence(OcrProviderRequest {
+                    frame: provider_frame(scene),
+                    region,
+                    languages: &target.languages,
+                    timeout_ms: target.timeout_ms,
+                    model_ref: &target.model_ref,
+                    model_sha256: &target.model_sha256,
+                })
+                .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
+            let execution = observation.execution.ok_or_else(|| {
+                RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::VisionProviderInvalidResponse,
+                    format!(
+                        "ocr observation for target '{}' is missing execution evidence",
+                        target.id
+                    ),
+                )
+            })?;
+            if execution.model_ref != target.model_ref
+                || execution.model_sha256 != target.model_sha256
+                || !ocr_execution_provider_binding_is_valid(&execution)
+                || !execution.complete
+                || !execution.fallback_forbidden
+                || execution.fallback_observed.is_some()
+            {
+                return Err(RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::VisionProviderInvalidResponse,
+                    format!(
+                        "ocr observation execution evidence does not match target '{}'",
+                        target.id
+                    ),
+                ));
+            }
+            let ocr = validate_ocr_result(observation.result, region)?;
+            Ok(OcrObservationEvaluation {
+                raw_text: ocr.raw_text,
+                block_source_order: ocr.block_source_order,
+                region: region_evidence.clone(),
+                target_id: target.id.clone(),
+                text: ocr.text,
+                confidence: ocr.confidence,
+                blocks: ocr.blocks,
+                execution,
             })
-            .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
-        let execution = observation.execution.ok_or_else(|| {
-            RecognitionPackError::fatal_with_code(
-                RecognitionPackErrorCode::VisionProviderInvalidResponse,
-                format!(
-                    "ocr observation for target '{}' is missing execution evidence",
-                    target.id
-                ),
-            )
-        })?;
-        if execution.model_ref != target.model_ref
-            || execution.model_sha256 != target.model_sha256
-            || !ocr_execution_provider_binding_is_valid(&execution)
-            || !execution.complete
-            || !execution.fallback_forbidden
-            || execution.fallback_observed.is_some()
-        {
-            return Err(RecognitionPackError::fatal_with_code(
-                RecognitionPackErrorCode::VisionProviderInvalidResponse,
-                format!(
-                    "ocr observation execution evidence does not match target '{}'",
-                    target.id
-                ),
-            ));
-        }
-        let ocr = validate_ocr_result(observation.result, region)?;
-        Ok(OcrObservationEvaluation {
-            target_id: target.id.clone(),
-            text: ocr.text,
-            confidence: ocr.confidence,
-            blocks: ocr.blocks,
-            execution,
-        })
+        })()
+        .map_err(|error: RecognitionPackError| error.with_region(&region_evidence))
     }
 
     pub fn get_click_target(&self, target_id: &str) -> RecognitionPackResult<PackRect> {
@@ -927,6 +1164,9 @@ impl RecognitionEvaluator {
                     "template target '{}' has unsupported region '{value}'",
                     target.id
                 ))),
+                PackRegion::TemplateRelative(_) => Err(RecognitionPackError::fatal(
+                    "template search region must be static",
+                )),
             },
             RecognitionTarget::Color(_)
             | RecognitionTarget::ClickOnly(_)
@@ -1039,63 +1279,70 @@ impl RecognitionEvaluator {
 
     fn evaluate_ocr(
         &self,
-        scene: &Scene,
+        context: &SceneEvaluation<'_>,
         target: &OcrTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
-        let provider = self.vision_provider.as_ref().ok_or_else(|| {
-            RecognitionPackError::fatal_with_code(
-                RecognitionPackErrorCode::VisionProviderMissing,
-                format!("ocr target '{}' has no injected vision provider", target.id),
-            )
-        })?;
-        let region = provider_region(scene, &target.id, &target.region)?;
-        provider
-            .require_ocr_model(&target.model_ref, &target.model_sha256)
-            .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-        let result = provider
-            .read_text(OcrProviderRequest {
-                frame: provider_frame(scene),
-                region,
-                languages: &target.languages,
-                timeout_ms: target.timeout_ms,
-                model_ref: &target.model_ref,
-                model_sha256: &target.model_sha256,
-            })
-            .map_err(|err| provider_error(&target.id, "ocr", err))?;
-        let ocr = validate_ocr_result(result, region)?;
-        let matched_expected = target
-            .expected
-            .iter()
-            .find(|expected| ocr_text_matches(&ocr.text, expected, target))
-            .cloned();
-        let confidence_ok = ocr
-            .confidence
-            .is_some_and(|confidence| confidence >= target.minimum_confidence);
-        let passed = matched_expected.is_some() && confidence_ok;
-        let message = match (matched_expected.is_some(), confidence_ok) {
-            (true, true) => "ocr passed",
-            (false, true) => "ocr text did not match",
-            (true, false) => "ocr confidence below threshold",
-            (false, false) => "ocr text did not match and confidence below threshold",
-        }
-        .to_string();
+        let scene = context.scene;
+        let (region, region_evidence) = context.ocr_region(target)?;
+        (|| {
+            let provider = self.vision_provider.as_ref().ok_or_else(|| {
+                RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::VisionProviderMissing,
+                    format!("ocr target '{}' has no injected vision provider", target.id),
+                )
+            })?;
+            provider
+                .require_ocr_model(&target.model_ref, &target.model_sha256)
+                .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
+            let result = provider
+                .read_text(OcrProviderRequest {
+                    frame: provider_frame(scene),
+                    region,
+                    languages: &target.languages,
+                    timeout_ms: target.timeout_ms,
+                    model_ref: &target.model_ref,
+                    model_sha256: &target.model_sha256,
+                })
+                .map_err(|err| provider_error(&target.id, "ocr", err))?;
+            let ocr = validate_ocr_result(result, region)?;
+            let matched_expected = target
+                .expected
+                .iter()
+                .find(|expected| ocr_text_matches(&ocr.text, expected, target))
+                .cloned();
+            let confidence_ok = ocr
+                .confidence
+                .is_some_and(|confidence| confidence >= target.minimum_confidence);
+            let passed = matched_expected.is_some() && confidence_ok;
+            let message = match (matched_expected.is_some(), confidence_ok) {
+                (true, true) => "ocr passed",
+                (false, true) => "ocr text did not match",
+                (true, false) => "ocr confidence below threshold",
+                (false, false) => "ocr text did not match and confidence below threshold",
+            }
+            .to_string();
 
-        Ok(TargetEvaluation {
-            id: target.id.clone(),
-            kind: TargetKind::Ocr,
-            passed,
-            template: None,
-            color: None,
-            ocr: Some(OcrEvaluation {
-                text: ocr.text,
-                confidence: ocr.confidence,
-                matched_expected,
-                match_mode: target.match_mode,
-                blocks: ocr.blocks,
-            }),
-            nn: None,
-            message,
-        })
+            Ok(TargetEvaluation {
+                id: target.id.clone(),
+                kind: TargetKind::Ocr,
+                passed,
+                template: None,
+                color: None,
+                ocr: Some(OcrEvaluation {
+                    raw_text: ocr.raw_text,
+                    block_source_order: ocr.block_source_order,
+                    region: Box::new(region_evidence.clone()),
+                    text: ocr.text,
+                    confidence: ocr.confidence,
+                    matched_expected,
+                    match_mode: target.match_mode,
+                    blocks: ocr.blocks,
+                }),
+                nn: None,
+                message,
+            })
+        })()
+        .map_err(|error: RecognitionPackError| error.with_region(&region_evidence))
     }
 
     fn evaluate_nn(
@@ -1144,6 +1391,7 @@ impl RecognitionEvaluator {
             color: None,
             ocr: None,
             nn: Some(NnEvaluation {
+                requested_region: region,
                 selected_label,
                 selected_score,
                 selection: target.selection,
@@ -1375,6 +1623,26 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
                 && !rect.is_null()
                 && !(field == "region" && rect.is_string())
             {
+                if field == "region" && rect.get("mode").is_some() {
+                    if target_type != "ocr" {
+                        return Err(RecognitionPackError::fatal(
+                            "template_relative region is only valid for OCR",
+                        ));
+                    }
+                    validate_strict_object(
+                        rect,
+                        &["mode", "anchor_target_id", "offset", "width", "height"],
+                        "template_relative region",
+                    )?;
+                    validate_strict_object(
+                        rect.get("offset").ok_or_else(|| {
+                            RecognitionPackError::fatal("relative region offset missing")
+                        })?,
+                        &["x", "y"],
+                        "template_relative offset",
+                    )?;
+                    continue;
+                }
                 validate_strict_object(
                     rect,
                     &["x", "y", "width", "height"],
@@ -1530,7 +1798,39 @@ fn validate_pack(
                         "target[{index}] type=ocr requires schema_version '0.6'"
                     ));
                 }
-                validate_region_shape(&target.region, &format!("target[{index}].region"), errors);
+                if let PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+                    anchor_target_id,
+                    width,
+                    height,
+                    ..
+                }) = &target.region
+                {
+                    if anchor_target_id.trim().is_empty()
+                        || anchor_target_id.len() > MAX_VISION_STRING_BYTES
+                    {
+                        errors.push(format!("target[{index}] relative anchor id is invalid"));
+                    }
+                    match pack.targets.iter().find(|candidate| candidate.id() == anchor_target_id) {
+                        Some(RecognitionTarget::Template(anchor)) if matches!(&anchor.region, PackRegion::Rect(_) | PackRegion::Keyword(_)) => {},
+                        _ => errors.push(format!("target[{index}] relative anchor '{anchor_target_id}' must name a static template target")),
+                    }
+                    if *width <= 0
+                        || *height <= 0
+                        || pack.coordinate_space.is_some_and(|space| {
+                            *width as u32 > space.width || *height as u32 > space.height
+                        })
+                    {
+                        errors.push(format!(
+                            "target[{index}] relative OCR dimensions exceed coordinate space"
+                        ));
+                    }
+                } else {
+                    validate_region_shape(
+                        &target.region,
+                        &format!("target[{index}].region"),
+                        errors,
+                    );
+                }
                 validate_region_within_coordinate_space(
                     &target.region,
                     pack.coordinate_space,
@@ -1803,6 +2103,9 @@ fn validate_rect_shape(rect: PackRect, label: &str, errors: &mut Vec<String>) {
 
 fn validate_region_shape(region: &PackRegion, label: &str, errors: &mut Vec<String>) {
     match region {
+        PackRegion::TemplateRelative(_) => {
+            errors.push(format!("{label} must be static for this target type"))
+        }
         PackRegion::Rect(rect) => validate_rect_shape(*rect, label, errors),
         PackRegion::Keyword(value) if value == "full_frame" => {}
         PackRegion::Keyword(value) => errors.push(format!(
@@ -1816,6 +2119,9 @@ fn target_region(
     region: &PackRegion,
 ) -> RecognitionPackResult<Option<recognition::Rect>> {
     match region {
+        PackRegion::TemplateRelative(_) => Err(RecognitionPackError::fatal(
+            "template search region must be static",
+        )),
         PackRegion::Rect(rect) => Ok(Some((*rect).into())),
         PackRegion::Keyword(value) if value == "full_frame" => Ok(None),
         PackRegion::Keyword(value) => Err(RecognitionPackError::fatal(format!(
@@ -1838,6 +2144,11 @@ fn provider_region(
     region: &PackRegion,
 ) -> RecognitionPackResult<PackRect> {
     let rect = match region {
+        PackRegion::TemplateRelative(_) => {
+            return Err(RecognitionPackError::fatal(
+                "relative OCR region requires its Scene evaluation context",
+            ));
+        }
         PackRegion::Rect(rect) => *rect,
         PackRegion::Keyword(value) if value == "full_frame" => PackRect {
             x: 0,
@@ -1921,6 +2232,8 @@ fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvide
 
 #[derive(Debug)]
 struct ValidatedOcrResult {
+    raw_text: String,
+    block_source_order: Vec<usize>,
     text: String,
     confidence: Option<f32>,
     blocks: Vec<OcrTextEvidence>,
@@ -1959,13 +2272,17 @@ fn validate_ocr_result(
                 "OCR block[{index}] rect is outside the requested ROI"
             )));
         }
-        blocks.push(OcrTextEvidence {
-            text: block.text,
-            rect: block.rect,
-            confidence: block.confidence,
-        });
+        blocks.push((
+            index,
+            OcrTextEvidence {
+                text: block.text,
+                rect: block.rect,
+                confidence: block.confidence,
+            },
+        ));
     }
     blocks.sort_by(|left, right| {
+        let (left, right) = (&left.1, &right.1);
         (
             left.rect.y,
             left.rect.x,
@@ -1981,8 +2298,10 @@ fn validate_ocr_result(
                 &right.text,
             ))
     });
+    let (block_source_order, blocks): (Vec<_>, Vec<_>) = blocks.into_iter().unzip();
+    let raw_text = result.text;
     let text = if blocks.is_empty() {
-        result.text
+        raw_text.clone()
     } else {
         let text = blocks
             .iter()
@@ -1997,6 +2316,8 @@ fn validate_ocr_result(
         text
     };
     Ok(ValidatedOcrResult {
+        raw_text,
+        block_source_order,
         text,
         confidence: result.confidence,
         blocks,
@@ -2030,6 +2351,7 @@ fn validate_nn_result(
         }
         validate_provider_score(label.score, &format!("NN label[{index}] score"))?;
         labels.push(NnLabelEvidence {
+            source_index: index,
             candidate: candidates.contains(label.label.as_str()),
             label: label.label,
             score: label.score,
@@ -2691,6 +3013,91 @@ mod tests {
                 err.code(),
                 RecognitionPackErrorCode::VisionProviderInvalidResponse
             );
+        }
+        let fixture = TemplateFixture::new();
+        fixture
+            .dir
+            .write(
+                "templates/relative.png",
+                &encode_png(&blank_image(1, 1, [255, 0, 0])),
+            )
+            .unwrap();
+        let relative_pack = |offset: i32| {
+            let mut value: Value =
+                serde_json::from_str(&ocr_pack_json("exact", "hello", 0.0)).unwrap();
+            value["targets"][0]["region"] = serde_json::json!({"mode":"template_relative","anchor_target_id":"item/icon","offset":{"x":offset,"y":0},"width":1,"height":1});
+            value["targets"].as_array_mut().unwrap().push(serde_json::json!({"type":"template","id":"item/icon","template_path":"templates/relative.png","region":"full_frame","threshold":0.99}));
+            load_pack_from_json_str(&value.to_string()).unwrap()
+        };
+        let provider = Arc::new(TestVisionProvider {
+            execution: Some(execution_evidence(OcrExecutionProviderKind::Cpu)),
+            ocr: Ok(OcrProviderResult {
+                text: "hello".into(),
+                blocks: vec![],
+                confidence: Some(1.0),
+            }),
+            nn: Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "unused",
+            )),
+        });
+        for (pixels, x, offset) in [
+            (vec![255, 0, 0, 0, 0, 0], 0, 0),
+            (vec![0, 0, 0, 255, 0, 0], 1, 0),
+            (vec![0, 0, 0, 255, 0, 0], 1, -1),
+        ] {
+            let evaluator = RecognitionEvaluator::with_vision_provider(
+                relative_pack(offset),
+                Arc::new(FsAssetResolver::new(fixture.dir.path.clone())),
+                provider.clone(),
+            )
+            .unwrap();
+            let scene = Scene::from_rgb8(2, 1, &pixels).unwrap();
+            let context = evaluator.scene_context(&scene);
+            let anchor = context.evaluate_target("item/icon").unwrap();
+            assert_eq!(anchor.template.unwrap().x, x);
+            let observed = context.evaluate_ocr_observation("ocr/page").unwrap();
+            assert_eq!(observed.region.roi.unwrap().x, x + offset);
+            assert_eq!(observed.region.anchor_match.as_ref().unwrap().rect.x, x);
+            assert_eq!(
+                observed.region.anchor_match.as_ref().unwrap().threshold,
+                0.99
+            );
+            assert_eq!(context.templates.borrow().len(), 1);
+            let evaluated = context.evaluate_target("ocr/page").unwrap();
+            assert_eq!(*evaluated.ocr.unwrap().region, observed.region);
+        }
+        for (pixels, offset, reason) in [
+            (vec![0; 6], 0, OcrRegionUnresolvedReason::AnchorNotMatched),
+            (
+                vec![0, 0, 0, 255, 0, 0],
+                1,
+                OcrRegionUnresolvedReason::OutOfFrame,
+            ),
+            (
+                vec![0, 0, 0, 255, 0, 0],
+                i32::MAX,
+                OcrRegionUnresolvedReason::CoordinateOverflow,
+            ),
+            (
+                vec![255, 0, 0, 0, 0, 0],
+                -1,
+                OcrRegionUnresolvedReason::OutOfFrame,
+            ),
+        ] {
+            // No provider is installed: an unresolved ROI must finish before provider admission.
+            let evaluator =
+                RecognitionEvaluator::new(fixture.dir.path.clone(), relative_pack(offset)).unwrap();
+            let scene = Scene::from_rgb8(2, 1, &pixels).unwrap();
+            for error in [
+                evaluator.evaluate_target(&scene, "ocr/page").unwrap_err(),
+                evaluator
+                    .evaluate_ocr_observation(&scene, "ocr/page")
+                    .unwrap_err(),
+            ] {
+                assert_eq!(error.code(), RecognitionPackErrorCode::RegionUnresolved);
+                assert_eq!(error.region().unwrap().unresolved, Some(reason));
+            }
         }
     }
 

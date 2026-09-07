@@ -145,7 +145,9 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
+mod lab_operation;
 mod online_observation;
+mod task_diagnostic;
 
 #[derive(Clone, Copy)]
 pub enum RuntimeLifecycleFailureStage {
@@ -1897,6 +1899,7 @@ struct MonitorRecoveryAdmission {
 struct CompletedReadonlyObservation {
     observation: ReadonlyObservation,
     terminal: PersistedEvent,
+    verified: TerminalEvent,
     links: EventLinksDraft,
     artifact_links: ArtifactLinksDraft,
 }
@@ -2956,6 +2959,13 @@ struct RuntimeRunLinks {
     run_id: IssuedRunId,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RuntimeInputContext {
+    run_links: Option<RuntimeRunLinks>,
+    source_step_action_id: Option<ActionId>,
+    before_frame_id: Option<actingcommand_contract::FrameId>,
+}
+
 #[derive(Clone, Copy)]
 struct RuntimeLeaseAcquisition<'request, 'payload> {
     request: &'request ValidatedRuntimeRequest<'payload>,
@@ -3046,6 +3056,22 @@ struct OperationSuccess {
     state: RuntimeReceiptState,
     terminal: Option<TerminalEvent>,
     result: RuntimeResult,
+}
+
+impl OperationSuccess {
+    fn into_receipt(self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
+        match self.result {
+            RuntimeResult::ContainedLabOperation { operation } => {
+                RuntimeReceipt::contained_lab_operation(
+                    request,
+                    self.terminal.ok_or_else(receipt_error)?,
+                    operation,
+                )
+            }
+            result => RuntimeReceipt::success(request, self.state, self.terminal, result),
+        }
+        .map_err(|_| receipt_error())
+    }
 }
 
 struct RequestFailure {
@@ -5248,10 +5274,7 @@ impl HostShared {
             }
         };
         match self.process_validated(request, &validated, connection_id) {
-            Ok(success) => {
-                RuntimeReceipt::success(request, success.state, success.terminal, success.result)
-                    .map_err(|_| receipt_error())
-            }
+            Ok(success) => success.into_receipt(request),
             Err(failure) => {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
@@ -5355,6 +5378,21 @@ impl HostShared {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.observe_contained_page(request, validated, instance_alias, observation)
             }
+            RuntimeOperation::RunContainedLabOperation {
+                instance_alias,
+                holder_id,
+                request: operation,
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.run_contained_lab_operation(
+                    request,
+                    validated,
+                    instance_alias,
+                    *holder_id,
+                    operation,
+                    connection_id,
+                )
+            }
             RuntimeOperation::CaptureSequence {
                 instance_alias,
                 spec,
@@ -5412,7 +5450,7 @@ impl HostShared {
                     action,
                     connection_id,
                     ExecutionBackendProvenance::PhysicalDevice,
-                    None,
+                    RuntimeInputContext::default(),
                 )
                 .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {
@@ -9866,6 +9904,27 @@ impl HostShared {
         if let Some((task_id, run_id)) = debug_run {
             links = links.with_task_id(task_id).with_run_id(run_id);
         }
+        let mut artifact_links = capability.artifact_links(request);
+        if let Some((_, run_id)) = debug_run {
+            artifact_links = artifact_links.with_run_id(run_id);
+        }
+        self.capture_observation_with_links(
+            request,
+            instance_alias,
+            links,
+            artifact_links,
+            retain_native_artifact_error,
+        )
+    }
+
+    fn capture_observation_with_links(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        links: EventLinksDraft,
+        artifact_links: ArtifactLinksDraft,
+        retain_native_artifact_error: bool,
+    ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.append_event(
             EventSeverity::Info,
             EventSource::Device,
@@ -9963,18 +10022,15 @@ impl HostShared {
                 ));
             }
         };
-        let mut artifact_links = capability.artifact_links(request);
-        if let Some((_, run_id)) = debug_run {
-            artifact_links = artifact_links.with_run_id(run_id);
-        }
         let write_context = ArtifactWriteContext::new(
             artifact_links.clone(),
             links.clone(),
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
-        let mut sink = RuntimeArtifactEventSink {
+        let mut sink = online_observation::ObservationArtifactSink {
             ledger: &self.ledger,
             events: &self.events,
+            verified: None,
         };
         let stored = self
             .artifacts
@@ -10046,6 +10102,11 @@ impl HostShared {
         Ok(CompletedReadonlyObservation {
             observation,
             terminal: event,
+            verified: terminal(&sink.verified.ok_or_else(|| {
+                online_observation::observation_integrity_failure(
+                    "observation_verified_event_missing",
+                )
+            })?),
             links,
             artifact_links,
         })
@@ -10176,7 +10237,7 @@ impl HostShared {
             &InputAction::Reset,
             connection_id,
             ExecutionBackendProvenance::PhysicalDevice,
-            None,
+            RuntimeInputContext::default(),
         ) {
             Ok((success, _)) => success,
             Err(failure) => {
@@ -10776,6 +10837,9 @@ impl HostShared {
             execution_provenance,
             control: Arc::clone(&control),
             last_frame_id: None,
+            input_step_action_id: None,
+            post_input_action_id: None,
+            last_capture_input_action_id: None,
             expected_stability_declaration,
             stability: None,
             expects_post_admission_ocr,
@@ -10785,6 +10849,7 @@ impl HostShared {
             step_actions: BTreeMap::new(),
             step_index_offset: 0,
             completed_entry_recovery_steps: 0,
+            entry_preflight_recorded: false,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
             finalizing: None,
@@ -10792,30 +10857,70 @@ impl HostShared {
             configuration_records: 0,
             configuration_capture_recorded: false,
             configuration_input_recorded: false,
+            diagnostic_stream: None,
+            diagnostic_records: 0,
+            diagnostic_step: None,
+            diagnostic_physical: None,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
-        let execution =
-            if let Err(failure) = runtime.record_initial_configuration(task_request, &prepared) {
-                Err(ContainedTaskRunError::Boundary(failure))
-            } else if prepared.required_home_entry_page().is_some()
-                && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
-            {
-                self.run_preflighted_contained_task(
-                    instance_alias,
-                    task_request,
-                    &prepared,
-                    &mut runtime,
-                )
-            } else {
-                let execution = prepared.run(&mut runtime);
-                execution
-            };
+        let mut execution = if let Err(failure) = runtime
+            .begin_diagnostic()
+            .and_then(|()| runtime.record_initial_configuration(task_request, &prepared))
+        {
+            Err(ContainedTaskRunError::Boundary(failure))
+        } else if prepared.required_home_entry_page().is_some()
+            && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
+        {
+            self.run_preflighted_contained_task(
+                instance_alias,
+                task_request,
+                &prepared,
+                &mut runtime,
+            )
+        } else {
+            let execution = prepared.run(&mut runtime);
+            execution
+        };
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
                 runtime.record_post_admission_ocr_failure(error.code(), error.detail())
             }
             _ => Ok(()),
         };
+        let fatal = post_admission_ocr_failure_diagnostic.is_err()
+            || matches!(&execution,
+                Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
+                    if failure.poison_runtime || failure.error.is_fatal());
+        let diagnostic_result = if fatal {
+            runtime.abort_diagnostic()
+        } else {
+            runtime.finish_diagnostic(&execution)
+        };
+        if let Err(mut failure) = diagnostic_result {
+            let prior_code = match &execution {
+                Err(ContainedTaskRunError::Task(error)) => Some(error.code()),
+                Err(
+                    ContainedTaskRunError::Boundary(error)
+                    | ContainedTaskRunError::NonfatalOperation(error),
+                ) => Some(error.error.code()),
+                Ok(_) => None,
+            };
+            if let Some(code) = prior_code {
+                failure.error = Box::new(
+                    failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_native_detail(format!("{}; prior_task_code={code}", failure.error)),
+                );
+            }
+            if let Err(cleanup) = runtime.abort_diagnostic() {
+                failure.error = Box::new(failure.error.as_ref().clone().with_native_detail(
+                    format!("{}; diagnostic_cleanup={}", failure.error, cleanup.error),
+                ));
+            }
+            execution = Err(ContainedTaskRunError::Boundary(failure));
+        }
         let finalizing = runtime.finalizing;
         let completed_entry_recovery_steps = runtime.completed_entry_recovery_steps;
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
@@ -11149,6 +11254,7 @@ impl HostShared {
                 required: !initial_home,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        runtime.entry_preflight_recorded = true;
         if initial_home {
             runtime
                 .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
@@ -11213,7 +11319,7 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
-            recovery.run(&mut recovery_runtime)
+            recovery.run_entry_recovery(&mut recovery_runtime)
         };
         let nonfatal_operation = matches!(
             &recovery_execution,
@@ -12225,7 +12331,7 @@ impl HostShared {
         action: &InputAction,
         connection_id: ConnectionId,
         execution_provenance: ExecutionBackendProvenance,
-        run_links: Option<RuntimeRunLinks>,
+        context: RuntimeInputContext,
     ) -> Result<
         (
             OperationSuccess,
@@ -12233,6 +12339,11 @@ impl HostShared {
         ),
         RequestFailure,
     > {
+        let RuntimeInputContext {
+            run_links,
+            source_step_action_id,
+            before_frame_id,
+        } = context;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
             let admission = lock(&instance_guard, "lock_instance_admission")?;
@@ -12302,17 +12413,13 @@ impl HostShared {
             ),
         };
         let event_action = action.event_action();
-        let intent_payload = match execution_plan {
-            Some(execution_plan) => InputPayloadDraft::intent_with_execution_plan(
-                event_action,
-                execution_plan,
-                execution_audit(execution_provenance, resolved.audit_endpoint()),
-            ),
-            None => InputPayloadDraft::intent(
-                event_action,
-                execution_audit(execution_provenance, resolved.audit_endpoint()),
-            ),
-        };
+        let intent_payload = InputPayloadDraft::intent_with_provenance(
+            action.clone(),
+            execution_plan,
+            source_step_action_id,
+            before_frame_id,
+            execution_audit(execution_provenance, resolved.audit_endpoint()),
+        );
         let intent = self
             .events
             .draft(
@@ -14518,6 +14625,9 @@ struct RuntimeContainedTask<'a> {
     execution_provenance: ExecutionBackendProvenance,
     control: Arc<ContainedRunControl>,
     last_frame_id: Option<IssuedFrameId>,
+    input_step_action_id: Option<ActionId>,
+    post_input_action_id: Option<ActionId>,
+    last_capture_input_action_id: Option<ActionId>,
     expected_stability_declaration: Option<StabilityTerminationDeclaration>,
     stability: Option<RuntimeContainedTaskStability>,
     expects_post_admission_ocr: bool,
@@ -14527,6 +14637,7 @@ struct RuntimeContainedTask<'a> {
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     step_index_offset: u32,
     completed_entry_recovery_steps: u32,
+    entry_preflight_recorded: bool,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
@@ -14534,6 +14645,10 @@ struct RuntimeContainedTask<'a> {
     configuration_records: u8,
     configuration_capture_recorded: bool,
     configuration_input_recorded: bool,
+    diagnostic_stream: Option<actingcommand_artifact_store::ArtifactStream>,
+    diagnostic_records: u64,
+    diagnostic_step: Option<task_diagnostic::DiagnosticStep>,
+    diagnostic_physical: Option<ActionId>,
 }
 
 struct EntryRecoveryRuntime<'a, 'host> {
@@ -14542,6 +14657,35 @@ struct EntryRecoveryRuntime<'a, 'host> {
 
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
+
+    fn record_page_evaluations(
+        &mut self,
+        phase: &'static str,
+        results: &actingcommand_page_detector::PageBatchResult,
+    ) -> Result<(), Self::Error> {
+        self.inner.diagnostic_pages(phase, results)
+    }
+    fn record_guard_evaluation(
+        &mut self,
+        target: Option<&str>,
+        result: Option<
+            &actingcommand_recognition_pack::RecognitionPackResult<
+                actingcommand_recognition_pack::TargetEvaluation,
+            >,
+        >,
+        reason: &'static str,
+    ) -> Result<(), Self::Error> {
+        self.inner.diagnostic_guard(target, result, reason)
+    }
+    fn record_ocr_evaluation(
+        &mut self,
+        target: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        self.inner.diagnostic_ocr(target, result)
+    }
 
     fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         RuntimeContainedTask::classify_error(error)
@@ -14642,6 +14786,7 @@ struct RuntimeContainedTaskOcrObservationDiagnostic<'a> {
     run_id: &'a RunId,
     frame_id: &'a FrameId,
     frame_index: u32,
+    frame_artifact: &'a actingcommand_contract::ArtifactReference,
     observation: &'a PostAdmissionOcrObservation,
 }
 
@@ -15114,12 +15259,25 @@ impl RuntimeContainedTask<'_> {
                 ),
             ));
         }
+        let frame_artifact = self
+            .capture_evidence
+            .frames
+            .last()
+            .filter(|frame| frame.artifact.frame_id() == Some(frame_id.transport()))
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_post_admission_ocr_frame_artifact_missing",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
         let diagnostic = RuntimeContainedTaskOcrObservationDiagnostic {
             schema_version: "actingcommand.runtime.post-admission-ocr-observation.v1",
             task_id: self.task_id.transport(),
             run_id: self.run_id.transport(),
             frame_id: frame_id.transport(),
             frame_index,
+            frame_artifact: &frame_artifact.artifact,
             observation: &observation,
         };
         let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
@@ -15531,6 +15689,35 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
 
+    fn record_page_evaluations(
+        &mut self,
+        phase: &'static str,
+        results: &actingcommand_page_detector::PageBatchResult,
+    ) -> Result<(), Self::Error> {
+        self.diagnostic_pages(phase, results)
+    }
+    fn record_guard_evaluation(
+        &mut self,
+        target: Option<&str>,
+        result: Option<
+            &actingcommand_recognition_pack::RecognitionPackResult<
+                actingcommand_recognition_pack::TargetEvaluation,
+            >,
+        >,
+        reason: &'static str,
+    ) -> Result<(), Self::Error> {
+        self.diagnostic_guard(target, result, reason)
+    }
+    fn record_ocr_evaluation(
+        &mut self,
+        target: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        self.diagnostic_ocr(target, result)
+    }
+
     fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         if error.error.is_fatal() {
             ContainedTaskRuntimeErrorClass::Fatal
@@ -15547,7 +15734,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .issuer()
             .mint_frame_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        let links = self.links().with_frame_id(frame_id);
+        let input_action_id = self.post_input_action_id.take();
+        let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+            .apply(self.host.events.request_links(
+                self.request,
+                Some(self.token.instance_id()),
+                Some(self.token.lease_id()),
+                input_action_id,
+            ))
+            .with_frame_id(frame_id);
         let (source, module) = self.capture_origin();
         let requested = self.host.append_event(
             EventSeverity::Info,
@@ -15602,6 +15797,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     })?;
                 self.capture_evidence.persisted(frame_index, &stored)?;
                 self.last_frame_id = Some(frame_id);
+                self.last_capture_input_action_id = input_action_id;
                 if self.configuration_records > 0 && !self.configuration_capture_recorded {
                     let selection =
                         frame
@@ -15711,10 +15907,16 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             &action,
             self.connection_id,
             self.execution_provenance,
-            Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+            RuntimeInputContext {
+                run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+                source_step_action_id: self.input_step_action_id.take(),
+                before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
+            },
         )?;
         self.ensure_active()?;
         if let RuntimeResult::InputCommitted { action_id } = success.result {
+            self.post_input_action_id = Some(action_id);
+            self.diagnostic_physical = Some(action_id);
             if self.configuration_records > 0 && !self.configuration_input_recorded {
                 self.record_configuration(
                     EffectiveConfigurationFacts::Input {
@@ -15788,6 +15990,16 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     required_page,
                     matched,
                 })?;
+                if self.entry_preflight_recorded {
+                    return if matched {
+                        Ok(())
+                    } else {
+                        self.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                            disposition: TaskEntryTargetDisposition::FailClosed,
+                            failure_code: Some("contained_task_home_entry_not_matched".to_owned()),
+                        })
+                    };
+                }
                 self.record_entry_fact(TaskSemanticFact::EntryRecoveryDecision {
                     required: false,
                 })?;
@@ -15809,7 +16021,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
-                let links = self.links().with_frame_id(frame_id);
+                let input_action_id = self.last_capture_input_action_id.take();
+                let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+                    .apply(self.host.events.request_links(
+                        self.request,
+                        Some(self.token.instance_id()),
+                        Some(self.token.lease_id()),
+                        input_action_id,
+                    ))
+                    .with_frame_id(frame_id);
                 let (source, module) = self.capture_origin();
                 self.host.append_event(
                     EventSeverity::Info,
@@ -15962,6 +16182,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 from_page,
             } => {
+                let diagnostic_started = self
+                    .host
+                    .monotonic_ms()
+                    .map_err(RequestFailure::poison_without_terminal)?;
                 self.capture_evidence
                     .pin_last(PinnedFrameReason::PreInput)?;
                 let action_id = self.host.events.issuer().mint_action_id().map_err(|_| {
@@ -15991,7 +16215,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                self.begin_diagnostic_step(step_index, *action_id.transport(), diagnostic_started)
             }
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -16020,11 +16245,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     }
                     None => TaskPayloadDraft::semantic(fact, AuditInput::new()),
                 };
-                self.append_task(
-                    EventSeverity::Info,
-                    self.links().with_action_id(action_id),
-                    payload,
-                )
+                let mut links = self.links().with_action_id(action_id);
+                if let Some(frame_id) = self.last_frame_id {
+                    links = links.with_frame_id(frame_id);
+                }
+                self.append_task(EventSeverity::Info, links, payload)?;
+                self.input_step_action_id = Some(*action_id.transport());
+                Ok(())
             }
             ContainedTaskTrace::EffectCompleted {
                 step_index,
@@ -16050,6 +16277,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 page_label,
             } => {
+                let diagnostic_ended = self
+                    .host
+                    .monotonic_ms()
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                self.input_step_action_id = None;
+                self.post_input_action_id = None;
                 contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
                 let (action_id, _) = self.step_actions.remove(&step_index).ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -16069,7 +16302,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                self.end_diagnostic_step(diagnostic_ended, true)
             }
             ContainedTaskTrace::StabilityBaseline {
                 step_index,

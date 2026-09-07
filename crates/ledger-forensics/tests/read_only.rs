@@ -322,6 +322,12 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
 
 #[test]
 fn filters_events_by_persisted_fields_with_stable_cursor() {
+    use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
+    use actingcommand_contract::{
+        ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, CapturePersistedEvidence,
+        CapturePinnedEvidence, CaptureSummaryRecord, InputAction, InputExecutionPlanEvent,
+        InputExecutionPlanRecord, InputPayloadDraft, PinnedFrameReason, TaskSemanticFact,
+    };
     let temp = tempfile::tempdir().expect("tempdir");
     let state_root = temp.path();
     let ledger_root = state_root.join("ledger");
@@ -597,6 +603,540 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         )
         .is_err()
     );
+
+    let store = ArtifactStore::open(state_root).unwrap();
+    let writer = GlobalLedger::open_with_artifact_verifier(
+        GlobalLedgerConfig::new(&ledger_root, "task-evidence-source"),
+        |reference| store.verify_recovery_reference(reference).ok(),
+    )
+    .unwrap();
+    struct Sink<'a>(&'a GlobalLedger);
+    impl ArtifactEventSink for Sink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            let draft = draft
+                .sanitize(&Sha256SecretFingerprinter::new(b"task-evidence-spec").unwrap())
+                .unwrap();
+            self.0.append(draft).map(|_| ()).map_err(|error| {
+                ArtifactStoreError::fatal(
+                    error.code(),
+                    "task_evidence_spec",
+                    "append artifact event failed",
+                )
+            })
+        }
+    }
+    let append = |links: EventLinksDraft, payload: EventPayloadDraft| {
+        writer
+            .append(
+                EventDraft::new(
+                    identifiers.mint_event_id().unwrap(),
+                    1_752_147_200_200,
+                    EventSeverity::Info,
+                    EventOrigin::new(
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                    ),
+                    links,
+                    payload,
+                )
+                .sanitize(&Sha256SecretFingerprinter::new(b"task-evidence-spec").unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let request = identifiers.mint_request_id().unwrap();
+    let task = identifiers.mint_task_id().unwrap();
+    let run_id = identifiers.mint_run_id().unwrap();
+    let instance = identifiers.mint_instance_id().unwrap();
+    let lease = identifiers.mint_lease_id().unwrap();
+    let step = identifiers.mint_action_id().unwrap();
+    let physical = identifiers.mint_action_id().unwrap();
+    let pre = identifiers.mint_frame_id().unwrap();
+    let post = identifiers.mint_frame_id().unwrap();
+    let links = EventLinksDraft::default()
+        .with_request_id(request)
+        .with_task_id(task)
+        .with_run_id(run_id)
+        .with_instance_id(instance)
+        .with_lease_id(lease)
+        .with_correlation_id(correlation_a);
+    let pre_requested = append(
+        links.clone().with_frame_id(pre),
+        CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()).into(),
+    );
+    let before = store
+        .put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::CaptureFrame,
+                b"neutral before frame bytes",
+                ArtifactWriteContext::new(
+                    ArtifactLinksDraft::default()
+                        .with_run_id(run_id)
+                        .with_correlation_id(correlation_a)
+                        .with_frame_id(pre),
+                    links.clone().with_frame_id(pre),
+                    1_752_147_200_200,
+                ),
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::CaptureStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut Sink(&writer),
+        )
+        .unwrap();
+    append(
+        links.clone().with_frame_id(pre),
+        CapturePayloadDraft::completed(
+            EventAction::CaptureObserve,
+            EffectDisposition::NotPerformed,
+            2,
+            1,
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let action = InputAction::Swipe {
+        x1: 0,
+        y1: 200,
+        x2: 100,
+        y2: 100,
+        duration_ms: 550,
+    };
+    let step_event = append(
+        links.clone().with_action_id(step).with_frame_id(pre),
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::EffectIntent {
+                step_index: 4,
+                operation_label: "neutral_swipe".into(),
+                action: action.clone(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let points = vec![
+        InputExecutionPlanEvent::Down { x: 0, y: 200 },
+        InputExecutionPlanEvent::Move {
+            x: 75,
+            y: 200,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Hold { duration_ms: 150 },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 125,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Up,
+    ];
+    let input_event = append(
+        links.clone().with_action_id(physical),
+        InputPayloadDraft::intent_with_provenance(
+            action.clone(),
+            Some(InputExecutionPlanRecord::new(points.clone()).unwrap()),
+            Some(*step.transport()),
+            Some(*pre.transport()),
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let outcome = append(
+        links.clone().with_action_id(physical),
+        InputPayloadDraft::committed(
+            EventAction::InputSwipe,
+            EffectDisposition::Performed,
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let post_requested = append(
+        links.clone().with_action_id(physical).with_frame_id(post),
+        CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()).into(),
+    );
+    let after = store
+        .put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::CaptureFrame,
+                b"neutral after frame bytes",
+                ArtifactWriteContext::new(
+                    ArtifactLinksDraft::default()
+                        .with_run_id(run_id)
+                        .with_correlation_id(correlation_a)
+                        .with_frame_id(post),
+                    links.clone().with_action_id(physical).with_frame_id(post),
+                    1_752_147_200_200,
+                ),
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::CaptureStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut Sink(&writer),
+        )
+        .unwrap();
+    append(
+        links.clone().with_action_id(physical).with_frame_id(post),
+        CapturePayloadDraft::completed(
+            EventAction::CaptureObserve,
+            EffectDisposition::NotPerformed,
+            2,
+            1,
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let pre_ref = before.reference().project(true);
+    let post_ref = after.reference().project(true);
+    let summary = CaptureSummaryRecord::new(
+        2,
+        0,
+        0,
+        2,
+        EvidenceCompleteness::Complete,
+        vec![
+            CapturePersistedEvidence::new(0, pre_ref.clone()).unwrap(),
+            CapturePersistedEvidence::new(1, post_ref.clone()).unwrap(),
+        ],
+        vec![
+            CapturePinnedEvidence::new(Some(0), PinnedFrameReason::PreInput, Some(pre_ref.clone()))
+                .unwrap(),
+            CapturePinnedEvidence::new(
+                Some(1),
+                PinnedFrameReason::PostInput,
+                Some(post_ref.clone()),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let summary_event = append(
+        links.clone(),
+        CapturePayloadDraft::summary_committed(summary, AuditInput::new()).into(),
+    );
+    append(
+        links.clone(),
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::TerminalCommitted {
+                outcome: TaskOutcome::Success,
+                final_page: Some("neutral/end".into()),
+                executed_steps: 7,
+                failure_code: None,
+                scheduling_disposition: None,
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let evidence = |after_sequence, through, limit| {
+        let request = ForensicRequest::task_evidence(
+            state_root,
+            ForensicEventsRequest::new(
+                ForensicEventFilter::default(),
+                after_sequence,
+                through,
+                limit,
+            )
+            .unwrap(),
+        );
+        let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) = run(request).unwrap()
+        else {
+            panic!("task evidence report");
+        };
+        report
+    };
+    let original_tree = tree_bytes(state_root);
+    let complete = evidence(0, None, 1024);
+    assert!(complete.window_complete, "{complete:?}");
+    assert!(complete.gaps.is_empty());
+    assert_eq!(complete.inputs.len(), 1);
+    let row = &complete.inputs[0];
+    assert_eq!(row.physical_action_id, Some(*physical.transport()));
+    assert_eq!(row.intent.provenance().unwrap().input_action, action);
+    assert_eq!(row.intent.execution_plan().unwrap().events(), points);
+    assert_eq!(
+        row.source_step.source_sequences,
+        vec![step_event.sequence()]
+    );
+    assert_eq!(row.outcome.source_sequences, vec![outcome.sequence()]);
+    assert_eq!(row.before_frame.frame_id, Some(*pre.transport()));
+    assert_eq!(row.before_frame.artifacts, vec![pre_ref.clone()]);
+    assert_eq!(
+        row.after_capture.source_sequences,
+        vec![post_requested.sequence()]
+    );
+    assert_eq!(row.after_frame.artifacts, vec![post_ref]);
+    assert_eq!(
+        row.after_frame.capture_summary.source_sequences,
+        vec![summary_event.sequence()]
+    );
+    assert_eq!(
+        complete.steps[0].physical_inputs.source_sequences,
+        vec![input_event.sequence()]
+    );
+    let serialized = serde_json::to_value(&complete).unwrap();
+    assert!(serialized.to_string().contains("\"executed_steps\":7"));
+    let first_page = evidence(
+        pre_requested.sequence() - 1,
+        Some(complete.page.through_sequence),
+        5,
+    );
+    let next_page = evidence(
+        first_page.page.next_after_sequence.unwrap(),
+        Some(complete.page.through_sequence),
+        1,
+    );
+    assert_eq!(
+        next_page.inputs[0].source_step.state,
+        "outside_window_or_missing"
+    );
+    assert_eq!(
+        next_page.inputs[0].before_frame.png.state,
+        "outside_window_or_missing"
+    );
+    assert_eq!(
+        next_page.inputs[0].outcome.state,
+        "outside_window_or_missing"
+    );
+    assert!(!next_page.window_complete);
+    assert!(next_page.gaps.is_empty());
+    assert_eq!(tree_bytes(state_root), original_tree);
+
+    assert!(
+        complete
+            .diagnostic_gaps
+            .iter()
+            .any(|gap| gap.run_id == *run_id.transport() && gap.record_count.is_none())
+    );
+    use actingcommand_contract::{
+        TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticKind, TaskDiagnosticRecord,
+    };
+    use actingcommand_ledger_forensics::TaskRecordsRequest;
+    let context = ArtifactWriteContext::new(
+        ArtifactLinksDraft::default()
+            .with_run_id(run_id)
+            .with_correlation_id(correlation_a),
+        links.clone(),
+        1_752_147_200_300,
+    );
+    let policy = ArtifactIssuePolicy::new(
+        ArtifactProducer::ArtifactStore,
+        RetentionClass::DebugFull,
+        ArtifactRedactionState::Pending,
+    );
+    let mut stream = store
+        .begin_stream(ArtifactKind::DiagnosticJson, context.clone(), policy)
+        .unwrap();
+    let header = serde_json::to_vec(&TaskDiagnosticHeader {
+        schema_version: TASK_DIAGNOSTIC_SCHEMA.into(),
+        request_id: *request.transport(),
+        correlation_id: *correlation_a.transport(),
+        task_id: *task.transport(),
+        run_id: *run_id.transport(),
+        instance_id: *instance.transport(),
+        lease_id: *lease.transport(),
+    })
+    .unwrap();
+    stream.append(&header[..header.len() - 1]).unwrap();
+    stream.append(b",\"records\":[\n").unwrap();
+    for index in 1..=35 {
+        if index > 1 {
+            stream.append(b",").unwrap();
+        }
+        let record = TaskDiagnosticRecord {
+            index,
+            kind: TaskDiagnosticKind::Ocr,
+            frame_id: Some(*pre.transport()),
+            step_action_id: Some(*step.transport()),
+            physical_action_id: None,
+            parent_index: None,
+            data: serde_json::json!({"raw_text": "neutral ".repeat(8000), "source_index": index-1}),
+        };
+        serde_json::to_writer(&mut stream, &record).unwrap();
+        stream.append(b"\n").unwrap();
+    }
+    let staging_tree = tree_bytes(state_root);
+    assert!(evidence(0, None, 1024).diagnostics.is_empty());
+    assert_eq!(tree_bytes(state_root), staging_tree);
+    stream.append(b"]}\n").unwrap();
+    let raw = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
+    assert!(raw.reference().byte_count() > 1024 * 1024);
+    let private = evidence(0, None, 1024);
+    assert_eq!(private.diagnostics.len(), 1);
+    assert_eq!(private.diagnostics[0].state, "privacy_withheld");
+    assert!(private.diagnostics[0].records.is_empty());
+    assert_eq!(private.diagnostics[0].total_records, None);
+    assert!(
+        !serde_json::to_string(&private)
+            .unwrap()
+            .contains("neutral neutral")
+    );
+    let record_page = |cursor| {
+        let request = ForensicRequest::task_evidence(
+            state_root,
+            ForensicEventsRequest::new(
+                ForensicEventFilter::default(),
+                0,
+                Some(private.page.through_sequence),
+                1024,
+            )
+            .unwrap(),
+        )
+        .with_task_records(TaskRecordsRequest {
+            cursor,
+            limit: 7,
+            include_private: true,
+        })
+        .unwrap();
+        let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) = run(request).unwrap()
+        else {
+            panic!("records report")
+        };
+        report
+    };
+    let published_tree = tree_bytes(state_root);
+    let mut cursor = None;
+    let mut indices = Vec::new();
+    loop {
+        let report = record_page(cursor.take());
+        let [page] = report.diagnostics.as_slice() else {
+            panic!("one exact artifact")
+        };
+        assert_eq!(page.state, "verified");
+        assert_eq!(page.total_records, Some(35));
+        assert_eq!(
+            page.artifact.artifact_id,
+            raw.reference().artifact_id().to_owned()
+        );
+        assert!(page.records.len() <= 7);
+        for record in &page.records {
+            indices.push(record.index);
+            assert_eq!(record.frame_id, Some(*pre.transport()));
+            assert_eq!(record.data["raw_text"], "neutral ".repeat(8000));
+        }
+        cursor = page.next_cursor.clone();
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(indices, (1..=35).collect::<Vec<_>>());
+    assert_eq!(tree_bytes(state_root), published_tree);
+    let mut wrong_cursor = record_page(None).diagnostics[0]
+        .next_cursor
+        .clone()
+        .unwrap();
+    wrong_cursor.sha256 = format!("sha256:{}", "0".repeat(64));
+    let wrong = ForensicRequest::task_evidence(
+        state_root,
+        ForensicEventsRequest::new(ForensicEventFilter::default(), 0, None, 1024).unwrap(),
+    )
+    .with_task_records(TaskRecordsRequest {
+        cursor: Some(wrong_cursor),
+        limit: 7,
+        include_private: true,
+    })
+    .unwrap();
+    assert_eq!(
+        run(wrong).unwrap_err().code(),
+        "task_diagnostic_cursor_mismatch"
+    );
+    store
+        .put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::DiagnosticJson,
+                br#"{"schema_version":"neutral.unknown.v1","raw_text":"withheld source"}"#,
+                context,
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::ArtifactStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut Sink(&writer),
+        )
+        .unwrap();
+    let unknown = evidence(0, None, 1024);
+    assert!(unknown.gaps.contains(&"unknown_diagnostic_schema"));
+    assert!(
+        unknown
+            .diagnostics
+            .iter()
+            .any(|page| page.state == "unknown_schema" && page.legacy.is_none())
+    );
+
+    let other_run = identifiers.mint_run_id().unwrap();
+    append(
+        links
+            .clone()
+            .with_run_id(other_run)
+            .with_action_id(physical),
+        InputPayloadDraft::committed(
+            EventAction::InputSwipe,
+            EffectDisposition::Performed,
+            AuditInput::new(),
+        )
+        .into(),
+    );
+    let conflict = evidence(0, None, 1024);
+    assert_eq!(conflict.inputs[0].outcome.state, "identity_conflict");
+    assert_eq!(conflict.inputs[0].after_capture.state, "source_mismatch");
+    assert!(conflict.inputs[0].after_frame.artifacts.is_empty());
+    let legacy_id = identifiers.mint_action_id().unwrap();
+    append(
+        links.clone().with_action_id(legacy_id),
+        InputPayloadDraft::intent(EventAction::InputTap, AuditInput::new()).into(),
+    );
+    let legacy = evidence(0, None, 1024);
+    assert!(legacy.gaps.contains(&"provenance_not_recorded"));
+    assert_eq!(legacy.inputs[1].source_step.state, "not_recorded");
+    assert_eq!(legacy.inputs[1].outcome.state, "missing");
+    assert_eq!(
+        legacy.steps[0].physical_inputs.source_sequences,
+        vec![input_event.sequence()]
+    );
+    writer.close().unwrap();
+    let saved_raw = fs::read(raw.path()).unwrap();
+    fs::write(raw.path(), b"damaged task diagnostic").unwrap();
+    let damaged_raw_tree = tree_bytes(state_root);
+    let damaged_raw = record_page(None);
+    assert!(!damaged_raw.failures.is_empty());
+    assert!(
+        !damaged_raw
+            .diagnostics
+            .iter()
+            .any(
+                |page| page.artifact.artifact_id == *raw.reference().artifact_id()
+                    && page.state == "verified"
+            )
+    );
+    assert_eq!(tree_bytes(state_root), damaged_raw_tree);
+    fs::write(raw.path(), saved_raw).unwrap();
+    let saved_frame = fs::read(before.path()).unwrap();
+    fs::write(before.path(), b"damaged frame").unwrap();
+    let damaged_tree = tree_bytes(state_root);
+    let damaged = evidence(0, None, 1024);
+    assert!(!damaged.failures.is_empty());
+    assert!(damaged.gaps.contains(&"artifact_verification_failed"));
+    assert_eq!(tree_bytes(state_root), damaged_tree);
+    fs::write(before.path(), saved_frame).unwrap();
+    append_bytes(&latest_segment(&ledger_root), b"damaged-tail");
+    let bad_tail_tree = tree_bytes(state_root);
+    let bad_tail = evidence(0, None, 1024);
+    assert!(bad_tail.corrupt_tail.is_some());
+    assert_eq!(tree_bytes(state_root), bad_tail_tree);
 }
 
 #[test]

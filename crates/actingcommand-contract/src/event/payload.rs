@@ -493,7 +493,19 @@ pub struct InputIntentPayload {
     action: EventAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution_plan: Option<InputExecutionPlanRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provenance: Option<InputIntentProvenance>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputIntentProvenance {
+    pub input_action: InputAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_step_action_id: Option<crate::ActionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame_id: Option<crate::FrameId>,
 }
 
 impl InputIntentPayload {
@@ -505,11 +517,24 @@ impl InputIntentPayload {
         self.execution_plan.as_ref()
     }
 
+    pub const fn provenance(&self) -> Option<&InputIntentProvenance> {
+        self.provenance.as_ref()
+    }
+
     pub fn audit(&self) -> &SanitizedAudit {
         &self.audit
     }
 
     fn validate(&self) -> Result<(), SanitizationError> {
+        if let Some(provenance) = &self.provenance {
+            provenance
+                .input_action
+                .validate()
+                .map_err(|_| SanitizationError::new("invalid_input_provenance", "input_action"))?;
+            if self.action != provenance.input_action.event_action() {
+                return Err(SanitizationError::new("invalid_input_provenance", "action"));
+            }
+        }
         if let Some(execution_plan) = &self.execution_plan {
             if self.action != EventAction::InputSwipe {
                 return Err(SanitizationError::new(
@@ -2995,20 +3020,24 @@ impl TaskSemanticPayload {
     }
 }
 
+fn redact_sensitive_input(action: &mut InputAction) {
+    match action {
+        InputAction::Key { key } => *key = "[redacted]".to_string(),
+        InputAction::Text { text } => *text = "[redacted]".to_string(),
+        InputAction::Tap { .. }
+        | InputAction::LongTap { .. }
+        | InputAction::Swipe { .. }
+        | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+        | InputAction::Reset => {}
+    }
+}
+
 impl TaskSemanticFact {
     fn redact_sensitive_input(&mut self) {
         let Self::EffectIntent { action, .. } = self else {
             return;
         };
-        match action {
-            InputAction::Key { key } => *key = "[redacted]".to_string(),
-            InputAction::Text { text } => *text = "[redacted]".to_string(),
-            InputAction::Tap { .. }
-            | InputAction::LongTap { .. }
-            | InputAction::Swipe { .. }
-            | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
-            | InputAction::Reset => {}
-        }
+        redact_sensitive_input(action);
     }
 
     fn event_type(&self) -> EventType {
@@ -4306,6 +4335,7 @@ struct ObservationDraft {
 struct InputIntentDraft {
     action: EventAction,
     execution_plan: Option<InputExecutionPlanRecord>,
+    provenance: Option<InputIntentProvenance>,
     audit: AuditInput,
 }
 
@@ -5694,6 +5724,7 @@ impl InputIntentDraft {
         Self {
             action,
             execution_plan,
+            provenance: None,
             audit,
         }
     }
@@ -5711,11 +5742,22 @@ impl InputIntentDraft {
         if let Some(execution_plan) = &self.execution_plan {
             execution_plan.validate()?;
         }
-        Ok(InputIntentPayload {
+        let mut provenance = self.provenance;
+        if let Some(provenance) = &mut provenance {
+            provenance
+                .input_action
+                .validate()
+                .map_err(|_| SanitizationError::new("invalid_input_provenance", "input_action"))?;
+            redact_sensitive_input(&mut provenance.input_action);
+        }
+        let payload = InputIntentPayload {
             action: self.action,
             execution_plan: self.execution_plan,
+            provenance,
             audit: self.audit.sanitize(fingerprinter)?,
-        })
+        };
+        payload.validate()?;
+        Ok(payload)
     }
 }
 
@@ -6590,6 +6632,25 @@ enum InputDraftKind {
 pub struct InputPayloadDraft(InputDraftKind);
 
 impl InputPayloadDraft {
+    pub fn intent_with_provenance(
+        input_action: InputAction,
+        execution_plan: Option<InputExecutionPlanRecord>,
+        source_step_action_id: Option<crate::ActionId>,
+        before_frame_id: Option<crate::FrameId>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Intent(InputIntentDraft {
+            action: input_action.event_action(),
+            execution_plan,
+            provenance: Some(InputIntentProvenance {
+                input_action,
+                source_step_action_id,
+                before_frame_id,
+            }),
+            audit,
+        }))
+    }
+
     pub fn intent(action: EventAction, audit: AuditInput) -> Self {
         Self(InputDraftKind::Intent(InputIntentDraft::new(
             action, None, audit,
