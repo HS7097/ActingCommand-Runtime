@@ -12,10 +12,11 @@ use actingcommand_contract::{
     EffectiveOperationTiming, EffectiveTaskTiming, EffectiveTimingSource, EffectiveTimingValue,
     InputAction, InputSamplingEvidence, InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA,
     OcrFieldDictionary, OcrFieldReason, OcrFieldRecord, OcrFieldResult, OcrFieldType,
-    OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
-    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
+    OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, PHASED_CONTROL_SCHEMA,
+    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
+    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence, validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -40,7 +41,7 @@ const DEFAULT_CAPTURE_INTERVAL_MS: u64 = 50;
 const DEFAULT_TASK_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_STEP_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_MAX_STEPS: u32 = 100;
-const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
 const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
 const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
@@ -1380,6 +1381,7 @@ pub enum ContainedTaskTrace {
         step_index: u32,
         operation_label: String,
         from_page: String,
+        phase: Option<TaskPhaseEvidence>,
     },
     EffectIntent {
         step_index: u32,
@@ -1396,6 +1398,7 @@ pub enum ContainedTaskTrace {
         step_index: u32,
         operation_label: String,
         page_label: String,
+        phase: Option<TaskPhaseEvidence>,
     },
     StabilityBaseline {
         step_index: u32,
@@ -1867,14 +1870,24 @@ impl PreparedContainedTask {
         entry: ContainedTaskEntry,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        let task_deadline = started + task_timeout;
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
             self.capture_page(runtime, ocr_collector, Some(required_page))?
                 .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
         } else {
-            self.capture_until_page(runtime, ocr_collector, step_timeout, capture_interval)?
+            self.capture_until_page(
+                runtime,
+                ocr_collector,
+                step_timeout,
+                capture_interval,
+                task_deadline,
+            )?
         };
+        if Instant::now() >= task_deadline {
+            return Err(ContainedTaskError::new("contained_task_timeout").into());
+        }
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -1896,7 +1909,7 @@ impl PreparedContainedTask {
             .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
-        let config = RunStateConfig::new_with_target_pages(
+        let mut config = RunStateConfig::new_with_target_pages(
             &self.control.game,
             self.program.target_pages()?,
             self.control.stop_on_confirmation.unwrap_or(true),
@@ -1904,6 +1917,16 @@ impl PreparedContainedTask {
             self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS),
         )
         .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
+        if let Some(phases) = &self.program.phases {
+            config = config.with_phases(
+                phases.clone(),
+                self.program
+                    .scheduling_outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.designated_operation())
+                    .map(str::to_owned),
+            );
+        }
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         machine
@@ -1912,7 +1935,7 @@ impl PreparedContainedTask {
         let mut stability_tracker = StabilityTracker::default();
 
         loop {
-            if started.elapsed() > task_timeout {
+            if started.elapsed() >= task_timeout {
                 return Err(ContainedTaskError::new("contained_task_timeout").into());
             }
             match machine
@@ -1925,6 +1948,7 @@ impl PreparedContainedTask {
                         ocr_collector,
                         step_timeout,
                         capture_interval,
+                        task_deadline,
                     )?;
                     machine
                         .observe_page(Some(observation.page_label.clone()))
@@ -1949,7 +1973,7 @@ impl PreparedContainedTask {
                     )?;
                     let mut attempt = 1;
                     loop {
-                        if started.elapsed() > task_timeout {
+                        if started.elapsed() >= task_timeout {
                             return Err(ContainedTaskError::new("contained_task_timeout").into());
                         }
                         runtime
@@ -1957,6 +1981,7 @@ impl PreparedContainedTask {
                                 step_index,
                                 operation_label: operation_id.clone(),
                                 from_page: from_page.clone(),
+                                phase: machine.phase_evidence(None),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
                         let (guard, target) = match operation.guard_outcome(
@@ -2017,6 +2042,9 @@ impl PreparedContainedTask {
                                 guard,
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
+                        if started.elapsed() >= task_timeout {
+                            return Err(ContainedTaskError::new("contained_task_timeout").into());
+                        }
                         runtime
                             .input(action)
                             .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -2026,6 +2054,9 @@ impl PreparedContainedTask {
                                 operation_label: operation_id.clone(),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
+                        machine
+                            .operation_effect_completed(&operation_id)
+                            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
                         Self::wait_post_input_delay(operation, started, task_timeout)?;
                         let destination_pages = operation.destination_pages()?;
                         if destination_pages.is_empty() {
@@ -2034,6 +2065,7 @@ impl PreparedContainedTask {
                                 ocr_collector,
                                 step_timeout,
                                 capture_interval,
+                                task_deadline,
                             )?;
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
@@ -2064,6 +2096,7 @@ impl PreparedContainedTask {
                             operation,
                             confirmation_timeout,
                             confirmation_interval,
+                            task_deadline,
                         )? {
                             PostconditionResolution::Reached(reached) => {
                                 observation = reached;
@@ -2136,6 +2169,7 @@ impl PreparedContainedTask {
                                     operation,
                                     confirmation_timeout,
                                     confirmation_interval,
+                                    task_deadline,
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = reached;
@@ -2347,6 +2381,7 @@ impl PreparedContainedTask {
                 step_index,
                 operation_label: operation_label.to_string(),
                 page_label: observation.page_label.clone(),
+                phase: machine.phase_evidence(Some(&observation.page_label)),
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         machine
@@ -2442,6 +2477,7 @@ impl PreparedContainedTask {
                     Some(observation) => observation.page_label.clone(),
                     None => "<unrecognized>".to_string(),
                 },
+                phase: None,
             })
             .map_err(ContainedTaskRunError::Boundary)
     }
@@ -2475,16 +2511,28 @@ impl PreparedContainedTask {
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         timeout: Duration,
         interval: Duration,
+        task_deadline: Instant,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         loop {
-            if let Some(observation) = self.capture_page(runtime, ocr_collector, None)? {
+            if Instant::now() >= task_deadline {
+                return Err(ContainedTaskError::new("contained_task_timeout").into());
+            }
+            let observation = self.capture_page(runtime, ocr_collector, None)?;
+            if Instant::now() >= task_deadline {
+                return Err(ContainedTaskError::new("contained_task_timeout").into());
+            }
+            if let Some(observation) = observation {
                 return Ok(observation);
             }
             if started.elapsed() >= timeout {
                 return Err(ContainedTaskError::new("contained_task_page_unknown").into());
             }
-            thread::sleep(interval);
+            thread::sleep(
+                interval
+                    .min(timeout.saturating_sub(started.elapsed()))
+                    .min(task_deadline.saturating_duration_since(Instant::now())),
+            );
         }
     }
 
@@ -2619,11 +2667,19 @@ impl PreparedContainedTask {
         operation: &TaskOperation,
         timeout: Duration,
         interval: Duration,
+        task_deadline: Instant,
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         let mut last_observation = None;
         loop {
-            if let Some(observation) = self.capture_page(runtime, ocr_collector, None)? {
+            if Instant::now() >= task_deadline {
+                return Err(ContainedTaskError::new("contained_task_timeout").into());
+            }
+            let observation = self.capture_page(runtime, ocr_collector, None)?;
+            if Instant::now() >= task_deadline {
+                return Err(ContainedTaskError::new("contained_task_timeout").into());
+            }
+            if let Some(observation) = observation {
                 let destination_matches =
                     operation.matching_destination_count(&self.control, &observation)?;
                 let hit_error_page = self
@@ -2654,7 +2710,11 @@ impl PreparedContainedTask {
                 });
             }
             let remaining = timeout.saturating_sub(started.elapsed());
-            thread::sleep(interval.min(remaining));
+            thread::sleep(
+                interval
+                    .min(remaining)
+                    .min(task_deadline.saturating_duration_since(Instant::now())),
+            );
         }
     }
 }
@@ -2877,6 +2937,8 @@ struct TaskControl {
     server: String,
     resolution: Resolution,
     entry_task_id: String,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    phases: Option<Vec<TaskPhase>>,
     #[serde(default)]
     capture_interval_ms: Option<u64>,
     #[serde(default)]
@@ -2928,7 +2990,10 @@ impl TaskControl {
     }
 
     fn validate(&self) -> Result<(), ContainedTaskError> {
-        if self.schema_version != CONTROL_SCHEMA
+        if !matches!(
+            self.schema_version.as_str(),
+            CONTROL_SCHEMA | PHASED_CONTROL_SCHEMA
+        ) || (self.phases.is_some() && self.schema_version != PHASED_CONTROL_SCHEMA)
             || self.package_id.trim().is_empty()
             || self.game.trim().is_empty()
             || self.server.trim().is_empty()
@@ -3021,6 +3086,8 @@ struct TaskProgram {
     #[serde(default)]
     entry_page: Option<String>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    phases: Option<Vec<TaskPhase>>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
     timeout_ms: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     max_steps: Option<u32>,
@@ -3056,6 +3123,7 @@ impl TaskProgram {
             "0.8" => self.post_admission_ocr.as_ref().is_some_and(|value| {
                 serde_json::from_value::<OcrFieldsDeclaration>(value.clone()).is_ok()
             }),
+            "0.9" => self.post_admission_ocr.is_none(),
             _ => false,
         };
         if !schema_valid
@@ -3074,6 +3142,12 @@ impl TaskProgram {
         }
         self.validate_task_timeout(control)?;
         self.validate_task_max_steps(control)?;
+        if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
+            || self.phases != control.phases
+            || (self.phases.is_some() && self.schema_version != "0.9")
+        {
+            return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+        }
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
@@ -3144,7 +3218,68 @@ impl TaskProgram {
                 return Err(ContainedTaskError::new("contained_task_program_invalid"));
             }
         }
-        if let Some(declaration) = &self.scheduling_outcome {
+        if let Some(phases) = &self.phases {
+            validate_task_phases(
+                phases,
+                &self
+                    .operations
+                    .iter()
+                    .map(|operation| operation.id.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(ContainedTaskError::new)?;
+            if control.execution_mode != "navigable_route"
+                || !control.stop_on_confirmation.unwrap_or(true)
+                || self.entry_page.is_none()
+                || self.scheduling_outcome.is_none()
+                || self.recovery.is_some()
+                || self.stability_termination.is_some()
+            {
+                return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+            }
+            validate_page_references(&control.game, &[self.entry_page.clone().unwrap()], detector)?;
+            for phase in phases {
+                validate_page_references(&control.game, &phase.target_pages, detector)?;
+                validate_page_set_overlap(
+                    &control.game,
+                    &phase.target_pages,
+                    &self.error_pages,
+                    detector,
+                )?;
+            }
+            let canonical = |pages: &[String]| {
+                pages
+                    .iter()
+                    .map(|page| crate::canonical_page_anchor(&control.game, page))
+                    .collect::<BTreeSet<_>>()
+            };
+            if canonical(&phases.last().unwrap().target_pages) != canonical(&target_pages) {
+                return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+            }
+            for operation in &self.operations {
+                if phases
+                    .iter()
+                    .any(|phase| phase.operations.contains(&operation.id))
+                    && operation.destination_pages()?.is_empty()
+                {
+                    return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+                }
+                if self
+                    .scheduling_outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.designated_operation())
+                    == Some(operation.id.as_str())
+                    && operation
+                        .retry_policy(self.defaults, control.task_timeout().milliseconds)?
+                        .is_some_and(|policy| policy.retryable())
+                {
+                    return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+                }
+            }
+        }
+        if let Some(declaration) = &self.scheduling_outcome
+            && self.phases.is_none()
+        {
             let observable_pages = detector.page_ids().map(str::to_owned).collect::<Vec<_>>();
             let required_home = self.required_home_entry_page(control, detector)?;
             validate_scheduling_outcome_coverage(
@@ -3155,6 +3290,29 @@ impl TaskProgram {
                 &self.operations,
                 declaration,
             )?;
+        }
+        if let Some(phases) = &self.phases {
+            let operations = self
+                .operations
+                .iter()
+                .map(|operation| {
+                    Ok(actingcommand_contract::TaskPhaseOperation {
+                        id: &operation.id,
+                        from: &operation.from,
+                        destinations: operation.destination_pages()?,
+                        retryable: operation.retryable.unwrap_or(false),
+                    })
+                })
+                .collect::<Result<Vec<_>, ContainedTaskError>>()?;
+            actingcommand_contract::validate_phased_route(
+                &control.game,
+                self.entry_page.as_deref().unwrap_or_default(),
+                phases,
+                &target_pages,
+                &operations,
+                self.scheduling_outcome.as_ref().unwrap(),
+            )
+            .map_err(ContainedTaskError::new)?;
         }
         self.validate_recovery(bundle)?;
         Ok(())
@@ -3168,16 +3326,18 @@ impl TaskProgram {
         Ok(self
             .entry_page
             .as_deref()
-            .filter(|page| crate::canonical_page_anchor(&control.game, page) == "home")
+            .filter(|page| {
+                self.phases.is_some() || crate::canonical_page_anchor(&control.game, page) == "home"
+            })
             .map(|page| resolve_page_reference(&control.game, page, detector))
             .transpose()?
-            .filter(|page| detector.page_uses_any_of(page)))
+            .filter(|page| self.phases.is_some() || detector.page_uses_any_of(page)))
     }
 
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
         let valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.timeout_ms.is_none(),
-            "0.7" | "0.8" => self
+            "0.7" | "0.8" | "0.9" => self
                 .timeout_ms
                 .is_none_or(|timeout_ms| control.timeout_ms == Some(timeout_ms)),
             _ => false,
@@ -3192,7 +3352,7 @@ impl TaskProgram {
     fn validate_task_max_steps(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
         let valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.max_steps.is_none(),
-            "0.7" | "0.8" => self.max_steps.is_none_or(|max_steps| {
+            "0.7" | "0.8" | "0.9" => self.max_steps.is_none_or(|max_steps| {
                 (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
             }),
             _ => false,
@@ -4431,7 +4591,7 @@ impl TaskClick {
                 }
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if !matches!(schema_version, "0.7" | "0.8")
+                if !matches!(schema_version, "0.7" | "0.8" | "0.9")
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()
@@ -6875,7 +7035,7 @@ mod post_admission_ocr_tests {
                 .code(),
             "contained_task_program_invalid"
         );
-        for invalid in [0, 600_001] {
+        for invalid in [0, 1_800_001] {
             assert_eq!(
                 control(Some(invalid))
                     .validate()
@@ -7724,6 +7884,7 @@ mod retry_wiring_tests {
             server_scope: vec!["test".to_string()],
             coordinate_space: control.resolution,
             entry_page: None,
+            phases: None,
             timeout_ms: None,
             max_steps: None,
             target_page: Some(PageDeclaration::Singleton("terminal".to_string())),
@@ -7930,6 +8091,165 @@ mod retry_wiring_tests {
             "contained_task_requires_scheduler"
         );
         assert_eq!(default_runtime.inputs, DEFAULT_MAX_STEPS as usize);
+    }
+
+    // PHASED-ROUTE-v1 specification: same-page return, one effect and shared step budget.
+    #[test]
+    fn phased_home_route_isolates_operations_and_keeps_one_run_budget() {
+        let mut task = omitted_policy_task(true, false);
+        let phases: Vec<TaskPhase> = serde_json::from_value(json!([
+            {"id":"depart","operations":["depart"],"target_pages":["terminal"]},
+            {"id":"business","operations":["submit","observe_result"],"target_pages":["terminal"]},
+            {"id":"return","operations":["return"],"target_pages":["home"]}
+        ]))
+        .unwrap();
+        task.control.schema_version = PHASED_CONTROL_SCHEMA.to_owned();
+        task.control.phases = Some(phases.clone());
+        task.control.max_steps = Some(4);
+        task.program.schema_version = "0.9".to_owned();
+        task.program.phases = Some(phases.clone());
+        task.program.target_page = Some(PageDeclaration::Singleton("home".to_owned()));
+        task.program.operations = [
+            ("depart", "home", "terminal"),
+            ("submit", "terminal", "alternate"),
+            ("observe_result", "alternate", "terminal"),
+            ("return", "terminal", "home"),
+        ]
+        .into_iter()
+        .map(|(id, from, to)| {
+            let mut operation = operation(json!({"retryable":false}), None);
+            operation.id = id.to_owned();
+            operation.from = from.to_owned();
+            operation.to = Some(PageDeclaration::Singleton(to.to_owned()));
+            operation
+        })
+        .collect();
+        let declaration = scheduling_declaration(
+            json!({"designated_operation":"submit","mappings":[
+            {"outcome_key":"returned","effect":"designated_effect_completed","terminal_pages":["home"]}]}),
+        );
+        task.program.scheduling_outcome = Some(declaration.clone());
+        let graph = task
+            .program
+            .operations
+            .iter()
+            .map(|operation| actingcommand_contract::TaskPhaseOperation {
+                id: &operation.id,
+                from: &operation.from,
+                destinations: operation.destination_pages().unwrap(),
+                retryable: false,
+            })
+            .collect::<Vec<_>>();
+        actingcommand_contract::validate_phased_route(
+            "neutral",
+            "home",
+            &phases,
+            &["home".to_owned()],
+            &graph,
+            &declaration,
+        )
+        .unwrap();
+        let mut repeated = phases.clone();
+        repeated[2].operations.insert(0, "submit".to_owned());
+        assert_eq!(
+            actingcommand_contract::validate_phased_route(
+                "neutral",
+                "home",
+                &repeated,
+                &["home".to_owned()],
+                &graph,
+                &declaration
+            ),
+            Err("task_phases_designated_effect_repeated")
+        );
+        let mut runtime = ScriptedRuntime::new("home");
+        runtime.frames = ["home", "terminal", "alternate", "terminal", "home"]
+            .map(page_frame)
+            .into();
+        let result = task.run(&mut runtime).unwrap();
+        assert_eq!(result.final_page.as_deref(), Some("neutral/home"));
+        assert_eq!(result.executed_steps, 4);
+        assert_eq!(runtime.inputs, 4);
+        let starts = runtime
+            .traces
+            .iter()
+            .filter_map(|trace| match trace {
+                ContainedTaskTrace::StepStarted {
+                    operation_label,
+                    phase: Some(phase),
+                    ..
+                } => Some((operation_label.as_str(), phase.index)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            starts,
+            [
+                ("depart", 0),
+                ("submit", 1),
+                ("observe_result", 1),
+                ("return", 2)
+            ]
+        );
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::StepFinished {
+                        phase: Some(TaskPhaseEvidence {
+                            completed: true,
+                            ..
+                        }),
+                        ..
+                    }
+                ))
+                .count(),
+            3
+        );
+        assert_eq!(runtime.traces.iter().filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { operation_label, .. } if operation_label == "submit")).count(), 1);
+        task.control.max_steps = Some(3);
+        let mut limited = ScriptedRuntime::new("home");
+        limited.frames = ["home", "terminal", "alternate", "terminal", "home"]
+            .map(page_frame)
+            .into();
+        assert!(
+            matches!(task.run(&mut limited), Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_requires_scheduler")
+        );
+        assert_eq!(limited.inputs, 3);
+    }
+
+    // PHASED-ROUTE-v1 specification: the existing total timer bounds inner polling.
+    #[test]
+    fn postcondition_wait_expires_at_total_deadline_without_another_input() {
+        let mut task = omitted_policy_task(true, false);
+        task.control.timeout_ms = Some(50);
+        task.program.operations[0].expect_after = Some(
+            serde_json::from_value(json!({"page_id":"terminal","timeout_ms":500,"interval_ms":1}))
+                .unwrap(),
+        );
+        let mut runtime = ScriptedRuntime::new("home");
+        let started = Instant::now();
+        assert!(
+            matches!(task.run(&mut runtime), Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_timeout")
+        );
+        assert!(started.elapsed() < Duration::from_millis(400));
+        assert_eq!(runtime.inputs, 1);
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !runtime
+                .traces
+                .iter()
+                .any(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
+        );
     }
 
     struct TimingRuntime {

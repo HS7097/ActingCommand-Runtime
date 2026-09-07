@@ -191,13 +191,13 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
             .unwrap();
         admit(&package).expect("exact built bytes pass Runtime admission");
     }
-    for timeout in [0, 600_001, u64::MAX] {
+    for timeout in [0, 1_800_001, u64::MAX] {
         task["operations"][0]["expect_after"]["timeout_ms"] = json!(timeout);
         let error = build(&task, &format!("invalid-{timeout}")).unwrap_err();
         assert!(
             error
                 .message
-                .contains("expect_after.timeout_ms must be in 1..=600000"),
+                .contains("expect_after.timeout_ms must be in 1..=1800000"),
             "{error:?}"
         );
     }
@@ -229,7 +229,7 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
         ("expect", 480_000, true),
         ("expect", 600_000, true),
         ("expect", 0, false),
-        ("expect", 600_001, false),
+        ("expect", 1_800_001, false),
         ("step", 60_000, true),
         ("step", 60_001, false),
         ("step", 0, false),
@@ -293,5 +293,107 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
             };
             assert_eq!(result.err().expect("rejected bound").code(), code);
         }
+    }
+
+    // PHASED-ROUTE-v1: source, formal build and both admission consumers agree.
+    task["schema_version"] = json!("0.9");
+    task.as_object_mut().unwrap().remove("post_admission_ocr");
+    task.as_object_mut().unwrap().remove("ocr_targets");
+    task["timeout_ms"] = json!(1_800_000);
+    task["max_steps"] = json!(2);
+    task["operations"][0]["expect_after"]["timeout_ms"] = json!(1_800_000);
+    task["operations"][0]["retryable"] = json!(false);
+    let mut return_operation = task["operations"][0].clone();
+    return_operation["id"] = json!("return_same_page");
+    task["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(return_operation);
+    task["phases"] = json!([
+        {"id":"business","operations":["home_noop"],"target_pages":["home"]},
+        {"id":"return","operations":["return_same_page"],"target_pages":["home"]}
+    ]);
+    task["scheduling_outcome"] = json!({"designated_operation":"home_noop","mappings":[
+        {"outcome_key":"returned","effect":"designated_effect_completed","terminal_pages":["home"]}]});
+    build(&task, "phased").expect("formal non-OCR phased build");
+    let bytes = open_published_package(&temp.path().join("phased.zip"))
+        .unwrap()
+        .read_all()
+        .unwrap();
+    admit(&bytes).expect("Runtime phased admission");
+    actingcommand_lab::validate_lab_package_bytes(
+        "phased",
+        &bytes,
+        ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
+    )
+    .expect("Lab phased admission");
+    let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut control = String::new();
+    archive
+        .by_name("control.json")
+        .unwrap()
+        .read_to_string(&mut control)
+        .unwrap();
+    let control: serde_json::Value = serde_json::from_str(&control).unwrap();
+    assert_eq!(control["schema_version"], "Lab-1y.control.v2");
+    assert_eq!(control["phases"], task["phases"]);
+    assert_eq!(control["timeout_ms"], 1_800_000);
+    for changed_field in ["schema_version", "phases", "timeout_ms"] {
+        let mut input = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index).unwrap();
+            let mut payload = Vec::new();
+            entry.read_to_end(&mut payload).unwrap();
+            if entry.name() == "control.json" {
+                let mut changed = control.clone();
+                match changed_field {
+                    "schema_version" => changed[changed_field] = json!("Lab-1y.control.v1"),
+                    "phases" => {
+                        changed.as_object_mut().unwrap().remove("phases");
+                    }
+                    _ => changed[changed_field] = json!(60_000),
+                }
+                payload = serde_json::to_vec(&changed).unwrap();
+            }
+            output
+                .start_file(entry.name(), FileOptions::default())
+                .unwrap();
+            output.write_all(&payload).unwrap();
+        }
+        let changed = output.finish().unwrap().into_inner();
+        assert!(admit(&changed).is_err(), "{changed_field}");
+        assert!(
+            actingcommand_lab::validate_lab_package_bytes(
+                "changed-phase-control",
+                &changed,
+                ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&changed).to_string())
+                    .unwrap()
+            )
+            .is_err(),
+            "{changed_field}"
+        );
+    }
+    for (case, field, value) in [
+        ("schema", "schema_version", json!("0.6")),
+        ("empty", "phases", json!([])),
+        (
+            "too_many",
+            "phases",
+            json!(vec![task["phases"][0].clone(); 33]),
+        ),
+        (
+            "unknown",
+            "phases",
+            json!([{ "id":"unknown", "operations":["missing"], "target_pages":["home"] }]),
+        ),
+        ("budget", "timeout_ms", json!(1_800_001)),
+    ] {
+        let mut invalid = task.clone();
+        invalid[field] = value;
+        assert!(
+            build(&invalid, &format!("phased-{case}")).is_err(),
+            "{case}"
+        );
     }
 }

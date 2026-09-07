@@ -138,18 +138,58 @@ writes neither ledger state nor artifacts and does not infer successful input
 or capture from the task terminal's outcome or step count.
 
 Explicit operation `expect_after.timeout_ms` is a polling budget in
-`1..=600000` milliseconds. Package build, Runtime admission and Lab validation
+`1..=1800000` milliseconds. Package build, Runtime admission and Lab validation
 share this bound. Omission retains the existing step-timeout fallback. The
 Runtime control step timeout remains at most 60000 ms; post-input delay and
 postcondition interval remain at most 5000 ms.
 
 After the declared input, postcondition polling only captures and recognizes.
 Each iteration includes capture/recognition cost and a bounded interval. A
-matching page is checked before polling expiry, so the budget is not a strict
-wall-clock deadline. Existing request/lease cancellation and cumulative task
-timeout checks retain their precedence at their existing execution boundaries.
+matching page may complete the local polling budget, but every poll is also
+bounded by the original task deadline. The deadline is checked before and after
+capture/recognition and immediately before input; sleeps are clipped to its
+remaining time. Existing request/lease cancellation and fatal boundaries remain.
 The wait does not reset those budgets or change retry, recovery, input, lease,
 heartbeat or resource-close behavior.
+
+Operation `0.9` declares non-OCR task budgets directly: optional `timeout_ms`
+defaults to 60000 and accepts `1..=1800000`; optional `max_steps` retains the
+existing 100-step default and 1000-step maximum. Its package control is
+`Lab-1y.control.v2`. The task RPC response ceiling is 1800000 ms and the official
+task-run client selects that bounded ceiling. Resources explicitly choose a
+long budget; all phases share the original monotonic task timer. An in-flight
+capture/provider call retains its existing bounded completion and cancellation
+checks; elapsed time never permits a further input.
+
+An optional `phases` array defines 1–32 linear stages, for example:
+
+```json
+[
+  {"id":"depart","operations":["open_panel"],"target_pages":["panel"]},
+  {"id":"business","operations":["submit"],"target_pages":["result"]},
+  {"id":"return","operations":["back_to_panel","back_home"],"target_pages":["home"]}
+]
+```
+
+Each stage selects only its listed existing protected operations, in the task's
+operation order. Its cursor advances only after a successful operation confirms
+a declared stage target; observing the same page at stage entry does not advance
+or finish the task. The final stage targets equal the task targets. A phased
+task declares its entry page and scheduling outcome; it uses `navigable_route`
+with confirmation enabled and has no internal recovery or stability termination.
+Static reachability follows `(phase, page, designated effect)` through finite
+postconditions. The designated operation is nonretryable and cannot be reachable
+again after its effect. Source conversion, build and Runtime admission share this
+check; the operation and control phase declarations must match exactly.
+
+Phases retain one Task/Run/lease, cumulative steps and the original deadline.
+Existing StepStarted/StepFinished ledger facts carry optional `phase` evidence
+(`index`, `id`, `completed`); a completed StepFinished is committed before the
+cursor advances. Ledger failure remains fatal. Cancellation/failure preserves
+the actual effect and does not restart a phase or submit another task. Ordinary
+declarations without phases retain their page-driven semantics. Consumers that
+cannot interpret 0.9/control.v2 reject them explicitly; Lab deep validation uses
+Runtime admission for this contract.
 
 The Rust mainline contract crate lives in:
 
