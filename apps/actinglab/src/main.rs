@@ -164,6 +164,7 @@ mod cli_parse;
 mod cli_result;
 mod commands;
 mod contained_resources;
+mod scheduling_cli;
 #[rustfmt::skip] mod device_runtime_config;
 mod drive_cli;
 mod env_detection;
@@ -182,6 +183,7 @@ mod readonly_cli;
 pub mod recovery_exec;
 mod resource_authoring;
 mod resource_convert;
+mod resource_restore;
 mod resource_runtime_support;
 mod run_summary;
 mod runtime_capture_backend;
@@ -326,6 +328,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
             run_control(sub, &invocation.global, &invocation.args)
         }
         [group, sub] if group == "scheduler" => run_scheduler(sub, &invocation.global),
+        [group, sub] if group == "scheduling" => {
+            scheduling_cli::run_scheduling(sub, &invocation.global, &invocation.args)
+        }
         [group, sub] if group == "resource" => {
             run_resource(sub, &invocation.global, &invocation.args)
         }

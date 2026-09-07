@@ -287,6 +287,72 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     .expect("Runtime request");
 
     let first = raw_exchange(&info, &request);
+    if first.state() != RuntimeReceiptState::Completed {
+        // Keep the first receipt and the test-owned ledger's raw sequence/link fields.
+        // The receipt is already bounded by raw_exchange's one-MiB frame limit.
+        let receipt = serde_json::to_string(&first).unwrap_or_else(|error| {
+            format!("receipt serialization failed: {error}; original receipt: {first:?}")
+        });
+        eprintln!("C4 first receipt: {receipt}");
+        let mut remaining = (1024_usize * 1024).saturating_sub(receipt.len());
+        let evidence = (|| -> std::io::Result<()> {
+            let mut found_segment = false;
+            for entry in fs::read_dir(root.path().join("ledger/segments"))? {
+                let entry = entry?;
+                let path = entry.path();
+                if !entry.file_type()?.is_file()
+                    || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+                {
+                    eprintln!(
+                        "C4 ledger evidence incomplete: unexpected entry {}",
+                        path.display()
+                    );
+                    continue;
+                }
+                found_segment = true;
+                let file = fs::File::open(&path)?;
+                let snapshot_bytes = file.metadata()?.len();
+                let mut bytes = Vec::new();
+                let read = file
+                    .take(snapshot_bytes.min(remaining as u64))
+                    .read_to_end(&mut bytes);
+                remaining -= bytes.len();
+                eprintln!(
+                    "C4 ledger segment={} snapshot_bytes={snapshot_bytes} captured_bytes={}; raw event.sequence and links follow (later appends excluded):",
+                    path.display(),
+                    bytes.len()
+                );
+                match std::str::from_utf8(&bytes) {
+                    Ok(text) => eprintln!("{text}"),
+                    Err(error) => {
+                        eprintln!("{}", String::from_utf8_lossy(&bytes[..error.valid_up_to()]));
+                        eprintln!("C4 ledger evidence incomplete: UTF-8 error: {error}");
+                    }
+                }
+                read?;
+                if bytes.len() as u64 != snapshot_bytes || !bytes.ends_with(b"\n") {
+                    eprintln!(
+                        "C4 ledger evidence incomplete: bounded or partial segment; original receipt retained"
+                    );
+                }
+                if remaining == 0 {
+                    eprintln!(
+                        "C4 ledger evidence incomplete: one-MiB receipt/ledger limit reached; further segments omitted"
+                    );
+                    break;
+                }
+            }
+            if !found_segment {
+                eprintln!("C4 ledger evidence incomplete: no segment files found");
+            }
+            Ok(())
+        })();
+        if let Err(error) = evidence {
+            eprintln!(
+                "C4 ledger evidence read failed: {error}; original receipt retained; original assertion follows"
+            );
+        }
+    }
     assert_eq!(first.state(), RuntimeReceiptState::Completed);
     let replayed = raw_exchange(&info, &request);
     assert_eq!(replayed, first);
@@ -579,7 +645,7 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 "entry_task_id":"task",
                 "capture_interval_ms":1,
                 "step_timeout_ms":50,
-                "timeout_ms":1000,
+                "timeout_ms":3000,
                 "max_steps":2
             }"#,
         ),
@@ -645,6 +711,131 @@ fn run_json<const N: usize>(binary: &str, arguments: [&str; N]) -> Value {
         .args(arguments)
         .output()
         .expect("run actingctl");
+    if !output.status.success() {
+        const OUTPUT_LIMIT: usize = 1024 * 1024;
+        const TAIL_RESERVE: usize = 256;
+        let mut evidence = String::new();
+        let mut truncated = false;
+        let append = |evidence: &mut String, text: &str| {
+            let remaining = (OUTPUT_LIMIT - TAIL_RESERVE).saturating_sub(evidence.len());
+            let mut length = text.len().min(remaining);
+            while !text.is_char_boundary(length) {
+                length -= 1;
+            }
+            evidence.push_str(&text[..length]);
+            length != text.len()
+        };
+        truncated |= append(&mut evidence, &format!("C4 CLI exit: {}\n", output.status));
+        for (label, original) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+            truncated |= append(&mut evidence, &format!("C4 CLI {label}:\n"));
+            let captured = original
+                .len()
+                .min((OUTPUT_LIMIT - TAIL_RESERVE).saturating_sub(evidence.len()));
+            match std::str::from_utf8(&original[..captured]) {
+                Ok(text) => truncated |= append(&mut evidence, text),
+                Err(error) => {
+                    truncated |= append(
+                        &mut evidence,
+                        &String::from_utf8_lossy(&original[..error.valid_up_to()]),
+                    );
+                    truncated |= append(
+                        &mut evidence,
+                        &format!("\nC4 {label} evidence incomplete: UTF-8 error: {error}\n"),
+                    );
+                }
+            }
+            truncated |= captured != original.len();
+            truncated |= append(&mut evidence, "\n");
+        }
+        let read = (|| -> std::io::Result<()> {
+            let Some(state_root) = arguments
+                .windows(2)
+                .find(|pair| pair[0] == "--state-root")
+                .map(|pair| pair[1])
+                .filter(|path| !path.is_empty())
+            else {
+                truncated |= append(
+                    &mut evidence,
+                    "C4 ledger evidence incomplete: no explicit --state-root path\n",
+                );
+                return Ok(());
+            };
+            let mut found_segment = false;
+            for entry in fs::read_dir(Path::new(state_root).join("ledger/segments"))? {
+                if evidence.len() == OUTPUT_LIMIT - TAIL_RESERVE {
+                    truncated = true;
+                    break;
+                }
+                let entry = entry?;
+                let path = entry.path();
+                if !entry.file_type()?.is_file()
+                    || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+                {
+                    truncated |= append(
+                        &mut evidence,
+                        &format!(
+                            "C4 ledger evidence incomplete: unexpected entry {}\n",
+                            path.display()
+                        ),
+                    );
+                    continue;
+                }
+                found_segment = true;
+                let file = fs::File::open(&path)?;
+                let snapshot_bytes = file.metadata()?.len();
+                let remaining = (OUTPUT_LIMIT - TAIL_RESERVE).saturating_sub(evidence.len());
+                let mut bytes = Vec::new();
+                let result = file
+                    .take(snapshot_bytes.min(remaining as u64))
+                    .read_to_end(&mut bytes);
+                truncated |= append(
+                    &mut evidence,
+                    &format!(
+                        "C4 ledger segment={} snapshot_bytes={snapshot_bytes} captured_bytes={}; raw sequence/links follow (later appends excluded):\n",
+                        path.display(),
+                        bytes.len()
+                    ),
+                );
+                match std::str::from_utf8(&bytes) {
+                    Ok(text) => truncated |= append(&mut evidence, text),
+                    Err(error) => {
+                        truncated |= append(
+                            &mut evidence,
+                            &String::from_utf8_lossy(&bytes[..error.valid_up_to()]),
+                        );
+                        truncated |= append(
+                            &mut evidence,
+                            &format!("\nC4 ledger evidence incomplete: UTF-8 error: {error}\n"),
+                        );
+                    }
+                }
+                result?;
+                if bytes.len() as u64 != snapshot_bytes || !bytes.ends_with(b"\n") {
+                    truncated |= append(
+                        &mut evidence,
+                        "\nC4 ledger evidence incomplete: bounded or partial segment\n",
+                    );
+                }
+            }
+            if !found_segment {
+                truncated |= append(
+                    &mut evidence,
+                    "C4 ledger evidence incomplete: no segments\n",
+                );
+            }
+            Ok(())
+        })();
+        if let Err(error) = read {
+            truncated |= append(
+                &mut evidence,
+                &format!("\nC4 ledger evidence read failed: {error}; original assertion follows\n"),
+            );
+        }
+        if truncated {
+            evidence.push_str("\nC4 evidence incomplete: one-MiB output limit reached; remaining bytes omitted; original assertion follows\n");
+        }
+        eprint!("{evidence}");
+    }
     assert!(
         output.status.success(),
         "actingctl failed: {}",

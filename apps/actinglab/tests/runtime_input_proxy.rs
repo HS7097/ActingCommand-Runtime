@@ -39,6 +39,731 @@ struct FakeState {
     tap_delay_ms: AtomicUsize,
 }
 
+#[test]
+fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records() {
+    use actingcommand_contract::{
+        ContainedLabOperationRequest, InputAction, LabOperationEvidence, LabOperationSelection,
+        LabProjectionHint, verify_lab_operation_evidence,
+    };
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let package = root.path().join("lab-evidence.zip");
+    let mut package_files: Vec<(&str, &[u8])> = vec![
+        ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"seed"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"seed"}"#),
+        ("resources/operations/seed/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","game":"neutral","server":"test","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"private-value","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["anchor"],"optional":["private-value"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+        ("resources/navigation/neutral.test.projection.json", br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#),
+    ];
+    let hashes: serde_json::Map<String, Value> = package_files
+        .iter()
+        .filter(|(path, _)| path.starts_with("resources/") && *path != "resources/manifest.json")
+        .map(|(path, bytes)| {
+            (
+                path.strip_prefix("resources/").unwrap().to_string(),
+                serde_json::json!(format!("{:x}", Sha256::digest(bytes))),
+            )
+        })
+        .collect();
+    let manifest =
+        serde_json::to_vec(&serde_json::json!({"entry_task_id":"seed","hashes":hashes})).unwrap();
+    package_files
+        .iter_mut()
+        .find(|(path, _)| *path == "resources/manifest.json")
+        .unwrap()
+        .1 = &manifest;
+    write_zip(&package, &package_files);
+    let hash = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"lab-evidence-spec"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        actingcommand_contract::EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    for selection in [
+        LabOperationSelection::Coordinates {
+            action: InputAction::Tap { x: 0, y: 0 },
+        },
+        LabOperationSelection::Element {
+            id: "undeclared".into(),
+        },
+    ] {
+        let complete = matches!(selection, LabOperationSelection::Coordinates { .. });
+        let session = client.begin_debug_session().unwrap();
+        let verified = session
+            .run_contained_lab_operation(
+                "node.a",
+                ContainedLabOperationRequest {
+                    package_path: package.to_str().unwrap().to_string(),
+                    expected_sha256: hash.clone(),
+                    selection,
+                    projection_hint: LabProjectionHint {
+                        sequence: None,
+                        content_sha256: None,
+                    },
+                },
+            )
+            .unwrap();
+        let operation = verified.operation().clone();
+        let prepared = &operation.record.prepared;
+        let events = client
+            .query_events(
+                EventQuery {
+                    request_id: Some(prepared.request_id),
+                    correlation_id: Some(prepared.correlation_id),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .unwrap();
+        let lease_events = client
+            .query_events(
+                EventQuery {
+                    lease_id: prepared.lease_id,
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .unwrap();
+        let action_events = if let Some(action_id) = operation.record.input_action_id {
+            client
+                .query_events(
+                    EventQuery {
+                        action_id: Some(action_id),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+                .unwrap()
+        } else {
+            Vec::new()
+        };
+        let artifacts = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .flat_map(|event| &event.artifacts)
+            .map(|reference| {
+                (
+                    reference.artifact_id,
+                    actingcommand_artifact_store::read_projected_verified(&runtime_root, reference)
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let evidence = LabOperationEvidence {
+            operation,
+            terminal: verified.receipt().terminal().unwrap(),
+            events,
+            lease_events,
+            action_events,
+            artifacts,
+        };
+        verify_lab_operation_evidence(&evidence).unwrap();
+        assert_eq!(evidence.operation.record.failure.is_none(), complete);
+        assert_eq!(evidence.operation.record.after_frame.is_some(), complete);
+        assert_eq!(evidence.operation.record.input_event.is_some(), complete);
+        let projection = evidence
+            .operation
+            .record
+            .prepared
+            .before_projection
+            .as_ref()
+            .unwrap();
+        let internal: actingcommand_contract::ContainedObservationEvidence =
+            serde_json::from_slice(&evidence.artifacts[&projection.artifact.artifact_id]).unwrap();
+        assert!(
+            internal
+                .private_facts
+                .rows
+                .iter()
+                .any(|row| row["target"]["target_id"] == "private-value")
+        );
+        assert!(
+            projection
+                .facts
+                .rows
+                .iter()
+                .any(|row| row["target"]["target_id"] == "private-value"
+                    && row["target"]["redacted"] == true)
+        );
+        assert!(
+            !serde_json::to_string(&evidence.operation)
+                .unwrap()
+                .contains("private_facts")
+        );
+        let mut mismatched = evidence.clone();
+        mismatched.operation.record.prepared.request_id = *IdentifierIssuer::new()
+            .unwrap()
+            .mint_request_id()
+            .unwrap()
+            .transport();
+        assert!(verify_lab_operation_evidence(&mismatched).is_err());
+        let mut corrupt = evidence.clone();
+        corrupt
+            .artifacts
+            .get_mut(
+                &evidence
+                    .operation
+                    .record
+                    .prepared_artifact
+                    .artifact
+                    .artifact_id,
+            )
+            .unwrap()[0] ^= 1;
+        assert_eq!(
+            verify_lab_operation_evidence(&corrupt).unwrap_err().code(),
+            "runtime_lab_artifact_hash_mismatch"
+        );
+        if complete {
+            let mut missing_intent = evidence.clone();
+            missing_intent.action_events.clear();
+            assert!(verify_lab_operation_evidence(&missing_intent).is_err());
+        }
+        client.status().unwrap();
+    }
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().unwrap();
+}
+
+#[test]
+fn resource_restore_uses_native_evidence_and_existing_package_chain() {
+    use actingcommand_contract::{
+        ContainedLabOperationRequest, LabOperationSelection, LabProjectionHint,
+    };
+    use actingcommand_resource_tooling::open_published_package;
+    use serde_json::json;
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let source = root.path().join("source");
+    let seed_dir = source.join("ours/operations/seed");
+    fs::create_dir_all(seed_dir.join("assets")).unwrap();
+    fs::create_dir_all(source.join("ours/navigation")).unwrap();
+    let template = Frame::from_pixels(
+        1,
+        1,
+        vec![255, 0, 0],
+        PixelFormat::Rgb8,
+        CaptureBackendName::AdbScreencap,
+    )
+    .unwrap()
+    .encode_png_fast()
+    .unwrap();
+    fs::write(seed_dir.join("assets/HOME.png"), &template).unwrap();
+    let source_task = json!({"schema_version":"0.6","task_id":"seed","game":"neutral","server_scope":["test"],"locale":"en-US",
+        "coordinate_space":{"width":2,"height":2},"defaults":{"template_threshold":0.9,"color_max_distance":0.0},
+        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.9}],
+        "color_probes":[{"id":"private-value","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}],
+        "entry_page":"home","target_page":"home","goal":"Explicit neutral author goal",
+        "operations":[{"id":"seed-tap","purpose":"source purpose","from":"home","to":null,"click":{"kind":"point","x":1,"y":1},
+            "guard":{"page_id":"home","target_id":"page/home","expected_rect":{"x":1,"y":1,"width":1,"height":1},"verify_template":"assets/HOME.png"},"consumes":[],"produces":[]}]});
+    fs::write(
+        seed_dir.join("task.json"),
+        serde_json::to_vec_pretty(&source_task).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        source.join("ours/operations/resources.json"),
+        br#"{"schema_version":"1.0","resources":[],"resource_count":0}"#,
+    )
+    .unwrap();
+    fs::write(source.join("ours/navigation/neutral.test.projection.json"),br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#).unwrap();
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "convert",
+            "--repo",
+            source.to_str().unwrap(),
+        ],
+    );
+    let original = root.path().join("original.zip");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "package",
+            "build-task",
+            "--repo",
+            source.to_str().unwrap(),
+            "--task",
+            "seed",
+            "--out",
+            original.to_str().unwrap(),
+        ],
+    );
+    let source_bytes = open_published_package(&original)
+        .unwrap()
+        .read_all()
+        .unwrap();
+    let hash = format!("{:x}", Sha256::digest(&source_bytes));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"restore-native-spec"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 2,
+        }),
+    )
+    .unwrap();
+    let mut request_ids = Vec::new();
+    let mut frame_hashes = Vec::new();
+    for (flag, coordinates) in [("--tap", "1,1"), ("--swipe", "1,1,1,0,1")] {
+        let output = run_actinglab_json(
+            &config,
+            &runtime_root,
+            &local,
+            [
+                "--json",
+                "--instance",
+                "node.a",
+                "do",
+                flag,
+                coordinates,
+                "--capture",
+                "--zip",
+                original.to_str().unwrap(),
+                "--expected-sha256",
+                &hash,
+                "--verbose",
+            ],
+        );
+        assert_eq!(output["data"]["executed"], true);
+        request_ids.push(output["data"]["req_id"].as_str().unwrap().to_string());
+        let operation: actingcommand_contract::ContainedLabOperationResult =
+            serde_json::from_value(output["data"]["operation_record"].clone()).unwrap();
+        frame_hashes.push(
+            operation
+                .record
+                .prepared
+                .before_frame
+                .unwrap()
+                .observation
+                .artifact()
+                .sha256
+                .clone(),
+        );
+    }
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    let session = client.begin_debug_session().unwrap();
+    let published_source = open_published_package(&original).unwrap();
+    let incomplete = session
+        .run_contained_lab_operation(
+            "node.a",
+            ContainedLabOperationRequest {
+                package_path: published_source.path().to_str().unwrap().into(),
+                expected_sha256: hash.clone(),
+                selection: LabOperationSelection::Element {
+                    id: "undeclared".into(),
+                },
+                projection_hint: LabProjectionHint {
+                    sequence: None,
+                    content_sha256: None,
+                },
+            },
+        )
+        .unwrap();
+    request_ids.push(
+        serde_json::to_value(incomplete.receipt().request_id())
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string(),
+    );
+    assert_eq!(
+        incomplete.operation().record.effect,
+        actingcommand_contract::EffectDisposition::NotPerformed
+    );
+    drop(session);
+    drop(client);
+    host.close().unwrap();
+    let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(runtime_root.join("ledger")),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
+                    .unwrap(),
+            )
+        },
+    )
+    .unwrap();
+    let through = snapshot.latest_sequence().to_string();
+    let native_before = serde_json::to_vec(snapshot.events()).unwrap();
+    let restored = root.path().join("restored");
+    let output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            restored.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[1],
+            "--request-id",
+            &request_ids[0],
+            "--request-id",
+            &request_ids[2],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "restored",
+            "--entry-page",
+            "home",
+            "--target-page",
+            "home",
+            "--goal",
+            "Explicit restored goal",
+        ],
+    );
+    assert_eq!(output["data"]["record_count"], 3);
+    assert_eq!(output["data"]["operation_count"], 2);
+    assert_eq!(output["data"]["awaiting_author_input"], json!([]));
+    assert_eq!(output["data"]["gaps"].as_array().unwrap().len(), 1);
+    let task_bytes = fs::read(restored.join("ours/operations/restored/task.json")).unwrap();
+    let task: Value = serde_json::from_slice(&task_bytes).unwrap();
+    assert_eq!(task["schema_version"], "0.6");
+    assert_eq!(task["target_page"], "home");
+    assert_eq!(task["operations"][0]["click"]["kind"], "point");
+    assert_eq!(task["operations"][1]["click"]["kind"], "drag");
+    assert_eq!(task["operations"][1]["click"]["duration_ms"], 1);
+    assert_eq!(task["operations"][0]["purpose"], "");
+    assert_eq!(task["operations"][0]["to"], Value::Null);
+    let source_operation = &task["operations"][0];
+    assert_eq!(source_operation["from"], "home");
+    assert_eq!(source_operation["expect_after"]["page_id"], "home");
+    let recorded_after = &source_operation["provenance"]["after"]["projection"];
+    assert_eq!(recorded_after["page"], "neutral/home");
+    assert!(
+        task["operations"][0]["provenance"]["input_intent"]["sequence"]
+            .as_u64()
+            .unwrap()
+            < task["operations"][1]["provenance"]["input_intent"]["sequence"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(
+        !String::from_utf8(task_bytes.clone())
+            .unwrap()
+            .contains("private_facts")
+    );
+    assert!(task["color_probes"].as_array().unwrap().is_empty());
+    let assets = fs::read_dir(restored.join("ours/operations/restored/assets"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(fs::read(&assets[0]).unwrap(), template);
+    assert!(!frame_hashes.contains(&format!(
+        "sha256:{:x}",
+        Sha256::digest(fs::read(&assets[0]).unwrap())
+    )));
+    let metadata: Value = serde_json::from_slice(
+        &fs::read(restored.join("ours/navigation/neutral.test.projection.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        metadata["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|action| action["safety"] == "dangerous")
+    );
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "convert",
+            "--repo",
+            restored.to_str().unwrap(),
+        ],
+    );
+    let built = root.path().join("restored.zip");
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "package",
+            "build-task",
+            "--repo",
+            restored.to_str().unwrap(),
+            "--task",
+            "restored",
+            "--out",
+            built.to_str().unwrap(),
+        ],
+    );
+    run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "package",
+            "validate",
+            "--zip",
+            built.to_str().unwrap(),
+        ],
+    );
+    let pending = root.path().join("pending");
+    let pending_output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            pending.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[0],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "pending",
+        ],
+    );
+    assert_eq!(
+        pending_output["data"]["awaiting_author_input"],
+        json!(["target_page", "entry_page"])
+    );
+    let pending_task: Value = serde_json::from_slice(
+        &fs::read(pending.join("ours/operations/pending/task.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(pending_task.get("target_page").is_none() && pending_task.get("entry_page").is_none());
+    run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            restored.to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_ids[0],
+            "--through-sequence",
+            &through,
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--task-id",
+            "restored",
+        ],
+    );
+    assert_eq!(
+        fs::read(restored.join("ours/operations/restored/task.json")).unwrap(),
+        task_bytes
+    );
+    let after = actingcommand_ledger::GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(runtime_root.join("ledger")),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
+                    .unwrap(),
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_vec(after.events()).unwrap(), native_before);
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contracts() {
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let package = root.path().join("observe.zip");
+    let frame = root.path().join("frame.png");
+    write_zip(&package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let expected = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"online-observation-cli"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    let output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected,
+            "--targets",
+            "anchor",
+            "--with-frame",
+            frame.to_str().unwrap(),
+            "--verbose",
+        ],
+    );
+    assert_eq!(output["data"]["state"], "recognized");
+    assert_eq!(output["data"]["observation"]["page"], "page");
+    assert_eq!(output["data"]["facts"]["target_evaluation_count"], 1);
+    assert_eq!(
+        output["data"]["projection_source"]["actual_package_sha256"],
+        expected
+    );
+    assert!(
+        output["data"]["terminal"]["sequence"].as_u64().unwrap()
+            > output["data"]["projection_source"]["projection_sequence"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(frame.is_file());
+    let minimum = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected,
+        ],
+    );
+    assert!(
+        serde_json::to_vec(&minimum["data"]).unwrap().len()
+            <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
+    );
+    assert_eq!(minimum["data"]["observation"]["page"], "page");
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    let raw = client.observe_readonly("node.a").unwrap();
+    assert!(
+        matches!(raw.receipt().result(), Some(actingcommand_contract::RuntimeResult::ReadonlyObservationCompleted { observation }) if observation.verdict() == actingcommand_contract::RecognitionVerdict::FrameDecoded)
+    );
+    let before = state.captures.load(Ordering::Acquire);
+    let offline = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "observe",
+            "--scene",
+            frame.to_str().unwrap(),
+            "--zip",
+            package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected,
+            "--verbose",
+        ],
+    );
+    assert_eq!(offline["data"]["observation"]["page"], "page");
+    assert_eq!(state.captures.load(Ordering::Acquire), before);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != EventType::LeaseGranted)
+    );
+    drop(client);
+    host.close().unwrap();
+}
+
 struct FakeBackend {
     state: Arc<FakeState>,
     closed: bool,
@@ -960,7 +1685,8 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
             "--instance",
             "node.a",
             "do",
-            "home_button",
+            "--tap",
+            "0,0",
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
@@ -984,9 +1710,9 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
     assert_eq!(
         envelope
-            .pointer("/data/device/backend")
+            .pointer("/data/device/authority")
             .and_then(Value::as_str),
-        Some("runtime_proxy")
+        Some("runtime_execution_kernel")
     );
     assert!(envelope.pointer("/data/needs_detection").is_none());
     assert_eq!(state.captures.load(Ordering::Acquire), 2);
@@ -1003,13 +1729,26 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     let semantic_package = root.path().join("semantic.zip");
     let config_path = root.path().join("actinglab.json");
     fs::write(&config_path, "{}").expect("write config");
-    write_semantic_resources(&resources);
-    write_semantic_package(&semantic_package, &resources);
+    write_navigation_resources(&resources);
+    let pack = fs::read_to_string(resources.join("recognition/arknights.cn.pack.json"))
+        .unwrap()
+        .replace("[0,0,255]", "[0,255,0]");
+    let pages = fs::read(resources.join("recognition/arknights.cn.pages.json")).unwrap();
+    let navigation = fs::read(resources.join("navigation/arknights.cn.navigation.json")).unwrap();
+    write_zip(&semantic_package, &[
+        ("control.json", br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"schema_version":"0.3","entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{"task_id":"task","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"home_anchor","privacy":"personal"}]}}"#),
+        ("resources/recognition/arknights.cn.pack.json", pack.as_bytes()),
+        ("resources/recognition/arknights.cn.pages.json", &pages),
+        ("resources/navigation/arknights.cn.navigation.json", &navigation),
+    ]);
     let expected_sha256 = format!(
         "{:x}",
         Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
     );
     let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
         .mint_instance_id()
@@ -1040,6 +1779,7 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
             semantic_package.to_str().expect("semantic package path"),
             "--expected-sha256",
             &expected_sha256,
+            "--verbose",
         ],
     );
     assert_eq!(
@@ -1049,6 +1789,17 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
         Some("runtime_scheduler")
     );
 
+    let element = observe["data"]["observation"]["elements"][0]["id"]
+        .as_str()
+        .expect("current element")
+        .to_string();
+    let old_sequence = observe["data"]["projection_source"]["projection_sequence"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let old_hash = observe["data"]["projection_source"]["content_sha256"]
+        .as_str()
+        .unwrap();
     let action = run_actinglab_json(
         &config_path,
         &runtime_root,
@@ -1058,12 +1809,17 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
             "--instance",
             "node.a",
             "do",
-            "home_button",
+            &element,
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
             "--expected-sha256",
             &expected_sha256,
+            "--projection-sequence",
+            &old_sequence,
+            "--projection-hash",
+            old_hash,
+            "--verbose",
         ],
     );
     assert_eq!(
@@ -1079,6 +1835,117 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert!(state.captures.load(Ordering::Acquire) >= 3);
     assert!(!local_app_data.join("ActingCommand/actinglab/lab2").exists());
+    let operation: actingcommand_contract::ContainedLabOperationResult =
+        serde_json::from_value(action["data"]["operation_record"].clone()).unwrap();
+    assert_eq!(
+        operation
+            .record
+            .prepared
+            .projection_hint
+            .sequence
+            .unwrap()
+            .to_string(),
+        old_sequence
+    );
+    assert!(
+        operation
+            .record
+            .prepared
+            .before_projection
+            .as_ref()
+            .unwrap()
+            .projection_sequence
+            > old_sequence.parse::<u64>().unwrap()
+    );
+    assert_eq!(
+        operation.record.effect,
+        actingcommand_contract::EffectDisposition::Performed
+    );
+    assert!(operation.record.failure.is_none());
+    assert!(
+        !operation
+            .record
+            .after_projection
+            .as_ref()
+            .unwrap()
+            .projection
+            .matched
+    );
+    let before = operation
+        .record
+        .prepared
+        .before_projection
+        .as_ref()
+        .unwrap();
+    let raw =
+        actingcommand_artifact_store::read_projected_verified(&runtime_root, &before.artifact)
+            .unwrap();
+    let evidence: actingcommand_contract::ContainedObservationEvidence =
+        serde_json::from_slice(&raw).unwrap();
+    assert!(
+        evidence
+            .private_facts
+            .rows
+            .iter()
+            .any(|row| row["target"]["target_id"] == "home_anchor"
+                && !row["target"]["evaluation"].is_null())
+    );
+    assert!(
+        before
+            .facts
+            .rows
+            .iter()
+            .any(|row| row["target"]["target_id"] == "home_anchor"
+                && row["target"]["redacted"] == true
+                && row["target"]["evaluation"].is_null())
+    );
+    assert!(
+        !serde_json::to_string(&action)
+            .unwrap()
+            .contains("private_facts")
+    );
+    for (flag, coordinates) in [("--tap", "0,0"), ("--swipe", "0,0,0,0,1")] {
+        let explicit = run_actinglab_json(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            [
+                "--json",
+                "--instance",
+                "node.a",
+                "do",
+                flag,
+                coordinates,
+                "--capture",
+                "--zip",
+                semantic_package.to_str().unwrap(),
+                "--expected-sha256",
+                &expected_sha256,
+                "--projection-sequence",
+                &old_sequence,
+                "--projection-hash",
+                old_hash,
+                "--verbose",
+            ],
+        );
+        assert_eq!(explicit["data"]["executed"], true);
+        assert_eq!(explicit["data"]["effect"], "performed");
+        assert_eq!(
+            explicit["data"]["operation_record"]["record"]["prepared"]["selection"]["mode"],
+            "coordinates"
+        );
+        assert_eq!(
+            explicit["data"]["operation_record"]["record"]["prepared"]["selected_element"],
+            Value::Null
+        );
+        assert_eq!(
+            explicit["data"]["operation_record"]["record"]["prepared"]["before_projection"]["projection"]
+                ["matched"],
+            false
+        );
+    }
+    assert_eq!(state.taps.load(Ordering::Acquire), 2);
+    assert_eq!(state.captures.load(Ordering::Acquire), 7);
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
@@ -1102,13 +1969,58 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     assert_event_order(
         &correlated,
         &[
-            EventType::CaptureCompleted,
             EventType::LeaseGranted,
-            EventType::InputCommitted,
-            EventType::LeaseReleased,
             EventType::CaptureCompleted,
+            EventType::InputCommitted,
+            EventType::CaptureCompleted,
+            EventType::LeaseReleased,
         ],
     );
+    let inputs = events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputCommitted)
+        .collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 3);
+    for input in inputs {
+        let request = input.links.request_id();
+        let chain = events
+            .iter()
+            .filter(|event| event.links.request_id() == request)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|event| event.event_type == EventType::InputIntent)
+                .count(),
+            1
+        );
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|event| event.event_type == EventType::CaptureCompleted)
+                .count(),
+            2
+        );
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|event| event.event_type == EventType::ArtifactVerified
+                    && event.artifacts[0].kind == ArtifactKind::DiagnosticJson)
+                .count(),
+            4
+        );
+        assert!(
+            chain
+                .iter()
+                .filter(|event| matches!(
+                    event.event_type,
+                    EventType::CaptureCompleted
+                        | EventType::InputIntent
+                        | EventType::InputCommitted
+                ))
+                .all(|event| event.links.lease_id() == input.links.lease_id())
+        );
+    }
 
     drop(client);
     host.close().expect("close host");
@@ -1165,22 +2077,13 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
             semantic_package.to_str().expect("semantic package path"),
             "--expected-sha256",
             &expected_sha256,
+            "--verbose",
         ],
     );
     assert_eq!(exit_code, 3, "{failure}");
-    assert_eq!(failure["error"]["code"], "target_not_visible");
-    assert_eq!(
-        failure["error"]["details"]["needs_detection"],
-        serde_json::json!({
-            "status": "needs_detection",
-            "reason": "resource_drift",
-            "command": "do",
-            "subject": "home_button",
-            "detector_ids": [],
-            "keys": [],
-            "recommended_action": "run_detect"
-        })
-    );
+    assert_eq!(failure["error"]["code"], "capability_insufficient");
+    assert_eq!(failure["error"]["details"]["failure"]["stage"], "selection");
+    assert_eq!(failure["error"]["details"]["effect"], "not_performed");
     assert_eq!(
         failure["error"]["details"]["ledger"]["authority"],
         "runtime_global_ledger"
@@ -1208,8 +2111,160 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
             .all(|event| event.event_type != EventType::InputCommitted)
     );
 
+    let (_, outside) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,0",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected_sha256,
+            "--verbose",
+        ],
+    );
+    assert_eq!(
+        outside["error"]["details"]["failure"]["code"],
+        "lab_coordinates_out_of_frame"
+    );
+    assert_eq!(outside["error"]["details"]["effect"], "not_performed");
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
+
+    state.tap_started.store(false, Ordering::Release);
+    state.tap_delay_ms.store(2_000, Ordering::Release);
+    let (post_failure, queued) = thread::scope(|scope| {
+        let operation = scope.spawn(|| {
+            run_actinglab_output(
+                &config_path,
+                &runtime_root,
+                &local_app_data,
+                [
+                    "--json",
+                    "--instance",
+                    "node.a",
+                    "do",
+                    "--tap",
+                    "0,0",
+                    "--capture",
+                    "--zip",
+                    semantic_package.to_str().unwrap(),
+                    "--expected-sha256",
+                    &expected_sha256,
+                    "--verbose",
+                ],
+            )
+        });
+        wait_until(Duration::from_secs(5), || {
+            state.tap_started.load(Ordering::Acquire)
+        });
+        let queued = client
+            .queue_lease(
+                "node.a",
+                actingcommand_contract::LeaseQueuePolicy::new(
+                    actingcommand_contract::LeasePriority::High,
+                    5_000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let actingcommand_runtime_client::LeaseAdmission::Queued(queued) = queued else {
+            panic!("input's destructive step must defer transfer");
+        };
+        assert!(queued.preempt_requested());
+        (operation.join().unwrap(), queued)
+    });
+    assert!(!post_failure.status.success());
+    let post_failure: Value = serde_json::from_slice(&post_failure.stdout).unwrap();
+    let details = &post_failure["error"]["details"];
+    assert_eq!(details["effect"], "performed");
+    assert_eq!(details["executed"], true);
+    assert_eq!(details["failure"]["stage"], "after_frame");
+    assert!(details["after"].is_null());
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 3);
+    let operation: actingcommand_contract::ContainedLabOperationResult =
+        serde_json::from_value(details["operation_record"].clone()).unwrap();
+    let native = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .unwrap();
+    let input = native
+        .iter()
+        .find(|event| event.sequence == operation.record.input_event.unwrap().sequence)
+        .unwrap();
+    assert_eq!(input.event_type, EventType::InputCommitted);
+    assert_eq!(
+        input.links.lease_id().copied(),
+        operation.record.prepared.lease_id
+    );
+    assert!(
+        native
+            .iter()
+            .any(|event| event.event_type == EventType::LeaseTransferred
+                && event.sequence > input.sequence)
+    );
+    assert!(operation.record.after_frame.is_none());
+    assert!(operation.record.after_projection.is_none());
+    let actingcommand_runtime_client::LeaseAdmission::Granted(next_token) =
+        client.poll_queued_lease(queued.request_id()).unwrap()
+    else {
+        panic!("queued lease must transfer at the existing input boundary");
+    };
+    assert_ne!(
+        Some(next_token.lease_id()),
+        operation.record.prepared.lease_id
+    );
+    client.release_lease(&next_token).unwrap();
+
     drop(client);
     host.close().expect("close host");
+
+    let failed_root = root.path().join("artifact-failure-runtime");
+    let failed_state = Arc::new(FakeState::default());
+    let failed_host = RuntimeHost::start(
+        RuntimeHostConfig::new(&failed_root, b"lab-operation-artifact-failure"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: failed_state.clone(),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    fs::write(
+        failed_root.join("artifacts"),
+        b"blocks original artifact directory",
+    )
+    .unwrap();
+    let (exit, fatal) = run_actinglab_failure_json(
+        &config_path,
+        &failed_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "0,0",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().unwrap(),
+            "--expected-sha256",
+            &expected_sha256,
+            "--verbose",
+        ],
+    );
+    assert_ne!(exit, 0, "{fatal}");
+    assert_eq!(failed_state.taps.load(Ordering::Acquire), 0);
+    assert!(failed_host.close().is_err());
 }
 
 #[test]

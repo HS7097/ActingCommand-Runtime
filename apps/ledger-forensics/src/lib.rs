@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use actingcommand_ledger_forensics::{
     ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
-    ForensicReplayRequest, ForensicRequest, MAX_FORENSIC_EVENTS,
+    ForensicReplayRequest, ForensicReport, ForensicRequest, MAX_FORENSIC_EVENTS,
+    TaskRecordsRequest,
 };
 
 enum CliRequest {
@@ -61,6 +62,8 @@ where
         CliRequest::Replay(request) => actingcommand_ledger_forensics::replay(request),
     }
     .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
+    let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
+    let task_evidence_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) if !report.gaps.is_empty());
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -73,7 +76,22 @@ where
             }
         }
     }
-    output.flush().map_err(output_error)
+    output.flush().map_err(output_error)?;
+    if stability_incomplete {
+        return Err(CliError::new(
+            "stability_export_incomplete",
+            "export_stability",
+            "see structured gaps and failures in the report",
+        ));
+    }
+    if task_evidence_incomplete {
+        return Err(CliError::new(
+            "task_evidence_export_incomplete",
+            "export_task_evidence",
+            "see explicit relations, gaps and failures in the report",
+        ));
+    }
+    Ok(())
 }
 
 pub fn run_env() -> Result<(), CliError> {
@@ -106,7 +124,10 @@ where
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
         "open" => ForensicCommand::Open,
-        "events" => return parse_events(state_root, args).map(CliRequest::StateRoot),
+        "events" => {
+            return parse_events(state_root, args, ForensicCommand::Events)
+                .map(CliRequest::StateRoot);
+        }
         "chain" => {
             require_utf8(args.next(), "--req")?;
             let request_id = require_utf8(args.next(), "request id")?;
@@ -117,7 +138,21 @@ where
         }
         "tail" => ForensicCommand::Tail,
         "repairs" => ForensicCommand::Repairs,
-        "export" => ForensicCommand::Export,
+        "export" => {
+            if let Some(option) = args.next() {
+                let option = option
+                    .into_string()
+                    .map_err(|_| invalid_arguments("export mode is not valid UTF-8"))?;
+                let mode = match option.as_str() {
+                    "--performance" => ForensicCommand::Performance,
+                    "--stability" => ForensicCommand::Stability,
+                    "--task-evidence" => ForensicCommand::TaskEvidence,
+                    _ => return Err(invalid_arguments("unsupported export mode")),
+                };
+                return parse_events(state_root, args, mode).map(CliRequest::StateRoot);
+            }
+            ForensicCommand::Export
+        }
         _ => return Err(invalid_arguments("unsupported command")),
     };
     if args.next().is_some() {
@@ -164,7 +199,11 @@ where
     )))
 }
 
-fn parse_events<I>(state_root: PathBuf, mut args: I) -> Result<ForensicRequest, CliError>
+fn parse_events<I>(
+    state_root: PathBuf,
+    mut args: I,
+    command: ForensicCommand,
+) -> Result<ForensicRequest, CliError>
 where
     I: Iterator<Item = OsString>,
 {
@@ -175,12 +214,47 @@ where
     let mut diagnostic_code = None;
     let mut severity = None;
     let mut correlation_id = None;
+    let mut record_cursor = None;
+    let mut record_limit = None;
+    let mut include_private = false;
     while let Some(option) = args.next() {
         let option = option
             .into_string()
             .map_err(|_| invalid_arguments("event option is not valid UTF-8"))?;
+        if option == "--include-private" && command == ForensicCommand::TaskEvidence {
+            if include_private {
+                return Err(invalid_arguments("duplicate --include-private"));
+            }
+            include_private = true;
+            continue;
+        }
+        if command != ForensicCommand::Events
+            && !matches!(option.as_str(), "--after" | "--through" | "--limit")
+            && !(command == ForensicCommand::TaskEvidence
+                && matches!(option.as_str(), "--record-cursor" | "--record-limit"))
+        {
+            return Err(invalid_arguments(format!(
+                "unsupported export page option {option}"
+            )));
+        }
         let value = next_value(&mut args, &option)?;
         match option.as_str() {
+            "--record-cursor"
+                if command == ForensicCommand::TaskEvidence && record_cursor.is_none() =>
+            {
+                if value.len() > 2048 {
+                    return Err(invalid_arguments("record cursor exceeds bound"));
+                }
+                record_cursor = Some(
+                    serde_json::from_str(&value)
+                        .map_err(|_| invalid_arguments("invalid record cursor"))?,
+                );
+            }
+            "--record-limit"
+                if command == ForensicCommand::TaskEvidence && record_limit.is_none() =>
+            {
+                record_limit = Some(parse_usize(&value, "--record-limit")?)
+            }
             "--after" if after_sequence.is_none() => {
                 after_sequence = Some(parse_u64(&value, "--after")?)
             }
@@ -193,7 +267,7 @@ where
             "--severity" if severity.is_none() => severity = Some(value),
             "--correlation-id" if correlation_id.is_none() => correlation_id = Some(value),
             "--after" | "--through" | "--limit" | "--origin-module" | "--diagnostic-code"
-            | "--severity" | "--correlation-id" => {
+            | "--severity" | "--correlation-id" | "--record-cursor" | "--record-limit" => {
                 return Err(invalid_arguments(format!(
                     "duplicate event option {option}"
                 )));
@@ -210,7 +284,18 @@ where
         limit.unwrap_or(MAX_FORENSIC_EVENTS),
     )
     .map_err(|error| invalid_arguments(error.to_string()))?;
-    Ok(ForensicRequest::events(state_root, events))
+    Ok(match command {
+        ForensicCommand::Performance => ForensicRequest::performance(state_root, events),
+        ForensicCommand::Stability => ForensicRequest::stability(state_root, events),
+        ForensicCommand::TaskEvidence => ForensicRequest::task_evidence(state_root, events)
+            .with_task_records(TaskRecordsRequest {
+                cursor: record_cursor,
+                limit: record_limit.unwrap_or(16),
+                include_private,
+            })
+            .map_err(|error| invalid_arguments(error.to_string()))?,
+        _ => ForensicRequest::events(state_root, events),
+    })
 }
 
 fn next_value<I>(args: &mut I, option: &str) -> Result<String, CliError>

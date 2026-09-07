@@ -12,6 +12,14 @@ pub(super) struct FlagArgs {
 
 impl FlagArgs {
     pub(super) fn parse(args: &[String]) -> CliOutcome<Self> {
+        Self::parse_with_required_values(args, false)
+    }
+
+    pub(super) fn parse_values(args: &[String]) -> CliOutcome<Self> {
+        Self::parse_with_required_values(args, true)
+    }
+
+    fn parse_with_required_values(args: &[String], require_values: bool) -> CliOutcome<Self> {
         let mut parsed = Self::default();
         let mut index = 0usize;
         while index < args.len() {
@@ -25,6 +33,9 @@ impl FlagArgs {
                         .push(args[index + 1].clone());
                     index += 2;
                 } else {
+                    if require_values {
+                        return Err(CliError::usage(format!("missing {arg} <value>")));
+                    }
                     parsed
                         .flags
                         .entry(arg.clone())

@@ -1,3 +1,169 @@
+    // Specification: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5556059085
+    #[test]
+    fn scheduling_inspection_compiles_and_queries_without_runtime_state() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let runtime_root = temp.path().join("runtime-must-not-exist");
+        let _runtime_env = use_runtime_state_root(&runtime_root);
+        let config = temp.path().join("unread-config.json");
+        fs::write(&config, "not a Runtime configuration").unwrap();
+        set_config_env(&config);
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contracts/scheduling/examples/catalog-a");
+        let mut documents = Vec::new();
+        let mut compile_args = vec!["--json".to_owned(), "scheduling".into(), "compile".into()];
+        for name in ["tasks", "pools", "activity", "timeline"] {
+            let bytes = fs::read(example.join(format!("{name}.json"))).unwrap();
+            let path = temp.path().join(format!("{name}.json"));
+            fs::write(&path, &bytes).unwrap();
+            documents.push((path.clone(), serde_json::from_slice::<Value>(&bytes).unwrap()));
+            compile_args.extend([format!("--{name}"), path.to_str().unwrap().to_owned()]);
+        }
+        let compiled = run_cli(compile_args.clone(), true);
+        assert_eq!(compiled.exit_code(), 0, "{}", compiled.envelope_json());
+        let json: Value = serde_json::from_str(&compiled.envelope_json()).unwrap();
+        assert_eq!(json["command"], "scheduling compile");
+        assert_eq!(json["data"]["status"], "accepted");
+        assert_eq!(json["data"]["summary"]["catalog_id"], "fixture.catalog-a");
+        let hash = json["data"]["summary"]["catalog_hash"].as_str().unwrap();
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(hash.len(), 71);
+        assert!(!runtime_root.exists());
+        for command in ["scheduling compile", "scheduling timeline"] {
+            let capability = command_capabilities().into_iter()
+                .find(|entry| entry["command"] == command).unwrap();
+            assert_eq!(capability["needs"], json!(["offline", "read_only"]));
+        }
+
+        // A mixed version preserves the compiler's original structured diagnostics.
+        documents[3].1["schema_version"] = json!("actingcommand.scheduling.v2");
+        fs::write(&documents[3].0, serde_json::to_vec(&documents[3].1).unwrap()).unwrap();
+        let rejected = run_cli(compile_args.clone(), true);
+        assert_eq!(rejected.exit_code(), 2);
+        let rejected: Value = serde_json::from_str(&rejected.envelope_json()).unwrap();
+        assert_eq!(rejected["error"]["code"], "scheduling_catalog_rejected");
+        assert_eq!(rejected["error"]["details"]["status"], "rejected");
+        assert!(!rejected["error"]["details"]["diagnostics"].as_array().unwrap().is_empty());
+
+        for (_, document) in &mut documents {
+            document["schema_version"] = json!("actingcommand.scheduling.v2");
+        }
+        documents[3].1["events"] = json!([{
+            "id":"neutral.window", "scope":{"kind":"server","server_id":"fixture-server-a"},
+            "event_kind":"activity", "schedule":{"kind":"at","at_ms":1000,
+                "clock_source":{"kind":"server","timezone_id":"fixed/utc","utc_offset_minutes":0,"dst_offset_minutes":0,"maintenance_drift_ms":0}},
+            "duration_ms":1000, "invalidates_fact_prefixes":[],
+            "validity":{"from_unix_ms":1100,"until_unix_ms":1900}
+        }]);
+        for (path, document) in &documents {
+            fs::write(path, serde_json::to_vec(document).unwrap()).unwrap();
+        }
+        let mut query_args = compile_args.clone();
+        query_args[2] = "timeline".into();
+        query_args.extend(["--event-id", "neutral.window", "--unix-ms", "1100", "--monotonic-ms", "50",
+            "--instance-id", "fixture-instance-a", "--server-id", "fixture-server-a", "--game-id", "fixture-game-a"].map(str::to_owned));
+        let queried = run_cli(query_args.clone(), true);
+        assert_eq!(queried.exit_code(), 0, "{}", queried.envelope_json());
+        let queried: Value = serde_json::from_str(&queried.envelope_json()).unwrap();
+        assert_eq!(queried["command"], "scheduling timeline");
+        let timeline = &queried["data"]["timeline"];
+        assert_eq!(timeline["time"], json!({"unix_ms":1100,"monotonic_ms":50}));
+        assert_eq!(timeline["context"]["instance_id"], "fixture-instance-a");
+        assert_eq!(timeline["events"][0]["scope_applies"], true);
+        assert_eq!(timeline["events"][0]["availability"]["state"], "true");
+        assert_eq!(timeline["events"][0]["availability"]["active_interval"], json!([1100,1900]));
+        assert_eq!(timeline["next_wake_unix_ms"], 1900);
+        for (flag, value) in [("--event-id", "unknown"), ("--monotonic-ms", "invalid")] {
+            let mut invalid = query_args.clone();
+            let index = invalid.iter().position(|arg| arg == flag).unwrap();
+            invalid[index+1] = value.into();
+            let result = run_cli(invalid, true);
+            assert_eq!(result.exit_code(), 2);
+            assert_eq!(serde_json::from_str::<Value>(&result.envelope_json()).unwrap()["ok"], false);
+        }
+        let mut missing_clock = query_args.clone();
+        let index = missing_clock.iter().position(|arg| arg == "--unix-ms").unwrap();
+        missing_clock.drain(index..index+2);
+        assert_eq!(run_cli(missing_clock, true).exit_code(), 2);
+        for extra in [vec!["--runtime-endpoint", "unused"], vec!["--version"], vec!["--tasks", "duplicate"], vec!["--unexpected", "value"]] {
+            let mut invalid = compile_args.clone();
+            invalid.extend(extra.into_iter().map(str::to_owned));
+            assert_eq!(run_cli(invalid, true).exit_code(), 2);
+        }
+        for bytes in [b"{".to_vec(), vec![b' '; 1_048_577]] {
+            fs::write(&documents[3].0, bytes).unwrap();
+            let rejected = run_cli(compile_args.clone(), true);
+            assert_eq!(rejected.exit_code(), 2);
+            assert_eq!(rejected.envelope.error.as_ref().unwrap().code, "scheduling_catalog_rejected");
+        }
+        fs::remove_file(&documents[3].0).unwrap();
+        let missing = run_cli(compile_args.clone(), true);
+        assert_eq!(missing.exit_code(), 2);
+        assert_eq!(missing.envelope.error.unwrap().code, "scheduling_source_read_failed");
+
+        // Defect regression: https://github.com/HS7097/ActingCommand-Runtime/pull/316#discussion_r3942723676
+        documents[3].1["events"][0]["id"] = json!("true");
+        let mut true_query = query_args.clone();
+        for flag in ["--event-id", "--instance-id", "--server-id", "--game-id"] {
+            let index = true_query.iter().position(|arg| arg == flag).unwrap();
+            true_query[index + 1] = "true".into();
+        }
+        for scope in [
+            json!({"kind":"instance","instance_id":"true"}),
+            json!({"kind":"server","server_id":"true"}),
+            json!({"kind":"game","game_id":"true"}),
+        ] {
+            documents[3].1["events"][0]["scope"] = scope.clone();
+            fs::write(&documents[3].0, serde_json::to_vec(&documents[3].1).unwrap()).unwrap();
+            let compiled = run_cli(compile_args.clone(), true);
+            assert_eq!(compiled.exit_code(), 0, "{}", compiled.envelope_json());
+            let compilation = compiled.envelope.data.unwrap();
+            assert_eq!(compilation["summary"]["timeline_event_ids"], json!(["true"]));
+            let queried = run_cli(true_query.clone(), true);
+            assert_eq!(queried.exit_code(), 0, "{}", queried.envelope_json());
+            let queried: Value = serde_json::from_str(&queried.envelope_json()).unwrap();
+            let timeline = &queried["data"]["timeline"];
+            assert_eq!(timeline["catalog_hash"], compilation["summary"]["catalog_hash"]);
+            assert_eq!(timeline["context"], json!({"instance_id":"true","server_id":"true","game_id":"true"}));
+            assert_eq!(timeline["events"][0]["event_id"], "true");
+            assert_eq!(timeline["events"][0]["scope"], scope);
+            assert_eq!(timeline["events"][0]["scope_applies"], true);
+            assert_eq!(timeline["events"][0]["availability"]["state"], "true");
+            assert_eq!(timeline["events"][0]["availability"]["active_interval"], json!([1100,1900]));
+        }
+        let true_path = temp.path().join("true");
+        fs::write(&true_path, serde_json::to_vec(&documents[0].1).unwrap()).unwrap();
+        let mut path_args = compile_args.clone();
+        let path_index = path_args.iter().position(|arg| arg == "--tasks").unwrap() + 1;
+        path_args[path_index] = true_path.to_str().unwrap().into();
+        let compiled = run_cli(path_args.clone(), true);
+        assert_eq!(compiled.exit_code(), 0, "{}", compiled.envelope_json());
+        path_args[path_index] = "true".into();
+        let invocation = parse_invocation(path_args, true).unwrap();
+        let flags = FlagArgs::parse_values(&invocation.args).unwrap();
+        assert_eq!(flags.optional("--tasks").as_deref(), Some("true"));
+        for flag in ["--tasks", "--pools", "--activity", "--timeline", "--event-id",
+            "--unix-ms", "--monotonic-ms", "--instance-id", "--server-id", "--game-id"] {
+            let index = true_query.iter().position(|arg| arg == flag).unwrap();
+            let mut missing_value = true_query.clone();
+            missing_value.remove(index + 1);
+            let rejected = run_cli(missing_value, true);
+            assert_eq!(rejected.exit_code(), 2, "missing value for {flag}");
+            let mut empty_value = true_query.clone();
+            empty_value[index + 1].clear();
+            let rejected = run_cli(empty_value, true);
+            assert_eq!(rejected.exit_code(), 2, "empty value for {flag}");
+        }
+        let mut duplicate_event = true_query;
+        duplicate_event.extend(["--event-id".to_owned(), "true".into()]);
+        let rejected = run_cli(duplicate_event, true);
+        assert_eq!(rejected.exit_code(), 2);
+        assert_eq!(rejected.envelope.error.unwrap().code, "policy_evaluation_input_invalid");
+        assert!(!runtime_root.exists());
+        assert_eq!(fs::read_to_string(&config).unwrap(), "not a Runtime configuration");
+        set_missing_config_env();
+    }
+
     #[test]
     fn doctor_reports_path_adb_baseline_warning() {
         let adb = resolved_adb_json_from(Ok(path_baseline_adb()));

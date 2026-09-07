@@ -493,7 +493,19 @@ pub struct InputIntentPayload {
     action: EventAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution_plan: Option<InputExecutionPlanRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provenance: Option<InputIntentProvenance>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputIntentProvenance {
+    pub input_action: InputAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_step_action_id: Option<crate::ActionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_frame_id: Option<crate::FrameId>,
 }
 
 impl InputIntentPayload {
@@ -505,11 +517,24 @@ impl InputIntentPayload {
         self.execution_plan.as_ref()
     }
 
+    pub const fn provenance(&self) -> Option<&InputIntentProvenance> {
+        self.provenance.as_ref()
+    }
+
     pub fn audit(&self) -> &SanitizedAudit {
         &self.audit
     }
 
     fn validate(&self) -> Result<(), SanitizationError> {
+        if let Some(provenance) = &self.provenance {
+            provenance
+                .input_action
+                .validate()
+                .map_err(|_| SanitizationError::new("invalid_input_provenance", "input_action"))?;
+            if self.action != provenance.input_action.event_action() {
+                return Err(SanitizationError::new("invalid_input_provenance", "action"));
+            }
+        }
         if let Some(execution_plan) = &self.execution_plan {
             if self.action != EventAction::InputSwipe {
                 return Err(SanitizationError::new(
@@ -1570,6 +1595,8 @@ pub struct PerformanceSummaryPayload {
     foreground: Option<crate::PerformanceForegroundSummary>,
     owned_processes: Vec<crate::PerformanceProcessSummary>,
     third_party_high_load: Vec<crate::PerformanceProcessSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ledger_commits: Option<crate::PerformanceLedgerSample>,
     audit: SanitizedAudit,
 }
 
@@ -3177,20 +3204,24 @@ impl TaskSemanticPayload {
     }
 }
 
+fn redact_sensitive_input(action: &mut InputAction) {
+    match action {
+        InputAction::Key { key } => *key = "[redacted]".to_string(),
+        InputAction::Text { text } => *text = "[redacted]".to_string(),
+        InputAction::Tap { .. }
+        | InputAction::LongTap { .. }
+        | InputAction::Swipe { .. }
+        | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+        | InputAction::Reset => {}
+    }
+}
+
 impl TaskSemanticFact {
     fn redact_sensitive_input(&mut self) {
         let Self::EffectIntent { action, .. } = self else {
             return;
         };
-        match action {
-            InputAction::Key { key } => *key = "[redacted]".to_string(),
-            InputAction::Text { text } => *text = "[redacted]".to_string(),
-            InputAction::Tap { .. }
-            | InputAction::LongTap { .. }
-            | InputAction::Swipe { .. }
-            | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
-            | InputAction::Reset => {}
-        }
+        redact_sensitive_input(action);
     }
 
     fn event_type(&self) -> EventType {
@@ -3661,11 +3692,39 @@ impl PerformanceStutterPayload {
     pub const fn frame_gap_ms(&self) -> u64 {
         self.frame_gap_ms
     }
+
+    pub const fn capture_latency_ms(&self) -> Option<u64> {
+        self.capture_latency_ms
+    }
+
+    pub const fn recognition_latency_ms(&self) -> Option<u64> {
+        self.recognition_latency_ms
+    }
+
+    pub const fn action_effect_latency_ms(&self) -> Option<u64> {
+        self.action_effect_latency_ms
+    }
 }
 
 impl PerformanceSummaryPayload {
     pub const fn context(&self) -> &PerformanceContext {
         &self.context
+    }
+
+    pub const fn foreground(&self) -> Option<&crate::PerformanceForegroundSummary> {
+        self.foreground.as_ref()
+    }
+
+    pub fn owned_processes(&self) -> &[crate::PerformanceProcessSummary] {
+        &self.owned_processes
+    }
+
+    pub fn third_party_high_load(&self) -> &[crate::PerformanceProcessSummary] {
+        &self.third_party_high_load
+    }
+
+    pub const fn ledger_commits(&self) -> Option<&crate::PerformanceLedgerSample> {
+        self.ledger_commits.as_ref()
     }
 }
 
@@ -3698,6 +3757,14 @@ impl PerformanceControlPayload {
 
     pub const fn reason(&self) -> PerformanceControlReason {
         self.reason
+    }
+
+    pub const fn host_responsiveness_basis_points(&self) -> Option<u16> {
+        self.host_responsiveness_basis_points
+    }
+
+    pub const fn third_party_pressure_basis_points(&self) -> Option<u16> {
+        self.third_party_pressure_basis_points
     }
 
     pub const fn deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
@@ -4452,6 +4519,7 @@ struct ObservationDraft {
 struct InputIntentDraft {
     action: EventAction,
     execution_plan: Option<InputExecutionPlanRecord>,
+    provenance: Option<InputIntentProvenance>,
     audit: AuditInput,
 }
 
@@ -4848,6 +4916,7 @@ impl PerformanceSummaryDraft {
             foreground: self.data.foreground,
             owned_processes: self.data.owned_processes,
             third_party_high_load: self.data.third_party_high_load,
+            ledger_commits: self.data.ledger_commits,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -5385,6 +5454,7 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 foreground: value.foreground.clone(),
                 owned_processes: value.owned_processes.clone(),
                 third_party_high_load: value.third_party_high_load.clone(),
+                ledger_commits: value.ledger_commits.clone(),
             })
         }
         PerformancePayload::MonitorDegraded(value)
@@ -5838,6 +5908,7 @@ impl InputIntentDraft {
         Self {
             action,
             execution_plan,
+            provenance: None,
             audit,
         }
     }
@@ -5855,11 +5926,22 @@ impl InputIntentDraft {
         if let Some(execution_plan) = &self.execution_plan {
             execution_plan.validate()?;
         }
-        Ok(InputIntentPayload {
+        let mut provenance = self.provenance;
+        if let Some(provenance) = &mut provenance {
+            provenance
+                .input_action
+                .validate()
+                .map_err(|_| SanitizationError::new("invalid_input_provenance", "input_action"))?;
+            redact_sensitive_input(&mut provenance.input_action);
+        }
+        let payload = InputIntentPayload {
             action: self.action,
             execution_plan: self.execution_plan,
+            provenance,
             audit: self.audit.sanitize(fingerprinter)?,
-        })
+        };
+        payload.validate()?;
+        Ok(payload)
     }
 }
 
@@ -6734,6 +6816,25 @@ enum InputDraftKind {
 pub struct InputPayloadDraft(InputDraftKind);
 
 impl InputPayloadDraft {
+    pub fn intent_with_provenance(
+        input_action: InputAction,
+        execution_plan: Option<InputExecutionPlanRecord>,
+        source_step_action_id: Option<crate::ActionId>,
+        before_frame_id: Option<crate::FrameId>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Intent(InputIntentDraft {
+            action: input_action.event_action(),
+            execution_plan,
+            provenance: Some(InputIntentProvenance {
+                input_action,
+                source_step_action_id,
+                before_frame_id,
+            }),
+            audit,
+        }))
+    }
+
     pub fn intent(action: EventAction, audit: AuditInput) -> Self {
         Self(InputDraftKind::Intent(InputIntentDraft::new(
             action, None, audit,
@@ -8515,6 +8616,19 @@ impl EventPayloadDraft {
 }
 
 impl EventPayload {
+    pub fn performance_summary(&self) -> Option<&PerformanceSummaryPayload> {
+        performance_summary(self)
+    }
+
+    pub fn performance_stutter(&self) -> Option<&PerformanceStutterPayload> {
+        performance_stutter(self)
+    }
+
+    pub fn performance_clock_jump(&self) -> Option<&PerformanceControlPayload> {
+        performance_control(self)
+            .filter(|value| value.reason() == PerformanceControlReason::ClockJump)
+    }
+
     pub fn event_type(&self) -> EventType {
         self.family_payload().event_type()
     }

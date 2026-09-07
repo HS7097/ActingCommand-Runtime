@@ -5,17 +5,21 @@
 use crate::performance_control::PerformanceControlObservation;
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    ActionId, EventId, EventSeverity, EventType, FrameId, PerformanceContext,
-    PerformanceControlEventData, PerformanceControlLevel, PerformanceDeadlineDisposition,
-    PerformanceForegroundSummary, PerformanceMetric, PerformanceMonitorHealth,
-    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureKind,
-    PerformancePressureRecord, PerformancePressureSeverity, PerformancePressureValue,
-    PerformanceProcessOwnership, PerformanceProcessSummary, PerformanceStutterEventData,
-    PerformanceSummaryEventData, RecognitionId, RuntimeErrorCode,
+    ActionId, EventId, EventSeverity, EventType, FrameId, MAX_LEDGER_SAMPLE_WINDOW_NS,
+    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceDeadlineDisposition, PerformanceForegroundSummary, PerformanceLedgerSample,
+    PerformanceLedgerUnavailable, PerformanceLedgerWindow, PerformanceMetric,
+    PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePressureEventData,
+    PerformancePressureKind, PerformancePressureRecord, PerformancePressureSeverity,
+    PerformancePressureValue, PerformanceProcessOwnership, PerformanceProcessSummary,
+    PerformanceStutterEventData, PerformanceSummaryEventData, RecognitionId, RuntimeErrorCode,
 };
 use actingcommand_host_metrics::{
     HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
     ProcessOwnership as HostProcessOwnership, ProcessSample as HostProcessSample,
+};
+use actingcommand_ledger::{
+    GlobalLedger, GlobalLedgerCommitObservation, GlobalLedgerCommitSnapshot,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
@@ -268,6 +272,8 @@ pub(crate) struct RawProcessSample {
     pub(crate) ownership: PerformanceProcessOwnership,
     pub(crate) cpu_basis_points: u16,
     pub(crate) working_set_bytes: u64,
+    pub(crate) peak_working_set_bytes: Option<u64>,
+    pub(crate) process_created_at_windows_100ns: Option<u64>,
     pub(crate) io_bytes_per_second: u64,
 }
 
@@ -384,6 +390,7 @@ pub(crate) struct PerformanceMonitor {
     pipeline_stopped: bool,
     last_summary_unix_ms: Option<u64>,
     last_control_sample_unix_ms: Option<u64>,
+    previous_ledger_sample: Option<GlobalLedgerCommitSnapshot>,
 }
 
 impl PerformanceMonitor {
@@ -408,6 +415,7 @@ impl PerformanceMonitor {
             pipeline_stopped: false,
             last_summary_unix_ms: None,
             last_control_sample_unix_ms: None,
+            previous_ledger_sample: None,
         }
     }
 
@@ -444,11 +452,44 @@ impl PerformanceMonitor {
             pipeline_stopped: false,
             last_summary_unix_ms: None,
             last_control_sample_unix_ms: None,
+            previous_ledger_sample: None,
         })
     }
 
     pub(crate) fn sample_interval(&self) -> Option<Duration> {
         self.config.as_ref().map(|config| config.sample_interval)
+    }
+
+    /// Called before the tick's events are appended; its summary belongs to the next window.
+    pub(crate) fn attach_ledger_sample(
+        &mut self,
+        tick: &mut PerformanceTick,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<()> {
+        for event in &mut tick.events {
+            if let PerformanceSemanticEvent::Summary(data) = event {
+                let sample = ledger.sample_commit_statistics().map_err(|_| {
+                    RuntimeHostError::fatal(
+                        "ledger_failure",
+                        "sample_performance_ledger",
+                        RuntimeErrorCode::LedgerFailure,
+                    )
+                })?;
+                data.ledger_commits = Some(match sample {
+                    GlobalLedgerCommitObservation::Available(current) => {
+                        let result =
+                            ledger_commit_window(self.previous_ledger_sample.as_ref(), &current);
+                        self.previous_ledger_sample = Some(current);
+                        result
+                    }
+                    GlobalLedgerCommitObservation::Unavailable(reason) => {
+                        self.previous_ledger_sample = None;
+                        PerformanceLedgerSample::Unavailable { reason }
+                    }
+                });
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn accepts_pipeline_events(&self) -> bool {
@@ -1123,6 +1164,7 @@ impl PerformanceMonitor {
                         .iter()
                         .map(process_summary)
                         .collect(),
+                    ledger_commits: None,
                 },
             )));
             self.last_summary_unix_ms = Some(sample.observed_at_unix_ms);
@@ -1737,6 +1779,8 @@ fn process_summary(sample: &RawProcessSample) -> PerformanceProcessSummary {
         ownership: sample.ownership,
         cpu_basis_points: sample.cpu_basis_points,
         working_set_bytes: sample.working_set_bytes,
+        peak_working_set_bytes: sample.peak_working_set_bytes,
+        process_created_at_windows_100ns: sample.process_created_at_windows_100ns,
         io_bytes_per_second: sample.io_bytes_per_second,
     }
 }
@@ -1781,6 +1825,8 @@ fn raw_process_sample(sample: HostProcessSample) -> RawProcessSample {
         ownership: process_ownership(sample.ownership),
         cpu_basis_points: sample.cpu_basis_points,
         working_set_bytes: sample.working_set_bytes,
+        peak_working_set_bytes: sample.peak_working_set_bytes,
+        process_created_at_windows_100ns: sample.process_created_at_windows_100ns,
         io_bytes_per_second: sample.io_bytes_per_second,
     }
 }
@@ -1792,6 +1838,8 @@ fn host_process_summary(sample: HostProcessSample) -> PerformanceProcessSummary 
         ownership: process_ownership(sample.ownership),
         cpu_basis_points: sample.cpu_basis_points,
         working_set_bytes: sample.working_set_bytes,
+        peak_working_set_bytes: sample.peak_working_set_bytes,
+        process_created_at_windows_100ns: sample.process_created_at_windows_100ns,
         io_bytes_per_second: sample.io_bytes_per_second,
     }
 }
@@ -1917,6 +1965,79 @@ fn performance_fatal(code: &'static str, operation: &'static str) -> RuntimeHost
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
+fn ledger_commit_window(
+    previous: Option<&GlobalLedgerCommitSnapshot>,
+    current: &GlobalLedgerCommitSnapshot,
+) -> PerformanceLedgerSample {
+    let projected = (|| {
+        let previous = previous.ok_or(PerformanceLedgerUnavailable::NoBaseline)?;
+        if previous.writer_id != current.writer_id {
+            return Err(PerformanceLedgerUnavailable::WriterChanged);
+        }
+        let duration = current
+            .sampled_at_monotonic_ns
+            .checked_sub(previous.sampled_at_monotonic_ns)
+            .filter(|duration| *duration > 0)
+            .ok_or(PerformanceLedgerUnavailable::NonPositiveWindow)?;
+        if duration > MAX_LEDGER_SAMPLE_WINDOW_NS {
+            return Err(PerformanceLedgerUnavailable::WindowTooWide);
+        }
+        let successful_commits = current
+            .successful_commits
+            .checked_sub(previous.successful_commits)
+            .ok_or(PerformanceLedgerUnavailable::CounterReset)?;
+        let write_sync_total_ns = current
+            .write_sync_total_ns
+            .checked_sub(previous.write_sync_total_ns)
+            .ok_or(PerformanceLedgerUnavailable::CounterReset)?;
+        if current
+            .through_sequence
+            .checked_sub(previous.through_sequence)
+            != Some(successful_commits)
+            || current.write_sync_max_ns < previous.write_sync_max_ns
+            || (successful_commits == 0 && write_sync_total_ns != 0)
+        {
+            return Err(PerformanceLedgerUnavailable::CounterReset);
+        }
+        let (first_sequence, last_sequence) = if successful_commits == 0 {
+            (None, None)
+        } else {
+            (
+                Some(
+                    previous
+                        .through_sequence
+                        .checked_add(1)
+                        .ok_or(PerformanceLedgerUnavailable::CounterOverflow)?,
+                ),
+                Some(current.through_sequence),
+            )
+        };
+        let commits_per_second_milli = u64::try_from(
+            u128::from(successful_commits) * 1_000_000_000_000 / u128::from(duration),
+        )
+        .map_err(|_| PerformanceLedgerUnavailable::CounterOverflow)?;
+        let window = PerformanceLedgerWindow {
+            writer_id: current.writer_id,
+            start_monotonic_ns: previous.sampled_at_monotonic_ns,
+            end_monotonic_ns: current.sampled_at_monotonic_ns,
+            first_sequence,
+            last_sequence,
+            successful_commits,
+            write_sync_total_ns,
+            writer_lifetime_write_sync_max_ns: current.write_sync_max_ns,
+            commits_per_second_milli,
+        };
+        window
+            .validate()
+            .map_err(|_| PerformanceLedgerUnavailable::CounterReset)?;
+        Ok(window)
+    })();
+    match projected {
+        Ok(window) => PerformanceLedgerSample::Available { window },
+        Err(reason) => PerformanceLedgerSample::Unavailable { reason },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1972,6 +2093,279 @@ mod tests {
             })),
         )
         .expect("monitor")
+    }
+
+    // Specification criterion 1: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
+    #[test]
+    fn b3_process_peak_is_os_observation_with_creation_identity() {
+        for (peak, created) in [(Some(900), Some(11)), (Some(300), Some(22)), (None, None)] {
+            let process = HostProcessSample {
+                pid: 7,
+                process_name: "neutral-process".to_owned(),
+                ownership: HostProcessOwnership::Runtime,
+                cpu_basis_points: 100,
+                working_set_bytes: 100,
+                peak_working_set_bytes: peak,
+                process_created_at_windows_100ns: created,
+                io_bytes_per_second: 0,
+            };
+            let mut input = sample(1_000, 100);
+            input.owned_processes.push(process.clone());
+            input.foreground = Some(actingcommand_host_metrics::ForegroundSample {
+                process,
+                fullscreen: false,
+            });
+            let mut monitor = monitor(vec![Ok(input)]);
+            let tick = monitor.tick(1_000).expect("neutral sample");
+            let data = tick
+                .events
+                .iter()
+                .find_map(|event| match event {
+                    PerformanceSemanticEvent::Summary(data) => Some(data.as_ref()),
+                    _ => None,
+                })
+                .expect("periodic summary");
+            for value in [
+                &data.owned_processes[0],
+                &data.foreground.as_ref().expect("foreground").process,
+            ] {
+                assert_eq!(value.pid, 7);
+                assert_eq!(value.working_set_bytes, 100);
+                assert_eq!(value.peak_working_set_bytes, peak);
+                assert_eq!(value.process_created_at_windows_100ns, created);
+                value.validate().expect("paired optional source fields");
+                let mut invalid = value.clone();
+                invalid.peak_working_set_bytes = Some(99);
+                invalid.process_created_at_windows_100ns = Some(11);
+                assert!(invalid.validate().is_err());
+            }
+        }
+    }
+
+    // Specification criterion 3: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
+    #[test]
+    fn b3_ledger_windows_bound_monotonic_counts_and_reset() {
+        let ids = IdentifierIssuer::new().expect("ids");
+        let base = GlobalLedgerCommitSnapshot {
+            writer_id: *ids
+                .mint_correlation_id()
+                .expect("writer identity")
+                .transport(),
+            sampled_at_monotonic_ns: 100,
+            successful_commits: 0,
+            through_sequence: 41,
+            write_sync_total_ns: 0,
+            write_sync_max_ns: 0,
+        };
+        let mut end = base.clone();
+        end.sampled_at_monotonic_ns += 1_000_000_000;
+        end.successful_commits = 3;
+        end.through_sequence = 44;
+        end.write_sync_total_ns = 30;
+        end.write_sync_max_ns = 20;
+        let PerformanceLedgerSample::Available { window } = ledger_commit_window(Some(&base), &end)
+        else {
+            panic!("observed window");
+        };
+        assert_eq!(
+            (
+                window.first_sequence,
+                window.last_sequence,
+                window.successful_commits
+            ),
+            (Some(42), Some(44), 3)
+        );
+        assert_eq!(
+            (
+                window.commits_per_second_milli,
+                window.write_sync_total_ns,
+                window.writer_lifetime_write_sync_max_ns
+            ),
+            (3_000, 30, 20)
+        );
+        window.validate().expect("public contract");
+        let mut invalid = window.clone();
+        invalid.commits_per_second_milli = 0;
+        assert!(invalid.validate().is_err());
+        let mut zero = base.clone();
+        zero.sampled_at_monotonic_ns += 1_000_000_000;
+        let PerformanceLedgerSample::Available { window } =
+            ledger_commit_window(Some(&base), &zero)
+        else {
+            panic!("true zero commits");
+        };
+        assert_eq!(
+            (
+                window.successful_commits,
+                window.commits_per_second_milli,
+                window.first_sequence,
+                window.last_sequence
+            ),
+            (0, 0, None, None)
+        );
+        for (previous, current, expected) in [
+            (None, end.clone(), PerformanceLedgerUnavailable::NoBaseline),
+            (
+                Some(base.clone()),
+                base.clone(),
+                PerformanceLedgerUnavailable::NonPositiveWindow,
+            ),
+            (
+                Some(end.clone()),
+                base.clone(),
+                PerformanceLedgerUnavailable::NonPositiveWindow,
+            ),
+        ] {
+            assert_eq!(
+                ledger_commit_window(previous.as_ref(), &current),
+                PerformanceLedgerSample::Unavailable { reason: expected }
+            );
+        }
+        let mut changed = end.clone();
+        changed.writer_id = *ids.mint_correlation_id().expect("next writer").transport();
+        assert_eq!(
+            ledger_commit_window(Some(&base), &changed),
+            PerformanceLedgerSample::Unavailable {
+                reason: PerformanceLedgerUnavailable::WriterChanged
+            }
+        );
+        let mut wide = end.clone();
+        wide.sampled_at_monotonic_ns =
+            base.sampled_at_monotonic_ns + MAX_LEDGER_SAMPLE_WINDOW_NS + 1;
+        assert_eq!(
+            ledger_commit_window(Some(&base), &wide),
+            PerformanceLedgerSample::Unavailable {
+                reason: PerformanceLedgerUnavailable::WindowTooWide
+            }
+        );
+        let mut reset = end.clone();
+        reset.through_sequence = 40;
+        assert_eq!(
+            ledger_commit_window(Some(&base), &reset),
+            PerformanceLedgerSample::Unavailable {
+                reason: PerformanceLedgerUnavailable::CounterReset
+            }
+        );
+        let mut overflow_base = base.clone();
+        overflow_base.through_sequence = 0;
+        let mut overflow = overflow_base.clone();
+        overflow.sampled_at_monotonic_ns += 1;
+        overflow.successful_commits = u64::MAX;
+        overflow.through_sequence = u64::MAX;
+        assert_eq!(
+            ledger_commit_window(Some(&overflow_base), &overflow),
+            PerformanceLedgerSample::Unavailable {
+                reason: PerformanceLedgerUnavailable::CounterOverflow
+            }
+        );
+    }
+
+    // Specification criterion 4: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
+    #[test]
+    fn b3_summary_samples_before_own_commit_and_reads_legacy() {
+        use actingcommand_contract::{
+            AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSource,
+            OriginModule, PerformancePayloadDraft,
+        };
+        use actingcommand_ledger::{
+            GlobalLedgerConfig, GlobalLedgerReadOnlyConfig, Sha256SecretFingerprinter,
+        };
+        let temp = tempfile::tempdir().expect("ledger root");
+        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+            temp.path(),
+            "neutral-summary-writer",
+        ))
+        .expect("ledger");
+        let ids = IdentifierIssuer::new().expect("ids");
+        let persist = |data: PerformanceSummaryEventData| {
+            ledger
+                .append(
+                    EventDraft::new(
+                        ids.mint_event_id().expect("event id"),
+                        1_000,
+                        EventSeverity::Info,
+                        EventOrigin::new(
+                            EventSource::Runtime,
+                            OriginModule::PerformanceMonitor,
+                            EventActor::Runtime,
+                        ),
+                        EventLinksDraft::default(),
+                        PerformancePayloadDraft::summary(data, AuditInput::new()).into(),
+                    )
+                    .sanitize(
+                        &Sha256SecretFingerprinter::new(b"neutral-summary").expect("fingerprinter"),
+                    )
+                    .expect("sanitized summary"),
+                )
+                .expect("persist summary")
+        };
+        let mut monitor = monitor(vec![Ok(sample(1_000, 100)), Ok(sample(61_000, 100))]);
+        let mut first = monitor.tick(1_000).expect("first tick");
+        monitor
+            .attach_ledger_sample(&mut first, &ledger)
+            .expect("first statistics");
+        let first_data = first
+            .events
+            .iter()
+            .find_map(|event| match event {
+                PerformanceSemanticEvent::Summary(data) => Some(data.as_ref().clone()),
+                _ => None,
+            })
+            .expect("first summary");
+        assert_eq!(
+            first_data.ledger_commits,
+            Some(PerformanceLedgerSample::Unavailable {
+                reason: PerformanceLedgerUnavailable::NoBaseline
+            })
+        );
+        let first_event = persist(first_data.clone());
+        let mut second = monitor.tick(61_000).expect("second tick");
+        monitor
+            .attach_ledger_sample(&mut second, &ledger)
+            .expect("second statistics");
+        let second_data = second
+            .events
+            .iter()
+            .find_map(|event| match event {
+                PerformanceSemanticEvent::Summary(data) => Some(data.as_ref().clone()),
+                _ => None,
+            })
+            .expect("second summary");
+        let Some(PerformanceLedgerSample::Available { window }) = &second_data.ledger_commits
+        else {
+            panic!("positive consistent window");
+        };
+        assert_eq!(window.successful_commits, 1);
+        assert_eq!(
+            (window.first_sequence, window.last_sequence),
+            (Some(first_event.sequence()), Some(first_event.sequence()))
+        );
+        let second_event = persist(second_data);
+        let mut legacy = first_data;
+        legacy.ledger_commits = None;
+        let legacy_event = persist(legacy);
+        assert!(
+            !serde_json::to_string(&legacy_event)
+                .expect("legacy JSON")
+                .contains("ledger_commits")
+        );
+        ledger.close().expect("close writer");
+        let snapshot =
+            GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(temp.path()), |_| None)
+                .expect("read persisted source");
+        assert_eq!(
+            snapshot.events(),
+            &[first_event, second_event, legacy_event]
+        );
+        assert!(
+            snapshot.events()[2]
+                .payload()
+                .performance_summary()
+                .expect("legacy summary")
+                .ledger_commits()
+                .is_none()
+        );
+        assert!(snapshot.corrupt_tail().is_none());
     }
 
     #[test]

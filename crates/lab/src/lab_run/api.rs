@@ -172,7 +172,51 @@ pub fn validate_lab_package_bytes(
     let entry_count = bundle.entry_count();
     let control = lab_control_from_bundle(&bundle)?;
     control.validate()?;
-    let resources = load_lab_resources_from_bundle(bundle, &control)?;
+    let resources = if bundle.operation()["schema_version"] == "0.8" {
+        // Fields packages use Runtime admission before the existing offline interpreter.
+        actingcommand_execution_kernel::PreparedContainedTask::load(
+            input_label, bytes, expected_input_sha256,
+        ).map_err(|error| CliError::package_invalid(error.to_string()))?;
+        let evaluator = bundle.evaluator().ok_or_else(|| {
+            CliError::package_invalid("missing recognition evaluator for Lab package")
+        })?;
+        let operation_count = bundle.operation()["operations"]
+            .as_array()
+            .ok_or_else(|| CliError::package_invalid("missing operations for Lab package"))?
+            .len();
+        LabValidateResourcesResponse {
+            resource_root: bundle.resource_root().to_owned(),
+            manifest: bundle.manifest_path().to_owned(),
+            operation: bundle.operation_path().to_owned(),
+            operation_count,
+            pack: bundle.recognition_pack_path().ok_or_else(|| {
+                CliError::package_invalid("missing recognition pack for Lab package")
+            })?.to_owned(),
+            recognition_unsupported_target_count: evaluator.unsupported_target_count(),
+            recognition_unsupported_targets: evaluator.unsupported_targets().iter().map(|target| {
+                LabUnsupportedTargetResponse { id: target.id.clone(), reason: target.reason.clone() }
+            }).collect(),
+            pages: bundle.pages_path().ok_or_else(|| {
+                CliError::package_invalid("missing page set for Lab package")
+            })?.to_owned(),
+            navigation: bundle.navigation_path().map(str::to_owned),
+        }
+    } else {
+        let resources = load_lab_resources_from_bundle(bundle, &control)?;
+        LabValidateResourcesResponse {
+            resource_root: resources.resource_root.display().to_string(),
+            manifest: resources.manifest_path.display().to_string(),
+            operation: resources.operation_path.display().to_string(),
+            operation_count: resources.operation_bundle.operations.len(),
+            pack: resources.pack_path.display().to_string(),
+            recognition_unsupported_target_count: resources.evaluator.unsupported_target_count(),
+            recognition_unsupported_targets: resources.evaluator.unsupported_targets().iter().map(|target| {
+                LabUnsupportedTargetResponse { id: target.id.clone(), reason: target.reason.clone() }
+            }).collect(),
+            pages: resources.pages_path.display().to_string(),
+            navigation: resources.navigation_path.as_ref().map(|path| path.display().to_string()),
+        }
+    };
     let validation = LabValidateResponse {
         zip: input_label.to_string(),
         status: "valid".to_string(),
@@ -191,28 +235,7 @@ pub fn validate_lab_package_bytes(
             },
             entry_task_id: control.entry_task_id,
         },
-        resources: LabValidateResourcesResponse {
-            resource_root: resources.resource_root.display().to_string(),
-            manifest: resources.manifest_path.display().to_string(),
-            operation: resources.operation_path.display().to_string(),
-            operation_count: resources.operation_bundle.operations.len(),
-            pack: resources.pack_path.display().to_string(),
-            recognition_unsupported_target_count: resources.evaluator.unsupported_target_count(),
-            recognition_unsupported_targets: resources
-                .evaluator
-                .unsupported_targets()
-                .iter()
-                .map(|target| LabUnsupportedTargetResponse {
-                    id: target.id.clone(),
-                    reason: target.reason.clone(),
-                })
-                .collect(),
-            pages: resources.pages_path.display().to_string(),
-            navigation: resources
-                .navigation_path
-                .as_ref()
-                .map(|path| path.display().to_string()),
-        },
+        resources,
     };
     Ok(LabContainedPackageValidationResponse {
         validation,

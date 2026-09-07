@@ -26,6 +26,7 @@ mod projection;
 mod readonly;
 mod readonly_api;
 mod resource_convert;
+mod scheduling;
 mod state;
 
 pub use context::*;
@@ -45,6 +46,7 @@ pub use package_build::PackageBuildCatalog;
 pub use ports::*;
 pub use projection::*;
 pub use readonly_api::*;
+pub use scheduling::*;
 pub use state::*;
 
 pub use actingcommand_artifact_store::{FrameStoreControl, MemorySample, MemorySampleSource};

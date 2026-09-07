@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::page_projection::{
+    ProjectionCatalog, ProjectionMetadata, VerifiedProjectionMetadata,
+};
 use actingcommand_page_detector::{
     PageDefinition, PageDetector, PageSet, load_page_set_from_json_str,
 };
@@ -202,6 +205,26 @@ impl Containment {
         task_zip_bytes: &[u8],
         expected: &Sha256Hash,
     ) -> ContainmentResult<&LoadedBundle> {
+        self.load_for(instance, task_zip_bytes, expected, false)
+    }
+
+    /// Admits the existing Lab resource layout without requiring an executable operation.
+    pub fn load_observation(
+        &mut self,
+        instance: &InstanceId,
+        zip_bytes: &[u8],
+        expected: &Sha256Hash,
+    ) -> ContainmentResult<&LoadedBundle> {
+        self.load_for(instance, zip_bytes, expected, true)
+    }
+
+    fn load_for(
+        &mut self,
+        instance: &InstanceId,
+        task_zip_bytes: &[u8],
+        expected: &Sha256Hash,
+        observation: bool,
+    ) -> ContainmentResult<&LoadedBundle> {
         if task_zip_bytes.len() as u64 > self.limits.max_compressed_bytes {
             return Err(ContainmentError::CompressedTooLarge {
                 instance: instance.clone(),
@@ -222,6 +245,7 @@ impl Containment {
             package,
             actual,
             self.vision_provider.as_ref().map(Arc::clone),
+            observation,
         )?;
         let bench = self
             .benches
@@ -357,6 +381,7 @@ pub enum PackageLayout {
 
 #[derive(Debug)]
 pub struct LoadedBundle {
+    projection_metadata: Option<VerifiedProjectionMetadata>,
     task_id: TaskId,
     verified: Sha256Hash,
     layout: PackageLayout,
@@ -383,15 +408,47 @@ impl LoadedBundle {
         package: MemoryPackage,
         verified: Sha256Hash,
         vision_provider: Option<Arc<dyn VisionProvider>>,
+        observation: bool,
     ) -> ContainmentResult<Self> {
         let entries = Arc::new(package.entries);
-        let metadata = PackageMetadata::from_entries(&entries)?;
+        let metadata = if observation {
+            PackageMetadata::from_observation_entries(&entries)?
+        } else {
+            PackageMetadata::from_entries(&entries)?
+        };
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
+        let projection_metadata = if let (Some(pack), Some(pages), Some(navigation)) = (
+            &metadata.recognition_pack_path,
+            &metadata.pages_path,
+            &metadata.navigation_path,
+        ) {
+            validate_projection_resources(
+                &metadata.manifest,
+                &metadata.resource_root,
+                pack,
+                pages,
+                navigation,
+                |path| entries.get(path).map(Vec::as_slice),
+                entries.keys().map(String::as_str),
+            )?
+        } else {
+            if entries
+                .keys()
+                .any(|path| path.ends_with(".projection.json"))
+            {
+                return Err(ContainmentError::JsonParse {
+                    path: metadata.manifest_path.clone(),
+                    message: "projection metadata requires pack/pages/navigation".to_string(),
+                });
+            }
+            None
+        };
         let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
         let (evaluator, detector) =
             load_recognition_pipeline(&entries, &metadata, vision_provider)?;
 
         Ok(Self {
+            projection_metadata,
             task_id: metadata.task_id,
             verified,
             layout: metadata.layout,
@@ -472,6 +529,10 @@ impl LoadedBundle {
 
     pub fn navigation(&self) -> Option<&Value> {
         self.navigation.as_ref()
+    }
+
+    pub fn projection_metadata(&self) -> Option<&VerifiedProjectionMetadata> {
+        self.projection_metadata.as_ref()
     }
 
     pub fn evaluator(&self) -> Option<&RecognitionEvaluator> {
@@ -640,6 +701,31 @@ impl PackageMetadata {
     }
 
     fn from_lab_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        Self::from_lab_entries_for(entries, false)
+    }
+
+    fn from_observation_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        // The observation path has the Lab recognition pipeline, never Module task ingress.
+        let metadata = Self::from_lab_entries_for(entries, true)?;
+        for path in [
+            &metadata.recognition_pack_path,
+            &metadata.pages_path,
+            &metadata.navigation_path,
+        ] {
+            if path.is_none() {
+                return Err(ContainmentError::JsonParse {
+                    path: "control.json".to_string(),
+                    message: "observation requires Lab pack/pages/navigation resources".to_string(),
+                });
+            }
+        }
+        Ok(metadata)
+    }
+
+    fn from_lab_entries_for(
+        entries: &BTreeMap<String, Vec<u8>>,
+        observation: bool,
+    ) -> ContainmentResult<Self> {
         let control: LabControl = read_json_entry(entries, "control.json")?;
         let control_value = read_json_value_entry(entries, "control.json")?;
         let resource_root = match control.resource_root {
@@ -665,7 +751,11 @@ impl PackageMetadata {
         let task_id = TaskId::new(control.entry_task_id)?;
         let operation_path =
             prefixed_path(&resource_root, &format!("operations/{task_id}/task.json"));
-        let operation = read_json_value_entry(entries, &operation_path)?;
+        let operation = if observation && !entries.contains_key(&operation_path) {
+            Value::Null
+        } else {
+            read_json_value_entry(entries, &operation_path)?
+        };
         let stem = format!("{}.{}", control.game, control.server);
         let recognition_pack_path =
             prefixed_path(&resource_root, &format!("recognition/{stem}.pack.json"));
@@ -1417,6 +1507,110 @@ fn collect_recognition_pack_diagnostics(
     Ok(diagnostics)
 }
 
+/// Shared metadata admission for generated packages and contained packages.
+pub fn validate_projection_resources<'a>(
+    manifest: &Value,
+    resource_root: &str,
+    pack_path: &str,
+    pages_path: &str,
+    navigation_path: &str,
+    read: impl Fn(&str) -> Option<&'a [u8]>,
+    paths: impl Iterator<Item = &'a str>,
+) -> ContainmentResult<Option<VerifiedProjectionMetadata>> {
+    let projection_path = navigation_path.replace(".navigation.json", ".projection.json");
+    let paths = paths.collect::<Vec<_>>();
+    let fail = |message: String| ContainmentError::JsonParse {
+        path: projection_path.clone(),
+        message,
+    };
+    if paths
+        .iter()
+        .any(|path| path.ends_with(".projection.json") && *path != projection_path)
+    {
+        return Err(fail(
+            "projection declaration must use the matching navigation stem".to_string(),
+        ));
+    }
+    let declaration_bytes = read(&projection_path);
+    let hashes: ManifestHashes =
+        serde_json::from_value(manifest.clone()).map_err(|e| fail(e.to_string()))?;
+    let verified_bytes = |path: &str| -> ContainmentResult<&'a [u8]> {
+        let relative = path
+            .strip_prefix(&format!("{resource_root}/"))
+            .ok_or_else(|| fail("projection path is outside resource root".to_string()))?;
+        let expected = hashes
+            .hashes
+            .get(relative)
+            .map(String::as_str)
+            .or_else(|| {
+                hashes
+                    .files
+                    .iter()
+                    .find(|f| f.path == relative)
+                    .and_then(|f| f.sha256.as_deref().or(f.hash.as_deref()))
+            })
+            .ok_or_else(|| {
+                fail(format!(
+                    "projection dependency requires a manifest hash: {path}"
+                ))
+            })?;
+        let bytes = read(path).ok_or_else(|| ContainmentError::MissingEntry {
+            path: path.to_string(),
+        })?;
+        let expected = Sha256Hash::parse_hex(expected)?;
+        let actual = Sha256Hash::digest(bytes);
+        if !constant_time_hash_eq(&actual, &expected) {
+            return Err(ContainmentError::ManifestHashMismatch {
+                path: path.to_string(),
+                expected,
+                actual,
+            });
+        }
+        Ok(bytes)
+    };
+    if declaration_bytes.is_some() {
+        verified_bytes(&projection_path)?;
+    }
+    let parse = |path| -> ContainmentResult<Value> {
+        let bytes = if declaration_bytes.is_some() {
+            verified_bytes(path)?
+        } else {
+            read(path).ok_or_else(|| fail(format!("missing catalog resource {path}")))?
+        };
+        serde_json::from_slice(bytes).map_err(|e| fail(e.to_string()))
+    };
+    let mut catalog = ProjectionCatalog::from_resources(
+        &parse(pack_path)?,
+        &parse(pages_path)?,
+        &parse(navigation_path)?,
+    )
+    .map_err(|e| fail(e.to_string()))?;
+    for path in paths.iter().filter(|path| {
+        path.starts_with(&format!("{resource_root}/operations/")) && path.ends_with("/task.json")
+    }) {
+        let operation: Value = serde_json::from_slice(
+            read(path).ok_or_else(|| fail(format!("missing operation {path}")))?,
+        )
+        .map_err(|e| fail(e.to_string()))?;
+        if operation["post_admission_ocr"]["mode"] == "fields_v1" {
+            if declaration_bytes.is_some() {
+                verified_bytes(path)?;
+            }
+            catalog
+                .add_operation_fields(&operation)
+                .map_err(|e| fail(e.to_string()))?;
+        }
+    }
+    let Some(bytes) = declaration_bytes else {
+        return Ok(Some(VerifiedProjectionMetadata::unannotated(catalog)));
+    };
+    let declaration = ProjectionMetadata::parse(bytes).map_err(|e| fail(e.to_string()))?;
+    let verified = declaration
+        .validate(catalog)
+        .map_err(|e| fail(e.to_string()))?;
+    Ok(Some(verified))
+}
+
 fn validate_manifest_hashes(
     manifest: &Value,
     entries: &BTreeMap<String, Vec<u8>>,
@@ -1649,6 +1843,57 @@ mod tests {
     use zip::write::FileOptions;
 
     #[test]
+    fn online_observation_admission_without_task_and_with_operation_catalog() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        entries.insert(
+            "resources/navigation/neutral.test.navigation.json".into(),
+            br#"{"navigation":[]}"#.to_vec(),
+        );
+        let operation_path = "resources/operations/task_a/task.json";
+        entries.remove(operation_path);
+        entries.insert(
+            "resources/manifest.json".into(),
+            br#"{"entry_task_id":"task_a"}"#.to_vec(),
+        );
+        let instance = InstanceId::new("neutral-observation").unwrap();
+        let bytes = zip_from_map(entries.clone());
+        let expected = Sha256Hash::digest(&bytes);
+        let mut containment = Containment::new();
+        let loaded = containment
+            .load_observation(&instance, &bytes, &expected)
+            .unwrap();
+        assert_eq!(loaded.layout(), PackageLayout::Lab);
+        assert!(loaded.operation().is_null());
+        assert!(loaded.projection_metadata().is_some());
+        assert!(
+            Containment::new()
+                .load(&instance, &bytes, &expected)
+                .is_err()
+        );
+        assert!(matches!(
+            Containment::new().load_observation(&instance, b"invalid zip", &expected),
+            Err(ContainmentError::HashMismatch { .. })
+        ));
+        let module = zip_with_entries(&[("manifest.json", br#"{"entry_task_id":"task_a"}"#)]);
+        assert!(
+            Containment::new()
+                .load_observation(&instance, &module, &Sha256Hash::digest(&module))
+                .is_err()
+        );
+        entries.insert(operation_path.into(), br#"{"task_id":"task_a","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"home_color","privacy":"personal"}]}}"#.to_vec());
+        let bytes = zip_from_map(entries);
+        let loaded = containment
+            .load_observation(&instance, &bytes, &Sha256Hash::digest(&bytes))
+            .unwrap();
+        let metadata = loaded.projection_metadata().unwrap();
+        assert_eq!(metadata.catalog().fields.len(), 1);
+        assert_eq!(
+            metadata.target_privacy("home_color"),
+            Some(actingcommand_contract::page_projection::Privacy::Personal)
+        );
+    }
+
+    #[test]
     fn load_single_lab_package_and_evaluate_from_capability() {
         let zip = lab_package_zip("task_a", [255, 0, 0]);
         let expected = Sha256Hash::digest(&zip);
@@ -1667,6 +1912,78 @@ mod tests {
             .evaluate_target(&scene, "home_color")
             .expect("target evaluated");
         assert!(result.passed);
+    }
+
+    #[test]
+    fn page_projection_metadata_requires_hashes_and_resolved_references() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        let navigation_path = "resources/navigation/neutral.test.navigation.json";
+        let projection_path = "resources/navigation/neutral.test.projection.json";
+        let declaration = serde_json::json!({"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"home_color","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]});
+        let mut manifest: Value =
+            serde_json::from_slice(&entries["resources/manifest.json"]).unwrap();
+        for (path, value) in [
+            (navigation_path, serde_json::json!({"navigation":[]})),
+            (projection_path, declaration),
+        ] {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            manifest["files"].as_array_mut().unwrap().push(serde_json::json!({"path":path.strip_prefix("resources/").unwrap(),"sha256":Sha256Hash::digest(&bytes).to_string()}));
+            entries.insert(path.to_string(), bytes);
+        }
+        entries.insert(
+            "resources/manifest.json".to_string(),
+            serde_json::to_vec(&manifest).unwrap(),
+        );
+        for mode in 0..4 {
+            let mut candidate = entries.clone();
+            if mode == 1 {
+                candidate.get_mut(projection_path).unwrap().push(b' ');
+            }
+            if mode == 2 {
+                let mut manifest = manifest.clone();
+                manifest["files"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|file| file["path"] != "navigation/neutral.test.projection.json");
+                candidate.insert(
+                    "resources/manifest.json".into(),
+                    serde_json::to_vec(&manifest).unwrap(),
+                );
+            }
+            if mode == 3 {
+                let mut declaration: Value =
+                    serde_json::from_slice(&candidate[projection_path]).unwrap();
+                declaration["targets"][0]["target_id"] = serde_json::json!("absent");
+                replace_manifested_entry(&mut candidate, projection_path, &declaration);
+            }
+            let zip = zip_from_map(candidate);
+            let mut containment = Containment::new();
+            let result = containment.load(
+                &InstanceId::new("neutral-instance").unwrap(),
+                &zip,
+                &Sha256Hash::digest(&zip),
+            );
+            if mode == 0 {
+                assert_eq!(
+                    result
+                        .unwrap()
+                        .projection_metadata()
+                        .unwrap()
+                        .target_privacy("home_color"),
+                    Some(actingcommand_contract::page_projection::Privacy::Personal)
+                );
+            } else {
+                let message = result.unwrap_err().to_string();
+                assert!(
+                    message.contains(match mode {
+                        1 => "hash mismatch",
+                        2 => "requires a manifest hash",
+                        _ => "unknown reference",
+                    }),
+                    "{message}"
+                );
+            }
+        }
     }
 
     #[test]

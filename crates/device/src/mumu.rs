@@ -18,7 +18,7 @@ pub enum MumuInstallSource {
 }
 
 impl MumuInstallSource {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::ExplicitFolder => "explicit_folder",
             Self::ConfiguredBackendPath => "configured_backend_path",

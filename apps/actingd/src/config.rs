@@ -1018,6 +1018,10 @@ impl DeviceRegistryInputDiagnosticBackend {
 }
 
 impl InputBackend for DeviceRegistryInputDiagnosticBackend {
+    fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
+        self.backend.selection_context()
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         self.run("tap", |backend| backend.tap(x, y))
     }
@@ -2312,7 +2316,10 @@ mod tests {
         );
         // C1B9 v16 D04: PR298 review 5120590779; CI33961302177 preserves this first red.
         assert_eq!(payload["device_error"]["category"], "native");
-        assert_eq!(payload["device_error"]["stage"], "adb.ensure_device.get_state");
+        assert_eq!(
+            payload["device_error"]["stage"],
+            "adb.ensure_device.get_state"
+        );
         assert_eq!(payload["device_error"]["detail_truncated"], false);
         let device_error = payload["device_error"]["detail"]
             .as_str()

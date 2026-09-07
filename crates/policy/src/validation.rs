@@ -14,7 +14,8 @@ use crate::{
     MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
     MAX_UTC_OFFSET_MINUTES, MAX_WINDOWS_PER_PROFILE, MIN_DST_OFFSET_MINUTES,
     MIN_UTC_OFFSET_MINUTES, MetricRef, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec,
-    SCHEDULING_SCHEMA_VERSION, ScopeSelector, TaskSpec,
+    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
+    TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -121,7 +122,10 @@ fn validate_descriptors(
 
     for (schema_version, catalog, map) in documents {
         let descriptor = Some((catalog.catalog_id.as_str(), catalog.catalog_version));
-        if schema_version != SCHEDULING_SCHEMA_VERSION {
+        if !matches!(
+            schema_version,
+            SCHEDULING_SCHEMA_VERSION | SCHEDULING_SCHEMA_VERSION_V2
+        ) {
             let mut diagnostic = map.diagnostic(
                 CatalogDiagnosticCode::UnsupportedSchemaVersion,
                 "/schema_version",
@@ -237,6 +241,7 @@ fn validate_tasks(
             task_ids,
             pool_ids,
             &bundle.pools.pools,
+            &bundle.timeline,
             descriptor,
             diagnostics,
         );
@@ -251,6 +256,7 @@ fn validate_task(
     task_ids: &HashSet<&str>,
     pool_ids: &HashSet<&str>,
     pools: &[PoolSpec],
+    timeline: &TimelineDocument,
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
@@ -281,6 +287,7 @@ fn validate_task(
         map,
         task_ids,
         pool_ids,
+        timeline,
         descriptor,
         diagnostics,
     );
@@ -290,6 +297,7 @@ fn validate_task(
         map,
         task_ids,
         pool_ids,
+        timeline,
         descriptor,
         diagnostics,
     );
@@ -507,6 +515,7 @@ fn validate_predicate(
     map: &SourceMap,
     task_ids: &HashSet<&str>,
     pool_ids: &HashSet<&str>,
+    timeline: &TimelineDocument,
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
@@ -519,6 +528,7 @@ fn validate_predicate(
         map,
         task_ids,
         pool_ids,
+        timeline,
         descriptor,
         diagnostics,
     );
@@ -533,6 +543,7 @@ fn validate_predicate_node(
     map: &SourceMap,
     task_ids: &HashSet<&str>,
     pool_ids: &HashSet<&str>,
+    timeline: &TimelineDocument,
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
@@ -578,6 +589,7 @@ fn validate_predicate_node(
                     map,
                     task_ids,
                     pool_ids,
+                    timeline,
                     descriptor,
                     diagnostics,
                 );
@@ -591,11 +603,37 @@ fn validate_predicate_node(
             map,
             task_ids,
             pool_ids,
+            timeline,
             descriptor,
             diagnostics,
         ),
         PredicateSpec::Clock { schedule } => {
             validate_schedule(schedule, path, map, descriptor, diagnostics)
+        }
+        PredicateSpec::TimelineActive { event_id } => {
+            if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::TypeMismatch,
+                    path,
+                    "timeline_active requires actingcommand.scheduling.v2",
+                    descriptor,
+                ));
+            }
+            validate_identifier(
+                map,
+                &format!("{path}/event_id"),
+                event_id,
+                descriptor,
+                diagnostics,
+            );
+            if !timeline.events.iter().any(|event| event.id == *event_id) {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::DanglingReference,
+                    format!("{path}/event_id"),
+                    format!("referenced timeline event `{event_id}` does not exist"),
+                    descriptor,
+                ));
+            }
         }
         PredicateSpec::ResourceProjection {
             pool_id,
@@ -1288,6 +1326,35 @@ fn validate_timeline(
     let mut ids = HashSet::new();
     for (index, event) in bundle.timeline.events.iter().enumerate() {
         let path = format!("/events/{index}");
+        match (bundle.timeline.schema_version.as_str(), &event.validity) {
+            (SCHEDULING_SCHEMA_VERSION_V2, Some(validity)) => {
+                if validity
+                    .until_unix_ms
+                    .0
+                    .is_some_and(|until| until <= validity.from_unix_ms)
+                {
+                    diagnostics.push(map.diagnostic(
+                        CatalogDiagnosticCode::PredicateUnreachable,
+                        format!("{path}/validity"),
+                        "timeline validity must be a nonempty half-open Unix interval",
+                        descriptor,
+                    ));
+                }
+            }
+            (SCHEDULING_SCHEMA_VERSION_V2, None) => diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::MissingRequiredField,
+                format!("{path}/validity"),
+                "V2 timeline events require explicit validity",
+                descriptor,
+            )),
+            (_, Some(_)) => diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::UnknownField,
+                format!("{path}/validity"),
+                "timeline validity requires actingcommand.scheduling.v2",
+                descriptor,
+            )),
+            (_, None) => {}
+        }
         validate_identifier(
             map,
             &format!("{path}/id"),

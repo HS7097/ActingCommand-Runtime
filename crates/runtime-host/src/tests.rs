@@ -5,6 +5,7 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::{ArtifactStore, read_projected_verified};
+use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
@@ -82,6 +83,187 @@ use zip::{ZipWriter, write::FileOptions};
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capability";
 
+#[test]
+fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
+    use actingcommand_contract::{
+        ContainedObservationEvidence, ContainedObservationRequest, PageObservationStatus,
+    };
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+    for mode in 0..7 {
+        let root = TempDir::new().unwrap();
+        let state = Arc::new(FakeState::default());
+        state.unknown_capture.store(mode == 1, Ordering::Release);
+        state.fail_capture.store(mode == 4, Ordering::Release);
+        state
+            .transient_capture_failure
+            .store(mode == 4, Ordering::Release);
+        let vision = Arc::new(FakeVisionProvider {
+            ocr_calls: AtomicU64::new(0),
+            ocr_failure_detail: (mode == 3).then_some("private-provider-detail"),
+            ..FakeVisionProvider::default()
+        });
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("node.a", instance_id(), state.clone())
+                    .with_vision_provider(vision.clone()),
+            ),
+        )
+        .unwrap();
+        let pages = if mode == 2 {
+            br#"{"schema_version":"0.6","pages":[{"id":"page","required":["anchor","text"],"optional":["later"]},{"id":"other","required":["text"]}]}"#.as_slice()
+        } else {
+            br#"{"schema_version":"0.6","pages":[{"id":"page","required":["anchor","text"],"optional":["later"]}]}"#
+                .as_slice()
+        };
+        let files: &[(&str, &[u8])] = &[
+            ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#),
+            ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+            ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.6","coordinate_space":{"width":2,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"ocr","id":"text","region":"full_frame","languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["home"],"case_sensitive":false,"minimum_confidence":0.9,"model_ref":"PP-OCRv6_medium","model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"type":"color","id":"later","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+            ("resources/recognition/neutral.test.pages.json", pages),
+            ("resources/navigation/neutral.test.navigation.json", br#"{"navigation":[]}"#),
+            ("resources/operations/task/task.json", br#"{"task_id":"task","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"text","privacy":"personal"}]}}"#),
+        ];
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in files {
+            zip.start_file(*name, FileOptions::default()).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let path = root.path().join("observation.zip");
+        fs::write(&path, &bytes).unwrap();
+        let expected = if mode == 6 {
+            "0".repeat(64)
+        } else {
+            format!("{:x}", Sha256::digest(&bytes))
+        };
+        if mode == 5 {
+            fs::write(root.path().join("artifacts"), b"blocks artifact directory").unwrap();
+        }
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Lab,
+            EventSource::Lab,
+        ))
+        .unwrap();
+        let session = client.begin_debug_session().unwrap();
+        let request = ContainedObservationRequest::new(
+            path.to_str().unwrap(),
+            &expected,
+            vec!["text".into()],
+        )
+        .unwrap();
+        let result = session.observe_contained_page("node.a", request);
+        if mode >= 4 {
+            let error = result.unwrap_err();
+            assert_eq!(error.is_fatal(), mode == 5);
+            assert_eq!(
+                state.capture_count.load(Ordering::Acquire),
+                usize::from(mode != 6)
+            );
+        } else {
+            let verified = match result {
+                Ok(value) => value,
+                Err(error) => {
+                    let preserved = root.keep();
+                    panic!(
+                        "mode={mode} error={error:?}; native evidence retained at {}",
+                        preserved.display()
+                    );
+                }
+            };
+            let observation = verified.observation();
+            assert_eq!(
+                observation.status,
+                [
+                    PageObservationStatus::Recognized,
+                    PageObservationStatus::NoMatch,
+                    PageObservationStatus::Conflict,
+                    PageObservationStatus::Partial
+                ][mode]
+            );
+            assert_eq!(verified.receipt().state(), RuntimeReceiptState::Observed);
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+            assert_eq!(
+                vision.ocr_calls.load(Ordering::Acquire),
+                if mode == 2 { 2 } else { 1 }
+            );
+            assert_eq!(
+                format!("sha256:{:x}", Sha256::digest(verified.png())),
+                observation.frame.artifact().sha256
+            );
+            assert_eq!(observation.actual_package_sha256, expected);
+            assert!(
+                verified.receipt().terminal().unwrap().sequence > observation.projection_sequence
+            );
+            let raw = read_projected_verified(root.path(), &observation.artifact).unwrap();
+            let evidence: ContainedObservationEvidence = serde_json::from_slice(&raw).unwrap();
+            evidence.private_facts.validate().unwrap();
+            assert_eq!(
+                evidence.private_facts.target_evaluation_count,
+                if mode == 2 {
+                    4
+                } else if mode == 3 {
+                    1
+                } else {
+                    3
+                }
+            );
+            if mode == 3 {
+                assert!(observation.facts.rows.iter().any(|row| {
+                    row["kind"] == "target_not_evaluated"
+                        && row["target_id"] == "later"
+                        && row["state"] == "not_evaluated"
+                        && row["page_id"] == "page"
+                        && row["target_index"] == 0
+                }));
+            }
+            assert!(
+                !serde_json::to_string(&observation.facts)
+                    .unwrap()
+                    .contains("private-provider-detail")
+            );
+            if mode == 0 {
+                assert!(
+                    observation
+                        .projection
+                        .fields
+                        .iter()
+                        .filter(|field| field["target_id"] == "text")
+                        .all(|field| field["redacted"] == true && field["value"].is_null())
+                );
+            }
+            let events = session.query_events(ProjectionProfile::Forensic).unwrap();
+            assert!(events.iter().all(|event| event.links.lease_id().is_none()));
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == EventType::ArtifactVerified
+                        && event
+                            .artifacts
+                            .iter()
+                            .any(|artifact| artifact.kind == ArtifactKind::DiagnosticJson))
+                    .count(),
+                1
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.sequence == observation.projection_sequence
+                        && event.event_id == observation.projection_event_id)
+            );
+        }
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        drop(session);
+        drop(client);
+        if mode == 5 {
+            assert!(host.close().is_err());
+        } else {
+            host.close().unwrap();
+        }
+    }
+}
+
 struct ManualRuntimeClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
@@ -131,6 +313,8 @@ impl RuntimeClock for ManualRuntimeClock {
 
 #[derive(Default)]
 struct FakeState {
+    input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
+    capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
     open_count: AtomicUsize,
     input_count: AtomicUsize,
     close_count: AtomicUsize,
@@ -211,6 +395,14 @@ impl FakeBackend {
 }
 
 impl InputBackend for FakeBackend {
+    fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
+        self.state
+            .input_selection
+            .lock()
+            .expect("input selection")
+            .clone()
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         self.input(InputAction::Tap { x, y })
     }
@@ -347,7 +539,7 @@ impl CaptureBackend for FakeCapture {
         } else {
             [0, 255, 0]
         };
-        Frame::from_pixels(
+        let mut frame = Frame::from_pixels(
             2,
             1,
             [first.as_slice(), guard.as_slice()].concat(),
@@ -358,7 +550,15 @@ impl CaptureBackend for FakeCapture {
                     CaptureBackendName::FixtureSimulation
                 }
             },
-        )
+        )?;
+        frame.selection = self
+            .state
+            .capture_selection
+            .lock()
+            .expect("capture selection")
+            .clone()
+            .map(Arc::new);
+        Ok(frame)
     }
 
     fn close_once(
@@ -589,6 +789,8 @@ impl ExecutionBackendProvider for FakeProvider {
 struct FakeVisionProvider {
     ocr_calls: AtomicU64,
     ocr_failure_detail: Option<&'static str>,
+    raw_evidence: bool,
+    nn_calls: AtomicU64,
 }
 
 impl VisionProvider for FakeVisionProvider {
@@ -611,9 +813,15 @@ impl VisionProvider for FakeVisionProvider {
 
     fn require_nn_model(
         &self,
-        _model_ref: &str,
-        _model_sha256: &str,
+        model_ref: &str,
+        model_sha256: &str,
     ) -> Result<(), VisionProviderError> {
+        if self.raw_evidence
+            && model_ref == "neutral-classifier"
+            && model_sha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        {
+            return Ok(());
+        }
         Err(VisionProviderError::new(
             VisionProviderErrorCode::Unavailable,
             "NN capability is unavailable",
@@ -637,6 +845,44 @@ impl VisionProvider for FakeVisionProvider {
             Some([255, 255, 0]) => "error",
             _ => "unknown",
         };
+        if self.raw_evidence {
+            use actingcommand_recognition_pack::{OcrProviderTextBlock, PackRect};
+            assert_eq!(
+                request.region,
+                PackRect {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 1
+                }
+            );
+            return Ok(OcrProviderResult {
+                text: format!("provider aggregate {text}"),
+                confidence: Some(0.99),
+                blocks: vec![
+                    OcrProviderTextBlock {
+                        text: "marker".into(),
+                        rect: PackRect {
+                            x: 1,
+                            y: 0,
+                            width: 1,
+                            height: 1,
+                        },
+                        confidence: Some(0.75),
+                    },
+                    OcrProviderTextBlock {
+                        text: text.into(),
+                        rect: PackRect {
+                            x: 0,
+                            y: 0,
+                            width: 1,
+                            height: 1,
+                        },
+                        confidence: Some(0.99),
+                    },
+                ],
+            });
+        }
         Ok(OcrProviderResult {
             text: text.to_owned(),
             blocks: Vec::new(),
@@ -646,8 +892,32 @@ impl VisionProvider for FakeVisionProvider {
 
     fn classify(
         &self,
-        _request: NnProviderRequest<'_>,
+        request: NnProviderRequest<'_>,
     ) -> Result<NnProviderResult, VisionProviderError> {
+        if self.raw_evidence {
+            use actingcommand_recognition_pack::{NnProviderLabel, PackRect};
+            self.nn_calls.fetch_add(1, Ordering::AcqRel);
+            assert_eq!(
+                request.region,
+                PackRect {
+                    x: 1,
+                    y: 0,
+                    width: 1,
+                    height: 1
+                }
+            );
+            let mut labels = (0..1023)
+                .map(|index| NnProviderLabel {
+                    label: format!("{index:04}{}", "x".repeat(4092)),
+                    score: 0.25,
+                })
+                .collect::<Vec<_>>();
+            labels.push(NnProviderLabel {
+                label: "ready".into(),
+                score: 0.98,
+            });
+            return Ok(NnProviderResult { labels });
+        }
         Err(VisionProviderError::new(
             VisionProviderErrorCode::Unavailable,
             "NN capability is unavailable",
@@ -4388,6 +4658,134 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
     );
     drop(client);
     host.close().expect("close runtime host");
+    for leaves_home in [false, true] {
+        let root = TempDir::new().unwrap();
+        let source =
+            explicit_home_contained_task_package("fixture01.target", [255, 0, 0], [0, 0, 255]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+        let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_owned();
+            let mut value: serde_json::Value = serde_json::from_reader(&mut entry).unwrap();
+            if name == "resources/operations/task/task.json" {
+                value["target_page"] = serde_json::json!("other");
+                value["operations"][0]["id"] = serde_json::json!("reach_result");
+                value["operations"][0]["from"] = serde_json::json!("home");
+                value["operations"][0]["to"] = serde_json::json!("other");
+            }
+            package.start_file(name, FileOptions::default()).unwrap();
+            serde_json::to_writer(&mut package, &value).unwrap();
+        }
+        let bytes = package.finish().unwrap().into_inner();
+        let path = root.path().join("required-home.zip");
+        fs::write(&path, &bytes).unwrap();
+        let state = Arc::new(FakeState::default());
+        if leaves_home {
+            state
+                .transition_capture_after_capture
+                .store(2, Ordering::Release);
+        } else {
+            state
+                .transition_capture_after_input
+                .store(true, Ordering::Release);
+        }
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "fixture01.instance",
+                instance_id(),
+                state.clone(),
+            )),
+        )
+        .unwrap();
+        let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
+        let correlation = client.ids.mint_correlation_id().unwrap();
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "fixture01.instance",
+                client.ids.mint_holder_id().unwrap(),
+                ContainedTaskRequest::new(
+                    path.display().to_string(),
+                    format!("{:x}", Sha256::digest(&bytes)),
+                )
+                .unwrap(),
+            ),
+        );
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            if leaves_home {
+                RuntimeReceiptState::Failed
+            } else {
+                RuntimeReceiptState::Completed
+            }
+        );
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            usize::from(!leaves_home)
+        );
+        assert_eq!(
+            state.capture_count.load(Ordering::Acquire),
+            if leaves_home { 2 } else { 3 }
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let facts = entry_preflight_facts(&events);
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|fact| matches!(fact, TaskSemanticFact::EntryRecognition { .. }))
+                .count(),
+            2
+        );
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TaskSemanticFact::EntryRecognition { matched: true, .. }
+        )));
+        assert_eq!(
+            facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecognition { matched: false, .. }
+            )),
+            leaves_home
+        );
+        assert!(
+            !facts
+                .iter()
+                .any(|fact| matches!(fact, TaskSemanticFact::EntryRecoveryPackageAdmitted { .. }))
+        );
+        if leaves_home {
+            assert!(facts.iter().any(
+                |fact| matches!(fact, TaskSemanticFact::EntryTargetDisposition {
+                disposition:TaskEntryTargetDisposition::FailClosed, failure_code:Some(code)
+            } if code == "contained_task_home_entry_not_matched")
+            ));
+        } else {
+            assert!(
+                matches!(receipt.result(), Some(RuntimeResult::ContainedTaskCompleted {
+                outcome:TaskOutcome::Success, executed_steps:1, final_page:Some(page), ..
+            }) if page == "fixture01/other")
+            );
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskRequested)
+                .count(),
+            1
+        );
+        drop(client);
+        host.close().unwrap();
+    }
 }
 
 // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
@@ -4489,6 +4887,105 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     );
     drop(client);
     host.close().expect("close runtime host");
+    let mut archive = zip::ZipArchive::new(Cursor::new(recovery)).unwrap();
+    let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_owned();
+        let mut value: serde_json::Value = serde_json::from_reader(&mut entry).unwrap();
+        if name == "resources/operations/task/task.json" {
+            value["scheduling_outcome"] = serde_json::json!({"mappings":[{
+                "outcome_key":"at_home","effect":"no_designated_effect","terminal_pages":["home"]
+            }]});
+        }
+        package.start_file(name, FileOptions::default()).unwrap();
+        serde_json::to_writer(&mut package, &value).unwrap();
+    }
+    let incompatible = package.finish().unwrap().into_inner();
+    let hash = format!("{:x}", Sha256::digest(&incompatible));
+    let prepared = PreparedContainedTask::load(
+        "fixture01.instance",
+        &incompatible,
+        ExternalExpectedSha256::parse_hex(&hash).unwrap(),
+    )
+    .unwrap();
+    assert!(!prepared.is_entry_recovery_compatible());
+    struct UnreachableRecovery;
+    impl ContainedTaskRuntime for UnreachableRecovery {
+        type Error = &'static str;
+        fn capture(&mut self) -> Result<Frame, Self::Error> {
+            panic!("incompatible recovery captured")
+        }
+        fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+            panic!("incompatible recovery input")
+        }
+        fn record(&mut self, _trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+            panic!("incompatible recovery started")
+        }
+    }
+    assert!(
+        matches!(prepared.run_entry_recovery(&mut UnreachableRecovery),
+        Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_home_recovery_package_incompatible")
+    );
+    let root = TempDir::new().unwrap();
+    let target_path = root.path().join("target.zip");
+    let recovery_path = root.path().join("incompatible.zip");
+    fs::write(&target_path, &target).unwrap();
+    fs::write(&recovery_path, &incompatible).unwrap();
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "fixture01.instance",
+            instance_id(),
+            state.clone(),
+        )),
+    )
+    .unwrap();
+    let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
+    let correlation = client.ids.mint_correlation_id().unwrap();
+    let correlation_id = *correlation.transport();
+    let binding = ContainedTaskRequest::new(
+        target_path.display().to_string(),
+        format!("{:x}", Sha256::digest(&target)),
+    )
+    .unwrap()
+    .with_recovery(
+        ContainedTaskRecoveryBinding::new(recovery_path.display().to_string(), hash).unwrap(),
+    )
+    .unwrap();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "fixture01.instance",
+            client.ids.mint_holder_id().unwrap(),
+            binding,
+        ),
+    );
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    assert!(entry_preflight_facts(&events).iter().any(
+        |fact| matches!(fact, TaskSemanticFact::EntryTargetDisposition {
+        disposition:TaskEntryTargetDisposition::FailClosed, failure_code:Some(code)
+    } if code == "contained_task_home_recovery_package_incompatible")
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type == EventType::TaskRequested)
+    );
+    drop(client);
+    host.close().unwrap();
 }
 
 // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
@@ -6709,6 +7206,67 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
             "{case}: catalog pin"
         );
         assert_eq!(state.input_count.load(Ordering::Acquire), 0, "{case}");
+        let diagnostics = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .filter(|event| {
+                event.artifacts.iter().any(|artifact| {
+                    artifact.kind == ArtifactKind::DiagnosticJson
+                        && artifact.redaction_state
+                            == actingcommand_contract::ArtifactRedactionState::Pending
+                })
+            })
+            .collect::<Vec<_>>();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("{case}: one sealed task diagnostic")
+        };
+        assert!(diagnostic.sequence < task_failed.sequence);
+        assert_eq!(diagnostic.links.run_id(), Some(&context.run_id()));
+        let bytes = read_projected_verified(root.path(), &diagnostic.artifacts[0]).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let records = document["records"].as_array().unwrap();
+        assert_eq!(records.last().unwrap()["data"]["code"], expected_code);
+        let pages = records
+            .iter()
+            .filter(|record| record["kind"] == "page")
+            .collect::<Vec<_>>();
+        assert!(!pages.is_empty());
+        assert!(pages.iter().all(|record| !record["frame_id"].is_null()));
+        if case == "guard-refused" {
+            let refused = records
+                .iter()
+                .filter(|record| {
+                    record["kind"] == "target" && record["data"]["source"]["phase"] == "guard"
+                })
+                .collect::<Vec<_>>();
+            assert!(!refused.is_empty());
+            assert!(
+                refused
+                    .iter()
+                    .all(|record| record["data"]["passed"] == false)
+            );
+            assert!(
+                refused
+                    .iter()
+                    .all(|record| !record["data"]["color"]["distance"].is_null())
+            );
+            let elapsed = records
+                .iter()
+                .filter(|record| record["kind"] == "step_elapsed")
+                .collect::<Vec<_>>();
+            assert!(!elapsed.is_empty());
+            assert!(
+                elapsed
+                    .iter()
+                    .all(|record| record["data"]["completed"] == false)
+            );
+        } else {
+            assert!(
+                pages
+                    .iter()
+                    .all(|record| record["data"]["matched"] == false)
+            );
+        }
         drop(client);
         host.close()
             .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
@@ -9844,7 +10402,46 @@ fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
 
 #[test]
 fn runtime_requires_vision_provider_only_after_selected_vision_target() {
-    let bytes = neutral_vision_contained_task_package();
+    use std::io::Read;
+    let source = neutral_vision_contained_task_package();
+    let mut archive = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+    let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_owned();
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content).unwrap();
+        if name == "control.json" {
+            let mut control: serde_json::Value = serde_json::from_slice(&content).unwrap();
+            control["step_timeout_ms"] = 5000.into();
+            control["timeout_ms"] = 20000.into();
+            content = serde_json::to_vec(&control).unwrap();
+        } else if name.ends_with("neutral.test.pack.json") {
+            let mut pack: serde_json::Value = serde_json::from_slice(&content).unwrap();
+            for target in pack["targets"].as_array_mut().unwrap() {
+                if target["type"] == "ocr" {
+                    target["region"]["width"] = 2.into();
+                    target["expected"][0] =
+                        format!("{}\nmarker", target["expected"][0].as_str().unwrap()).into();
+                }
+            }
+            pack["targets"].as_array_mut().unwrap().push(
+                serde_json::json!({"type":"nn", "id":"model/raw",
+                "region":{"x":1,"y":0,"width":1,"height":1},
+                "model_ref":"neutral-classifier", "model_sha256":"b".repeat(64),
+                "candidate_labels":["ready"], "minimum_score":0.9,
+                "selection":"best", "timeout_ms":1000}),
+            );
+            content = serde_json::to_vec(&pack).unwrap();
+        } else if name.ends_with("neutral.test.pages.json") {
+            let mut pages: serde_json::Value = serde_json::from_slice(&content).unwrap();
+            pages["pages"][0]["optional"] = serde_json::json!(["model/raw"]);
+            content = serde_json::to_vec(&pages).unwrap();
+        }
+        output.start_file(name, FileOptions::default()).unwrap();
+        output.write_all(&content).unwrap();
+    }
+    let bytes = output.finish().unwrap().into_inner();
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
 
     let missing_root = TempDir::new().expect("missing-provider tempdir");
@@ -9888,7 +10485,10 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     injected_state
         .transition_capture_after_input
         .store(true, Ordering::Release);
-    let vision_provider = Arc::new(FakeVisionProvider::default());
+    let vision_provider = Arc::new(FakeVisionProvider {
+        raw_evidence: true,
+        ..FakeVisionProvider::default()
+    });
     let injected_host = RuntimeHost::start(
         config(&injected_root),
         Arc::new(
@@ -9902,6 +10502,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     )
     .expect("injected-provider runtime host");
     let mut injected_client = TestClient::connect(&injected_host);
+    injected_client.set_receipt_read_timeout();
     let injected_request = injected_client.request(RuntimeOperation::run_contained_task(
         "neutral.instance",
         injected_client.ids.mint_holder_id().expect("holder"),
@@ -9919,10 +10520,1096 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
         }) if page == "neutral/terminal"
     ));
     assert!(vision_provider.ocr_calls.load(Ordering::Acquire) >= 2);
+    assert_eq!(vision_provider.ocr_calls.load(Ordering::Acquire), 6);
+    assert_eq!(vision_provider.nn_calls.load(Ordering::Acquire), 2);
     assert_eq!(injected_state.input_count.load(Ordering::Acquire), 1);
     assert_eq!(injected_state.capture_count.load(Ordering::Acquire), 2);
+    let events = projected_events(
+        &mut injected_client,
+        EventQuery {
+            request_id: Some(injected_request.request_id()),
+            ..EventQuery::default()
+        },
+    );
+    let diagnostics = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .flat_map(|event| &event.artifacts)
+        .filter(|artifact| {
+            artifact.kind == ArtifactKind::DiagnosticJson
+                && artifact.redaction_state
+                    == actingcommand_contract::ArtifactRedactionState::Pending
+        })
+        .collect::<Vec<_>>();
+    let [artifact] = diagnostics.as_slice() else {
+        panic!("one streamed task artifact")
+    };
+    assert!(artifact.byte_count > 4 * 1024 * 1024);
+    let mut reader =
+        actingcommand_artifact_store::open_projected_stream(injected_root.path(), artifact)
+            .unwrap();
+    let document: serde_json::Value = serde_json::from_reader(&mut reader).unwrap();
+    reader.finish().unwrap();
+    assert_eq!(
+        document["schema_version"],
+        actingcommand_contract::TASK_DIAGNOSTIC_SCHEMA
+    );
+    let records = document["records"].as_array().unwrap();
+    let ocr = records
+        .iter()
+        .filter(|record| record["kind"] == "ocr")
+        .collect::<Vec<_>>();
+    assert_eq!(ocr.len(), 6);
+    assert_eq!(ocr[0]["data"]["raw_text"], "provider aggregate home");
+    assert_eq!(ocr[0]["data"]["derived_text"], "home\nmarker");
+    let blocks = records
+        .iter()
+        .filter(|record| record["kind"] == "ocr_block")
+        .collect::<Vec<_>>();
+    assert_eq!(blocks.len(), 12);
+    assert_eq!(blocks[0]["data"]["source_index"], 0);
+    assert_eq!(blocks[0]["data"]["derived_rank"], 1);
+    assert_eq!(blocks[0]["data"]["raw"]["text"], "marker");
+    assert_eq!(
+        blocks[0]["data"]["raw"]["rect"],
+        serde_json::json!({"x":1,"y":0,"width":1,"height":1})
+    );
+    assert_eq!(
+        blocks[0]["data"]["raw"]["confidence"],
+        serde_json::json!(0.75_f32)
+    );
+    let nn_results = records
+        .iter()
+        .filter(|record| record["kind"] == "nn")
+        .collect::<Vec<_>>();
+    assert_eq!(nn_results.len(), 2);
+    for nn in nn_results {
+        assert_eq!(
+            nn["data"]["requested_region"],
+            serde_json::json!({"x":1,"y":0,"width":1,"height":1})
+        );
+        assert_eq!(nn["data"]["selected_label"], "ready");
+        let labels = records
+            .iter()
+            .filter(|record| record["kind"] == "nn_label" && record["parent_index"] == nn["index"])
+            .collect::<Vec<_>>();
+        assert_eq!(labels.len(), 1024);
+        for (index, label) in labels.iter().enumerate() {
+            assert_eq!(label["data"]["source_index"], index);
+            assert_eq!(label["parent_index"], nn["index"]);
+            assert_eq!(
+                label["data"]["raw"]["label"],
+                if index == 1023 {
+                    "ready".into()
+                } else {
+                    format!("{index:04}{}", "x".repeat(4092))
+                }
+            );
+            assert_eq!(
+                serde_json::from_value::<f32>(label["data"]["raw"]["score"].clone())
+                    .unwrap()
+                    .to_bits(),
+                (if index == 1023 { 0.98_f32 } else { 0.25_f32 }).to_bits()
+            );
+        }
+        assert_eq!(labels[1023]["data"]["derived"]["rank"], 0);
+    }
     drop(injected_client);
     injected_host.close().expect("close injected-provider host");
+}
+
+// Authorized D01 callback regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#pullrequestreview-5121633182
+// Zero-input Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553542252
+// ZIF-D01: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5554095550
+#[test]
+fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
+    use actingcommand_contract::{
+        ArtifactRedactionState, EffectiveConfigurationFacts, EffectiveConfigurationRecord,
+        EffectiveTimingSource,
+    };
+    use actingcommand_device::{
+        AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureMumuContext,
+        CaptureSelectionContext, DeviceTarget, InputSelectionContext, MaaTouchConfig,
+        MumuInstallSource, TouchBackendChoice, TouchBackendConfig, TouchBackendName,
+    };
+    use actingcommand_recognition_pack::{
+        OcrExecutionProviderKind, OcrProviderExecutionEvidence, OcrProviderObservation,
+    };
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+    use serde_json::{Value, json};
+    use std::io::Read;
+
+    #[derive(Debug)]
+    struct FieldEvidenceProvider(Arc<FakeVisionProvider>, Option<&'static str>);
+    impl VisionProvider for FieldEvidenceProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            self.0.require_ocr_model(model_ref, model_sha256)
+        }
+
+        fn require_nn_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            self.0.require_nn_model(model_ref, model_sha256)
+        }
+
+        fn read_text(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            self.0.read_text(request)
+        }
+
+        fn read_text_with_execution_evidence(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderObservation, VisionProviderError> {
+            let model_ref = request.model_ref.to_owned();
+            let model_sha256 = request.model_sha256.to_owned();
+            let mut result = self.0.read_text(request)?;
+            if let Some(text) = self.1 {
+                result.text = text.to_owned();
+                for block in &mut result.blocks {
+                    block.text = text.to_owned();
+                }
+            }
+            Ok(OcrProviderObservation {
+                result,
+                execution: Some(OcrProviderExecutionEvidence {
+                    invocation_id: format!("ocr-{}", self.0.ocr_calls.load(Ordering::Acquire)),
+                    session_id: "fields-session".to_owned(),
+                    session_generation: 1,
+                    requested_provider: OcrExecutionProviderKind::Cpu,
+                    resolved_provider: OcrExecutionProviderKind::Cpu,
+                    requested_cuda_ordinal: None,
+                    requested_cuda_identity: None,
+                    resolved_cuda_ordinal: None,
+                    resolved_cuda_identity: None,
+                    provider_implementation: "fixture-ocr".to_owned(),
+                    provider_binary_sha256: "b".repeat(64),
+                    runtime_version: "fixture-runtime".to_owned(),
+                    model_ref,
+                    model_sha256,
+                    cpu_ep_registered: true,
+                    cpu_fallback_disabled: false,
+                    fallback_forbidden: true,
+                    fallback_observed: None,
+                    complete: true,
+                }),
+            })
+        }
+
+        fn classify(
+            &self,
+            request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            self.0.classify(request)
+        }
+    }
+
+    let mut source = zip::ZipArchive::new(Cursor::new(
+        neutral_post_admission_ocr_contained_task_package(),
+    ))
+    .expect("existing neutral package");
+    let mut files = BTreeMap::new();
+    for index in 0..source.len() {
+        let mut entry = source.by_index(index).expect("neutral entry");
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).expect("neutral entry bytes");
+        files.insert(entry.name().to_string(), bytes);
+    }
+    let truth = serde_json::to_vec(
+        &json!({"schema_version":"actingcommand.ocr-truth-set.v2","items":["home"],"aliases":[]}),
+    )
+    .unwrap();
+    let truth_sha = format!("{:x}", Sha256::digest(&truth));
+    let mut control: Value = serde_json::from_slice(&files["control.json"]).unwrap();
+    control["execution_mode"] = json!("navigable_route");
+    control["capture_interval_ms"] = json!(3);
+    control["step_timeout_ms"] = json!(27);
+    control
+        .as_object_mut()
+        .unwrap()
+        .remove("stability_termination");
+    let mut task: Value =
+        serde_json::from_slice(&files["resources/operations/task/task.json"]).unwrap();
+    task["schema_version"] = json!("0.8");
+    task["target_page"] = json!("terminal");
+    task["operations"][0]["to"] = json!("terminal");
+    task["operations"][0]["expect_after"] =
+        json!({"page_id":"terminal","timeout_ms":480_000,"interval_ms":7});
+    task["operations"][0]["post_delay_ms"] = json!(1);
+    task.as_object_mut()
+        .unwrap()
+        .remove("stability_termination");
+    task["post_admission_ocr"] = json!({"mode":"fields_v1","page_ids":["home"],"fields":[{
+        "id":"location","group":"page","target_id":"fixture/ocr","required":true,"privacy":"public","trim":"whitespace_v1",
+        "value":{"type":"dictionary_entry","dictionary":{"path":"truth.json","sha256":truth_sha}}}],
+        "limits":{"max_frames":2,"max_items":16,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":16},"outcome_key":"fields_recorded"});
+    task["scheduling_outcome"] = json!({"mappings":[{"outcome_key":"fields_recorded","effect":"no_designated_effect","terminal_pages":["terminal"]}]});
+    let mut manifest: Value = serde_json::from_slice(&files["resources/manifest.json"]).unwrap();
+    manifest["files"][0]["sha256"] = json!(truth_sha);
+    files.insert("control.json".into(), serde_json::to_vec(&control).unwrap());
+    files.insert(
+        "resources/operations/task/task.json".into(),
+        serde_json::to_vec(&task).unwrap(),
+    );
+    files.insert("resources/operations/task/truth.json".into(), truth);
+    files.insert(
+        "resources/manifest.json".into(),
+        serde_json::to_vec(&manifest).unwrap(),
+    );
+    let zero_input_files = files.clone();
+    let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, bytes) in files {
+        package
+            .start_file(
+                path,
+                FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        package.write_all(&bytes).unwrap();
+    }
+    let bytes = package.finish().unwrap().into_inner();
+    let expected_sha = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+
+    for (capture, fatal, fail_report, successful) in [
+        (true, false, false, false),
+        (false, false, false, false),
+        (true, true, false, false),
+        (false, true, false, false),
+        (false, false, true, false),
+        (false, false, false, true),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package_path = root.path().join("fields-callback.zip");
+        fs::write(&package_path, &bytes).expect("inline fields package");
+        let state = Arc::new(FakeState::default());
+        *state.input_selection.lock().unwrap() = Some(InputSelectionContext {
+            backend: TouchBackendName::AdbShellInput,
+            serial: "neutral-selected-input".to_owned(),
+        });
+        *state.capture_selection.lock().unwrap() = Some(CaptureSelectionContext {
+            requested: CaptureBackendChoice::NemuIpc,
+            configured_adb: "neutral-configured-adb".to_owned(),
+            configured_serial: Some("127.0.0.1:16384".to_owned()),
+            resolved_adb: "neutral-resolved-adb".to_owned(),
+            selected_serial: "neutral-selected-capture".to_owned(),
+            mumu: Some(CaptureMumuContext {
+                root: "neutral-installation".into(),
+                adb_path: "neutral-installation/adb".into(),
+                capture_dll_path: "neutral-installation/capture.dll".into(),
+                source: MumuInstallSource::RunningProcess,
+            }),
+        });
+        if capture {
+            state.fail_capture_on.store(2, Ordering::Release);
+            state
+                .transient_capture_failure
+                .store(!fatal, Ordering::Release);
+        } else if !successful {
+            let error = if fatal {
+                DeviceError::fatal("synthetic input failure")
+            } else {
+                DeviceError::transient("synthetic input failure")
+            };
+            *state.input_error.lock().unwrap() = Some(error.with_diagnostic(
+                DeviceErrorCategory::Native,
+                "device_registry.input.operation",
+            ));
+        }
+        state.block_input.store(fail_report, Ordering::Release);
+        state
+            .transition_capture_after_input
+            .store(successful, Ordering::Release);
+        let configured_instance = instance_id();
+        let target = DeviceTarget {
+            serial: Some("127.0.0.1:16384".to_owned()),
+            ..DeviceTarget::default()
+        };
+        let adb = AdbConfig {
+            adb_path: "neutral-configured-adb".to_owned(),
+            command_timeout: Duration::from_millis(71),
+        };
+        let registry = ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+            "neutral.instance",
+            configured_instance,
+            "neutral.application",
+            TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
+                .with_requested(TouchBackendChoice::Minitouch),
+            CaptureBackendConfig::new(adb, target).with_requested(CaptureBackendChoice::NemuIpc),
+        )
+        .unwrap()])
+        .unwrap();
+        let resolved = registry.resolve("neutral.instance").unwrap();
+        let expected_configuration = resolved.configuration().unwrap().clone();
+        let vision = Arc::new(FakeVisionProvider::default());
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("neutral.instance", configured_instance, state.clone())
+                    .with_resolved_override(Arc::new(std::sync::Mutex::new(resolved)))
+                    .with_vision_provider(Arc::new(FieldEvidenceProvider(vision.clone(), None))),
+            ),
+        )
+        .expect("formal host with existing fake backends");
+        let request =
+            ContainedTaskRequest::new(package_path.display().to_string(), &expected_sha).unwrap();
+        let client_root = root.path().to_path_buf();
+        let execution = thread::spawn(move || {
+            let client = RuntimeClient::connect(RuntimeClientConfig::new(
+                client_root,
+                EventActor::Cli,
+                EventSource::Cli,
+            ))
+            .expect("official client");
+            client.run_contained_task("neutral.instance", request)
+        });
+        let artifact_root = root.path().join("artifacts");
+        let preserved_artifacts = root.path().join("preserved-artifacts");
+        if fail_report {
+            wait_until(Duration::from_secs(5), || {
+                state.input_started.load(Ordering::Acquire)
+            });
+            // The existing fake input pause occurs after parsed observation persistence.
+            // Refuse the next store write using this test's own filesystem boundary.
+            let refusal = fs::rename(&artifact_root, &preserved_artifacts)
+                .and_then(|()| fs::write(&artifact_root, b"synthetic store refusal"));
+            state.block_input.store(false, Ordering::Release);
+            refusal.expect("refuse report storage");
+        }
+        let result = execution.join().expect("official client execution");
+        if fail_report {
+            fs::remove_file(&artifact_root).expect("remove synthetic refusal");
+            fs::rename(&preserved_artifacts, &artifact_root)
+                .expect("restore original artifact evidence");
+        }
+        let expected_code = if fail_report {
+            RuntimeErrorCode::RuntimeFatal
+        } else if capture {
+            RuntimeErrorCode::CaptureFailed
+        } else {
+            RuntimeErrorCode::BackendOperationFailed
+        };
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .expect("product ledger facts");
+        let diagnostics = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::ArtifactVerified)
+            .flat_map(|event| event.artifacts())
+            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+            .filter(|artifact| artifact.producer() == ArtifactProducer::CapturePipeline)
+            .collect::<Vec<_>>();
+        let configuration_records = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::ArtifactVerified)
+            .flat_map(|event| {
+                event
+                    .artifacts()
+                    .iter()
+                    .filter(|artifact| {
+                        artifact.kind() == ArtifactKind::DiagnosticJson
+                            && artifact.producer() == ArtifactProducer::ArtifactStore
+                    })
+                    .map(move |artifact| (event, artifact))
+            })
+            .filter_map(|(event, artifact)| {
+                let bytes = read_projected_verified(root.path(), &artifact.project(true)).unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if value
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA)
+                {
+                    return None;
+                }
+                assert!(
+                    artifact.byte_count()
+                        <= actingcommand_contract::MAX_EFFECTIVE_CONFIGURATION_BYTES
+                );
+                let record: EffectiveConfigurationRecord = serde_json::from_value(value).unwrap();
+                assert_eq!(event.links().task_id(), Some(&record.task_id));
+                assert_eq!(event.links().run_id(), Some(&record.run_id));
+                assert_eq!(event.links().frame_id(), record.frame_id.as_ref());
+                assert_eq!(event.links().action_id(), record.action_id.as_ref());
+                assert_eq!(event.links().request_id(), Some(&record.request_id));
+                Some((event, record))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            configuration_records.len(),
+            if capture || successful { 3 } else { 2 }
+        );
+        assert!(configuration_records.len() <= 4);
+        let (initial_event, initial) = &configuration_records[0];
+        let EffectiveConfigurationFacts::Initial {
+            device,
+            timing,
+            capture_observed,
+            input_observed,
+            host_deadline_monotonic_ms,
+            observed_at_monotonic_ms,
+            host_remaining_ms,
+            ..
+        } = &initial.facts
+        else {
+            panic!("initial effective configuration");
+        };
+        assert_eq!(device.as_ref(), Some(&expected_configuration));
+        assert!(!capture_observed && !input_observed);
+        assert_eq!(
+            *host_remaining_ms,
+            host_deadline_monotonic_ms.saturating_sub(*observed_at_monotonic_ms)
+        );
+        assert_eq!(timing.step_timeout.milliseconds, 27);
+        assert_eq!(timing.step_timeout.source, EffectiveTimingSource::Control);
+        assert_eq!(timing.capture_interval.milliseconds, 3);
+        assert_eq!(timing.operations[0].timeout.milliseconds, 480_000);
+        assert_eq!(timing.operations[0].interval.milliseconds, 7);
+        assert_eq!(
+            timing.operations[0].timeout.source,
+            EffectiveTimingSource::ExpectAfter
+        );
+        assert_eq!(timing.operations[0].postdelay.milliseconds, 1);
+        assert_eq!(
+            timing.operations[0].postdelay.source,
+            EffectiveTimingSource::Operation
+        );
+        assert!(timing.operations[0].expect_after);
+        assert!(
+            events
+                .iter()
+                .find(|event| event.event_type() == EventType::CaptureRequested)
+                .unwrap()
+                .sequence()
+                > initial_event.sequence()
+        );
+        assert!(
+            initial.frame_id.is_none()
+                && initial.action_id.is_none()
+                && initial.source_sequence.is_none()
+        );
+        let capture_record = &configuration_records[1].1;
+        let EffectiveConfigurationFacts::Capture {
+            backend,
+            selection: Some(selection),
+        } = &capture_record.facts
+        else {
+            panic!("first successful capture context");
+        };
+        assert_eq!(backend, "adb_screencap");
+        assert_eq!(selection.requested_backend, "nemu_ipc");
+        assert_eq!(selection.resolved_adb, "neutral-resolved-adb");
+        assert_eq!(selection.selected_serial, "neutral-selected-capture");
+        assert_eq!(selection.mumu.as_ref().unwrap().source, "running_process");
+        assert_eq!(
+            selection.mumu.as_ref().unwrap().capture_dll_path,
+            std::path::PathBuf::from("neutral-installation/capture.dll")
+        );
+        let capture_source = events
+            .iter()
+            .find(|event| Some(event.sequence()) == capture_record.source_sequence)
+            .unwrap();
+        assert_eq!(capture_source.event_type(), EventType::CaptureRequested);
+        assert_eq!(
+            capture_source.links().frame_id(),
+            capture_record.frame_id.as_ref()
+        );
+        if capture || successful {
+            let input_record = &configuration_records[2].1;
+            let EffectiveConfigurationFacts::Input {
+                selection: Some(selection),
+            } = &input_record.facts
+            else {
+                panic!("committed input context");
+            };
+            assert_eq!(selection.backend, "adb_shell_input");
+            assert_eq!(selection.serial, "neutral-selected-input");
+            let input_source = events
+                .iter()
+                .find(|event| Some(event.sequence()) == input_record.source_sequence)
+                .unwrap();
+            assert_eq!(input_source.event_type(), EventType::InputCommitted);
+            assert_eq!(
+                input_source.links().action_id(),
+                input_record.action_id.as_ref()
+            );
+        }
+        if successful {
+            let output = result.expect("successful formal task with effective configuration");
+            assert!(matches!(
+                output.receipt().result(),
+                Some(RuntimeResult::ContainedTaskCompleted {
+                    outcome: TaskOutcome::Success,
+                    ..
+                })
+            ));
+            assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 2);
+            host.close().expect("successful close");
+            continue;
+        }
+        assert_eq!(
+            vision.ocr_calls.load(Ordering::Acquire),
+            1,
+            "resolved fields precede callback failure: {result:?}"
+        );
+        assert_eq!(
+            state.capture_count.load(Ordering::Acquire),
+            if capture { 2 } else { 1 }
+        );
+        assert_eq!(
+            diagnostics.len(),
+            if fatal || fail_report { 1 } else { 2 },
+            "one raw observation and at most one report"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type() == EventType::ArtifactStoreFailed)
+                .count(),
+            usize::from(fail_report),
+            "failed report persistence is not retried"
+        );
+        if fatal || fail_report {
+            let error = result.expect_err("fatal boundary propagates");
+            assert!(error.is_fatal());
+            assert_eq!(
+                error.projection().expect("typed fatal projection").code,
+                expected_code
+            );
+            if capture || fail_report {
+                assert!(
+                    host.fatal_error()
+                        .unwrap()
+                        .expect("fatal host state")
+                        .is_fatal()
+                );
+                assert!(host.close().expect_err("fatal host close").is_fatal());
+            } else {
+                assert!(host.fatal_error().unwrap().is_none());
+                host.close().expect("input failure remains contained");
+            }
+        } else {
+            let output = result.expect("ordinary callback failure keeps official fields output");
+            assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
+            let error = output
+                .receipt()
+                .error_projection()
+                .expect("original failed receipt");
+            assert_eq!(error.code, expected_code);
+            assert!(!error.fatal);
+            let projection = output
+                .official_ocr_fields_projection()
+                .expect("official parsed fields");
+            assert_eq!(projection.records().len(), 1);
+            assert_eq!(projection.failure(), None);
+            for artifact in &diagnostics {
+                assert_eq!(artifact.run_id(), Some(&projection.run_id()));
+                assert_eq!(
+                    artifact.frame_id(),
+                    Some(&projection.records()[0].frame_id())
+                );
+            }
+            let value = serde_json::to_value(projection).unwrap();
+            assert_eq!(value["records"][0]["group"], "page");
+            assert_eq!(value["records"][0]["fields"][0]["raw_text"], "home");
+            assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
+            assert_eq!(
+                value["records"][0]["frame_id"],
+                value["observations"][0]["frame_id"]
+            );
+            let terminals = events.iter().filter(|event| matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
+                if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
+            assert_eq!(terminals.len(), 1);
+            assert_eq!(terminals[0].links().run_id(), Some(&projection.run_id()));
+            assert!(host.fatal_error().unwrap().is_none());
+            host.close().expect("ordinary failure leaves host healthy");
+        }
+    }
+
+    {
+        let root = TempDir::new().unwrap();
+        let target = explicit_home_contained_task_package(
+            "fixture01.configuration-target",
+            [0, 0, 255],
+            [255, 0, 0],
+        );
+        let recovery_source = explicit_home_contained_task_package(
+            "fixture01.configuration-recovery",
+            [0, 0, 255],
+            [255, 0, 0],
+        );
+        let mut archive = zip::ZipArchive::new(Cursor::new(recovery_source)).unwrap();
+        let mut recovery = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry.name() == "control.json" {
+                let mut control: Value = serde_json::from_slice(&bytes).unwrap();
+                for key in ["capture_interval_ms", "step_timeout_ms", "timeout_ms"] {
+                    control.as_object_mut().unwrap().remove(key);
+                }
+                bytes = serde_json::to_vec(&control).unwrap();
+            }
+            recovery
+                .start_file(
+                    entry.name(),
+                    FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            recovery.write_all(&bytes).unwrap();
+        }
+        let recovery = recovery.finish().unwrap().into_inner();
+        let target_path = root.path().join("configuration-target.zip");
+        let recovery_path = root.path().join("configuration-recovery.zip");
+        fs::write(&target_path, &target).unwrap();
+        fs::write(&recovery_path, &recovery).unwrap();
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        *state.input_selection.lock().unwrap() = Some(InputSelectionContext {
+            backend: TouchBackendName::AdbShellInput,
+            serial: "neutral-recovery".to_owned(),
+        });
+        *state.capture_selection.lock().unwrap() = Some(CaptureSelectionContext {
+            requested: CaptureBackendChoice::Adb,
+            configured_adb: "neutral-adb".to_owned(),
+            configured_serial: Some("neutral-recovery".to_owned()),
+            resolved_adb: "neutral-adb".to_owned(),
+            selected_serial: "neutral-recovery".to_owned(),
+            mumu: None,
+        });
+        let configured_instance = instance_id();
+        let target_config = DeviceTarget {
+            serial: Some("neutral-recovery".to_owned()),
+            ..DeviceTarget::default()
+        };
+        let adb = AdbConfig {
+            adb_path: "neutral-adb".to_owned(),
+            ..AdbConfig::default()
+        };
+        let registry = ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+            "fixture01.instance",
+            configured_instance,
+            "neutral.application",
+            TouchBackendConfig::new(
+                adb.clone(),
+                target_config.clone(),
+                MaaTouchConfig::default(),
+            )
+            .with_requested(TouchBackendChoice::AdbShellInput),
+            CaptureBackendConfig::new(adb, target_config).with_requested(CaptureBackendChoice::Adb),
+        )
+        .unwrap()])
+        .unwrap();
+        let resolved = registry.resolve("fixture01.instance").unwrap();
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("fixture01.instance", configured_instance, state.clone())
+                    .with_resolved_override(Arc::new(std::sync::Mutex::new(resolved))),
+            ),
+        )
+        .unwrap();
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .unwrap();
+        let request = ContainedTaskRequest::new(
+            target_path.display().to_string(),
+            format!("{:x}", Sha256::digest(&target)),
+        )
+        .unwrap()
+        .with_recovery(
+            ContainedTaskRecoveryBinding::new(
+                recovery_path.display().to_string(),
+                format!("{:x}", Sha256::digest(&recovery)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let output = client
+            .run_contained_task("fixture01.instance", request)
+            .unwrap();
+        assert!(matches!(
+            output.receipt().result(),
+            Some(RuntimeResult::ContainedTaskCompleted {
+                outcome: TaskOutcome::Success,
+                ..
+            })
+        ));
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .unwrap();
+        let configurations = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::ArtifactVerified)
+            .flat_map(|event| event.artifacts())
+            .filter(|artifact| {
+                artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer() == ArtifactProducer::ArtifactStore
+            })
+            .filter_map(|artifact| {
+                let value: serde_json::Value = serde_json::from_slice(
+                    &read_projected_verified(root.path(), &artifact.project(true)).unwrap(),
+                )
+                .unwrap();
+                (value
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA))
+                .then(|| serde_json::from_value::<EffectiveConfigurationRecord>(value).unwrap())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            configurations.len(),
+            4,
+            "one initial, first capture, recovery, first committed input"
+        );
+        let recovery_record = configurations
+            .iter()
+            .find(|record| {
+                matches!(
+                    record.facts,
+                    EffectiveConfigurationFacts::EntryRecovery { .. }
+                )
+            })
+            .unwrap();
+        let EffectiveConfigurationFacts::EntryRecovery {
+            package_sha256,
+            timing,
+        } = &recovery_record.facts
+        else {
+            unreachable!()
+        };
+        assert_eq!(package_sha256, &format!("{:x}", Sha256::digest(&recovery)));
+        assert_eq!(timing.task_timeout.milliseconds, 60_000);
+        assert_eq!(timing.step_timeout.milliseconds, 5_000);
+        assert_eq!(timing.capture_interval.milliseconds, 50);
+        assert_eq!(
+            timing.operations[0].timeout.source,
+            EffectiveTimingSource::Default
+        );
+        assert_eq!(
+            timing.operations[0].interval.source,
+            EffectiveTimingSource::Default
+        );
+        assert_eq!(
+            timing.operations[0].postdelay.source,
+            EffectiveTimingSource::NotSpecified
+        );
+        assert!(!timing.operations[0].expect_after);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+        assert!(state.capture_count.load(Ordering::Acquire) > 1);
+        assert_eq!(events.iter().filter(|event| matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload)) if matches!(payload.fact(), TaskSemanticFact::RunStarted))).count(), 1);
+        host.close().unwrap();
+    }
+
+    for (declared_page, explicit_home, starts_home, extracted_personal) in [
+        ("home", false, true, None),
+        ("terminal", false, true, None),
+        ("home", true, true, None),
+        ("home", true, false, None),
+        ("home", false, true, Some(false)),
+        ("home", false, true, Some(true)),
+    ] {
+        let mut files = zero_input_files.clone();
+        let mut task = task.clone();
+        task["operations"] = json!([]);
+        task["target_page"] = json!(declared_page);
+        task["post_admission_ocr"]["page_ids"] = json!([declared_page]);
+        task["scheduling_outcome"]["mappings"][0]["terminal_pages"] = json!([declared_page]);
+        if let Some(personal) = extracted_personal {
+            let field = &mut task["post_admission_ocr"]["fields"][0];
+            field["privacy"] = json!(if personal { "personal" } else { "public" });
+            field["text_extraction"] = json!({"mode":"strip_declared_suffix_v1","suffix":[
+                {"type":"ascii_digits","count":2}, {"type":"literal","value":"/"},
+                {"type":"ascii_digits","count":4}, {"type":"literal","value":":"},
+                {"type":"ascii_digits","count":2}, {"type":"literal","value":"期限"}
+            ]});
+        }
+        files.insert(
+            "resources/operations/task/task.json".into(),
+            serde_json::to_vec(&task).unwrap(),
+        );
+        if explicit_home {
+            let pack_path = "resources/recognition/neutral.test.pack.json";
+            let mut pack: Value = serde_json::from_slice(&files[pack_path]).unwrap();
+            for (id, color) in [
+                ("home/green_anchor", [0, 255, 0]),
+                ("home/alternate_anchor", [255, 255, 255]),
+            ] {
+                pack["targets"].as_array_mut().unwrap().push(json!({
+                    "type":"color","id":id,"region":{"x":1,"y":0,"width":1,"height":1},
+                    "expected":color
+                }));
+            }
+            files.insert(pack_path.into(), serde_json::to_vec(&pack).unwrap());
+            let pages_path = "resources/recognition/neutral.test.pages.json";
+            let mut pages: Value = serde_json::from_slice(&files[pages_path]).unwrap();
+            pages["pages"][0]["any_of"] = json!([["home/green_anchor", "home/alternate_anchor"]]);
+            files.insert(pages_path.into(), serde_json::to_vec(&pages).unwrap());
+        }
+        let mut package = ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, bytes) in files {
+            package
+                .start_file(
+                    path,
+                    FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            package.write_all(&bytes).unwrap();
+        }
+        let bytes = package.finish().unwrap().into_inner();
+        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+        let root = TempDir::new().unwrap();
+        let package_path = root.path().join("zero-input-fields.zip");
+        fs::write(&package_path, &bytes).unwrap();
+        let state = Arc::new(FakeState::default());
+        if explicit_home {
+            state.fail_capture_on.store(2, Ordering::Release);
+            state
+                .transient_capture_failure
+                .store(true, Ordering::Release);
+            if !starts_home {
+                state
+                    .transition_capture_after_capture
+                    .store(1, Ordering::Release);
+            }
+        }
+        let vision = Arc::new(FakeVisionProvider::default());
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(
+                FakeProvider::one("neutral.instance", instance_id(), state.clone())
+                    .with_vision_provider(Arc::new(FieldEvidenceProvider(
+                        vision.clone(),
+                        extracted_personal.map(|_| " home09/2803:59期限 "),
+                    ))),
+            ),
+        )
+        .expect("formal zero-input host");
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .expect("official client");
+        let result = client.run_contained_task(
+            "neutral.instance",
+            ContainedTaskRequest::new(package_path.display().to_string(), expected).unwrap(),
+        );
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .unwrap();
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        assert_eq!(
+            vision.ocr_calls.load(Ordering::Acquire),
+            u64::from(declared_page == "home" && starts_home)
+        );
+        if explicit_home {
+            let facts = events
+                .iter()
+                .filter_map(|event| match event.payload() {
+                    EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                facts
+                    .iter()
+                    .filter(|fact| matches!(fact,
+                        TaskSemanticFact::EntryRecognition {
+                            phase: TaskEntryRecognitionPhase::Initial, required_page, matched,
+                        } if required_page == "neutral/home" && *matched == starts_home
+                    ))
+                    .count(),
+                1
+            );
+            assert!(facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecoveryDecision { required: false }
+            )));
+            assert!(!facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecoveryPackageAdmitted { .. }
+                    | TaskSemanticFact::EntryRecoveryCompleted { .. }
+                    | TaskSemanticFact::StepStarted { .. }
+            )));
+            assert!(facts.iter().any(|fact| matches!(fact,
+                TaskSemanticFact::EntryTargetDisposition { disposition, failure_code }
+                    if (*disposition == TaskEntryTargetDisposition::Started && starts_home && failure_code.is_none())
+                        || (*disposition == TaskEntryTargetDisposition::FailClosed && !starts_home
+                            && failure_code.as_deref() == Some("contained_task_home_entry_not_matched"))
+            )));
+        }
+        let terminals = events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                    fact @ TaskSemanticFact::TerminalCommitted { .. } => Some((event, fact)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminals.len(), 1, "exactly one terminal: {result:?}");
+        if declared_page == "home" && starts_home {
+            let output = result.expect("official zero-input fields receipt");
+            assert!(
+                matches!(output.receipt().result(), Some(RuntimeResult::ContainedTaskCompleted {
+                outcome: TaskOutcome::Success, executed_steps: 0, final_page: Some(page), ..
+            }) if page == "neutral/home")
+            );
+            assert!(matches!(
+                terminals[0].1,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Success,
+                    executed_steps: 0,
+                    ..
+                }
+            ));
+            let projection = output
+                .official_ocr_fields_projection()
+                .expect("verified report projection");
+            assert_eq!(projection.failure(), None);
+            assert_eq!(projection.records().len(), 1);
+            assert_eq!(terminals[0].0.links().run_id(), Some(&projection.run_id()));
+            let summary_event = events
+                .iter()
+                .find(|event| event.event_type() == EventType::CaptureSummaryCommitted)
+                .expect("terminal capture summary");
+            assert_eq!(
+                summary_event.links().run_id(),
+                terminals[0].0.links().run_id()
+            );
+            assert!(summary_event.sequence() < terminals[0].0.sequence());
+            let EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) =
+                summary_event.payload()
+            else {
+                panic!("typed terminal capture summary");
+            };
+            assert_eq!(summary.summary().frames().len(), 1);
+            assert_eq!(
+                summary.summary().frames()[0].artifact().frame_id(),
+                Some(&projection.records()[0].frame_id())
+            );
+            assert!(summary.summary().pinned().iter().any(|pin| {
+                pin.reason() == PinnedFrameReason::Terminal && pin.frame_index() == Some(0)
+            }));
+            let value = serde_json::to_value(projection).unwrap();
+            if extracted_personal == Some(true) {
+                let field = &value["records"][0]["fields"][0];
+                assert_eq!(field["redacted"], true);
+                assert_eq!(field["raw_text"], Value::Null);
+                assert_eq!(field["normalized_text"], Value::Null);
+                assert_eq!(field["value"], Value::Null);
+                assert!(field.get("extraction").is_none());
+                assert!(
+                    !serde_json::to_string(projection)
+                        .unwrap()
+                        .contains("home09/2803:59")
+                );
+            } else {
+                assert_eq!(value["records"][0]["fields"][0]["value"]["value"], "home");
+            }
+            if extracted_personal == Some(false) {
+                let field = &value["records"][0]["fields"][0];
+                assert_eq!(field["raw_text"], " home09/2803:59期限 ");
+                assert_eq!(field["normalized_text"], "home09/2803:59期限");
+                assert_eq!(
+                    field["extraction"],
+                    json!({
+                        "rule_version":"strip_declared_suffix_v1",
+                        "matched_suffix":{"start":4,"end":20},
+                        "extracted_text":"home","extracted_range":{"start":0,"end":4}
+                    })
+                );
+            }
+            assert_eq!(
+                value["records"][0]["frame_id"],
+                value["observations"][0]["frame_id"]
+            );
+            let diagnostics = events
+                .iter()
+                .filter(|event| event.event_type() == EventType::ArtifactVerified)
+                .flat_map(|event| event.artifacts())
+                .filter(|artifact| {
+                    artifact.kind() == ArtifactKind::DiagnosticJson
+                        && artifact.producer() == ArtifactProducer::CapturePipeline
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(diagnostics.len(), 2, "one observation and one final report");
+            for artifact in diagnostics {
+                assert_eq!(artifact.run_id(), Some(&projection.run_id()));
+                assert_eq!(
+                    artifact.frame_id(),
+                    Some(&projection.records()[0].frame_id())
+                );
+                if let Some(personal) = extracted_personal {
+                    assert_eq!(
+                        artifact.project(true).redaction_state,
+                        if personal {
+                            ArtifactRedactionState::Pending
+                        } else {
+                            ArtifactRedactionState::NotRequired
+                        }
+                    );
+                    let stored: Value = serde_json::from_slice(
+                        &read_projected_verified(root.path(), &artifact.project(true)).unwrap(),
+                    )
+                    .unwrap();
+                    if let Some(report) = stored.get("report") {
+                        let field = &report["records"][0]["fields"][0];
+                        assert_eq!(field["raw_text"], " home09/2803:59期限 ");
+                        assert_eq!(field["normalized_text"], "home09/2803:59期限");
+                        assert_eq!(field["value"]["value"], "home");
+                        assert_eq!(
+                            field["extraction"]["matched_suffix"],
+                            json!({"start":4,"end":20})
+                        );
+                        assert_eq!(field["extraction"]["extracted_text"], "home");
+                        assert_eq!(report["declaration"], task["post_admission_ocr"]);
+                    }
+                }
+            }
+        } else {
+            assert!(matches!(
+                terminals[0].1,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    executed_steps: 0,
+                    ..
+                }
+            ));
+            match result {
+                Ok(output) => {
+                    assert_eq!(output.receipt().state(), RuntimeReceiptState::Failed);
+                    assert!(output.official_ocr_fields_projection().is_none());
+                }
+                Err(error) => assert!(!error.is_fatal(), "page mismatch is a contained failure"),
+            }
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| event.event_type() == EventType::TaskCompleted)
+            );
+        }
+        drop(client);
+        host.close().expect("zero-input run leaves host healthy");
+    }
 }
 
 #[test]
@@ -10003,7 +11690,10 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
             event
                 .artifacts
                 .iter()
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| {
+                    artifact.kind() == ArtifactKind::DiagnosticJson
+                        && artifact.producer == ArtifactProducer::CapturePipeline
+                })
                 .map(move |artifact| (event, artifact))
         })
         .collect::<Vec<_>>();
@@ -10216,7 +11906,8 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
             .iter()
             .filter(|event| event.event_type() == EventType::ArtifactVerified)
             .flat_map(|event| event.artifacts().iter())
-            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+            .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson
+                && artifact.producer() == ArtifactProducer::CapturePipeline)
             .count(),
         0
     );
@@ -10334,7 +12025,8 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             events
                 .iter()
                 .flat_map(|event| event.artifacts.iter())
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer == ArtifactProducer::CapturePipeline)
                 .count(),
             0,
             "{case}"
@@ -10535,7 +12227,8 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
                 .iter()
                 .filter(|event| event.event_type() == EventType::ArtifactVerified)
                 .flat_map(|event| event.artifacts().iter())
-                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer() == ArtifactProducer::CapturePipeline)
                 .count(),
             0,
             "{failure_kind}"
@@ -10626,10 +12319,10 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
         .iter()
         .filter(|event| {
             event.event_type == EventType::ArtifactVerified
-                && event
-                    .artifacts
-                    .iter()
-                    .any(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                && event.artifacts.iter().any(|artifact| {
+                    artifact.kind() == ArtifactKind::DiagnosticJson
+                        && artifact.producer == ArtifactProducer::CapturePipeline
+                })
         })
         .collect::<Vec<_>>();
     assert_eq!(capture_frames.len(), 6);
@@ -10772,7 +12465,10 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
         .flat_map(|event| event.artifacts.iter())
-        .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+        .filter(|artifact| {
+            artifact.kind() == ArtifactKind::DiagnosticJson
+                && artifact.producer == ArtifactProducer::CapturePipeline
+        })
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 3, "terminal trace adds no artifact");
     let terminal: serde_json::Value = serde_json::from_slice(
@@ -10881,6 +12577,122 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
             ..EventQuery::default()
         },
     );
+    let input_intents = events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputIntent)
+        .collect::<Vec<_>>();
+    let [input_intent] = input_intents.as_slice() else {
+        panic!("one physical input intent");
+    };
+    let ProjectionPayload::Full(payload) = &input_intent.payload else {
+        panic!("full input intent");
+    };
+    let EventPayload::Input(actingcommand_contract::InputPayload::Intent(input)) = payload.as_ref()
+    else {
+        panic!("typed input intent");
+    };
+    let provenance = input
+        .provenance()
+        .expect("durable input provenance")
+        .clone();
+    let physical_id = *input_intent.links.action_id().expect("physical action");
+    let step_intents = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEffectIntent)
+        .collect::<Vec<_>>();
+    let [step_intent] = step_intents.as_slice() else {
+        panic!("one task effect intent");
+    };
+    assert_eq!(
+        provenance.source_step_action_id.as_ref(),
+        step_intent.links.action_id()
+    );
+    assert_eq!(
+        provenance.before_frame_id.as_ref(),
+        step_intent.links.frame_id()
+    );
+    assert_ne!(Some(&physical_id), step_intent.links.action_id());
+    let TaskSemanticFact::EffectIntent { action, .. } =
+        projected_task_semantic_fact(step_intent).unwrap()
+    else {
+        panic!("step input action");
+    };
+    assert_eq!(&provenance.input_action, action);
+    let outcomes = events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputCommitted)
+        .collect::<Vec<_>>();
+    let [outcome] = outcomes.as_slice() else {
+        panic!("one physical outcome");
+    };
+    assert_eq!(outcome.links.action_id(), Some(&physical_id));
+    assert!(
+        step_intent.sequence < input_intent.sequence && input_intent.sequence < outcome.sequence
+    );
+    let after_captures = events
+        .iter()
+        .filter(|event| {
+            event.event_type == EventType::CaptureRequested
+                && event.links.action_id() == Some(&physical_id)
+        })
+        .collect::<Vec<_>>();
+    let [after_capture] = after_captures.as_slice() else {
+        panic!("first post-input capture");
+    };
+    let after_frame = *after_capture.links.frame_id().unwrap();
+    let before_frame = provenance.before_frame_id.unwrap();
+    assert_ne!(before_frame, after_frame);
+    assert!(outcome.sequence < after_capture.sequence);
+    for frame_id in [before_frame, after_frame] {
+        let completed = events
+            .iter()
+            .filter(|event| {
+                event.event_type == EventType::CaptureCompleted
+                    && event.links.frame_id() == Some(&frame_id)
+            })
+            .collect::<Vec<_>>();
+        let [completed] = completed.as_slice() else {
+            panic!("one capture completion per frame");
+        };
+        assert_eq!(
+            completed.links.action_id(),
+            (frame_id == after_frame).then_some(&physical_id)
+        );
+        for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
+            let artifacts = events
+                .iter()
+                .filter(|event| {
+                    event.event_type == event_type
+                        && event.links.frame_id() == Some(&frame_id)
+                        && event
+                            .artifacts
+                            .iter()
+                            .any(|artifact| artifact.kind == ArtifactKind::CaptureFrame)
+                })
+                .collect::<Vec<_>>();
+            let [artifact_event] = artifacts.as_slice() else {
+                panic!("one persisted PNG event");
+            };
+            assert_eq!(
+                artifact_event.links.action_id(),
+                completed.links.action_id()
+            );
+            assert_eq!(artifact_event.links.run_id(), input_intent.links.run_id());
+            assert_eq!(artifact_event.links.task_id(), input_intent.links.task_id());
+            assert_eq!(
+                artifact_event.links.request_id(),
+                input_intent.links.request_id()
+            );
+            let [artifact] = artifact_event.artifacts.as_slice() else {
+                panic!("one PNG reference");
+            };
+            let bytes = read_projected_verified(root.path(), artifact).unwrap();
+            assert_eq!(
+                artifact.sha256,
+                format!("sha256:{:x}", Sha256::digest(bytes))
+            );
+        }
+    }
     let semantic = events
         .iter()
         .filter_map(projected_task_semantic_fact)
@@ -10933,6 +12745,12 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     let verified_frames = events
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .filter(|event| {
+            event.artifacts.iter().any(|artifact| {
+                artifact.kind == ArtifactKind::CaptureFrame
+                    && artifact.producer == ArtifactProducer::CaptureStore
+            })
+        })
         .map(|event| *event.links.frame_id().expect("artifact frame id"))
         .collect::<BTreeSet<_>>();
     assert_eq!(evidence_frames, verified_frames);
@@ -10948,6 +12766,88 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         .iter()
         .find(|event| event.event_type == EventType::TaskCompleted)
         .expect("task terminal");
+    let diagnostics = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .filter(|event| {
+            event.artifacts.iter().any(|artifact| {
+                artifact.kind == ArtifactKind::DiagnosticJson
+                    && artifact.redaction_state
+                        == actingcommand_contract::ArtifactRedactionState::Pending
+            })
+        })
+        .collect::<Vec<_>>();
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!("one task stream publication")
+    };
+    assert!(diagnostic.sequence < terminal_event.sequence);
+    let artifact = &diagnostic.artifacts[0];
+    let created = events
+        .iter()
+        .filter(|event| {
+            event.event_type == EventType::ArtifactCreated
+                && event
+                    .artifacts
+                    .iter()
+                    .any(|reference| reference.artifact_id == artifact.artifact_id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(created.len(), 1);
+    assert!(created[0].sequence < diagnostic.sequence);
+    let document: serde_json::Value =
+        serde_json::from_slice(&read_projected_verified(root.path(), artifact).unwrap()).unwrap();
+    assert_eq!(
+        document["request_id"],
+        serde_json::to_value(request.request_id()).unwrap()
+    );
+    assert_eq!(
+        document["run_id"],
+        serde_json::to_value(input_intent.links.run_id().unwrap()).unwrap()
+    );
+    let records = document["records"].as_array().unwrap();
+    let start = records
+        .iter()
+        .find(|record| record["kind"] == "step_started")
+        .unwrap();
+    assert_eq!(
+        start["frame_id"],
+        serde_json::to_value(before_frame).unwrap()
+    );
+    assert_eq!(
+        start["step_action_id"],
+        serde_json::to_value(provenance.source_step_action_id.unwrap()).unwrap()
+    );
+    let elapsed = records
+        .iter()
+        .find(|record| record["kind"] == "step_elapsed")
+        .unwrap();
+    assert_eq!(
+        elapsed["frame_id"],
+        serde_json::to_value(after_frame).unwrap()
+    );
+    assert_eq!(
+        elapsed["physical_action_id"],
+        serde_json::to_value(physical_id).unwrap()
+    );
+    assert_eq!(elapsed["data"]["completed"], true);
+    for source in events.iter().filter(|event| {
+        event.event_type == EventType::ArtifactVerified && event.sequence < diagnostic.sequence
+    }) {
+        for reference in &source.artifacts {
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|record| record["kind"] == "artifact"
+                        && record["data"]["source_sequence"] == source.sequence
+                        && record["data"]["artifact"]["artifact_id"]
+                            == serde_json::to_value(reference.artifact_id).unwrap()
+                        && record["data"]["artifact"]["sha256"] == reference.sha256)
+                    .count(),
+                1
+            );
+        }
+    }
+    assert_eq!(records.last().unwrap()["kind"], "terminal");
     assert!(summary_event.sequence < terminal_event.sequence);
     assert_eq!(summary_event.links.run_id(), terminal_event.links.run_id());
     assert_eq!(
@@ -10973,6 +12873,14 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         actingcommand_contract::EvidenceCompleteness::Complete
     );
     assert_eq!(summary.summary().frames().len(), 2);
+    assert_eq!(
+        summary.summary().frames()[0].artifact().frame_id,
+        Some(before_frame)
+    );
+    assert_eq!(
+        summary.summary().frames()[1].artifact().frame_id,
+        Some(after_frame)
+    );
     assert_eq!(
         summary
             .summary()
@@ -11020,6 +12928,26 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         panic!("replayed typed capture summary");
     };
     assert_eq!(summary.summary(), &summary_record);
+    let restored_inputs = projected_events(
+        &mut replay_client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            event_type: Some(EventType::InputIntent),
+            ..EventQuery::default()
+        },
+    );
+    let [restored_input] = restored_inputs.as_slice() else {
+        panic!("one restored input");
+    };
+    let ProjectionPayload::Full(payload) = &restored_input.payload else {
+        panic!("full restored intent");
+    };
+    let EventPayload::Input(actingcommand_contract::InputPayload::Intent(input)) = payload.as_ref()
+    else {
+        panic!("typed restored intent");
+    };
+    assert_eq!(input.provenance(), Some(&provenance));
+    assert_eq!(restored_input.links.action_id(), Some(&physical_id));
     drop(replay_client);
     restarted.close().expect("close restarted host");
 }
@@ -14881,12 +16809,30 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
     ] {
         let root = TempDir::new().expect("tempdir");
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 1_000));
+        let bytes = neutral_contained_task_package();
+        let package = root.path().join("neutral-step.zip");
+        fs::write(&package, &bytes).unwrap();
+        let task = ContainedTaskRequest::new(
+            package.display().to_string(),
+            format!("{:x}", Sha256::digest(&bytes)),
+        )
+        .unwrap();
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        state.block_input.store(true, Ordering::Release);
         let host = RuntimeHost::start(
-            config(&root).with_runtime_clock(clock.clone()),
+            config(&root)
+                .with_runtime_clock(clock.clone())
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &bytes,
+                    vec!["after_observation".into()],
+                )),
             Arc::new(FakeProvider::one(
                 POLICY_INSTANCE_ALIAS,
                 instance_id(),
-                Arc::new(FakeState::default()),
+                state.clone(),
             )),
         )
         .unwrap_or_else(|error| panic!("{case}: start runtime host: {error}"));
@@ -14902,8 +16848,61 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
         };
         let admission = context.admission();
 
-        clock.set_unix_ms(completion_unix_ms);
-        clock.set_monotonic_ms(1_000 + elapsed_ms);
+        thread::scope(|scope| {
+            let run = scope.spawn(|| host.run_scheduled_contained_task(&context, &task));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state.input_started.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    state.block_input.store(false, Ordering::Release);
+                    panic!("{case}: physical input did not start");
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            clock.set_unix_ms(completion_unix_ms);
+            clock.set_monotonic_ms(1_000 + elapsed_ms);
+            state.block_input.store(false, Ordering::Release);
+            run.join().unwrap().expect("scheduled task completed");
+        });
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            },
+        );
+        let artifact = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .flat_map(|event| &event.artifacts)
+            .find(|artifact| {
+                artifact.kind == ArtifactKind::DiagnosticJson
+                    && artifact.redaction_state
+                        == actingcommand_contract::ArtifactRedactionState::Pending
+            })
+            .unwrap();
+        let document: serde_json::Value =
+            serde_json::from_slice(&read_projected_verified(root.path(), artifact).unwrap())
+                .unwrap();
+        let elapsed = document["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|record| record["kind"] == "step_elapsed")
+            .collect::<Vec<_>>();
+        assert_eq!(elapsed.len(), 1);
+        assert_eq!(elapsed[0]["data"]["started_monotonic_ms"], 0);
+        assert_eq!(elapsed[0]["data"]["ended_monotonic_ms"], elapsed_ms);
+        assert_eq!(elapsed[0]["data"]["elapsed_ms"], elapsed_ms);
+        assert_eq!(elapsed[0]["data"]["completed"], true);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskStepFinished)
+                .count(),
+            1
+        );
+        drop(client);
         let outcome = host
             .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
             .unwrap_or_else(|error| panic!("{case}: record policy outcome: {error}"));

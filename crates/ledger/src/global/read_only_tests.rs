@@ -12,6 +12,73 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+// Specification criterion 5: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
+#[test]
+fn b3_storage_snapshot_keeps_physical_tail_and_unverified_segments() {
+    let temp = tempfile::tempdir().expect("root");
+    let root = temp.path();
+    let ledger = GlobalLedger::open(
+        GlobalLedgerConfig::new(root, "neutral-storage").with_segment_max_bytes(128),
+    )
+    .expect("ledger");
+    let empty = GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(root), |_| None)
+        .expect("empty physical segment");
+    assert_eq!(empty.storage_snapshot().segment_count, 1);
+    assert_eq!(empty.storage_snapshot().observed_bytes, 0);
+    assert_eq!(empty.latest_sequence(), 0);
+    let first = ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("first");
+    ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("second");
+    ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("third");
+    ledger.close().expect("close writer");
+    let paths = segment_paths(root);
+    assert_eq!(paths.len(), 3);
+    let valid_prefix_bytes = fs::metadata(&paths[0])
+        .expect("first physical length")
+        .len();
+    append_bytes(&paths[0], b"not-json\n");
+    let before = tree_bytes(root);
+    let source_hashes: Vec<_> = paths
+        .iter()
+        .map(|path| sha256(&fs::read(path).expect("source")))
+        .collect();
+    let total_bytes: u64 = paths
+        .iter()
+        .map(|path| fs::metadata(path).expect("physical size").len())
+        .sum();
+    let snapshot = GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(root), |_| None)
+        .expect("physical snapshot with bad prefix tail");
+    assert_eq!(snapshot.events(), &[first]);
+    assert_eq!(
+        snapshot
+            .corrupt_tail()
+            .expect("bad first segment")
+            .segment_index,
+        1
+    );
+    assert_eq!(snapshot.listed_through_segment(), Some(3));
+    let physical = snapshot.storage_snapshot();
+    assert_eq!(physical.segment_count, 3);
+    assert_eq!(physical.observed_bytes, total_bytes);
+    assert_eq!(physical.read_bytes, total_bytes);
+    assert_eq!(physical.verified_prefix_bytes, valid_prefix_bytes);
+    assert!(physical.read_complete);
+    assert!(!physical.atomic);
+    assert_eq!(tree_bytes(root), before);
+    assert_eq!(
+        paths
+            .iter()
+            .map(|path| sha256(&fs::read(path).expect("preserved source")))
+            .collect::<Vec<_>>(),
+        source_hashes
+    );
+}
+
 #[test]
 fn open_read_only_is_byte_identical_and_does_not_contend_with_writer() {
     let temp = tempfile::tempdir().expect("tempdir");

@@ -15,9 +15,10 @@ use crate::{
     UnsupportedRecognitionTargetResponse,
 };
 use actingcommand_contract::{
-    LabError as CliError, LabResult as CliOutcome, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SchedulingOutcomeDeclaration,
+    LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
+    OcrFieldsDeclaration, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    SchedulingOutcomeDeclaration,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
@@ -509,6 +510,7 @@ fn build_task_outputs(
         navigation: selected.navigation,
         index: selected.index,
         primitives: selected.primitives,
+        projection_metadata: selected.projection_metadata,
     })
 }
 
@@ -803,6 +805,12 @@ fn add_generated_outputs(
         &format!("resources/navigation/{stem}.navigation.json"),
         outputs.navigation.clone(),
     )?;
+    if let Some(metadata) = &outputs.projection_metadata {
+        entries.add_json(
+            &format!("resources/navigation/{stem}.projection.json"),
+            metadata.clone(),
+        )?;
+    }
     entries.add_json(
         "resources/operations/operations.index.json",
         outputs.index.clone(),
@@ -1507,6 +1515,21 @@ fn validate_generated_package(
     } else {
         None
     };
+    if let Some(navigation) = &navigation {
+        actingcommand_pack_containment::validate_projection_resources(
+            &manifest,
+            resource_root,
+            &pack,
+            &pages,
+            navigation,
+            |path| match entries.files.get(path) {
+                Some(PackagePayload::Buffered { bytes, .. }) => Some(bytes.as_slice()),
+                _ => None,
+            },
+            entries.files.keys().map(String::as_str),
+        )
+        .map_err(containment_error)?;
+    }
 
     Ok(LabPackageValidationResponse {
         zip: path.display().to_string(),
@@ -1546,6 +1569,63 @@ fn validate_generated_post_admission_ocr(
     let Some(declaration) = operation.post_admission_ocr.as_ref() else {
         return Ok(());
     };
+    if operation.schema_version == "0.8" {
+        let fields: OcrFieldsDeclaration = serde_json::from_value(declaration.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        fields.validate().map_err(CliError::package_invalid)?;
+        let mut archive = ZipArchive::new(
+            File::open(archive_path).map_err(|e| CliError::package_invalid(e.to_string()))?,
+        )
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        let mut total_bytes = 0_u64;
+        for field in &fields.fields {
+            if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
+                let path = format!(
+                    "resources/operations/{}/{}",
+                    control.entry_task_id, dictionary.path
+                );
+                let payload = entries
+                    .files
+                    .get(&path)
+                    .ok_or_else(|| CliError::package_invalid("ocr_fields_dictionary_missing"))?;
+                let mut entry = archive
+                    .by_name(&path)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                total_bytes = total_bytes.checked_add(entry.size()).ok_or_else(|| {
+                    CliError::package_invalid("ocr_fields_dictionary_limit_exceeded")
+                })?;
+                if payload.sha256() != dictionary.sha256
+                    || total_bytes > fields.limits.max_total_bytes
+                {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_hash_or_limit_mismatch",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .by_ref()
+                    .take(fields.limits.max_total_bytes + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                if bytes.len() as u64 > fields.limits.max_total_bytes
+                    || format!("{:x}", Sha256::digest(&bytes)) != dictionary.sha256
+                {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_hash_or_limit_mismatch",
+                    ));
+                }
+                let parsed: OcrFieldDictionary = serde_json::from_slice(&bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                parsed
+                    .validate(&fields.limits)
+                    .map_err(CliError::package_invalid)?;
+            }
+        }
+        return Ok(());
+    }
+    let declaration: PostAdmissionOcrPackageDeclaration =
+        serde_json::from_value(declaration.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
     let entry_path = format!(
         "resources/operations/{}/{}",
         control.entry_task_id, declaration.truth_set.path
@@ -2093,7 +2173,10 @@ fn validate_entry_task_timeout(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     let Some(value) = bundle.data.get("timeout_ms") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "task '{}' timeout_ms requires schema_version '0.7'",
             bundle.task_id
@@ -2118,7 +2201,10 @@ fn validate_entry_task_max_steps(
     let Some(value) = bundle.data.get("max_steps") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "task '{}' max_steps requires schema_version '0.7'",
             bundle.task_id
@@ -2179,7 +2265,7 @@ fn validate_entry_stability_termination(
                 .get("scheduling_outcome")
                 .filter(|value| !value.is_null())
             {
-                let post_admission_ocr: PostAdmissionOcrPackageDeclaration = bundle
+                let post_admission_ocr: Value = bundle
                     .data
                     .get("post_admission_ocr")
                     .filter(|value| !value.is_null())
@@ -2198,7 +2284,15 @@ fn validate_entry_stability_termination(
                             bundle.task_id
                         ))
                     })?;
-                post_admission_ocr.validate(Some(scheduling_outcome))?;
+                validate_ocr_mode_declaration(
+                    bundle
+                        .data
+                        .get("schema_version")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    &post_admission_ocr,
+                    Some(scheduling_outcome),
+                )?;
             }
         }
         (_, Some(_)) => {
@@ -2519,7 +2613,7 @@ struct OperationBundle {
     #[serde(default)]
     scheduling_outcome: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
-    post_admission_ocr: Option<PostAdmissionOcrPackageDeclaration>,
+    post_admission_ocr: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTermination>,
     #[serde(default)]
@@ -2535,6 +2629,43 @@ struct OperationBundle {
     operations: Vec<Operation>,
 }
 
+pub(crate) fn validate_ocr_mode_declaration(
+    schema: &str,
+    value: &Value,
+    scheduling: Option<&Value>,
+) -> CliOutcome<()> {
+    if schema == "0.7" {
+        let declaration: PostAdmissionOcrPackageDeclaration = serde_json::from_value(value.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        return declaration.validate(scheduling);
+    }
+    if schema != "0.8" {
+        return Err(CliError::package_invalid("ocr_mode_schema_mismatch"));
+    }
+    let declaration: OcrFieldsDeclaration = serde_json::from_value(value.clone())
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    declaration.validate().map_err(CliError::package_invalid)?;
+    let scheduling: SchedulingOutcomeDeclaration = serde_json::from_value(
+        scheduling
+            .cloned()
+            .ok_or_else(|| CliError::package_invalid("ocr_fields_outcome_missing"))?,
+    )
+    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    scheduling
+        .validate()
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    if scheduling
+        .mappings()
+        .iter()
+        .filter(|m| m.outcome_key() == declaration.outcome_key)
+        .count()
+        != 1
+    {
+        return Err(CliError::package_invalid("ocr_fields_outcome_invalid"));
+    }
+    Ok(())
+}
+
 impl OperationBundle {
     fn validate(
         &self,
@@ -2543,7 +2674,7 @@ impl OperationBundle {
     ) -> CliOutcome<()> {
         let schema_valid = match self.schema_version.as_str() {
             "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
-            "0.7" => self.post_admission_ocr.is_some(),
+            "0.7" | "0.8" => self.post_admission_ocr.is_some(),
             _ => false,
         };
         if !schema_valid {
@@ -2589,9 +2720,28 @@ impl OperationBundle {
             )));
         }
         if self.operations.is_empty() {
-            return Err(CliError::package_invalid(
-                "operation bundle has no operations",
-            ));
+            if self.schema_version != "0.8" || self.recovery.is_some() {
+                return Err(CliError::package_invalid(
+                    "operation bundle has no operations",
+                ));
+            }
+            let fields: actingcommand_contract::OcrFieldsDeclaration =
+                serde_json::from_value(self.post_admission_ocr.clone().unwrap_or_default())
+                    .map_err(|_| CliError::package_invalid("ocr_fields_declaration_invalid"))?;
+            let scheduling: actingcommand_contract::SchedulingOutcomeDeclaration =
+                serde_json::from_value(self.scheduling_outcome.clone().unwrap_or_default())
+                    .map_err(|_| CliError::package_invalid("ocr_fields_outcome_invalid"))?;
+            fields
+                .validate_zero_input_task(
+                    &self.game,
+                    &control.execution_mode,
+                    control.stop_on_confirmation.unwrap_or(true),
+                    self.target_page
+                        .as_ref()
+                        .map_or(&[], PageDeclaration::pages),
+                    &scheduling,
+                )
+                .map_err(CliError::package_invalid)?;
         }
         self.validate_stability_termination(control)?;
         self.defaults.validate()?;
@@ -2599,7 +2749,11 @@ impl OperationBundle {
             target_page.validate("operation bundle target_page")?;
         }
         if let Some(declaration) = &self.post_admission_ocr {
-            declaration.validate(self.scheduling_outcome.as_ref())?;
+            validate_ocr_mode_declaration(
+                &self.schema_version,
+                declaration,
+                self.scheduling_outcome.as_ref(),
+            )?;
         }
         for anchor in &self.anchors {
             if anchor.id.trim().is_empty() {
@@ -2704,7 +2858,7 @@ impl OperationBundle {
 
     fn validate_task_timeout(&self, control: &LabControl) -> CliOutcome<()> {
         match self.schema_version.as_str() {
-            "0.7" => {
+            "0.7" | "0.8" => {
                 if self
                     .timeout_ms
                     .is_some_and(|timeout_ms| !(1..=MAX_TASK_TIMEOUT_MS).contains(&timeout_ms))
@@ -2728,7 +2882,7 @@ impl OperationBundle {
 
     fn validate_task_max_steps(&self, control: &LabControl) -> CliOutcome<()> {
         match self.schema_version.as_str() {
-            "0.7" => {
+            "0.7" | "0.8" => {
                 let max_steps = self
                     .max_steps
                     .map(usize::try_from)
@@ -3072,9 +3226,10 @@ impl OperationExpectation {
     fn validate(&self, operation_id: &str) -> CliOutcome<()> {
         self.page_id
             .validate(&format!("operation '{operation_id}' expect_after.page_id"))?;
-        if self.timeout_ms == Some(0) {
+        if !actingcommand_contract::postcondition_timeout_is_valid(self.timeout_ms) {
             return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.timeout_ms must be positive when provided"
+                "operation '{operation_id}' expect_after.timeout_ms must be in 1..={} when provided",
+                actingcommand_contract::MAX_POSTCONDITION_TIMEOUT_MS
             )));
         }
         if self.interval_ms == Some(0) {
@@ -3249,7 +3404,7 @@ impl OperationClick {
                 Ok(())
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if schema_version != "0.7"
+                if !matches!(schema_version, "0.7" | "0.8")
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()
@@ -3389,7 +3544,7 @@ fn validate_ratio_f64(name: &str, value: f64) -> Result<(), String> {
     }
 }
 
-fn canonical_page_anchor(game: &str, page_id: &str) -> String {
+pub(super) fn canonical_page_anchor(game: &str, page_id: &str) -> String {
     let prefix = format!("{game}/");
     page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
 }
@@ -3399,6 +3554,48 @@ fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &s
         || observed_or_anchor == expected_anchor
         || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
         || observed_or_anchor == format!("{game}/{expected_anchor}")
+}
+
+pub(super) fn validate_restored_geometry(
+    geometry: &actingcommand_contract::page_projection::Geometry,
+    width: u32,
+    height: u32,
+) -> CliOutcome<()> {
+    let coordinate = |value: u32| {
+        i32::try_from(value).map_err(|_| {
+            CliError::package_invalid("restored geometry exceeds existing coordinate range")
+        })
+    };
+    coordinate(width)?;
+    coordinate(height)?;
+    let resolution = Resolution { width, height };
+    match geometry {
+        actingcommand_contract::page_projection::Geometry::Tap { point, .. } => {
+            validate_click_point(
+                coordinate(point.x)?,
+                coordinate(point.y)?,
+                &resolution,
+                false,
+            )
+        }
+        actingcommand_contract::page_projection::Geometry::Drag {
+            from_rect, to_rect, ..
+        } => {
+            for rect in [from_rect, to_rect] {
+                validate_click_rect(
+                    PackRect {
+                        x: coordinate(rect.x)?,
+                        y: coordinate(rect.y)?,
+                        width: coordinate(rect.width)?,
+                        height: coordinate(rect.height)?,
+                    },
+                    &resolution,
+                    false,
+                )?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_click_rect(
@@ -4056,6 +4253,67 @@ mod tests {
     use zip::ZipArchive;
 
     #[test]
+    fn page_projection_conversion_and_package_preserve_validated_annotations() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write_fixture_repo(root);
+        for task in ["operator_task", "return_home"] {
+            let path = root.join(format!("operations/{task}/task.json"));
+            let mut data: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            data["game"] = json!("neutral");
+            data["server_scope"] = json!(["test"]);
+            fs::write(path, serde_json::to_vec(&data).unwrap()).unwrap();
+        }
+        fs::rename(
+            root.join("navigation/arknights.cn.navigation.json"),
+            root.join("navigation/neutral.test.navigation.json"),
+        )
+        .unwrap();
+        let converter = OperationConverter::load(root, None, None, None).unwrap();
+        let base = converter.build_all().unwrap();
+        let source = json!({"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":base.pack["targets"][0]["id"],"privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[{"page_id":base.pages["pages"][0]["id"],"completeness":"complete","scope":"declared panel","source":"neutral/spec","visible_rect":null}]});
+        let source_path = root.join("navigation/neutral.test.projection.json");
+        fs::write(&source_path, serde_json::to_vec(&source).unwrap()).unwrap();
+        let outputs = converter.build_all().unwrap();
+        assert_eq!(outputs.projection_metadata.as_ref(), Some(&source));
+        let selected = converter
+            .build_selected(&["return_home".to_string()])
+            .unwrap();
+        assert!(selected.projection_metadata.is_some());
+        let mut entries = PackageEntries::new(root, 64 * 1024 * 1024).unwrap();
+        add_generated_outputs(&mut entries, &converter, &outputs).unwrap();
+        entries.add_manifest("operator_task").unwrap();
+        let manifest = parse_buffered_json(&entries, "resources/manifest.json").unwrap();
+        let admitted = actingcommand_pack_containment::validate_projection_resources(
+            &manifest,
+            "resources",
+            "resources/recognition/neutral.test.pack.json",
+            "resources/recognition/neutral.test.pages.json",
+            "resources/navigation/neutral.test.navigation.json",
+            |path| match entries.files.get(path) {
+                Some(PackagePayload::Buffered { bytes, .. }) => Some(bytes.as_slice()),
+                _ => None,
+            },
+            entries.files.keys().map(String::as_str),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            admitted.target_privacy(source["targets"][0]["target_id"].as_str().unwrap()),
+            Some(actingcommand_contract::page_projection::Privacy::Personal)
+        );
+        let mut bad = source;
+        bad["targets"][0]["target_id"] = json!("unknown-target");
+        fs::write(source_path, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(converter.build_all().is_err());
+        assert!(
+            converter
+                .build_selected(&["return_home".to_string()])
+                .is_err()
+        );
+    }
+
+    #[test]
     fn task_timeout_and_max_steps_projection_are_bounded_and_byte_exact_when_absent() {
         let absent = control_json(
             "neutral.test.fixture",
@@ -4329,12 +4587,8 @@ mod tests {
             .expect("generated truth closure");
 
         let mut mismatch = operation.clone();
-        mismatch
-            .post_admission_ocr
-            .as_mut()
-            .expect("declaration")
-            .truth_set
-            .sha256 = "0".repeat(64);
+        mismatch.post_admission_ocr.as_mut().expect("declaration")["truth_set"]["sha256"] =
+            json!("0".repeat(64));
         assert!(
             validate_generated_post_admission_ocr(&archive_path, &entries, &control, &mismatch,)
                 .expect_err("hash mismatch")
@@ -4698,7 +4952,7 @@ mod tests {
         });
         let out = temp.path().join("ocr-task.zip");
 
-        let response = build_task(build_task_request(repo, out.clone()))
+        let response = build_task(build_task_request(repo.clone(), out.clone()))
             .expect("official package build and validation");
 
         assert_eq!(
@@ -4755,6 +5009,42 @@ mod tests {
                 "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             })
         );
+        let mut relative = Value::Null;
+        update_fixture_operation(&repo, |task| {
+            relative = json!({"mode":"template_relative","anchor_target_id":format!("page/{}",task["anchors"][0]["id"].as_str().unwrap()),"offset":{"x":-5,"y":12},"width":100,"height":20});
+            task["ocr_targets"][0]["region"] = relative.clone();
+        });
+        let relative_out = temp.path().join("relative-ocr-task.zip");
+        build_task(build_task_request(repo, relative_out.clone()))
+            .expect("relative OCR canonical package");
+        let relative_entries = read_zip_entries(&relative_out);
+        let relative_pack: Value =
+            serde_json::from_slice(relative_entries.get(pack_path).unwrap()).unwrap();
+        let target = relative_pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["id"] == ocr_id)
+            .unwrap();
+        assert_eq!(target["region"], relative);
+        let anchor = relative_pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["id"] == relative["anchor_target_id"])
+            .unwrap();
+        let asset_path = format!("resources/{}", anchor["template_path"].as_str().unwrap());
+        let asset = relative_entries
+            .get(&asset_path)
+            .expect("dependency template asset sealed");
+        let manifest = String::from_utf8(
+            relative_entries
+                .get("resources/manifest.json")
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
+        assert!(manifest.contains(&hex_sha256(asset)));
     }
 
     #[test]
@@ -5356,6 +5646,7 @@ mod tests {
     #[test]
     fn generated_environment_snapshot_covers_every_output_document() {
         let mut outputs = ConvertOutputs {
+            projection_metadata: None,
             pack: json!({"value": "{env:theme}"}),
             pages: json!({"value": "{env:theme}"}),
             navigation: json!({"value": "{env:theme}"}),

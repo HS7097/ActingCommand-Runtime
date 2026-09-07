@@ -71,7 +71,8 @@ impl TryFrom<InputAction> for PreparedInputAction {
 enum SessionCommand {
     Input {
         action: PreparedInputAction,
-        response: SyncSender<ExecutionKernelResult<()>>,
+        response:
+            SyncSender<ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>>>,
     },
     Capture {
         response: SyncSender<ExecutionKernelResult<Frame>>,
@@ -164,10 +165,13 @@ impl ExecutionSession {
     }
 
     pub fn input(&self, action: InputAction) -> ExecutionKernelResult<()> {
-        self.input_prepared(action.try_into()?)
+        self.input_prepared(action.try_into()?).map(|_| ())
     }
 
-    pub(crate) fn input_prepared(&self, action: PreparedInputAction) -> ExecutionKernelResult<()> {
+    pub(crate) fn input_prepared(
+        &self,
+        action: PreparedInputAction,
+    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
@@ -369,24 +373,27 @@ fn run_session(
         match command {
             SessionCommand::Input { action, response } => {
                 let result = execute_input(provider.as_ref(), &instance_alias, input, action);
-                if let Err(error) = result {
-                    let terminal = close_after_failure(
-                        capture.take(),
-                        input.take(),
-                        error,
-                        ResourceCloseOrder::InputFirst,
-                        DeviceCloseAuthority::LocalOnly,
-                    );
-                    let response_result = terminal.clone();
-                    if response.send(Err(response_result)).is_err() {
-                        return Err(ExecutionKernelError::merge(
-                            terminal,
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
-                        ));
+                let context = match result {
+                    Ok(context) => context,
+                    Err(error) => {
+                        let terminal = close_after_failure(
+                            capture.take(),
+                            input.take(),
+                            error,
+                            ResourceCloseOrder::InputFirst,
+                            DeviceCloseAuthority::LocalOnly,
+                        );
+                        let response_result = terminal.clone();
+                        if response.send(Err(response_result)).is_err() {
+                            return Err(ExecutionKernelError::merge(
+                                terminal,
+                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ));
+                        }
+                        return Err(terminal);
                     }
-                    return Err(terminal);
-                }
-                if response.send(Ok(())).is_err() {
+                };
+                if response.send(Ok(context)).is_err() {
                     return Err(close_after_failure(
                         capture.take(),
                         input.take(),
@@ -528,7 +535,7 @@ fn execute_input(
     instance_alias: &str,
     backend: &mut Option<Box<dyn InputBackend>>,
     action: PreparedInputAction,
-) -> ExecutionKernelResult<()> {
+) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
     if backend.is_none() {
         *backend =
             Some(provider.open_input(instance_alias).map_err(|error| {
@@ -539,7 +546,8 @@ fn execute_input(
         .as_mut()
         .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?;
     execute_action(backend.as_mut(), &action)
-        .map_err(|error| ExecutionKernelError::device("input_backend_operation_failed", &error))
+        .map_err(|error| ExecutionKernelError::device("input_backend_operation_failed", &error))?;
+    Ok(backend.selection_context())
 }
 
 fn execute_capture(

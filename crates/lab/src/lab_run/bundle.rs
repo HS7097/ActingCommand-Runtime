@@ -838,9 +838,10 @@ impl OperationExpectation {
     fn validate(&self, operation_id: &str) -> CliOutcome<()> {
         self.page_id
             .validate(&format!("operation '{operation_id}' expect_after.page_id"))?;
-        if self.timeout_ms == Some(0) {
+        if !actingcommand_contract::postcondition_timeout_is_valid(self.timeout_ms) {
             return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.timeout_ms must be positive when provided"
+                "operation '{operation_id}' expect_after.timeout_ms must be in 1..={} when provided",
+                actingcommand_contract::MAX_POSTCONDITION_TIMEOUT_MS
             )));
         }
         if self.interval_ms == Some(0) {

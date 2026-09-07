@@ -32,6 +32,13 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+
+mod online_observation;
+pub use online_observation::*;
+mod lab_operation;
+pub use lab_operation::*;
+mod lab_operation_evidence;
+pub use lab_operation_evidence::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
@@ -2317,6 +2324,15 @@ pub enum RuntimeOperation {
     ObserveReadonly {
         instance_alias: String,
     },
+    ObserveContainedPage {
+        instance_alias: String,
+        request: ContainedObservationRequest,
+    },
+    RunContainedLabOperation {
+        instance_alias: String,
+        holder_id: HolderId,
+        request: ContainedLabOperationRequest,
+    },
     CaptureSequence {
         instance_alias: String,
         spec: CaptureSequenceSpec,
@@ -2548,6 +2564,21 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 request.validate()
             }
+            Self::ObserveContainedPage {
+                instance_alias,
+                request,
+            } => {
+                validate_instance_alias(instance_alias)?;
+                request.validate()
+            }
+            Self::RunContainedLabOperation {
+                instance_alias,
+                request,
+                ..
+            } => {
+                validate_instance_alias(instance_alias)?;
+                request.validate()
+            }
         }
     }
 
@@ -2557,6 +2588,8 @@ impl RuntimeOperation {
             | Self::QueueLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::CaptureSequence { instance_alias, .. }
+            | Self::ObserveContainedPage { instance_alias, .. }
+            | Self::RunContainedLabOperation { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
             | Self::RunContainedTask { instance_alias, .. }
@@ -2603,6 +2636,12 @@ impl fmt::Debug for RuntimeOperation {
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
             Self::ObserveReadonly { .. } => "RuntimeOperation::ObserveReadonly(<redacted>)",
+            Self::ObserveContainedPage { .. } => {
+                "RuntimeOperation::ObserveContainedPage(<contained-resource>)"
+            }
+            Self::RunContainedLabOperation { .. } => {
+                "RuntimeOperation::RunContainedLabOperation(<contained-resource>)"
+            }
             Self::CaptureSequence { .. } => "RuntimeOperation::CaptureSequence(<redacted>)",
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::ApplicationLifecycle { .. } => {
@@ -2712,8 +2751,11 @@ impl RuntimeRequest {
                 "invalid_resource_authoring_origin",
             ));
         }
-        if matches!(self.operation, RuntimeOperation::RecordDebugEvent { .. })
-            && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
+        if matches!(
+            self.operation,
+            RuntimeOperation::RecordDebugEvent { .. }
+                | RuntimeOperation::RunContainedLabOperation { .. }
+        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
         }
@@ -2845,11 +2887,13 @@ impl ValidatedRuntimeRequest<'_> {
     }
 
     pub fn task_artifact_links(&self, run_id: IssuedRunId) -> ArtifactLinksDraft {
-        ArtifactLinksDraft::default()
-            .with_run_id(run_id)
-            .with_correlation_id(IssuedCorrelationId::from_verified_transport(
-                self.request.correlation_id,
-            ))
+        self.artifact_links().with_run_id(run_id)
+    }
+
+    pub fn artifact_links(&self) -> ArtifactLinksDraft {
+        ArtifactLinksDraft::default().with_correlation_id(
+            IssuedCorrelationId::from_verified_transport(self.request.correlation_id),
+        )
     }
 
     pub const fn correlation_id(&self) -> CorrelationId {
@@ -2869,6 +2913,7 @@ impl ValidatedRuntimeRequest<'_> {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeReceiptState {
     Admitted,
+    Observed,
     Queued,
     Denied,
     Completed,
@@ -3145,6 +3190,12 @@ pub enum RuntimeResult {
     ReadonlyObservationCompleted {
         observation: ReadonlyObservation,
     },
+    ContainedPageObserved {
+        observation: Box<ContainedPageObservation>,
+    },
+    ContainedLabOperation {
+        operation: Box<ContainedLabOperationResult>,
+    },
     CaptureSequenceCompleted {
         sequence: CaptureSequence,
     },
@@ -3251,6 +3302,33 @@ pub struct RuntimeReceipt {
 }
 
 impl RuntimeReceipt {
+    pub fn contained_lab_operation(
+        request: &RuntimeRequest,
+        terminal: TerminalEvent,
+        operation: Box<ContainedLabOperationResult>,
+    ) -> RuntimeContractResult<Self> {
+        let error = operation
+            .record
+            .failure
+            .as_ref()
+            .map(|failure| failure.error.clone());
+        let receipt = Self {
+            schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
+            request_id: request.request_id,
+            correlation_id: request.correlation_id,
+            state: if error.is_some() {
+                RuntimeReceiptState::Failed
+            } else {
+                RuntimeReceiptState::Completed
+            },
+            terminal: Some(terminal),
+            result: Some(RuntimeResult::ContainedLabOperation { operation }),
+            error,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
     pub fn success(
         request: &RuntimeRequest,
         state: RuntimeReceiptState,
@@ -3296,15 +3374,32 @@ impl RuntimeReceipt {
         let success_state = matches!(
             self.state,
             RuntimeReceiptState::Admitted
+                | RuntimeReceiptState::Observed
                 | RuntimeReceiptState::Queued
                 | RuntimeReceiptState::Completed
                 | RuntimeReceiptState::Cancelled
         );
-        if success_state != (self.result.is_some() && self.error.is_none()) {
+        let recorded_lab_failure = matches!(&self.result,
+            Some(RuntimeResult::ContainedLabOperation { operation })
+                if self.state == RuntimeReceiptState::Failed
+                    && operation.record.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
+        if !recorded_lab_failure && success_state != (self.result.is_some() && self.error.is_none())
+        {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));
         }
-        if !success_state && (self.error.is_none() || self.result.is_some()) {
+        if !recorded_lab_failure
+            && !success_state
+            && (self.error.is_none() || self.result.is_some())
+        {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));
+        }
+        if self.state == RuntimeReceiptState::Observed
+            && !matches!(
+                self.result,
+                Some(RuntimeResult::ContainedPageObserved { .. })
+            )
+        {
+            return Err(RuntimeContractError::new("invalid_observation_receipt"));
         }
         if self.terminal.is_some_and(|terminal| terminal.sequence == 0) {
             return Err(RuntimeContractError::new("invalid_terminal_event"));
@@ -3336,6 +3431,28 @@ impl RuntimeReceipt {
             ) => status.validate()?,
             Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
                 observation.validate()?
+            }
+            Some(RuntimeResult::ContainedPageObserved { observation }) => {
+                if self.state != RuntimeReceiptState::Observed || self.terminal.is_none() {
+                    return Err(RuntimeContractError::new(
+                        "invalid_page_observation_receipt",
+                    ));
+                }
+                observation.validate()?;
+            }
+            Some(RuntimeResult::ContainedLabOperation { operation }) => {
+                operation.validate()?;
+                if self.request_id != operation.record.prepared.request_id
+                    || self.correlation_id != operation.record.prepared.correlation_id
+                    || self.terminal.is_none_or(|terminal| {
+                        terminal.sequence <= operation.terminal_artifact.verified.sequence
+                    })
+                    || (operation.record.failure.is_none()
+                        && self.state != RuntimeReceiptState::Completed)
+                    || (operation.record.failure.is_some() && !recorded_lab_failure)
+                {
+                    return Err(RuntimeContractError::new("invalid_lab_operation_receipt"));
+                }
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
             Some(RuntimeResult::EventPage { page }) => page.validate()?,

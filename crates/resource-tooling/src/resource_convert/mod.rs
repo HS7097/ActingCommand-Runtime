@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
+use actingcommand_contract::page_projection::{ProjectionCatalog, ProjectionMetadata};
 use actingcommand_contract::{
-    LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
+    LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
+    OcrFieldsDeclaration, SchedulingOutcomeDeclaration,
 };
 use actingcommand_pack_containment::validate_recognition_metadata;
 use actingcommand_recognition_pack::FsAssetResolver;
@@ -11,6 +13,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -448,6 +451,7 @@ pub struct ConvertOutputs {
     pub navigation: Value,
     pub index: Value,
     pub primitives: Value,
+    pub projection_metadata: Option<Value>,
 }
 
 impl ConvertOutputs {
@@ -612,7 +616,54 @@ impl OperationConverter {
     }
 
     pub fn build_all(&self) -> CliOutcome<ConvertOutputs> {
-        let pack = self.build_pack()?;
+        let mut outputs = self.build_resources()?;
+        let path = self
+            .root
+            .join("navigation")
+            .join(format!("{}.{}.projection.json", self.game, self.server));
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(outputs),
+            Err(error) => {
+                return Err(CliError::package_invalid(format!(
+                    "failed to read {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        let declaration = ProjectionMetadata::parse(&bytes)?;
+        declaration
+            .clone()
+            .validate(self.projection_catalog(&outputs)?)?;
+        outputs.projection_metadata = Some(
+            serde_json::to_value(declaration)
+                .map_err(|e| CliError::package_invalid(e.to_string()))?,
+        );
+        Ok(outputs)
+    }
+
+    fn projection_catalog(&self, outputs: &ConvertOutputs) -> CliOutcome<ProjectionCatalog> {
+        let mut catalog =
+            ProjectionCatalog::from_resources(&outputs.pack, &outputs.pages, &outputs.navigation)?;
+        for bundle in &self.bundles {
+            catalog.add_operation_fields(&bundle.data)?;
+        }
+        Ok(catalog)
+    }
+
+    fn build_resources(&self) -> CliOutcome<ConvertOutputs> {
+        self.build_resources_with_dependencies(&[])
+    }
+
+    fn build_resources_with_dependencies(
+        &self,
+        dependencies: &[Bundle],
+    ) -> CliOutcome<ConvertOutputs> {
+        let pack = if dependencies.is_empty() {
+            self.build_pack()?
+        } else {
+            self.build_pack_with_dependencies(dependencies)?
+        };
         validate_pack_targets_exist(&self.root, &pack)?;
         let pages = self.build_pages()?;
         validate_page_rule_targets(&pack, &self.bundles)?;
@@ -626,6 +677,7 @@ impl OperationConverter {
             index,
             primitives,
             pack,
+            projection_metadata: None,
         })
     }
 
@@ -642,7 +694,8 @@ impl OperationConverter {
                 task_ids.join(", ")
             )));
         }
-        let selected = self.prune_page_rules_for_selected_build(selected)?;
+        let dependencies = self.relative_ocr_dependencies(&selected)?;
+        let selected = self.prune_page_rules_for_selected_build(selected, &dependencies)?;
         let subset = Self {
             root: self.root.clone(),
             game: self.game.clone(),
@@ -656,7 +709,32 @@ impl OperationConverter {
             maa_task_overlays: self.maa_task_overlays.clone(),
         };
         subset.validate_bundles()?;
-        subset.build_all()
+        let mut outputs = subset.build_resources_with_dependencies(&dependencies)?;
+        let annotation_path = self
+            .root
+            .join("navigation")
+            .join(format!("{}.{}.projection.json", self.game, self.server));
+        if !annotation_path.try_exists().map_err(|e| {
+            CliError::package_invalid(format!(
+                "failed to inspect {}: {e}",
+                annotation_path.display()
+            ))
+        })? {
+            return Ok(outputs);
+        }
+        let full = self.build_all()?;
+        if let Some(declaration) = &full.projection_metadata {
+            let metadata = ProjectionMetadata::parse(
+                &serde_json::to_vec(declaration)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?,
+            )?
+            .validate(self.projection_catalog(&full)?)?;
+            outputs.projection_metadata = Some(
+                serde_json::to_value(metadata.select(subset.projection_catalog(&outputs)?)?)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?,
+            );
+        }
+        Ok(outputs)
     }
 
     pub(crate) fn canonical_task(&self, task_id: &str) -> CliOutcome<Value> {
@@ -719,9 +797,69 @@ impl OperationConverter {
         Ok(task)
     }
 
-    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> CliOutcome<Vec<Bundle>> {
+    fn relative_ocr_dependencies(&self, selected: &[Bundle]) -> CliOutcome<Vec<Bundle>> {
+        let available = selected_available_target_ids(selected)?;
+        let mut required = BTreeSet::new();
+        for bundle in selected {
+            for target in ocr_target_declarations(bundle)? {
+                if target.pointer("/region/mode").and_then(Value::as_str)
+                    == Some("template_relative")
+                {
+                    let anchor = required_string(&target["region"], "anchor_target_id")?;
+                    if !available.contains(&anchor) {
+                        required.insert(anchor);
+                    }
+                }
+            }
+        }
+        let mut dependencies = Vec::new();
+        for bundle in &self.bundles {
+            let mut dependency = bundle.clone();
+            let anchors = array_field(&bundle.data, "anchors")
+                .iter()
+                .filter(|row| {
+                    row["id"]
+                        .as_str()
+                        .is_some_and(|id| required.contains(&anchor_target_id(id)))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let templates = array_field(&bundle.data, "verify_templates")
+                .iter()
+                .filter(|row| row["id"].as_str().is_some_and(|id| required.contains(id)))
+                .cloned()
+                .collect::<Vec<_>>();
+            let operations = array_field(&bundle.data, "operations")
+                .iter()
+                .filter(|row| {
+                    row["verify_template"]
+                        .as_str()
+                        .is_some_and(|path| required.contains(&template_target_id(path)))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if anchors.is_empty() && templates.is_empty() && operations.is_empty() {
+                continue;
+            }
+            // Only direct template declarations enter the pack; no donor task/page/OCR is selected.
+            dependency.data =
+                json!({"anchors":anchors,"verify_templates":templates,"operations":operations});
+            if let Some(defaults) = bundle.data.get("defaults") {
+                dependency.data["defaults"] = defaults.clone();
+            }
+            dependencies.push(dependency);
+        }
+        Ok(dependencies)
+    }
+
+    fn prune_page_rules_for_selected_build(
+        &self,
+        bundles: Vec<Bundle>,
+        dependencies: &[Bundle],
+    ) -> CliOutcome<Vec<Bundle>> {
         let available_pages = selected_available_page_ids(&self.game, &bundles)?;
-        let available_targets = selected_available_target_ids(&bundles)?;
+        let mut available_targets = selected_available_target_ids(&bundles)?;
+        available_targets.extend(selected_available_target_ids(dependencies)?);
         Ok(bundles
             .into_iter()
             .map(|mut bundle| {
@@ -848,10 +986,10 @@ impl OperationConverter {
             }
             if !matches!(
                 bundle.data.get("schema_version").and_then(Value::as_str),
-                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7")
+                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7" | "0.8")
             ) {
                 errors.push(format!(
-                    "{}: unsupported schema_version, expected 0.3, 0.4, 0.5, 0.6, or 0.7",
+                    "{}: unsupported schema_version, expected 0.3 through 0.8",
                     bundle.task_json_path().display()
                 ));
             }
@@ -969,9 +1107,40 @@ impl OperationConverter {
     }
 
     fn build_pack(&self) -> CliOutcome<Value> {
+        self.build_pack_with_dependencies(&[])
+    }
+
+    fn build_pack_with_dependencies(&self, dependencies: &[Bundle]) -> CliOutcome<Value> {
         let mut targets = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
-        for bundle in &self.bundles {
+        for bundle in self.bundles.iter().chain(dependencies) {
+            let template_threshold = |source: &Value| -> CliOutcome<Value> {
+                let threshold = source.get("threshold").map(Ok).unwrap_or_else(|| {
+                    let defaults = bundle
+                        .data
+                        .get("defaults")
+                        .map(|defaults| {
+                            defaults.as_object().ok_or_else(|| {
+                                CliError::package_invalid(format!(
+                                    "{}: defaults must be an object",
+                                    bundle.task_json_path().display()
+                                ))
+                            })
+                        })
+                        .transpose()?;
+                    defaults
+                        .and_then(|defaults| defaults.get("template_threshold"))
+                        .map(Ok)
+                        .unwrap_or_else(|| required_field(&self.defaults, "template_threshold"))
+                })?;
+                if !threshold.is_number() {
+                    return Err(CliError::package_invalid(format!(
+                        "{}: template threshold must be a number",
+                        bundle.task_json_path().display()
+                    )));
+                }
+                Ok(threshold.clone())
+            };
             for anchor in array_field(&bundle.data, "anchors") {
                 let anchor_id = required_string(anchor, "id")?;
                 let target_id = anchor_target_id(&anchor_id);
@@ -982,11 +1151,7 @@ impl OperationConverter {
                     &target_id,
                     &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
-                    source.get("threshold").cloned().unwrap_or_else(|| {
-                        required_field(&self.defaults, "template_threshold")
-                            .cloned()
-                            .unwrap_or(Value::Null)
-                    }),
+                    template_threshold(&source)?,
                     color_check_to_pack(source.get("color_check"))?,
                     None,
                 )?;
@@ -1011,11 +1176,7 @@ impl OperationConverter {
                     &target_id,
                     &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
-                    source.get("threshold").cloned().unwrap_or_else(|| {
-                        required_field(&self.defaults, "template_threshold")
-                            .cloned()
-                            .unwrap_or(Value::Null)
-                    }),
+                    template_threshold(&source)?,
                     None,
                     None,
                 )?;
@@ -1037,10 +1198,7 @@ impl OperationConverter {
                     &target_id,
                     &template_resource_path(&self.root, &bundle.dir, template)?,
                     Value::String(FULL_FRAME_SENTINEL.to_string()),
-                    source
-                        .get("threshold")
-                        .cloned()
-                        .unwrap_or(required_field(&self.defaults, "template_threshold")?.clone()),
+                    template_threshold(&source)?,
                     None,
                     None,
                 )?;
@@ -1975,7 +2133,10 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
 }
 
 fn validate_segmented_swipe_source(bundle: &Bundle, click: &Map<String, Value>) -> CliOutcome<()> {
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(
             "single_touch_drag_with_vertical_brake_v1 requires schema_version '0.7'",
         ));
@@ -2238,7 +2399,7 @@ fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.6" | "0.7")
+        Some("0.6" | "0.7" | "0.8")
     ) {
         return Err(CliError::package_invalid(format!(
             "{}: ocr_targets requires schema_version '0.6' or '0.7'",
@@ -2322,6 +2483,18 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
 }
 
 fn ocr_region_to_pack(region: &Value) -> CliOutcome<Value> {
+    if region.get("mode").and_then(Value::as_str) == Some("template_relative") {
+        let object = require_exact_object(
+            region,
+            &["mode", "anchor_target_id", "offset", "width", "height"],
+            "template_relative OCR region",
+        )?;
+        for field in ["anchor_target_id", "offset", "width", "height"] {
+            required_map_field(object, field)?;
+        }
+        require_exact_object(&object["offset"], &["x", "y"], "template_relative offset")?;
+        return Ok(region.clone());
+    }
     let region = require_exact_object(region, &["mode", "rect"], "ocr_targets entry region")?;
     let mode = region.get("mode").and_then(Value::as_str).ok_or_else(|| {
         CliError::package_invalid("ocr_targets entry region missing string field mode")
@@ -2377,7 +2550,10 @@ fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     let Some(value) = bundle.data.get("timeout_ms") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "{}: timeout_ms requires schema_version '0.7'",
             bundle.task_json_path().display()
@@ -2399,7 +2575,10 @@ fn validate_task_max_steps_bundle(bundle: &Bundle) -> CliOutcome<Option<u32>> {
     let Some(value) = bundle.data.get("max_steps") else {
         return Ok(None);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.7" | "0.8")
+    ) {
         return Err(CliError::package_invalid(format!(
             "{}: max_steps requires schema_version '0.7'",
             bundle.task_json_path().display()
@@ -2453,7 +2632,10 @@ fn post_admission_ocr_page_ids(declaration: &Map<String, Value>) -> CliOutcome<V
             let page_ids = page_ids.as_array().ok_or_else(|| {
                 CliError::package_invalid("post_admission_ocr.page_ids must be an array")
             })?;
-            if page_ids.len() != 2 {
+            if page_ids.len() != 2
+                && !(declaration.get("mode").and_then(Value::as_str) == Some("fields_v1")
+                    && page_ids.len() == 1)
+            {
                 return Err(CliError::package_invalid(
                     "post_admission_ocr.page_ids must contain exactly two entries",
                 ));
@@ -2533,6 +2715,28 @@ fn validate_post_admission_ocr_target_region(
     target_id: &str,
     target: &Value,
 ) -> CliOutcome<()> {
+    if target.pointer("/region/mode").and_then(Value::as_str) == Some("template_relative") {
+        let region = ocr_region_to_pack(required_field(target, "region")?)?;
+        let _: actingcommand_recognition_pack::PackRegion = serde_json::from_value(region.clone())
+            .map_err(|error| {
+                CliError::package_invalid(format!("invalid relative OCR region: {error}"))
+            })?;
+        for dimension in ["width", "height"] {
+            let value = region[dimension].as_i64().ok_or_else(|| {
+                CliError::package_invalid("relative OCR dimension must be an integer")
+            })?;
+            let bound = bundle.data["coordinate_space"][dimension]
+                .as_u64()
+                .ok_or_else(|| CliError::package_invalid("task coordinate_space is invalid"))?;
+            if value <= 0 || value as u64 > bound {
+                return Err(CliError::package_invalid(
+                    "relative OCR dimensions exceed coordinate space",
+                ));
+            }
+        }
+        // The complete generated pack validates direct template identity and assets.
+        return Ok(());
+    }
     let region = require_exact_object(
         required_map_field(
             target.as_object().ok_or_else(|| {
@@ -2608,6 +2812,64 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let declaration = bundle.data.get("post_admission_ocr");
+    if schema == "0.8" {
+        let value = declaration
+            .ok_or_else(|| CliError::package_invalid("ocr_fields_declaration_missing"))?;
+        crate::package_build::validate_ocr_mode_declaration(
+            schema,
+            value,
+            bundle.data.get("scheduling_outcome"),
+        )?;
+        let fields: OcrFieldsDeclaration = serde_json::from_value(value.clone())
+            .map_err(|e| CliError::package_invalid(e.to_string()))?;
+        let targets = ocr_target_declarations(bundle)?;
+        let mut dictionary_bytes = 0_u64;
+        for field in &fields.fields {
+            let matching = targets
+                .iter()
+                .filter(|t| t.get("id").and_then(Value::as_str) == Some(&field.target_id))
+                .collect::<Vec<_>>();
+            let [target] = matching.as_slice() else {
+                return Err(CliError::package_invalid(
+                    "ocr_fields_target_missing_or_duplicate",
+                ));
+            };
+            validate_post_admission_ocr_target_region(bundle, &field.target_id, target)?;
+            if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
+                let path = bundle.dir.join(&dictionary.path);
+                let size = fs::metadata(&path)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?
+                    .len();
+                dictionary_bytes = dictionary_bytes.checked_add(size).ok_or_else(|| {
+                    CliError::package_invalid("ocr_fields_dictionary_limit_exceeded")
+                })?;
+                if dictionary_bytes > fields.limits.max_total_bytes {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_limit_exceeded",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                fs::File::open(&path)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?
+                    .take(size + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                if bytes.len() as u64 != size
+                    || format!("{:x}", Sha256::digest(&bytes)) != dictionary.sha256
+                {
+                    return Err(CliError::package_invalid(
+                        "ocr_fields_dictionary_hash_mismatch",
+                    ));
+                }
+                let parsed: OcrFieldDictionary = serde_json::from_slice(&bytes)
+                    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+                parsed
+                    .validate(&fields.limits)
+                    .map_err(CliError::package_invalid)?;
+            }
+        }
+        return Ok(());
+    }
     match (schema, declaration) {
         ("0.7", Some(Value::Null) | None) => {
             return Err(CliError::package_invalid(format!(
@@ -2901,7 +3163,7 @@ fn add_ocr_target(
 }
 
 fn validate_generated_ocr_targets(root: &Path, pack: &Value) -> CliOutcome<()> {
-    let ocr_targets = array_field(pack, "targets")
+    let mut ocr_targets = array_field(pack, "targets")
         .iter()
         .filter(|target| target.get("type").and_then(Value::as_str) == Some("ocr"))
         .cloned()
@@ -2909,6 +3171,24 @@ fn validate_generated_ocr_targets(root: &Path, pack: &Value) -> CliOutcome<()> {
     if ocr_targets.is_empty() {
         return Ok(());
     }
+    let anchors = ocr_targets
+        .iter()
+        .filter_map(|target| {
+            target
+                .pointer("/region/anchor_target_id")
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    ocr_targets.extend(
+        array_field(pack, "targets")
+            .iter()
+            .filter(|target| {
+                target["id"].as_str().is_some_and(|id| anchors.contains(id))
+                    && target["type"].as_str() != Some("ocr")
+            })
+            .cloned(),
+    );
     let validation_pack = ordered_object([
         (
             "schema_version",
@@ -3288,6 +3568,11 @@ fn selected_available_target_ids(bundles: &[Bundle]) -> CliOutcome<BTreeSet<Stri
         for anchor in array_field(&bundle.data, "anchors") {
             if let Some(anchor_id) = anchor.get("id").and_then(Value::as_str) {
                 targets.insert(anchor_target_id(anchor_id));
+            }
+        }
+        for field in ["color_probes", "verify_templates"] {
+            for declaration in array_field(&bundle.data, field) {
+                targets.insert(required_string(declaration, "id")?);
             }
         }
         for operation in array_field(&bundle.data, "operations") {

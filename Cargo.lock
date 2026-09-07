@@ -168,6 +168,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",
+ "actingcommand-policy",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "actingcommand-resource-tooling",
@@ -223,6 +224,7 @@ dependencies = [
 name = "actingcommand-pack-containment"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
@@ -277,6 +279,7 @@ dependencies = [
 name = "actingcommand-recognition-pack"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-recognition",
  "serde",
  "serde_json",
@@ -310,6 +313,7 @@ dependencies = [
 name = "actingcommand-runtime-client"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-policy",
@@ -332,8 +336,10 @@ dependencies = [
  "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
+ "actingcommand-page-detector",
  "actingcommand-policy",
  "actingcommand-recognition-pack",
+ "actingcommand-runtime-client",
  "actingcommand-runtime-state",
  "actingcommand-scheduler",
  "serde",

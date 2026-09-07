@@ -128,7 +128,17 @@ fn append_maa_2_0_segment(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputSelectionContext {
+    pub backend: crate::TouchBackendName,
+    pub serial: String,
+}
+
 pub trait InputBackend {
+    fn selection_context(&self) -> Option<InputSelectionContext> {
+        None
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()>;
 
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()>;

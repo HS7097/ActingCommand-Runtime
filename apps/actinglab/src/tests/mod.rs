@@ -3001,6 +3001,23 @@ fn lab2_observe_projects_contained_page_elements() {
     assert_eq!(observation["metrics"]["recognized_count"], 3);
     assert_eq!(observation["metrics"]["entry_count"], 7);
     assert_eq!(observation["page_window_completeness"], "unknown");
+    assert_eq!(
+        observation["schema_version"],
+        actingcommand_contract::page_projection::PROJECTION_SCHEMA
+    );
+    assert_eq!(
+        observation["frame"]["sha256"],
+        format!("{:x}", Sha256::digest([255, 0, 0]))
+    );
+    let mut content = observation.clone();
+    content.as_object_mut().unwrap().remove("content_sha256");
+    assert_eq!(
+        observation["content_sha256"],
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&content).unwrap())
+        )
+    );
 }
 
 #[test]

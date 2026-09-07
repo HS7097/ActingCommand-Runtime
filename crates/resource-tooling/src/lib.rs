@@ -15,6 +15,7 @@ mod package_build;
 mod package_publish;
 mod package_validate;
 mod resource_convert;
+mod resource_restore;
 
 pub use api::*;
 pub use authoring::*;
@@ -35,3 +36,4 @@ pub use resource_convert::{
     Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
     canonical_locale, canonical_server, resolve_resource_root, resource_convert,
 };
+pub use resource_restore::*;
