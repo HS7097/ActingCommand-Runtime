@@ -413,7 +413,7 @@ pub enum TaskDiagnosticTerminalData {
         executed_steps: Option<u32>,
     },
     OperationError {
-        code: crate::RuntimeErrorCode,
+        code: String,
         executed_steps: Option<u32>,
     },
 }

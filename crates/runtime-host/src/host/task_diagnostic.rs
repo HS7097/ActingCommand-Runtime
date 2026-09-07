@@ -624,7 +624,7 @@ impl RuntimeContainedTask<'_> {
                 ContainedTaskRunError::Boundary(error)
                 | ContainedTaskRunError::NonfatalOperation(error),
             ) => TaskDiagnosticTerminalData::OperationError {
-                code: error.error.code(),
+                code: error.error.code().to_owned(),
                 executed_steps: None,
             },
         };
