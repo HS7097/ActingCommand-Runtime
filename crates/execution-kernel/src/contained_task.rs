@@ -16,7 +16,8 @@ use actingcommand_contract::{
     SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
     SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
     SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence, validate_task_phases,
+    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingFailure,
+    TaskTimingScope, TaskTimingStage, validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -78,18 +79,50 @@ where
 pub struct ContainedTaskError {
     code: &'static str,
     detail: Option<String>,
+    timing: Option<TaskTimingFailure>,
 }
 
 impl ContainedTaskError {
     fn new(code: &'static str) -> Self {
-        Self { code, detail: None }
+        Self {
+            code,
+            detail: None,
+            timing: None,
+        }
     }
 
     fn with_detail(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
             detail: Some(detail.into()),
+            timing: None,
         }
+    }
+
+    fn with_timing(mut self, timing: Option<TaskTimingFailure>) -> Self {
+        self.timing = timing;
+        self
+    }
+
+    fn timed(
+        code: &'static str,
+        scope: TaskTimingScope,
+        stage: TaskTimingStage,
+        elapsed: Duration,
+        limit: Duration,
+        required_delay: Option<Duration>,
+    ) -> Self {
+        Self::new(code).with_timing(Some(TaskTimingFailure {
+            scope,
+            stage,
+            elapsed_ms: elapsed.as_millis() as u64,
+            limit_ms: limit.as_millis() as u64,
+            required_delay_ms: required_delay.map(|delay| delay.as_millis() as u64),
+        }))
+    }
+
+    pub fn timing(&self) -> Option<&TaskTimingFailure> {
+        self.timing.as_ref()
     }
 
     pub const fn code(&self) -> &'static str {
@@ -1891,7 +1924,9 @@ impl PreparedContainedTask {
             )?
         };
         if Instant::now() >= task_deadline {
-            return Err(ContainedTaskError::new("contained_task_timeout").into());
+            return Err(self
+                .task_timeout_error(TaskTimingStage::EntryRecognition, task_deadline, None)
+                .into());
         }
         if self.control.execution_mode == "recognize_only" {
             runtime
@@ -1938,10 +1973,13 @@ impl PreparedContainedTask {
             .observe_page(Some(observation.page_label.clone()))
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         let mut stability_tracker = StabilityTracker::default();
+        let mut recovery_timing = None;
 
         loop {
             if started.elapsed() >= task_timeout {
-                return Err(ContainedTaskError::new("contained_task_timeout").into());
+                return Err(self
+                    .task_timeout_error(TaskTimingStage::Dispatch, task_deadline, None)
+                    .into());
             }
             match machine
                 .next_directive(&candidates)
@@ -1980,7 +2018,9 @@ impl PreparedContainedTask {
                     let mut attempt = 1;
                     loop {
                         if started.elapsed() >= task_timeout {
-                            return Err(ContainedTaskError::new("contained_task_timeout").into());
+                            return Err(self
+                                .task_timeout_error(TaskTimingStage::Dispatch, task_deadline, None)
+                                .into());
                         }
                         runtime
                             .record(ContainedTaskTrace::StepStarted {
@@ -2049,7 +2089,13 @@ impl PreparedContainedTask {
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
                         if started.elapsed() >= task_timeout {
-                            return Err(ContainedTaskError::new("contained_task_timeout").into());
+                            return Err(self
+                                .task_timeout_error(
+                                    TaskTimingStage::BeforeInput,
+                                    task_deadline,
+                                    None,
+                                )
+                                .into());
                         }
                         runtime
                             .input(action)
@@ -2096,14 +2142,16 @@ impl PreparedContainedTask {
                             Duration::from_millis(timing.timeout.milliseconds);
                         let confirmation_interval =
                             Duration::from_millis(timing.interval.milliseconds);
-                        let (failed_observation, hit_error_page) = match self.await_postcondition(
+                        let resolution = self.await_postcondition(
                             runtime,
                             ocr_collector,
                             operation,
                             confirmation_timeout,
                             confirmation_interval,
                             task_deadline,
-                        )? {
+                        )?;
+                        let (failed_observation, hit_error_page, timing_failure) = match resolution
+                        {
                             PostconditionResolution::Reached(reached) => {
                                 observation = reached;
                                 if let Some(reason) = self.complete_successful_step(
@@ -2127,7 +2175,8 @@ impl PreparedContainedTask {
                             PostconditionResolution::Failed {
                                 observation,
                                 hit_error_page,
-                            } => (observation, hit_error_page),
+                                timing_failure,
+                            } => (observation, hit_error_page, timing_failure),
                         };
                         let after_page = failed_observation
                             .as_ref()
@@ -2146,6 +2195,7 @@ impl PreparedContainedTask {
                                     after_page.as_deref().unwrap_or("<unrecognized>")
                                 ),
                             )
+                            .with_timing(timing_failure)
                             .into());
                         };
                         match operation.failure_decision(
@@ -2164,9 +2214,13 @@ impl PreparedContainedTask {
                                     .checked_sub(started.elapsed())
                                     .is_none_or(|remaining| delay > remaining)
                                 {
-                                    return Err(
-                                        ContainedTaskError::new("contained_task_timeout").into()
-                                    );
+                                    return Err(self
+                                        .task_timeout_error(
+                                            TaskTimingStage::RetryDelay,
+                                            task_deadline,
+                                            Some(delay),
+                                        )
+                                        .into());
                                 }
                                 thread::sleep(delay);
                                 match self.await_postcondition(
@@ -2200,6 +2254,7 @@ impl PreparedContainedTask {
                                     PostconditionResolution::Failed {
                                         observation: fresh,
                                         hit_error_page: true,
+                                        ..
                                     } => {
                                         let after_page = fresh
                                             .as_ref()
@@ -2251,6 +2306,7 @@ impl PreparedContainedTask {
                                     PostconditionResolution::Failed {
                                         observation: Some(fresh),
                                         hit_error_page: false,
+                                        ..
                                     } => {
                                         Self::finish_effect_attempt(
                                             runtime,
@@ -2263,6 +2319,7 @@ impl PreparedContainedTask {
                                     PostconditionResolution::Failed {
                                         observation: None,
                                         hit_error_page: false,
+                                        timing_failure,
                                     } => {
                                         Self::finish_effect_attempt(
                                             runtime,
@@ -2276,6 +2333,7 @@ impl PreparedContainedTask {
                                                 "operation={operation_id} attempts={attempt} after_page=<unrecognized> hit_error_page=false"
                                             ),
                                         )
+                                        .with_timing(timing_failure)
                                         .into());
                                     }
                                 }
@@ -2288,6 +2346,7 @@ impl PreparedContainedTask {
                                     &operation_id,
                                     failed_observation.as_ref(),
                                 )?;
+                                recovery_timing = timing_failure;
                                 machine.operation_needs_recovery(trigger).map_err(|_| {
                                     ContainedTaskError::new("contained_task_state_invalid")
                                 })?;
@@ -2306,6 +2365,7 @@ impl PreparedContainedTask {
                                         "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
                                     ),
                                 )
+                                .with_timing(timing_failure)
                                 .into());
                             }
                         }
@@ -2325,7 +2385,9 @@ impl PreparedContainedTask {
                 RunDirective::Terminal(
                     RunTerminal::SuccessorSuggested { .. } | RunTerminal::PausedNeedsHuman { .. },
                 ) => {
-                    return Err(ContainedTaskError::new("contained_task_requires_scheduler").into());
+                    return Err(ContainedTaskError::new("contained_task_requires_scheduler")
+                        .with_timing(recovery_timing)
+                        .into());
                 }
             }
         }
@@ -2488,6 +2550,23 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::Boundary)
     }
 
+    fn task_timeout_error(
+        &self,
+        stage: TaskTimingStage,
+        deadline: Instant,
+        required_delay: Option<Duration>,
+    ) -> ContainedTaskError {
+        let limit = Duration::from_millis(self.control.task_timeout().milliseconds);
+        ContainedTaskError::timed(
+            "contained_task_timeout",
+            TaskTimingScope::Task,
+            stage,
+            Instant::now().duration_since(deadline - limit),
+            limit,
+            required_delay,
+        )
+    }
+
     fn wait_post_input_delay(
         operation: &TaskOperation,
         started: Instant,
@@ -2501,11 +2580,25 @@ impl PreparedContainedTask {
             .checked_sub(started.elapsed())
             .is_none_or(|remaining| delay >= remaining)
         {
-            return Err(ContainedTaskError::new("contained_task_timeout"));
+            return Err(ContainedTaskError::timed(
+                "contained_task_timeout",
+                TaskTimingScope::Task,
+                TaskTimingStage::PostInputDelay,
+                started.elapsed(),
+                task_timeout,
+                Some(delay),
+            ));
         }
         thread::sleep(delay);
         if started.elapsed() >= task_timeout {
-            Err(ContainedTaskError::new("contained_task_timeout"))
+            Err(ContainedTaskError::timed(
+                "contained_task_timeout",
+                TaskTimingScope::Task,
+                TaskTimingStage::PostInputDelay,
+                started.elapsed(),
+                task_timeout,
+                None,
+            ))
         } else {
             Ok(())
         }
@@ -2522,17 +2615,29 @@ impl PreparedContainedTask {
         let started = Instant::now();
         loop {
             if Instant::now() >= task_deadline {
-                return Err(ContainedTaskError::new("contained_task_timeout").into());
+                return Err(self
+                    .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
+                    .into());
             }
             let observation = self.capture_page(runtime, ocr_collector, None)?;
             if Instant::now() >= task_deadline {
-                return Err(ContainedTaskError::new("contained_task_timeout").into());
+                return Err(self
+                    .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
+                    .into());
             }
             if let Some(observation) = observation {
                 return Ok(observation);
             }
             if started.elapsed() >= timeout {
-                return Err(ContainedTaskError::new("contained_task_page_unknown").into());
+                return Err(ContainedTaskError::timed(
+                    "contained_task_page_unknown",
+                    TaskTimingScope::PageRecognition,
+                    TaskTimingStage::PageRecognition,
+                    started.elapsed(),
+                    timeout,
+                    None,
+                )
+                .into());
             }
             thread::sleep(
                 interval
@@ -2679,11 +2784,15 @@ impl PreparedContainedTask {
         let mut last_observation = None;
         loop {
             if Instant::now() >= task_deadline {
-                return Err(ContainedTaskError::new("contained_task_timeout").into());
+                return Err(self
+                    .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .into());
             }
             let observation = self.capture_page(runtime, ocr_collector, None)?;
             if Instant::now() >= task_deadline {
-                return Err(ContainedTaskError::new("contained_task_timeout").into());
+                return Err(self
+                    .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .into());
             }
             if let Some(observation) = observation {
                 let destination_matches =
@@ -2705,6 +2814,7 @@ impl PreparedContainedTask {
                     return Ok(PostconditionResolution::Failed {
                         observation: Some(observation),
                         hit_error_page: true,
+                        timing_failure: None,
                     });
                 }
                 last_observation = Some(observation);
@@ -2713,6 +2823,13 @@ impl PreparedContainedTask {
                 return Ok(PostconditionResolution::Failed {
                     observation: last_observation,
                     hit_error_page: false,
+                    timing_failure: Some(TaskTimingFailure {
+                        scope: TaskTimingScope::Postcondition,
+                        stage: TaskTimingStage::Postcondition,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        limit_ms: timeout.as_millis() as u64,
+                        required_delay_ms: None,
+                    }),
                 });
             }
             let remaining = timeout.saturating_sub(started.elapsed());
@@ -2736,6 +2853,7 @@ enum PostconditionResolution {
     Failed {
         observation: Option<PageObservation>,
         hit_error_page: bool,
+        timing_failure: Option<TaskTimingFailure>,
     },
 }
 
@@ -8248,9 +8366,16 @@ mod retry_wiring_tests {
         );
         let mut runtime = ScriptedRuntime::new("home");
         let started = Instant::now();
-        assert!(
-            matches!(task.run(&mut runtime), Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_timeout")
-        );
+        let Err(ContainedTaskRunError::Task(error)) = task.run(&mut runtime) else {
+            panic!("expected task deadline failure")
+        };
+        assert_eq!(error.code(), "contained_task_timeout");
+        let timing = error.timing().expect("owner timing decision");
+        assert_eq!(timing.scope, TaskTimingScope::Task);
+        assert_eq!(timing.stage, TaskTimingStage::Postcondition);
+        assert_eq!(timing.limit_ms, 50);
+        assert!(timing.elapsed_ms >= timing.limit_ms);
+        assert_eq!(timing.required_delay_ms, None);
         assert!(started.elapsed() < Duration::from_millis(400));
         assert_eq!(runtime.inputs, 1);
         assert_eq!(runtime.progress, [0, 1]);
@@ -8378,6 +8503,15 @@ mod retry_wiring_tests {
             }
         };
         assert_eq!(error.code(), "page_confirmation_failed");
+        if after_page == "error" {
+            assert_eq!(error.timing(), None, "an error page is not a timeout");
+        } else {
+            let timing = error.timing().expect("postcondition wait expired");
+            assert_eq!(timing.scope, TaskTimingScope::Postcondition);
+            assert_eq!(timing.stage, TaskTimingStage::Postcondition);
+            assert!(timing.elapsed_ms >= timing.limit_ms);
+            assert_eq!(timing.required_delay_ms, None);
+        }
         assert!(
             error
                 .detail()
@@ -8514,6 +8648,14 @@ mod retry_wiring_tests {
             }
         };
         assert_eq!(timeout.code(), "contained_task_timeout");
+        let timing = timeout.timing().expect("insufficient delay facts");
+        assert_eq!(timing.scope, TaskTimingScope::Task);
+        assert_eq!(timing.stage, TaskTimingStage::PostInputDelay);
+        assert_eq!(timing.limit_ms, 20);
+        assert_eq!(timing.required_delay_ms, Some(50));
+        assert!(
+            timing.required_delay_ms.unwrap() >= timing.limit_ms.saturating_sub(timing.elapsed_ms)
+        );
         assert_eq!(timeout_runtime.inputs, 1);
         assert_eq!(timeout_runtime.captures, 1);
         assert_eq!(
@@ -9886,6 +10028,8 @@ mod retry_wiring_tests {
             }
         };
         assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(error.timing(), None, "stability failure is not a timeout");
+        assert_eq!(runtime.progress, [0, 1, 2, 3, 4]);
         assert_eq!(runtime.inputs, 4);
         assert!(matches!(
             runtime.traces.last(),

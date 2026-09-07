@@ -565,6 +565,7 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         result: &Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,
     ) -> Result<(), RequestFailure> {
+        let terminal_step_action_id = self.diagnostic_step.as_ref().map(|step| step.action_id);
         self.end_diagnostic_step(
             self.host
                 .monotonic_ms()
@@ -617,6 +618,7 @@ impl RuntimeContainedTask<'_> {
                 code: error.code().to_owned(),
                 detail: error.detail().map(str::to_owned),
                 executed_steps: self.executed_steps,
+                timing: error.timing().cloned(),
             },
             Err(
                 ContainedTaskRunError::Boundary(error)
@@ -626,7 +628,9 @@ impl RuntimeContainedTask<'_> {
                 executed_steps: self.executed_steps,
             },
         };
-        self.diagnostic(None, Payload::Terminal(data))?;
+        let mut terminal = self.diagnostic_record(None, Payload::Terminal(data));
+        terminal.step_action_id = terminal_step_action_id;
+        self.write_diagnostic_record(terminal)?;
         self.diagnostic_stream
             .as_mut()
             .ok_or_else(|| failure("stream missing at seal"))?

@@ -12171,10 +12171,28 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
 
 #[test]
 fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_error() {
-    for case in ["success", "other-task-error"] {
+    for case in [
+        "success",
+        "other-task-error",
+        "task-timeout",
+        "post-delay-budget",
+    ] {
         let root = TempDir::new().expect("tempdir");
         let package = root.path().join(format!("{case}.zip"));
-        let bytes = neutral_contained_task_package();
+        let bytes = match case {
+            "task-timeout" => neutral_contained_task_package_with_execution_timeout(50),
+            "post-delay-budget" => neutral_contained_task_package_with_task_and_timeout(
+                br#"{"schema_version":"0.6","task_id":"task","game":"neutral",
+                    "server_scope":["test"],"coordinate_space":{"width":2,"height":1},
+                    "entry_page":"home","target_page":"terminal","operations":[{
+                        "id":"open_terminal","from":"home",
+                        "click":{"kind":"point","x":1,"y":0},
+                        "unguarded_trusted_coordinate":true,"retryable":false,
+                        "post_delay_ms":5000}]}"#,
+                5_000,
+            ),
+            _ => neutral_contained_task_package(),
+        };
         fs::write(&package, &bytes).expect("write task package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
@@ -12183,6 +12201,8 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                 .transition_capture_after_input
                 .store(true, Ordering::Release),
             "other-task-error" => state.unknown_capture.store(true, Ordering::Release),
+            "task-timeout" => state.capture_delay_ms.store(100, Ordering::Release),
+            "post-delay-budget" => {}
             _ => unreachable!(),
         }
         let host = RuntimeHost::start(
@@ -12245,6 +12265,89 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             1,
             "{case}"
         );
+        let stream = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .flat_map(|event| &event.artifacts)
+            .find(|artifact| {
+                artifact.kind == ArtifactKind::DiagnosticJson
+                    && artifact.redaction_state
+                        == actingcommand_contract::ArtifactRedactionState::Pending
+            })
+            .expect("verified BRAW stream");
+        let document: serde_json::Value = serde_json::from_slice(
+            &read_projected_verified(root.path(), stream).expect("verified stream bytes"),
+        )
+        .unwrap();
+        let terminal: actingcommand_contract::TaskDiagnosticRecord = serde_json::from_value(
+            document["records"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .clone(),
+        )
+        .expect("typed terminal readback");
+        if case != "success" {
+            let actingcommand_contract::TaskDiagnosticPayload::Terminal(
+                actingcommand_contract::TaskDiagnosticTerminalData::TaskError {
+                    code,
+                    executed_steps,
+                    timing,
+                    ..
+                },
+            ) = &terminal.payload
+            else {
+                panic!("original task error")
+            };
+            let timing = timing.as_ref().expect("actual timing decision");
+            let dispatched = u32::from(case == "post-delay-budget");
+            assert_eq!(*executed_steps, Some(dispatched));
+            assert_eq!(
+                state.input_count.load(Ordering::Acquire),
+                dispatched as usize
+            );
+            assert_eq!(terminal.step_action_id.is_some(), dispatched == 1);
+            if case == "post-delay-budget" {
+                assert_eq!(code, "contained_task_timeout");
+                assert_eq!(
+                    timing.stage,
+                    actingcommand_contract::TaskTimingStage::PostInputDelay
+                );
+                assert_eq!(timing.limit_ms, 5_000);
+                assert_eq!(timing.required_delay_ms, Some(5_000));
+                let step = events
+                    .iter()
+                    .find(|event| event.event_type == EventType::TaskStepStarted)
+                    .expect("original step event");
+                assert_eq!(step.links.action_id(), terminal.step_action_id.as_ref());
+            } else {
+                assert_eq!(
+                    code,
+                    if case == "task-timeout" {
+                        "contained_task_timeout"
+                    } else {
+                        "contained_task_page_unknown"
+                    }
+                );
+                assert_eq!(
+                    timing.stage,
+                    actingcommand_contract::TaskTimingStage::PageRecognition
+                );
+                assert_eq!(timing.limit_ms, 50);
+                assert!(timing.elapsed_ms >= timing.limit_ms);
+                assert_eq!(timing.required_delay_ms, None);
+            }
+            let failed = events
+                .iter()
+                .find(|event| event.event_type == EventType::TaskFailed)
+                .unwrap();
+            assert!(matches!(
+                projected_task_semantic_fact(failed),
+                Some(TaskSemanticFact::TerminalCommitted { executed_steps, .. })
+                    if *executed_steps == Some(dispatched)
+            ));
+        }
         drop(client);
         host.close().expect("close host");
     }
@@ -12692,6 +12795,8 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
         assert_eq!(terminal["result"], "unchanged");
         assert_eq!(terminal["prior_consecutive_unchanged"], max_steps - 3);
         assert_eq!(terminal["new_consecutive_unchanged"], max_steps - 2);
+        assert_eq!(terminal["consecutive_unchanged_threshold"], max_steps - 1);
+        assert_eq!(terminal["max_steps"], max_steps);
         assert_eq!(terminal["terminal_reason"], "max_steps_reached");
         let task_failed = events
             .iter()
