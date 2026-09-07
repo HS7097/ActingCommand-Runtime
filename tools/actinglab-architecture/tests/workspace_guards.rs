@@ -1089,6 +1089,10 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .iter()
         .find(|package| package["name"] == "actingledger")
         .expect("actingledger package");
+    let checker = packages
+        .iter()
+        .find(|package| package["name"] == "actingcommand-vision-provider-check")
+        .expect("Provider ledger consumer package");
 
     let internal_dependencies = |package: &serde_json::Value| {
         let mut names = package["dependencies"]
@@ -1116,6 +1120,16 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         internal_dependencies(app),
         vec!["actingcommand-ledger-forensics".to_owned()],
         "actingledger must depend on only the forensic leaf among internal packages"
+    );
+    // F2: the checker consumes B and retains mechanical artifact parsing only.
+    // First red: https://github.com/HS7097/ActingCommand-Runtime/actions/runs/34145595031
+    assert_eq!(
+        internal_dependencies(checker),
+        vec![
+            "actingcommand-ledger-forensics".to_owned(),
+            "actingcommand-vision-ffi".to_owned(),
+        ],
+        "Provider checker internal dependency boundary changed"
     );
 
     let artifact_dependency = leaf["dependencies"]
@@ -1168,7 +1182,12 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
 
     let production_dependants = packages
         .iter()
-        .filter(|package| package["name"] != "actingledger")
+        .filter(|package| {
+            !matches!(
+                package["name"].as_str(),
+                Some("actingledger" | "actingcommand-vision-provider-check")
+            )
+        })
         .filter(|package| {
             package["dependencies"]
                 .as_array()
@@ -1176,14 +1195,20 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
                 .iter()
                 .any(|dependency| {
                     dependency["kind"].is_null()
-                        && dependency["name"] == "actingcommand-ledger-forensics"
+                        && matches!(
+                            dependency["name"].as_str(),
+                            Some(
+                                "actingcommand-ledger-forensics"
+                                    | "actingcommand-vision-provider-check"
+                            )
+                        )
                 })
         })
         .filter_map(|package| package["name"].as_str())
         .collect::<Vec<_>>();
     assert!(
         production_dependants.is_empty(),
-        "production packages depend on forensic leaf: {}",
+        "production packages depend on forensic leaf or Provider checker: {}",
         production_dependants.join(", ")
     );
 

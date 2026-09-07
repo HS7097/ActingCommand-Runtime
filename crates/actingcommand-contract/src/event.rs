@@ -159,6 +159,7 @@ pub enum Sensitivity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventFamily {
+    Provider,
     Runtime,
     Monitor,
     Performance,
@@ -185,6 +186,8 @@ pub enum EventFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventType {
+    #[serde(rename = "provider.startup_observed")]
+    ProviderStartupObserved,
     #[serde(rename = "runtime.started")]
     RuntimeStarted,
     #[serde(rename = "runtime.takeover")]
@@ -410,6 +413,7 @@ pub enum EventType {
 impl EventType {
     pub fn family(self) -> EventFamily {
         match self {
+            Self::ProviderStartupObserved => EventFamily::Provider,
             Self::RuntimeStarted
             | Self::RuntimeTakeover
             | Self::RuntimeFailed

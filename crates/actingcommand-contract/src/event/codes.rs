@@ -57,6 +57,7 @@ macro_rules! closed_code {
 }
 
 closed_code!(OriginModule {
+    Provider => "provider",
     Actingctl => "actingctl",
     Actinglab => "actinglab",
     Runtime => "runtime",
@@ -78,6 +79,7 @@ closed_code!(OriginModule {
 });
 
 closed_code!(EventAction {
+    ProviderStartup => "provider.startup",
     RuntimeAction => "runtime.action",
     RuntimeStart => "runtime.start",
     RuntimeTakeover => "runtime.takeover",
@@ -153,6 +155,7 @@ closed_code!(EventAction {
 });
 
 closed_code!(DiagnosticCode {
+    ProviderStartupFailed => "provider_startup_failed",
     RuntimeDiagnostic => "runtime.diagnostic",
     RuntimeOwnerConflict => "runtime.owner_conflict",
     RuntimeProtocolInvalid => "runtime.protocol_invalid",

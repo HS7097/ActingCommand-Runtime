@@ -26,6 +26,7 @@ mod procedure_manifest;
 mod project_interface;
 mod proposal;
 mod provider;
+mod provider_startup;
 mod strategy;
 mod time;
 
@@ -55,6 +56,7 @@ pub use policy_host::{
 };
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
+pub use provider_startup::ProviderStartup;
 
 #[cfg(test)]
 mod tests;
