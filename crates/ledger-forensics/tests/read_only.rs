@@ -833,7 +833,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             TaskSemanticFact::TerminalCommitted {
                 outcome: TaskOutcome::Success,
                 final_page: Some("neutral/end".into()),
-                executed_steps: 7,
+                executed_steps: Some(7),
                 failure_code: None,
                 scheduling_disposition: None,
             },

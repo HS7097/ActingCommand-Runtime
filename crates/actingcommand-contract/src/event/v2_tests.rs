@@ -2168,8 +2168,15 @@ fn task_semantic_payload_rejects_invalid_facts() {
         TaskSemanticFact::TerminalCommitted {
             outcome: TaskOutcome::Success,
             final_page: Some("home".to_string()),
-            executed_steps: 1,
+            executed_steps: Some(1),
             failure_code: Some("must_be_absent".to_string()),
+            scheduling_disposition: None,
+        },
+        TaskSemanticFact::TerminalCommitted {
+            outcome: TaskOutcome::Success,
+            final_page: Some("home".to_string()),
+            executed_steps: None,
+            failure_code: None,
             scheduling_disposition: None,
         },
     ];

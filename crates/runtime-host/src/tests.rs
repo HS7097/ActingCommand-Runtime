@@ -4581,6 +4581,19 @@ fn explicit_home_entry_mismatch_fails_before_target_input() {
         },
     );
     let facts = entry_preflight_facts(&events);
+    assert!(
+        events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .any(|fact| matches!(
+                fact,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    executed_steps: Some(0),
+                    ..
+                }
+            ))
+    );
     assert!(facts.iter().any(|fact| matches!(
         fact,
         TaskSemanticFact::EntryRecognition {
@@ -4879,6 +4892,19 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
         },
     );
     let facts = entry_preflight_facts(&events);
+    assert!(
+        events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .any(|fact| matches!(
+                fact,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Success,
+                    executed_steps: Some(1),
+                    ..
+                }
+            ))
+    );
     assert!(facts.iter().any(|fact| matches!(
         fact,
         TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 }
@@ -5140,7 +5166,7 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
                 terminal,
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Failure,
-                    executed_steps: 1,
+                    executed_steps: Some(1),
                     ..
                 }
             ));
@@ -11613,7 +11639,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 terminals[0].1,
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Success,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     ..
                 }
             ));
@@ -11726,7 +11752,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 terminals[0].1,
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Failure,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     ..
                 }
             ));
@@ -11935,7 +11961,7 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
         projected_task_semantic_fact(terminal),
         Some(TaskSemanticFact::TerminalCommitted {
             outcome: TaskOutcome::Failure,
-            executed_steps: 0,
+            executed_steps: Some(0),
             failure_code: Some(code),
             ..
         }) if code == "contained_task_post_admission_ocr_failed"
@@ -12061,7 +12087,7 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
                 payload.fact(),
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Failure,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: Some(code),
                     ..
                 } if code == "contained_task_post_admission_ocr_failed"
@@ -12552,91 +12578,130 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
 
 #[test]
 fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate_artifact() {
-    let root = TempDir::new().expect("tempdir");
-    let package = root.path().join("neutral-stability-max-task.zip");
-    let bytes = neutral_stability_contained_task_package(3, 4);
-    fs::write(&package, &bytes).expect("write stability package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
-    let state = Arc::new(FakeState::default());
-    state
-        .stability_region_transition_after_inputs
-        .store(2, Ordering::Release);
-    let host = RuntimeHost::start(
-        config(&root),
-        Arc::new(FakeProvider::one(
-            "neutral.instance",
-            instance_id(),
-            Arc::clone(&state),
-        )),
-    )
-    .expect("runtime host");
-    let mut client = TestClient::connect(&host);
-    client
-        .stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .expect("stability receipt timeout");
-    let correlation = client.ids.mint_correlation_id().expect("correlation");
-    let correlation_id = *correlation.transport();
-    let request = client.request_with_correlation(
-        correlation,
-        RuntimeOperation::run_contained_task(
-            "neutral.instance",
-            client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("task request"),
-        ),
-    );
+    // FAILED-PROGRESS-v1: W6 preserved first red, https://github.com/HS7097/ActingCommand-Workflow/issues/278#issuecomment-5570527033
+    for max_steps in [4, 6] {
+        let root = TempDir::new().expect("tempdir");
+        let package = root.path().join("neutral-stability-max-task.zip");
+        let bytes = neutral_stability_contained_task_package(max_steps - 1, max_steps);
+        fs::write(&package, &bytes).expect("write stability package");
+        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+        let state = Arc::new(FakeState::default());
+        state
+            .stability_region_transition_after_inputs
+            .store(2, Ordering::Release);
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "neutral.instance",
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .expect("runtime host");
+        let mut client = TestClient::connect(&host);
+        client
+            .stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("stability receipt timeout");
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "neutral.instance",
+                client.ids.mint_holder_id().expect("holder"),
+                ContainedTaskRequest::new(package.display().to_string(), expected)
+                    .expect("task request"),
+            ),
+        );
 
-    let receipt = client.send(&request);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
-    assert_eq!(state.input_count.load(Ordering::Acquire), 4);
-    let events = projected_events(
-        &mut client,
-        EventQuery {
-            correlation_id: Some(correlation_id),
-            ..EventQuery::default()
-        },
-    );
-    let diagnostics = events
-        .iter()
-        .filter(|event| event.event_type == EventType::ArtifactVerified)
-        .flat_map(|event| event.artifacts.iter())
-        .filter(|artifact| {
-            artifact.kind() == ArtifactKind::DiagnosticJson
-                && artifact.producer == ArtifactProducer::CapturePipeline
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(diagnostics.len(), 3, "terminal trace adds no artifact");
-    let terminal: serde_json::Value = serde_json::from_slice(
-        &read_projected_verified(root.path(), diagnostics.last().unwrap())
-            .expect("verified max-step diagnostic"),
-    )
-    .expect("max-step diagnostic JSON");
-    assert_eq!(terminal["step_index"], 3);
-    assert_eq!(terminal["result"], "unchanged");
-    assert_eq!(terminal["prior_consecutive_unchanged"], 1);
-    assert_eq!(terminal["new_consecutive_unchanged"], 2);
-    assert_eq!(terminal["terminal_reason"], "max_steps_reached");
-    let task_failed = events
-        .iter()
-        .filter(|event| event.event_type == EventType::TaskFailed)
-        .collect::<Vec<_>>();
-    assert_eq!(task_failed.len(), 1, "one authoritative TaskFailed");
-    let lease_id = *task_failed[0]
-        .links
-        .lease_id()
-        .expect("failed task lease identity");
-    let releases = host
-        .query_persisted_events_for_test(EventQuery {
-            event_type: Some(EventType::LeaseReleased),
-            lease_id: Some(lease_id),
-            ..EventQuery::default()
-        })
-        .expect("query synthetic cleanup release by lease identity");
-    assert_eq!(releases.len(), 1, "one authoritative LeaseReleased");
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    drop(client);
-    host.close().expect("close host");
+        let receipt = client.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            max_steps as usize
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let diagnostics = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .flat_map(|event| event.artifacts.iter())
+            .filter(|artifact| {
+                artifact.kind() == ArtifactKind::DiagnosticJson
+                    && artifact.producer == ArtifactProducer::CapturePipeline
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            diagnostics.len(),
+            max_steps as usize - 1,
+            "terminal trace adds no artifact"
+        );
+        let terminal: serde_json::Value = serde_json::from_slice(
+            &read_projected_verified(root.path(), diagnostics.last().unwrap())
+                .expect("verified max-step diagnostic"),
+        )
+        .expect("max-step diagnostic JSON");
+        assert_eq!(terminal["step_index"], max_steps - 1);
+        assert_eq!(terminal["result"], "unchanged");
+        assert_eq!(terminal["prior_consecutive_unchanged"], max_steps - 3);
+        assert_eq!(terminal["new_consecutive_unchanged"], max_steps - 2);
+        assert_eq!(terminal["terminal_reason"], "max_steps_reached");
+        let task_failed = events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskFailed)
+            .collect::<Vec<_>>();
+        assert_eq!(task_failed.len(), 1, "one authoritative TaskFailed");
+        assert!(matches!(
+            projected_task_semantic_fact(task_failed[0]),
+            Some(TaskSemanticFact::TerminalCommitted {
+                outcome: TaskOutcome::Failure,
+                executed_steps: Some(steps),
+                failure_code: Some(code),
+                ..
+            }) if *steps == max_steps && code == "contained_task_requires_scheduler"
+        ));
+        let streams = events
+            .iter()
+            .filter(|event| event.event_type == EventType::ArtifactVerified)
+            .flat_map(|event| &event.artifacts)
+            .filter(|artifact| {
+                artifact.kind == ArtifactKind::DiagnosticJson
+                    && artifact.producer == ArtifactProducer::ArtifactStore
+                    && artifact.redaction_state
+                        == actingcommand_contract::ArtifactRedactionState::Pending
+            })
+            .collect::<Vec<_>>();
+        let [stream] = streams.as_slice() else {
+            panic!("one native task diagnostic stream")
+        };
+        let document: serde_json::Value =
+            serde_json::from_slice(&read_projected_verified(root.path(), stream).unwrap()).unwrap();
+        let terminal = document["records"].as_array().unwrap().last().unwrap();
+        assert_eq!(terminal["kind"], "terminal");
+        assert_eq!(terminal["data"]["execution"], "task_error");
+        assert_eq!(terminal["data"]["executed_steps"], max_steps);
+        let lease_id = *task_failed[0]
+            .links
+            .lease_id()
+            .expect("failed task lease identity");
+        let releases = host
+            .query_persisted_events_for_test(EventQuery {
+                event_type: Some(EventType::LeaseReleased),
+                lease_id: Some(lease_id),
+                ..EventQuery::default()
+            })
+            .expect("query synthetic cleanup release by lease identity");
+        assert_eq!(releases.len(), 1, "one authoritative LeaseReleased");
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        drop(client);
+        host.close().expect("close host");
+    }
 }
 
 #[test]
@@ -13588,6 +13653,15 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         _ => None,
     });
     assert_eq!(deadline, Some(25));
+    assert!(persisted.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Task(TaskPayload::Semantic(payload))
+            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted {
+                outcome: TaskOutcome::Cancelled,
+                executed_steps: Some(0),
+                ..
+            })
+    )));
 
     let cancel = runtime_request(
         &ids,
@@ -13611,6 +13685,81 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         }) if task_request_id == &request.request_id()
     ));
     host.close().expect("close host");
+
+    let root = TempDir::new().expect("mid-step tempdir");
+    let package = root.path().join("deadline-task.zip");
+    fs::write(&package, &bytes).expect("write mid-step package");
+    let state = Arc::new(FakeState::default());
+    state.block_input.store(true, Ordering::Release);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("mid-step host");
+    let task_request = ContainedTaskRequest::new(
+        package.display().to_string(),
+        actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
+    )
+    .unwrap()
+    .with_response_deadline_ms(25)
+    .unwrap();
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().unwrap(),
+            task_request,
+        ),
+    );
+    let receipt = thread::scope(|scope| {
+        let worker = scope
+            .spawn(|| host.process_request_for_test(&request, ConnectionId::new(174).unwrap()));
+        let wait_deadline = Instant::now() + Duration::from_secs(5);
+        while !state.input_started.load(Ordering::Acquire) && Instant::now() < wait_deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let input_started = state.input_started.load(Ordering::Acquire);
+        clock.advance(25);
+        state.block_input.store(false, Ordering::Release);
+        assert!(
+            input_started,
+            "mid-step input reached its existing boundary"
+        );
+        worker
+            .join()
+            .expect("mid-step worker")
+            .expect("cancelled receipt")
+    });
+    assert_eq!(receipt.state(), RuntimeReceiptState::Cancelled);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            request_id: Some(request.request_id()),
+            ..EventQuery::default()
+        })
+        .unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Task(TaskPayload::Semantic(payload))
+            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted {
+                outcome: TaskOutcome::Cancelled,
+                executed_steps: Some(1),
+                ..
+            })
+    )));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::InputCommitted)
+            .count(),
+        1
+    );
+    host.close().expect("close mid-step host");
 }
 
 #[test]
@@ -13726,6 +13875,15 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
             .count(),
         1
     );
+    assert!(events.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Task(TaskPayload::Semantic(payload))
+            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted {
+                outcome: TaskOutcome::Cancelled,
+                executed_steps: None,
+                ..
+            })
+    )));
     assert_eq!(
         events
             .iter()

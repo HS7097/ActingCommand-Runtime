@@ -616,14 +616,14 @@ impl RuntimeContainedTask<'_> {
             Err(ContainedTaskRunError::Task(error)) => TaskDiagnosticTerminalData::TaskError {
                 code: error.code().to_owned(),
                 detail: error.detail().map(str::to_owned),
-                executed_steps: None,
+                executed_steps: self.executed_steps,
             },
             Err(
                 ContainedTaskRunError::Boundary(error)
                 | ContainedTaskRunError::NonfatalOperation(error),
             ) => TaskDiagnosticTerminalData::OperationError {
                 code: error.error.code().to_owned(),
-                executed_steps: None,
+                executed_steps: self.executed_steps,
             },
         };
         self.diagnostic(None, Payload::Terminal(data))?;

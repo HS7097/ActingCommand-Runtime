@@ -1456,6 +1456,10 @@ pub enum ContainedTaskRuntimeErrorClass {
 pub trait ContainedTaskRuntime {
     type Error;
 
+    /// Copies the run owner's logical-step count, including a dispatched step that fails.
+    /// This is a same-run snapshot, not a count of inputs or successful confirmations.
+    fn update_run_progress(&mut self, _executed_steps: u32) {}
+
     /// Classification comes from the error owner. Unknown errors forbid further reporting.
     fn classify_error(_error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         ContainedTaskRuntimeErrorClass::Unknown
@@ -1792,6 +1796,7 @@ impl PreparedContainedTask {
         runtime: &mut R,
         options: ContainedTaskRunOptions,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        runtime.update_run_progress(0);
         runtime
             .record(ContainedTaskTrace::PackageAdmitted {
                 task_label: self.task_label().to_string(),
@@ -1959,6 +1964,7 @@ impl PreparedContainedTask {
                     current_page: from_page,
                     step_index,
                 } => {
+                    runtime.update_run_progress(machine.completed_steps());
                     let operation = self
                         .program
                         .operations
@@ -5680,6 +5686,7 @@ mod post_admission_ocr_tests {
                     last_frame: frame,
                     captures: 0,
                     inputs: 0,
+                    progress: Vec::new(),
                     traces: Vec::new(),
                 },
                 failure,
@@ -6129,6 +6136,7 @@ mod post_admission_ocr_tests {
                 last_frame: result,
                 captures: 0,
                 inputs: 0,
+                progress: Vec::new(),
                 traces: Vec::new(),
             };
             let outcome = task.run(&mut runtime);
@@ -8006,6 +8014,7 @@ mod retry_wiring_tests {
         pub(super) last_frame: Frame,
         pub(super) captures: usize,
         pub(super) inputs: usize,
+        pub(super) progress: Vec<u32>,
         pub(super) traces: Vec<ContainedTaskTrace>,
     }
 
@@ -8021,6 +8030,7 @@ mod retry_wiring_tests {
                 last_frame,
                 captures: 0,
                 inputs: 0,
+                progress: Vec::new(),
                 traces: Vec::new(),
             }
         }
@@ -8028,6 +8038,10 @@ mod retry_wiring_tests {
 
     impl ContainedTaskRuntime for ScriptedRuntime {
         type Error = &'static str;
+
+        fn update_run_progress(&mut self, executed_steps: u32) {
+            self.progress.push(executed_steps);
+        }
 
         fn capture(&mut self) -> Result<Frame, Self::Error> {
             self.captures += 1;
@@ -8170,6 +8184,7 @@ mod retry_wiring_tests {
         let result = task.run(&mut runtime).unwrap();
         assert_eq!(result.final_page.as_deref(), Some("neutral/home"));
         assert_eq!(result.executed_steps, 4);
+        assert_eq!(runtime.progress, [0, 1, 2, 3, 4]);
         assert_eq!(runtime.inputs, 4);
         let starts = runtime
             .traces
@@ -8219,6 +8234,7 @@ mod retry_wiring_tests {
             matches!(task.run(&mut limited), Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_requires_scheduler")
         );
         assert_eq!(limited.inputs, 3);
+        assert_eq!(limited.progress, [0, 1, 2, 3]);
     }
 
     // PHASED-ROUTE-v1 specification: the existing total timer bounds inner polling.
@@ -8237,6 +8253,7 @@ mod retry_wiring_tests {
         );
         assert!(started.elapsed() < Duration::from_millis(400));
         assert_eq!(runtime.inputs, 1);
+        assert_eq!(runtime.progress, [0, 1]);
         assert_eq!(
             runtime
                 .traces
@@ -8461,6 +8478,7 @@ mod retry_wiring_tests {
             last_frame: terminal,
             captures: 0,
             inputs: 0,
+            progress: Vec::new(),
             traces: Vec::new(),
         };
         let mut runtime = TimingRuntime::new(inner);
@@ -8561,6 +8579,7 @@ mod retry_wiring_tests {
             last_frame: terminal,
             captures: 0,
             inputs: 0,
+            progress: Vec::new(),
             traces: Vec::new(),
         };
 
@@ -8835,6 +8854,7 @@ mod retry_wiring_tests {
             last_frame: unknown,
             captures: 0,
             inputs: 0,
+            progress: Vec::new(),
             traces: Vec::new(),
         };
 
@@ -9388,6 +9408,7 @@ mod retry_wiring_tests {
             last_frame,
             captures: 0,
             inputs: 0,
+            progress: Vec::new(),
             traces: Vec::new(),
         }
     }
