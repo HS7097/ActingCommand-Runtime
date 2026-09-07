@@ -156,7 +156,7 @@ Operation `0.9` declares non-OCR task budgets directly: optional `timeout_ms`
 defaults to 60000 and accepts `1..=1800000`; optional `max_steps` retains the
 existing 100-step default and 1000-step maximum. Its package control is
 `Lab-1y.control.v2`. The task RPC response ceiling is 1800000 ms and the official
-task-run client selects that bounded ceiling. Resources explicitly choose a
+task-run client and scheduled procedure binding select that bounded ceiling. Resources explicitly choose a
 long budget; all phases share the original monotonic task timer. An in-flight
 capture/provider call retains its existing bounded completion and cancellation
 checks; elapsed time never permits a further input.

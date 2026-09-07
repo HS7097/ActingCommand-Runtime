@@ -2717,7 +2717,8 @@ impl OperationBundle {
         }
         self.validate_task_timeout(control)?;
         self.validate_task_max_steps(control)?;
-        if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
+        if (self.task_id == control.entry_task_id
+            && (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA))
             || (self.task_id == control.entry_task_id && self.phases != control.phases)
             || (self.phases.is_some() && self.schema_version != "0.9")
         {
