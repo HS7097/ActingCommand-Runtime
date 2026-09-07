@@ -1458,7 +1458,7 @@ impl RuntimeHost {
                     outcome,
                     intent_already_recorded,
                     final_page,
-                    executed_steps,
+                    executed_steps: Some(executed_steps),
                     failure_code,
                     failure_severity: None,
                     scheduling_outcome: None,
@@ -1541,7 +1541,7 @@ impl RuntimeHost {
                     outcome: TaskOutcome::Success,
                     intent_already_recorded: false,
                     final_page,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: None,
                     failure_severity: None,
                     scheduling_outcome: Some((game, declaration)),
@@ -10939,7 +10939,7 @@ impl HostShared {
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
             step_index_offset: 0,
-            completed_entry_recovery_steps: 0,
+            executed_steps: Some(0),
             entry_preflight_recorded: false,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
@@ -11013,7 +11013,7 @@ impl HostShared {
             execution = Err(ContainedTaskRunError::Boundary(failure));
         }
         let finalizing = runtime.finalizing;
-        let completed_entry_recovery_steps = runtime.completed_entry_recovery_steps;
+        let executed_steps = runtime.executed_steps;
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
         let outcome = match execution {
@@ -11065,7 +11065,7 @@ impl HostShared {
                             outcome: terminal_outcome,
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
-                            executed_steps: completed_entry_recovery_steps,
+                            executed_steps,
                             failure_code: Some(failure.error.code()),
                             failure_severity: scheduled.then_some(EventSeverity::Warning),
                             scheduling_outcome: None,
@@ -11139,7 +11139,7 @@ impl HostShared {
                             outcome: TaskOutcome::Failure,
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
-                            executed_steps: completed_entry_recovery_steps,
+                            executed_steps,
                             failure_code: Some(
                                 task_failure
                                     .map(|evidence| evidence.code)
@@ -11208,7 +11208,7 @@ impl HostShared {
                         outcome: TaskOutcome::Failure,
                         intent_already_recorded: finalizing.is_some(),
                         final_page: None,
-                        executed_steps: completed_entry_recovery_steps,
+                        executed_steps,
                         failure_code: Some(error.code()),
                         failure_severity,
                         scheduling_outcome: None,
@@ -11283,7 +11283,7 @@ impl HostShared {
                 outcome: outcome.outcome,
                 intent_already_recorded: true,
                 final_page: outcome.final_page.clone(),
-                executed_steps: outcome.executed_steps,
+                executed_steps: Some(outcome.executed_steps),
                 failure_code: None,
                 failure_severity: None,
                 scheduling_outcome,
@@ -11451,7 +11451,6 @@ impl HostShared {
                 });
             }
         };
-        runtime.completed_entry_recovery_steps = recovery_outcome.executed_steps;
         let Some(final_page) = recovery_outcome.final_page.clone() else {
             return fail_contained_task_entry(
                 runtime,
@@ -11669,7 +11668,7 @@ impl HostShared {
                 terminal_event,
                 TaskOutcome::Cancelled,
                 None,
-                0,
+                None,
                 Some("contained_task_recovered_after_restart".to_owned()),
             ));
         }
@@ -11740,7 +11739,13 @@ impl HostShared {
                     response_deadline_monotonic_ms: deadline_monotonic_ms,
                     outcome: *outcome,
                     final_page: final_page.clone(),
-                    executed_steps: *executed_steps,
+                    executed_steps: executed_steps.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_terminal_state_inconsistent",
+                            "recover_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?,
                 },
             })),
             TaskOutcome::Cancelled => Ok(Some(OperationSuccess {
@@ -11820,7 +11825,7 @@ impl HostShared {
                     TaskSemanticFact::TerminalCommitted {
                         outcome: TaskOutcome::Cancelled,
                         final_page: None,
-                        executed_steps: 0,
+                        executed_steps: None,
                         failure_code: Some("contained_task_recovered_after_restart".to_owned()),
                         scheduling_disposition: None,
                     },
@@ -14663,7 +14668,7 @@ struct ContainedTaskTerminalDraft {
     outcome: TaskOutcome,
     intent_already_recorded: bool,
     final_page: Option<String>,
-    executed_steps: u32,
+    executed_steps: Option<u32>,
     failure_code: Option<&'static str>,
     failure_severity: Option<EventSeverity>,
     scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
@@ -14966,7 +14971,7 @@ struct RuntimeContainedTask<'a> {
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     step_index_offset: u32,
-    completed_entry_recovery_steps: u32,
+    executed_steps: Option<u32>,
     entry_preflight_recorded: bool,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
@@ -14987,6 +14992,10 @@ struct EntryRecoveryRuntime<'a, 'host> {
 
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
+
+    fn update_run_progress(&mut self, executed_steps: u32) {
+        self.inner.update_run_progress(executed_steps);
+    }
 
     fn record_page_evaluations(
         &mut self,
@@ -16022,6 +16031,10 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
+
+    fn update_run_progress(&mut self, executed_steps: u32) {
+        self.executed_steps = self.step_index_offset.checked_add(executed_steps);
+    }
 
     fn record_page_evaluations(
         &mut self,
@@ -17764,7 +17777,7 @@ fn select_scheduling_disposition(
     events: &[PersistedEvent],
     outcome: TaskOutcome,
     final_page: Option<&str>,
-    executed_steps: u32,
+    executed_steps: Option<u32>,
     contract: Option<&(String, SchedulingOutcomeDeclaration)>,
     selected_outcome_key: Option<&str>,
 ) -> Result<Option<SchedulingDisposition>, RequestFailure> {
@@ -17781,6 +17794,8 @@ fn select_scheduling_disposition(
             "contained_task_outcome_requires_success",
         ));
     }
+    let executed_steps = executed_steps
+        .ok_or_else(|| scheduling_outcome_failure("contained_task_outcome_progress_missing"))?;
     let final_page = final_page.ok_or_else(|| {
         scheduling_outcome_failure("contained_task_outcome_terminal_page_missing")
     })?;

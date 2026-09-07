@@ -674,7 +674,7 @@ fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> Pr
             TaskSemanticFact::TerminalCommitted {
                 outcome: TaskOutcome::Success,
                 final_page: Some("fixture/final".to_owned()),
-                executed_steps: 1,
+                executed_steps: Some(1),
                 failure_code: None,
                 scheduling_disposition: Some(disposition),
             },

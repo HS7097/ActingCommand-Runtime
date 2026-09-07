@@ -75,6 +75,21 @@ their original evaluators.
 | `artifact` | original ArtifactVerified sequence and projected native artifact reference |
 | `terminal` | interpreter result or original error code; unavailable executed-step counts are null |
 
+`executed_steps` is the run owner's count of dispatched logical steps. A dispatched
+step counts even if its guard, input or postcondition fails; retries of that step
+retain its index. It is distinct from physical input count and successful
+postcondition count. Phase transitions retain the global run count. Entry recovery
+contributes its own run count exactly once before the target run's count.
+
+Kernel snapshots this count at run start and logical-step dispatch through the
+existing Runtime boundary. Host uses that same snapshot for error/cancellation
+task terminals and diagnostic terminals, including errors while recording the
+result. A known pre-dispatch state is zero. If progress cannot be obtained, such
+as an interrupted run recovered after restart, `task.terminal_committed` retains
+`executed_steps: null`; a successful terminal requires a known count. No progress
+is inferred by counting ledger completion events, and original errors and
+committed effects remain unchanged.
+
 Model blocks and labels are written in provider order. Business sorting and
 selection retain their original behavior. Template raw/normalized score,
 threshold and hit rectangle and color mean/expected/distance/max-distance come

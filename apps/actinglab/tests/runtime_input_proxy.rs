@@ -2969,7 +2969,7 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
         TaskSemanticFact::TerminalCommitted {
             outcome: TaskOutcome::Success,
             final_page: Some(page),
-            executed_steps: 1,
+            executed_steps: Some(1),
             failure_code: None,
             ..
         } if page == "neutral/terminal"

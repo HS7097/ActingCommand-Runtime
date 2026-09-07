@@ -499,7 +499,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Success,
                     final_page: Some("home".to_owned()),
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: None,
                     scheduling_disposition: None,
                 },
@@ -520,7 +520,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Success,
                     final_page: Some("home".to_owned()),
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: None,
                     scheduling_disposition: Some(
                         SchedulingDisposition::new(
@@ -547,7 +547,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Success,
                     final_page: Some("home".to_owned()),
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: None,
                     scheduling_disposition: Some(
                         SchedulingDisposition::new(
@@ -574,7 +574,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Failure,
                     final_page: None,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: Some("capture_transient".to_owned()),
                     scheduling_disposition: None,
                 },
@@ -595,7 +595,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Failure,
                     final_page: None,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: Some("capture_fatal".to_owned()),
                     scheduling_disposition: None,
                 },
@@ -616,7 +616,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: TaskOutcome::Failure,
                     final_page: None,
-                    executed_steps: 0,
+                    executed_steps: Some(0),
                     failure_code: Some("capture_legacy".to_owned()),
                     scheduling_disposition: None,
                 },

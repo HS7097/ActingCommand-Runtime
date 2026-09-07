@@ -2670,7 +2670,9 @@ pub enum TaskSemanticFact {
         outcome: TaskOutcome,
         #[serde(skip_serializing_if = "Option::is_none")]
         final_page: Option<String>,
-        executed_steps: u32,
+        /// Run-owner logical steps; null means progress was unavailable.
+        #[serde(default)]
+        executed_steps: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         failure_code: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3433,7 +3435,9 @@ impl TaskSemanticFact {
                 failure_code,
                 scheduling_disposition,
             } => {
-                if *executed_steps > 1_000 {
+                if executed_steps.is_some_and(|steps| steps > 1_000)
+                    || (*outcome == TaskOutcome::Success && executed_steps.is_none())
+                {
                     return Err(SanitizationError::new(
                         "invalid_task_terminal",
                         "executed_steps",
