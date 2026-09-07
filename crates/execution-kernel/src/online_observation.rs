@@ -192,6 +192,16 @@ impl PreparedPageObservation {
         self.bundle.loaded_bundle().verified_hash().to_string()
     }
 
+    pub fn contains_page(&self, page_id: &str) -> bool {
+        self.bundle
+            .loaded_bundle()
+            .projection_metadata()
+            .expect("admitted metadata")
+            .catalog()
+            .pages
+            .contains(page_id)
+    }
+
     pub fn evaluate(
         &self,
         png: &[u8],

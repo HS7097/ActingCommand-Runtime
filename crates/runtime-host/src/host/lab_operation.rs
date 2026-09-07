@@ -8,9 +8,11 @@ use super::*;
 use actingcommand_contract::page_projection::{FrameIdentity, FrameKind};
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, ContainedObservationEvidence,
-    ContainedPageObservation, LAB_OPERATION_PREPARED_SCHEMA, LAB_OPERATION_TERMINAL_SCHEMA,
+    ContainedPageObservation, LAB_ARRIVAL_INTERVAL_MS, LAB_OPERATION_PREPARED_SCHEMA,
+    LAB_OPERATION_TERMINAL_SCHEMA, LabArrivalResult, LabArrivalSample, LabArrivalStatus,
     LabEvidenceReference, LabOperationFailure, LabOperationFrame, LabOperationPrepared,
-    LabOperationRecord, LabOperationStage, ONLINE_OBSERVATION_SCHEMA, PageObservationStatus,
+    LabOperationRecord, LabOperationStage, MAX_LAB_ARRIVAL_FRAMES, ONLINE_OBSERVATION_SCHEMA,
+    PageObservationStatus,
 };
 use actingcommand_execution_kernel::PreparedPageObservation;
 
@@ -76,14 +78,26 @@ impl HostShared {
                         error,
                     )
                 })?;
-            PreparedPageObservation::load(
+            let observer = PreparedPageObservation::load(
                 instance_alias,
                 &bytes,
                 expected,
                 &[],
                 self.execution.vision_provider(),
             )
-            .map_err(observation_kernel_error)
+            .map_err(observation_kernel_error)?;
+            if input
+                .after
+                .as_ref()
+                .is_some_and(|after| !observer.contains_page(&after.page_id))
+            {
+                return Err(observation_admission_error(
+                    "lab_arrival_page_absent",
+                    "admit_lab_operation",
+                    "arrival page must be an exact page ID in the verified package",
+                ));
+            }
+            Ok(observer)
         })()
         .map_err(|error| {
             self.observation_failure(
@@ -103,6 +117,7 @@ impl HostShared {
             lease_id: None,
             selection: input.selection.clone(),
             projection_hint: input.projection_hint.clone(),
+            after: input.after.clone(),
             before_frame: None,
             before_projection: None,
             selected_element: None,
@@ -202,6 +217,11 @@ impl HostShared {
             effect: EffectDisposition::NotPerformed,
             after_frame: None,
             after_projection: None,
+            arrival: input.after.as_ref().map(|_| LabArrivalResult {
+                status: LabArrivalStatus::Aborted,
+                elapsed_ms: 0,
+                samples: Vec::new(),
+            }),
             failure,
             cleanup_failure: None,
         };
@@ -267,32 +287,138 @@ impl HostShared {
                 None => None,
             };
             if record.failure.is_none() {
+                let started = self.monotonic_ms()?;
+                let elapsed = |now: u64| {
+                    now.checked_sub(started).ok_or_else(|| {
+                        observation_integrity_failure("lab_arrival_clock_regressed")
+                    })
+                };
+                let deadline = input
+                    .after
+                    .as_ref()
+                    .map(|after| {
+                        started.checked_add(after.timeout_ms).ok_or_else(|| {
+                            observation_integrity_failure("lab_arrival_deadline_overflow")
+                        })
+                    })
+                    .transpose()?;
                 let post = (|| -> Result<(), RequestFailure> {
-                    stage = LabOperationStage::AfterFrame;
-                    // This re-fences the original token, including any safe-boundary transfer.
-                    let (frame, fence) =
-                        self.capture_lab_operation_frame(request, held, connection_id, run_links)?;
-                    record.after_frame = Some(LabOperationFrame {
-                        observation: frame.observation.clone(),
-                        verified: frame.verified,
-                        lease_valid_after_capture: fence.is_ok(),
-                    });
-                    fence?;
-                    stage = LabOperationStage::AfterProjection;
-                    record.after_projection = Some(self.evaluate_lab_operation_frame(
-                        original,
-                        request,
-                        input,
-                        &observer,
-                        &frame,
-                        resolved.instance_id(),
-                    )?);
-                    let instance_guard = self.instance_guard(held.instance_id())?;
-                    let _admission = lock(&instance_guard, "validate_lab_after_projection")?;
-                    self.validated_instance(request, held, connection_id)?;
-                    Ok(())
+                    let captures = if deadline.is_some() {
+                        MAX_LAB_ARRIVAL_FRAMES
+                    } else {
+                        1
+                    };
+                    for index in 0..captures {
+                        stage = LabOperationStage::AfterFrame;
+                        if let Some(deadline) = deadline {
+                            self.validate_lab_arrival_token(request, held, connection_id)?;
+                            if self.monotonic_ms()? >= deadline {
+                                break;
+                            }
+                        }
+                        // Re-fence the original token, including any safe-boundary transfer.
+                        let (frame, fence) = self.capture_lab_operation_frame(
+                            request, held, connection_id, run_links,
+                        )?;
+                        record.after_frame = Some(LabOperationFrame {
+                            observation: frame.observation.clone(),
+                            verified: frame.verified,
+                            lease_valid_after_capture: fence.is_ok(),
+                        });
+                        record.after_projection = None;
+                        if let Some(arrival) = &mut record.arrival {
+                            arrival.samples.push(LabArrivalSample {
+                                frame: record.after_frame.as_ref().expect("captured frame").clone(),
+                                projection: None,
+                            });
+                        }
+                        fence?;
+                        stage = LabOperationStage::AfterProjection;
+                        record.after_projection = Some(self.evaluate_lab_operation_frame(
+                            original,
+                            request,
+                            input,
+                            &observer,
+                            &frame,
+                            resolved.instance_id(),
+                        )?);
+                        if let Some(arrival) = &mut record.arrival {
+                            let projection = record.after_projection.as_ref().expect("evaluated frame");
+                            arrival.samples.last_mut().expect("captured sample").projection =
+                                Some(LabEvidenceReference {
+                                    artifact: projection.artifact.clone(),
+                                    verified: TerminalEvent {
+                                        sequence: projection.projection_sequence,
+                                        event_id: projection.projection_event_id,
+                                    },
+                                });
+                        }
+                        {
+                            let instance_guard = self.instance_guard(held.instance_id())?;
+                            let _admission = lock(&instance_guard, "validate_lab_after_projection")?;
+                            self.validated_instance(request, held, connection_id)?;
+                        }
+                        let Some(deadline) = deadline else {
+                            return Ok(());
+                        };
+                        self.validate_lab_arrival_token(request, held, connection_id)?;
+                        let now = self.monotonic_ms()?;
+                        let arrival = record.arrival.as_mut().expect("arrival requested");
+                        arrival.elapsed_ms = elapsed(now)?;
+                        let projection = record.after_projection.as_ref().expect("evaluated frame");
+                        if now < deadline
+                            && projection.status == PageObservationStatus::Recognized
+                            && projection.projection.matched
+                            && projection.projection.page
+                                == input.after.as_ref().expect("arrival requested").page_id
+                        {
+                            arrival.status = LabArrivalStatus::Reached;
+                            return Ok(());
+                        }
+                        if matches!(
+                            projection.status,
+                            PageObservationStatus::Partial | PageObservationStatus::Conflict
+                        ) {
+                            return Err(RequestFailure::request(
+                                RuntimeHostError::request(
+                                    "lab_arrival_observation_failed",
+                                    "wait_lab_arrival",
+                                    RuntimeErrorCode::RecognitionFailed,
+                                ),
+                                RuntimeReceiptState::Failed,
+                                None,
+                            ));
+                        }
+                        if now >= deadline || index + 1 == captures {
+                            break;
+                        }
+                        // No owner/instance lock is held while waiting on the request thread.
+                        thread::sleep(Duration::from_millis(
+                            LAB_ARRIVAL_INTERVAL_MS.min(deadline - now),
+                        ));
+                    }
+                    stage = LabOperationStage::Arrival;
+                    let arrival = record.arrival.as_mut().expect("bounded arrival ended");
+                    arrival.elapsed_ms = elapsed(self.monotonic_ms()?)?;
+                    arrival.status = LabArrivalStatus::TimedOut;
+                    Err(RequestFailure::request(
+                        RuntimeHostError::request(
+                            "lab_arrival_timeout",
+                            "wait_lab_arrival",
+                            RuntimeErrorCode::RecognitionFailed,
+                        ),
+                        RuntimeReceiptState::Failed,
+                        None,
+                    ))
                 })();
                 if let Err(failure) = post {
+                    if let Some(arrival) = &mut record.arrival
+                        && arrival.status == LabArrivalStatus::Aborted
+                        && !failure.poison_runtime
+                        && !failure.error.is_fatal()
+                    {
+                        arrival.elapsed_ms = elapsed(self.monotonic_ms()?)?;
+                    }
                     record.failure = Some(lab_operation_failure(stage, failure)?);
                 }
             }
@@ -370,6 +496,32 @@ impl HostShared {
                 operation: Box::new(operation),
             },
         })
+    }
+
+    fn validate_lab_arrival_token(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> Result<(), RequestFailure> {
+        if let Some(error) = self.fatal.current()? {
+            return Err(RequestFailure::poison_without_terminal(error));
+        }
+        if self.fatal.is_shutdown_requested() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "lab_arrival_shutdown",
+                    "wait_lab_arrival",
+                    RuntimeErrorCode::RuntimeUnavailable,
+                ),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        let instance_guard = self.instance_guard(token.instance_id())?;
+        let _admission = lock(&instance_guard, "validate_lab_arrival_token")?;
+        self.validated_instance(request, token, connection_id)
+            .map(|_| ())
     }
 
     fn resolve_lab_input_evidence(

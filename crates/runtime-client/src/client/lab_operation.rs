@@ -51,8 +51,13 @@ impl RuntimeDebugSession {
             .map_err(|_| lab_error("runtime_lab_holder_issue_failed"))?;
         let timeout = connection
             .backend_open_timeout
-            .checked_mul(4)
+            .checked_mul(if request.after.is_some() { 23 } else { 4 })
             .and_then(|timeout| timeout.checked_add(Duration::from_millis(MAX_INPUT_DURATION_MS)))
+            .and_then(|timeout| {
+                timeout.checked_add(Duration::from_millis(
+                    request.after.as_ref().map_or(0, |after| after.timeout_ms),
+                ))
+            })
             .and_then(|timeout| timeout.checked_add(connection.io_timeout))
             .ok_or_else(|| lab_error("runtime_lab_operation_timeout_overflow"))?;
         drop(connection);
@@ -75,6 +80,7 @@ impl RuntimeDebugSession {
                 || prepared.expected_package_sha256 != request.expected_sha256
                 || prepared.selection != request.selection
                 || prepared.projection_hint != request.projection_hint
+                || prepared.after != request.after
             {
                 return Err(lab_error("runtime_lab_operation_request_mismatch"));
             }

@@ -2,12 +2,30 @@
 
 use super::*;
 use actingcommand_contract::{
-    ContainedLabOperationRequest, LabOperationSelection, LabProjectionHint,
+    ContainedLabOperationRequest, LabArrivalCondition, LabOperationSelection, LabProjectionHint,
 };
 
 pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "do")?;
     let selection = selection(flags)?;
+    let after = flags
+        .optional("--after-page")
+        .map(|page_id| {
+            let timeout_ms = flags
+                .optional("--after-timeout-ms")
+                .map(|value| {
+                    value.parse::<u64>().map_err(|_| {
+                        CliError::usage("--after-timeout-ms requires an integer")
+                    })
+                })
+                .transpose()?
+                .unwrap_or(5_000);
+            Ok::<_, CliError>(LabArrivalCondition { page_id, timeout_ms })
+        })
+        .transpose()?;
+    if after.is_none() && flags.optional("--after-timeout-ms").is_some() {
+        return Err(CliError::usage("--after-timeout-ms requires --after-page"));
+    }
     let projection_hint = LabProjectionHint {
         sequence: flags
             .optional("--projection-sequence")
@@ -36,6 +54,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
             expected_sha256: expected.hash().to_string(),
             selection,
             projection_hint,
+            after,
         };
         request
             .validate()
@@ -79,6 +98,10 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
                 "terminal_sequence":operation.terminal_artifact.verified.sequence},
             "failure":record.failure, "cleanup_failure":record.cleanup_failure,
         });
+        if prepared.after.is_some() {
+            payload["after_condition"] = json!(prepared.after);
+            payload["arrival"] = json!(record.arrival);
+        }
         if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
             payload["operation_record"] = json!(operation);
         }
@@ -89,6 +112,12 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         let mut projection_request = lab2_projection_request(flags, Some(evidence_id));
         for field in ["effect", "executed", "failure", "ledger"] {
             projection_request.fields.insert(field.to_string());
+        }
+        if prepared.after.is_some() {
+            projection_request
+                .fields
+                .insert("after_condition".to_string());
+            projection_request.fields.insert("arrival".to_string());
         }
         if global.verbose && projection_request.verbosity == ProjectionVerbosity::Min {
             projection_request.verbosity = ProjectionVerbosity::Normal;

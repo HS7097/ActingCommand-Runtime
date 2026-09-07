@@ -42,8 +42,8 @@ struct FakeState {
 #[test]
 fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records() {
     use actingcommand_contract::{
-        ContainedLabOperationRequest, InputAction, LabOperationEvidence, LabOperationSelection,
-        LabProjectionHint, verify_lab_operation_evidence,
+        ContainedLabOperationRequest, InputAction, LabArrivalCondition, LabArrivalStatus,
+        LabOperationEvidence, LabOperationSelection, LabProjectionHint, verify_lab_operation_evidence,
     };
     let root = TempDir::new().unwrap();
     let runtime_root = root.path().join("runtime");
@@ -98,16 +98,50 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
         EventSource::Lab,
     ))
     .unwrap();
-    for selection in [
-        LabOperationSelection::Coordinates {
-            action: InputAction::Tap { x: 0, y: 0 },
-        },
-        LabOperationSelection::Element {
-            id: "undeclared".into(),
-        },
+    for (selection, timeout_ms) in [
+        (
+            LabOperationSelection::Coordinates {
+                action: InputAction::Tap { x: 0, y: 0 },
+            },
+            None,
+        ),
+        (
+            LabOperationSelection::Element {
+                id: "undeclared".into(),
+            },
+            None,
+        ),
+        (
+            LabOperationSelection::Coordinates {
+                action: InputAction::Tap { x: 0, y: 0 },
+            },
+            Some(5_000),
+        ),
+        (
+            LabOperationSelection::Coordinates {
+                action: InputAction::Tap { x: 0, y: 0 },
+            },
+            Some(1_000),
+        ),
     ] {
-        let complete = matches!(selection, LabOperationSelection::Coordinates { .. });
+        let input_expected = matches!(selection, LabOperationSelection::Coordinates { .. });
+        let timed_out = timeout_ms == Some(1_000);
+        let complete = input_expected && !timed_out;
+        state
+            .transition_after_tap
+            .store(timeout_ms.is_some(), Ordering::Release);
         let session = client.begin_debug_session().unwrap();
+        let transition = (timeout_ms == Some(5_000)).then(|| {
+            let state = state.clone();
+            let captures = state.captures.load(Ordering::Acquire);
+            thread::spawn(move || {
+                wait_until(Duration::from_secs(5), || {
+                    state.captures.load(Ordering::Acquire) >= captures + 2
+                });
+                thread::sleep(Duration::from_millis(750));
+                state.transition_after_tap.store(false, Ordering::Release);
+            })
+        });
         let verified = session
             .run_contained_lab_operation(
                 "node.a",
@@ -119,9 +153,16 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
                         sequence: None,
                         content_sha256: None,
                     },
+                    after: timeout_ms.map(|timeout_ms| LabArrivalCondition {
+                        page_id: "neutral/home".into(),
+                        timeout_ms,
+                    }),
                 },
             )
             .unwrap();
+        if let Some(transition) = transition {
+            transition.join().unwrap();
+        }
         let operation = verified.operation().clone();
         let prepared = &operation.record.prepared;
         let events = client
@@ -178,8 +219,43 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
         };
         verify_lab_operation_evidence(&evidence).unwrap();
         assert_eq!(evidence.operation.record.failure.is_none(), complete);
-        assert_eq!(evidence.operation.record.after_frame.is_some(), complete);
-        assert_eq!(evidence.operation.record.input_event.is_some(), complete);
+        assert_eq!(
+            evidence.operation.record.after_frame.is_some(),
+            input_expected
+        );
+        assert_eq!(
+            evidence.operation.record.input_event.is_some(),
+            input_expected
+        );
+        if timeout_ms.is_some() {
+            let arrival = evidence.operation.record.arrival.as_ref().unwrap();
+            assert_eq!(
+                arrival.status,
+                if timed_out {
+                    LabArrivalStatus::TimedOut
+                } else {
+                    LabArrivalStatus::Reached
+                }
+            );
+            assert!(!arrival.samples.is_empty());
+            assert!(arrival.samples.len() <= actingcommand_contract::MAX_LAB_ARRIVAL_FRAMES);
+            if !timed_out {
+                assert!(arrival.samples.len() >= 2);
+            }
+            assert_eq!(
+                evidence.operation.record.effect,
+                actingcommand_contract::EffectDisposition::Performed
+            );
+            if timed_out {
+                assert!(arrival.elapsed_ms >= 1_000);
+                assert_eq!(
+                    evidence.operation.record.failure.as_ref().unwrap().code,
+                    "lab_arrival_timeout"
+                );
+            }
+        } else {
+            assert!(evidence.operation.record.arrival.is_none());
+        }
         let projection = evidence
             .operation
             .record
@@ -239,7 +315,7 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
         }
         client.status().unwrap();
     }
-    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.taps.load(Ordering::Acquire), 3);
     drop(client);
     host.close().unwrap();
 }
@@ -358,10 +434,13 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
                 original.to_str().unwrap(),
                 "--expected-sha256",
                 &hash,
+                "--after-page",
+                "neutral/home",
                 "--verbose",
             ],
         );
         assert_eq!(output["data"]["executed"], true);
+        assert_eq!(output["data"]["arrival"]["status"], "reached");
         request_ids.push(output["data"]["req_id"].as_str().unwrap().to_string());
         let operation: actingcommand_contract::ContainedLabOperationResult =
             serde_json::from_value(output["data"]["operation_record"].clone()).unwrap();
@@ -398,6 +477,7 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
                     sequence: None,
                     content_sha256: None,
                 },
+                after: None,
             },
         )
         .unwrap();
@@ -412,6 +492,34 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
         incomplete.operation().record.effect,
         actingcommand_contract::EffectDisposition::NotPerformed
     );
+    state.transition_after_tap.store(true, Ordering::Release);
+    let (_, timeout) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,1",
+            "--capture",
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &hash,
+            "--after-page",
+            "neutral/home",
+            "--after-timeout-ms",
+            "1000",
+            "--verbose",
+        ],
+    );
+    let timeout_record = &timeout["error"]["details"];
+    assert_eq!(timeout_record["effect"], "performed");
+    assert_eq!(timeout_record["arrival"]["status"], "timed_out");
+    request_ids.push(timeout_record["req_id"].as_str().unwrap().to_string());
     drop(session);
     drop(client);
     host.close().unwrap();
@@ -446,6 +554,8 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
             &request_ids[0],
             "--request-id",
             &request_ids[2],
+            "--request-id",
+            &request_ids[3],
             "--through-sequence",
             &through,
             "--zip",
@@ -462,10 +572,15 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
             "Explicit restored goal",
         ],
     );
-    assert_eq!(output["data"]["record_count"], 3);
+    assert_eq!(output["data"]["record_count"], 4);
     assert_eq!(output["data"]["operation_count"], 2);
     assert_eq!(output["data"]["awaiting_author_input"], json!([]));
-    assert_eq!(output["data"]["gaps"].as_array().unwrap().len(), 1);
+    assert_eq!(output["data"]["gaps"].as_array().unwrap().len(), 2);
+    assert!(
+        output["data"]["gaps"]
+            .to_string()
+            .contains("lab_arrival_not_reached")
+    );
     let task_bytes = fs::read(restored.join("ours/operations/restored/task.json")).unwrap();
     let task: Value = serde_json::from_slice(&task_bytes).unwrap();
     assert_eq!(task["schema_version"], "0.6");
@@ -480,6 +595,11 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
     assert_eq!(source_operation["expect_after"]["page_id"], "home");
     let recorded_after = &source_operation["provenance"]["after"]["projection"];
     assert_eq!(recorded_after["page"], "neutral/home");
+    assert_eq!(
+        source_operation["provenance"]["after_condition"]["page_id"],
+        "neutral/home"
+    );
+    assert_eq!(source_operation["provenance"]["arrival"]["status"], "reached");
     assert!(
         task["operations"][0]["provenance"]["input_intent"]["sequence"]
             .as_u64()
@@ -2158,6 +2278,8 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
                     semantic_package.to_str().unwrap(),
                     "--expected-sha256",
                     &expected_sha256,
+                    "--after-page",
+                    "arknights/home",
                     "--verbose",
                 ],
             )
@@ -2187,6 +2309,8 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     assert_eq!(details["effect"], "performed");
     assert_eq!(details["executed"], true);
     assert_eq!(details["failure"]["stage"], "after_frame");
+    assert_eq!(details["arrival"]["status"], "aborted");
+    assert_eq!(details["arrival"]["samples"], serde_json::json!([]));
     assert!(details["after"].is_null());
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert_eq!(state.captures.load(Ordering::Acquire), 3);

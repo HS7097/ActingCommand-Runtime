@@ -5,6 +5,29 @@ use crate::page_projection::{Geometry, PageProjection, Point, Rect};
 
 pub const LAB_OPERATION_PREPARED_SCHEMA: &str = "actingcommand.runtime.lab-operation-prepared.v1";
 pub const LAB_OPERATION_TERMINAL_SCHEMA: &str = "actingcommand.runtime.lab-operation-terminal.v1";
+pub const MAX_LAB_ARRIVAL_FRAMES: usize = 20;
+pub const LAB_ARRIVAL_INTERVAL_MS: u64 = 500;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabArrivalCondition {
+    pub page_id: String,
+    pub timeout_ms: u64,
+}
+
+impl LabArrivalCondition {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.page_id.is_empty()
+            || self.page_id.len() > 2048
+            || self.page_id.contains('\0')
+            || !self.page_id.contains('/')
+            || !(100..=10_000).contains(&self.timeout_ms)
+        {
+            return Err(RuntimeContractError::new("invalid_lab_arrival_condition"));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -135,6 +158,8 @@ pub struct ContainedLabOperationRequest {
     pub expected_sha256: String,
     pub selection: LabOperationSelection,
     pub projection_hint: LabProjectionHint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<LabArrivalCondition>,
 }
 
 impl fmt::Debug for ContainedLabOperationRequest {
@@ -147,6 +172,9 @@ impl ContainedLabOperationRequest {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         ContainedObservationRequest::new(&self.package_path, &self.expected_sha256, Vec::new())?;
         self.selection.validate()?;
+        if let Some(after) = &self.after {
+            after.validate()?;
+        }
         if self.projection_hint.sequence == Some(0) {
             return Err(RuntimeContractError::new("invalid_lab_projection_hint"));
         }
@@ -199,6 +227,8 @@ pub struct LabOperationPrepared {
     pub lease_id: Option<LeaseId>,
     pub selection: LabOperationSelection,
     pub projection_hint: LabProjectionHint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<LabArrivalCondition>,
     pub before_frame: Option<LabOperationFrame>,
     pub before_projection: Option<ContainedPageObservation>,
     pub selected_element: Option<serde_json::Value>,
@@ -222,7 +252,31 @@ pub enum LabOperationStage {
     Input,
     AfterFrame,
     AfterProjection,
+    Arrival,
     Release,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabArrivalStatus {
+    Reached,
+    TimedOut,
+    Aborted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabArrivalSample {
+    pub frame: LabOperationFrame,
+    pub projection: Option<LabEvidenceReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabArrivalResult {
+    pub status: LabArrivalStatus,
+    pub elapsed_ms: u64,
+    pub samples: Vec<LabArrivalSample>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +301,8 @@ pub struct LabOperationRecord {
     pub effect: EffectDisposition,
     pub after_frame: Option<LabOperationFrame>,
     pub after_projection: Option<ContainedPageObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival: Option<LabArrivalResult>,
     pub failure: Option<LabOperationFailure>,
     pub cleanup_failure: Option<LabOperationFailure>,
 }
@@ -366,6 +422,100 @@ impl ContainedLabOperationResult {
             return Err(RuntimeContractError::new(
                 "incomplete_lab_operation_success",
             ));
+        }
+        self.validate_arrival()?;
+        Ok(())
+    }
+
+    fn validate_arrival(&self) -> RuntimeContractResult<()> {
+        let record = &self.record;
+        let invalid = || RuntimeContractError::new("invalid_lab_arrival_record");
+        let (condition, arrival) = match (&record.prepared.after, &record.arrival) {
+            (None, None) => return Ok(()),
+            (Some(condition), Some(arrival)) => (condition, arrival),
+            _ => return Err(invalid()),
+        };
+        condition.validate()?;
+        let last_projection = record.after_projection.as_ref().map(|projection| {
+            LabEvidenceReference {
+                artifact: projection.artifact.clone(),
+                verified: TerminalEvent {
+                    sequence: projection.projection_sequence,
+                    event_id: projection.projection_event_id,
+                },
+            }
+        });
+        if arrival.samples.len() > MAX_LAB_ARRIVAL_FRAMES
+            || arrival.samples.last().map(|sample| &sample.frame) != record.after_frame.as_ref()
+            || arrival
+                .samples
+                .last()
+                .and_then(|sample| sample.projection.as_ref())
+                != last_projection.as_ref()
+        {
+            return Err(invalid());
+        }
+        let mut frames = BTreeSet::new();
+        if let Some(before) = &record.prepared.before_frame {
+            frames.insert(before.observation.artifact().frame_id);
+        }
+        let mut previous = record.input_event.map_or(0, |event| event.sequence);
+        for (index, sample) in arrival.samples.iter().enumerate() {
+            sample.frame.observation.validate()?;
+            if previous == 0
+                || sample.frame.verified.sequence <= previous
+                || !frames.insert(sample.frame.observation.artifact().frame_id)
+                || (index + 1 < arrival.samples.len()
+                    && (!sample.frame.lease_valid_after_capture || sample.projection.is_none()))
+            {
+                return Err(invalid());
+            }
+            previous = sample.frame.verified.sequence;
+            if let Some(projection) = &sample.projection {
+                projection.validate()?;
+                if projection.verified.sequence <= previous
+                    || projection.artifact.frame_id != sample.frame.observation.artifact().frame_id
+                    || !sample.frame.lease_valid_after_capture
+                {
+                    return Err(invalid());
+                }
+                previous = projection.verified.sequence;
+            }
+            if previous >= self.terminal_artifact.verified.sequence {
+                return Err(invalid());
+            }
+        }
+        match arrival.status {
+            LabArrivalStatus::Reached => {
+                if record.effect != EffectDisposition::Performed
+                    || arrival.elapsed_ms >= condition.timeout_ms
+                    || record.after_projection.as_ref().is_none_or(|projection| {
+                        projection.status != PageObservationStatus::Recognized
+                            || !projection.projection.matched
+                            || projection.projection.page != condition.page_id
+                    })
+                    || record
+                        .failure
+                        .as_ref()
+                        .is_some_and(|failure| failure.stage != LabOperationStage::Release)
+                {
+                    return Err(invalid());
+                }
+            }
+            LabArrivalStatus::TimedOut => {
+                if record.effect != EffectDisposition::Performed
+                    || (arrival.elapsed_ms < condition.timeout_ms
+                        && arrival.samples.len() < MAX_LAB_ARRIVAL_FRAMES)
+                    || record.failure.as_ref().is_none_or(|failure| {
+                        failure.stage != LabOperationStage::Arrival
+                            || failure.code != "lab_arrival_timeout"
+                    })
+                {
+                    return Err(invalid());
+                }
+            }
+            LabArrivalStatus::Aborted if record.failure.is_none() => return Err(invalid()),
+            LabArrivalStatus::Aborted => {}
         }
         Ok(())
     }
