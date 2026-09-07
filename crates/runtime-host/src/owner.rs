@@ -39,6 +39,7 @@ pub(crate) struct OwnerStartup {
 
 pub(crate) struct OwnerGuard {
     file: Option<File>,
+    retained_file: Option<&'static mut File>,
     record: OwnerRecord,
     closed: bool,
     retained_unconfirmed: bool,
@@ -135,6 +136,7 @@ impl OwnerGuard {
         Ok(OwnerStartup {
             guard: OwnerGuard {
                 file: Some(file),
+                retained_file: None,
                 record,
                 closed: false,
                 retained_unconfirmed: false,
@@ -175,6 +177,13 @@ impl OwnerGuard {
         &mut self,
         disposition: OwnerResourceDisposition,
     ) -> RuntimeHostResult<()> {
+        if self.retained_unconfirmed {
+            return Err(RuntimeHostError::fatal(
+                "owner_resource_unconfirmed",
+                "update_owner_resource_disposition",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         if self.record.resource_disposition == Some(disposition) {
             return Ok(());
         }
@@ -219,8 +228,22 @@ impl OwnerGuard {
             self.record = record;
             Ok(())
         })();
+        self.retained_file = Some(file);
         self.retention_result = Some(result.clone());
         result
+    }
+
+    pub(crate) fn retained_resource_disposition(
+        &self,
+    ) -> RuntimeHostResult<Option<OwnerResourceDisposition>> {
+        self.retention_result
+            .as_ref()
+            .map(|result| {
+                result
+                    .clone()
+                    .map(|()| OwnerResourceDisposition::Unconfirmed)
+            })
+            .transpose()
     }
 
     pub(crate) fn close(&mut self, closed_at_unix_ms: u64) -> RuntimeHostResult<()> {
@@ -269,13 +292,19 @@ impl OwnerGuard {
         result
     }
     fn file_mut(&mut self, operation: &'static str) -> RuntimeHostResult<&mut File> {
-        self.file.as_mut().ok_or_else(|| {
-            RuntimeHostError::fatal(
-                "owner_file_missing",
-                operation,
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })
+        if let Some(Err(error)) = &self.retention_result {
+            return Err(error.clone());
+        }
+        self.file
+            .as_mut()
+            .or(self.retained_file.as_deref_mut())
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "owner_file_missing",
+                    operation,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })
     }
 }
 
@@ -491,6 +520,39 @@ mod tests {
         first_guard
             .retain_unconfirmed()
             .expect("retain unconfirmed owner");
+
+        let instance = *issuer
+            .mint_instance_id()
+            .expect("retained instance")
+            .transport();
+        first_guard
+            .set_active_instances([instance])
+            .expect("update same retained owner");
+        let record = read_last_record(
+            first_guard
+                .file_mut("read_retained_owner")
+                .expect("same handle"),
+        )
+        .expect("persisted retained owner")
+        .expect("owner record");
+        assert_eq!(record.active_instances, [instance]);
+        assert_eq!(
+            record.resource_disposition,
+            Some(OwnerResourceDisposition::Unconfirmed)
+        );
+        assert_eq!(
+            first_guard
+                .retained_resource_disposition()
+                .expect("retained result"),
+            Some(OwnerResourceDisposition::Unconfirmed)
+        );
+        assert_eq!(
+            first_guard
+                .set_resource_disposition(OwnerResourceDisposition::ConfirmedClosed)
+                .expect_err("retained resources cannot be cleared")
+                .code(),
+            "owner_resource_unconfirmed"
+        );
 
         let error = OwnerGuard::acquire(root.path(), &issuer, 2)
             .err()

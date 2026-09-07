@@ -28,6 +28,11 @@ unconfirmed causes and retains any session whose close authority was not establi
 it cannot retry that session through a local-only native close. The first native
 close result remains stable.
 
+If one instance remains unconfirmed, the same retained OwnerGuard handle still
+records the retirement of other instances. Its overall Unconfirmed disposition
+stays fixed and its OS lock remains retained after Host shutdown. Journal failures
+continue to fail explicitly; a successful sibling close cannot clear that state.
+
 Resource quiescence has the existing Runtime-owned resource boundary described in
 `nemu-owned-resource-close.md`. SDK global state and a real-device recovery remain
 outside CI's proof.

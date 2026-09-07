@@ -13163,6 +13163,9 @@ impl HostShared {
     fn record_owner_resource_close(&self) -> RuntimeHostResult<OwnerResourceDisposition> {
         // The same owner lock spans InUse and session registration on every acquisition.
         let mut owner = lock(&self.owner, "record_owner_resource_close")?;
+        if let Some(disposition) = owner.retained_resource_disposition()? {
+            return Ok(disposition);
+        }
         let has_sessions = self.execution.has_sessions().map_err(|error| {
             RuntimeHostError::execution("inspect_remaining_execution_sessions", &error)
         })?;
