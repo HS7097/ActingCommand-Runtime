@@ -16143,7 +16143,7 @@ fn required_failure_events_preserve_cleanup_detail() {
                     } = value.phase()
                 {
                     assert_eq!(
-                        *quiescence,
+                        quiescence,
                         actingcommand_contract::ResourceQuiescence::Confirmed
                     );
                     continue;
