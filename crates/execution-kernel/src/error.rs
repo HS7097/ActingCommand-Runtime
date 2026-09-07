@@ -35,6 +35,7 @@ pub struct ExecutionKernelError {
 #[derive(Clone, Default)]
 struct ExecutionFailureContext {
     recorded_event: Arc<OnceLock<EventId>>,
+    native_detail: Option<Box<LifecycleNativeDetail>>,
     causes: Vec<ExecutionLifecycleCause>,
     closed_sessions: Vec<(InstanceId, ExecutionKernelError)>,
     instance_id: Option<InstanceId>,
@@ -137,6 +138,7 @@ impl ExecutionKernelError {
             diagnostic_detail: device_diagnostic_detail(error),
             cleanup_cause: None,
             lifecycle: Box::new(ExecutionFailureContext {
+                native_detail: device_native_detail(error),
                 causes,
                 resource_quiescence: error.resource_quiescence().map(runtime_quiescence),
                 resource_count: error.resource_count(),
@@ -240,6 +242,9 @@ impl ExecutionKernelError {
     }
     pub fn lifecycle_causes(&self) -> &[ExecutionLifecycleCause] {
         &self.lifecycle.causes
+    }
+    pub fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.lifecycle.native_detail.as_deref()
     }
     pub const fn resource_quiescence(&self) -> Option<ResourceQuiescence> {
         self.lifecycle.resource_quiescence
@@ -381,6 +386,22 @@ impl fmt::Display for ExecutionKernelError {
 }
 
 impl Error for ExecutionKernelError {}
+
+fn device_native_detail(error: &DeviceError) -> Option<Box<LifecycleNativeDetail>> {
+    let summary = error.diagnostic_message()?;
+    let message = error.message();
+    if message.is_empty() || message == summary {
+        return None;
+    }
+    let mut end = message.len().min(1_024);
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(Box::new(LifecycleNativeDetail::new(
+        &message[..end],
+        end < message.len(),
+    )))
+}
 
 fn device_diagnostic_detail(error: &DeviceError) -> Option<Box<DiagnosticDetailDraft>> {
     let diagnostic = error.diagnostic()?;

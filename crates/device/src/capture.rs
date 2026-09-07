@@ -1102,7 +1102,12 @@ impl CaptureBackend for ScreencapBackend {
     fn capture(&mut self) -> DeviceResult<Frame> {
         let serial = self.target.resolved_serial();
         let adb = Adb::new(self.adb_config.clone());
-        verify_adb_device(&adb, &self.target, &serial)?;
+        verify_adb_device(
+            &adb,
+            &self.target,
+            &serial,
+            CaptureBackendName::AdbScreencap,
+        )?;
 
         // `adb exec-out screencap -p` returns one binary PNG and has no long-lived session.
         let output = adb.screencap(&serial, self.capture_timeout)?;
@@ -1184,7 +1189,12 @@ impl DroidcastRawBackend {
 
     fn start_if_needed(&mut self) -> DeviceResult<(u32, u32)> {
         let adb = Adb::new(self.adb_config.clone());
-        verify_adb_device(&adb, &self.target, &self.serial)?;
+        verify_adb_device(
+            &adb,
+            &self.target,
+            &self.serial,
+            CaptureBackendName::DroidcastRaw,
+        )?;
         let (width, height) = parse_screen_size(&adb.screen_size(&self.serial)?)?;
         if self.started {
             return Ok((width, height));
@@ -2160,9 +2170,21 @@ impl Drop for NemuIpcBackend {
     }
 }
 
-fn verify_adb_device(adb: &Adb, target: &DeviceTarget, serial: &str) -> DeviceResult<()> {
-    adb.ensure_device(serial, target.connect)?;
-    Ok(())
+fn verify_adb_device(
+    adb: &Adb,
+    target: &DeviceTarget,
+    serial: &str,
+    backend: CaptureBackendName,
+) -> DeviceResult<()> {
+    adb.ensure_device(serial, target.connect)
+        .map(|_| ())
+        .map_err(|error| {
+            error.with_diagnostic_context_if_absent(
+                backend.as_str(),
+                "ensure_device",
+                DeviceErrorSensitivity::Sensitive,
+            )
+        })
 }
 
 pub fn parse_png_dimensions(png: &[u8]) -> DeviceResult<(u32, u32)> {

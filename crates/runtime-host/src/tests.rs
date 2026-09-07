@@ -10443,7 +10443,7 @@ fn capture_failure_persists_nemu_resolution_context() {
         .with_count(NemuResolutionCountKind::DllVersions, 2, false)
         .with_source(MumuInstallSource::ConfiguredBackendPath)
         .with_provenance(Some(NemuConfiguredAdbClass::SharedMumu), false, false);
-    let mut baseline_types = None;
+    let mut baseline_types: Option<Vec<EventType>> = None;
     for include_context in [false, true] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
@@ -10492,7 +10492,20 @@ fn capture_failure_persists_nemu_resolution_context() {
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         if let Some(baseline) = &baseline_types {
-            assert_eq!(&types, baseline);
+            let mut expected = baseline.clone();
+            let position = expected
+                .iter()
+                .position(|kind| *kind == EventType::RecognitionFailed)
+                .expect("recognition terminal");
+            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause and M4 detail are real facts.
+            expected.splice(
+                position..position,
+                [
+                    EventType::RuntimeFailed,
+                    EventType::RuntimeLifecycleObserved,
+                ],
+            );
+            assert_eq!(types, expected);
         } else {
             baseline_types = Some(types);
         }
@@ -10532,6 +10545,34 @@ fn capture_failure_persists_nemu_resolution_context() {
         let EventPayload::Capture(CapturePayload::Failed(outcome)) = payload.as_ref() else {
             panic!("capture failure")
         };
+        let native_events = events
+            .iter()
+            .filter(|event| event.event_type == EventType::RuntimeFailed)
+            .collect::<Vec<_>>();
+        assert_eq!(native_events.len(), usize::from(include_context));
+        if include_context {
+            let native_event = native_events[0];
+            assert_eq!(native_event.links, flow[2].links);
+            assert_eq!(native_event.sensitivity, Sensitivity::Sensitive);
+            let ProjectionPayload::Full(native_payload) = &native_event.payload else {
+                panic!("full native cause")
+            };
+            let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                native_outcome,
+            )) = native_payload.as_ref()
+            else {
+                panic!("native failure")
+            };
+            let lifecycle = native_outcome.lifecycle_failure().expect("typed lifecycle");
+            assert_eq!(lifecycle.entered_event_id(), Some(flow[2].event_id));
+            assert_eq!(lifecycle.primary_detail(), outcome.detail());
+            let native = lifecycle.native_detail().expect("original cause");
+            assert_eq!(native.text(), "original Nemu resolution error");
+            assert!(!native.truncated());
+            let public = serde_json::to_string(&native_payload.public_projection())
+                .expect("public native failure");
+            assert!(!public.contains("original Nemu resolution error"));
+        }
         let detail = outcome.detail().expect("resolution detail");
         assert_eq!(detail.message(), expected_message);
         assert_eq!(detail.category(), "protocol");
@@ -16082,7 +16123,7 @@ fn input_failure_persists_adb_bounds_context() {
         (100, 200),
         Some(AdbInputConnectGeometry::new(720, 1280, 90)),
     );
-    let mut baseline_types = None;
+    let mut baseline_types: Option<Vec<EventType>> = None;
     for include_context in [false, true] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
@@ -16133,7 +16174,17 @@ fn input_failure_persists_adb_bounds_context() {
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         if let Some(baseline) = &baseline_types {
-            assert_eq!(&types, baseline);
+            let mut expected = baseline.clone();
+            let position = expected.len();
+            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause and M4 detail are real facts.
+            expected.splice(
+                position..position,
+                [
+                    EventType::RuntimeFailed,
+                    EventType::RuntimeLifecycleObserved,
+                ],
+            );
+            assert_eq!(types, expected);
         } else {
             baseline_types = Some(types);
         }
@@ -16164,6 +16215,34 @@ fn input_failure_persists_adb_bounds_context() {
         let EventPayload::Input(InputPayload::Failed(outcome)) = payload.as_ref() else {
             panic!("input failure")
         };
+        let native_events = events
+            .iter()
+            .filter(|event| event.event_type == EventType::RuntimeFailed)
+            .collect::<Vec<_>>();
+        assert_eq!(native_events.len(), usize::from(include_context));
+        if include_context {
+            let native_event = native_events[0];
+            assert_eq!(native_event.links, flow[1].links);
+            assert_eq!(native_event.sensitivity, Sensitivity::Sensitive);
+            let ProjectionPayload::Full(native_payload) = &native_event.payload else {
+                panic!("full native cause")
+            };
+            let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                native_outcome,
+            )) = native_payload.as_ref()
+            else {
+                panic!("native failure")
+            };
+            let lifecycle = native_outcome.lifecycle_failure().expect("typed lifecycle");
+            assert_eq!(lifecycle.entered_event_id(), Some(flow[1].event_id));
+            assert_eq!(lifecycle.primary_detail(), outcome.detail());
+            let native = lifecycle.native_detail().expect("original cause");
+            assert_eq!(native.text(), "tap x 101 exceeds touch screen max 100");
+            assert!(!native.truncated());
+            let public = serde_json::to_string(&native_payload.public_projection())
+                .expect("public native failure");
+            assert!(!public.contains("tap x 101 exceeds touch screen max 100"));
+        }
         let detail = outcome.detail().expect("bounds detail");
         assert_eq!(detail.message(), expected_message);
         assert_eq!(detail.category(), "protocol");
