@@ -56,12 +56,19 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
     let host = RuntimeHost::start(host, Arc::new(registry)).map_err(ActingdError::runtime)?;
-    let initial_policy_cycle = policy
-        .as_ref()
-        .map(|policy| initialize_policy(&host, policy))
-        .transpose();
+    let initial_policy_cycle = (|| {
+        let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
+            return Ok(None);
+        };
+        policy
+            .as_ref()
+            .map(|policy| initialize_policy(&host, policy))
+            .transpose()
+            .map(Some)
+    })();
     let initial_policy_cycle = match initial_policy_cycle {
-        Ok(cycle) => cycle,
+        Ok(Some(cycle)) => cycle,
+        Ok(None) => return host.close().map_err(ActingdError::runtime),
         Err(error) => {
             let recorded = error.record_lifecycle_failure(
                 &host,
@@ -348,7 +355,14 @@ fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
                 recorded?;
                 return Err(close_error.map_or(error, ActingdError::runtime));
             }
-            Ok(None) => continue,
+            Ok(None) => {
+                if host
+                    .is_shutdown_requested()
+                    .map_err(ActingdError::runtime)?
+                {
+                    return host.close().map_err(ActingdError::runtime);
+                }
+            }
         }
     }
 }
@@ -362,6 +376,9 @@ fn monitor_policy(
     let policy = Arc::new(policy);
     let control = Arc::new(PolicyDriverControl::default());
     let setup = (|| {
+        let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
+            return Ok(None);
+        };
         let client = RuntimeClient::connect(
             RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
                 .with_io_timeout(POLICY_CLIENT_IO_TIMEOUT),
@@ -387,10 +404,11 @@ fn monitor_policy(
                 move || drive_policy(host, policy, control, initial_cycle)
             })
             .map_err(|_| ActingdError::process("policy_driver_spawn_failed"))?;
-        Ok((client, cursor, driver))
+        Ok(Some((client, cursor, driver)))
     })();
     let (client, mut cursor, driver) = match setup {
-        Ok(setup) => setup,
+        Ok(Some(setup)) => setup,
+        Ok(None) => return close_policy_host(host),
         Err(error) => {
             let error: ActingdError = error;
             let recorded =
@@ -403,19 +421,24 @@ fn monitor_policy(
     };
 
     let monitor_result = loop {
-        if driver.is_finished() {
-            break Err(ActingdError::process("policy_driver_stopped"));
-        }
         match host.fatal_error() {
             Ok(Some(error)) => break Err(ActingdError::runtime(error)),
             Ok(None) => {}
             Err(error) => break Err(ActingdError::runtime(error)),
         }
+        match host.is_shutdown_requested() {
+            Ok(true) => break Ok(()),
+            Ok(false) => {}
+            Err(error) => break Err(ActingdError::runtime(error)),
+        }
+        if driver.is_finished() {
+            break Err(ActingdError::process("policy_driver_stopped"));
+        }
         let request = match RuntimeSubscriptionRequest::new(
             EventQuery::default(),
             ProjectionProfile::Concise,
             cursor,
-            POLICY_EVENT_WAIT_MS,
+            0,
             MAX_RUNTIME_SUBSCRIPTION_EVENTS,
         ) {
             Ok(request) => request,
@@ -425,13 +448,27 @@ fn monitor_policy(
         };
         let batch = match client.subscribe_events(request) {
             Ok(batch) => batch,
-            Err(error) => break Err(ActingdError::client(error)),
+            Err(error) => {
+                match host.fatal_error() {
+                    Ok(Some(fatal)) | Err(fatal) => break Err(ActingdError::runtime(fatal)),
+                    Ok(None) => {}
+                }
+                match host.is_shutdown_requested() {
+                    Ok(true) => break Ok(()),
+                    Ok(false) => break Err(ActingdError::client(error)),
+                    Err(fatal) => break Err(ActingdError::runtime(fatal)),
+                }
+            }
         };
         cursor = batch.next_cursor();
         if let Some(trigger) = policy_trigger_for_events(batch.events())
             && let Err(error) = control.notify(trigger)
         {
             break Err(error);
+        }
+        if batch.events().is_empty() {
+            // Idle policy waiting belongs to the daemon, outside in-flight IPC admission.
+            thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
         }
     };
 
@@ -1107,6 +1144,9 @@ fn execute_ready_policy_trigger(
     recomputes: Vec<PolicyRecomputeWake>,
     now_unix_ms: u64,
 ) -> Result<(), ActingdError> {
+    let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
+        return Ok(());
+    };
     apply_policy_cycle_result(
         control,
         schedule,

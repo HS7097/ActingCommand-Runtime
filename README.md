@@ -189,13 +189,23 @@ actingctl task-run --state-root <state-root> --instance <alias> \
 
 | 子命令 | 实例参数与命令参数 |
 |---|---|
-| `status` / `monitor-status` | 不接受 `--instance` |
+| `status` / `monitor-status` / `request-shutdown` | 不接受 `--instance` |
 | `observe` / `reset` / `monitor-clear` | 必需 `--instance` |
 | `monitor-set` | 必需 `--instance`;可选 `--interval-ms`(默认 30000)、`--expect`(默认 `home`)、`--recover` |
 | `stream` | 必需 `--instance`;可选 `--max-frames`(默认 1)、`--interval-ms`(默认 250) |
 | `task-run` | 必需 `--instance`、`--package`、`--expected-sha256`;恢复参数 `--recovery-package` 与 `--recovery-expected-sha256` 必须成对提供 |
 
 请仅使用对应子命令的参数;当前解析器接收某个已知参数并不表示该子命令会使用它。
+
+`actingctl request-shutdown --state-root <state-root>` 是普通本机 Cli/Cli 维护入口。
+客户端冻结发现到的 owner epoch、PID 和启动时间，Host 在统一准入门内核对该 owner、
+活跃租约、排队工作和在途请求/原生动作。忙碌返回 `RuntimeBusy` 且继续服务；目标不符返回
+`RuntimeOwnerMismatch`。该操作不需要治理 secret，owner epoch 也不代表身份认证。
+接纳先记录 typed GlobalLedger 目标与决定，再停止准入，交由 daemon 回收 policy driver 并沿
+既有 `RuntimeHost::close` 收束资源、M4 summary、ledger 和 owner。
+JSON 中 `shutdown_accepted` 与 `admitted` 只表示接纳；完成需分别核对实际关闭事实、最终
+summary 和进程结果。回执丢失报告 `runtime_shutdown_receipt_unconfirmed` 并保留原错误，
+客户端不重投、不切换 owner。已有 fatal 与未确认资源保留边界继续适用。
 
 ## 🎮 资源仓
 

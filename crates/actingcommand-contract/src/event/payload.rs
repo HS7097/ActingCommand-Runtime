@@ -1521,6 +1521,10 @@ pub enum RuntimeLifecyclePhase {
         entered_event_id: EventId,
     },
     ShutdownRequested,
+    ShutdownRequest {
+        target: crate::RuntimeShutdownTarget,
+        decision: crate::RuntimeShutdownDecision,
+    },
     ResourceQuiescence {
         instance_id: InstanceId,
         resource_count: u16,
@@ -8829,6 +8833,16 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            if let RuntimeLifecyclePhase::ShutdownRequest { target, decision } = value.phase
+                && (target.validate().is_err()
+                    || (decision == crate::RuntimeShutdownDecision::Accepted
+                        && target.owner_epoch != value.owner_epoch))
+            {
+                return Err(SanitizationError::new(
+                    "invalid_shutdown_target",
+                    "runtime_payload",
+                ));
+            }
             let diagnostic = matches!(
                 value.phase,
                 RuntimeLifecyclePhase::DeviceDiagnosticDetail

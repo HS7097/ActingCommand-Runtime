@@ -130,7 +130,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -626,6 +626,8 @@ impl RuntimeHost {
         let fatal = FatalState::default();
         let shared = Arc::new(HostShared {
             owner_epoch,
+            shutdown_target: info.shutdown_target(),
+            lifecycle_admission: RwLock::new(false),
             scheduler: Mutex::new(scheduler),
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
@@ -803,6 +805,22 @@ impl RuntimeHost {
         &self.info
     }
 
+    /// The daemon checks fatal_error first, then returns through its owned close path.
+    pub fn is_shutdown_requested(&self) -> RuntimeHostResult<bool> {
+        Ok(self
+            .shared_ref("read_runtime_shutdown")?
+            .fatal
+            .is_shutdown_requested())
+    }
+
+    /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
+    pub fn begin_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
+        Ok(self
+            .shared_ref("begin_policy_work")?
+            .begin_work()?
+            .map(|guard| RuntimePolicyWork { _guard: guard }))
+    }
+
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
         let shared = self.shared_ref("read_runtime_health")?;
         if let Err(error) = shared.ledger.check_writer_health() {
@@ -824,7 +842,7 @@ impl RuntimeHost {
         &self,
         sources: &CatalogSources,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        self.shared_ref("activate_policy_catalog")?
+        self.work_ref("activate_policy_catalog")?
             .activate_policy_catalog(sources)
     }
 
@@ -849,7 +867,7 @@ impl RuntimeHost {
         &self,
         catalog_hash: &str,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        self.shared_ref("rollback_policy_catalog")?
+        self.work_ref("rollback_policy_catalog")?
             .rollback_policy_catalog(catalog_hash)
     }
 
@@ -858,7 +876,7 @@ impl RuntimeHost {
         manifest: RuntimeReleaseSet,
         sources: &ReleaseArtifactSources,
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
-        self.shared_ref("stage_release_set")?
+        self.work_ref("stage_release_set")?
             .stage_release_set(manifest, sources)
     }
 
@@ -868,12 +886,12 @@ impl RuntimeHost {
     }
 
     pub fn activate_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
-        self.shared_ref("activate_release_set")?
+        self.work_ref("activate_release_set")?
             .switch_release_set(ReleaseTransitionKind::Activate, release_id)
     }
 
     pub fn rollback_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
-        self.shared_ref("rollback_release_set")?
+        self.work_ref("rollback_release_set")?
             .switch_release_set(ReleaseTransitionKind::Rollback, release_id)
     }
 
@@ -891,13 +909,13 @@ impl RuntimeHost {
         report: &StrategicReport,
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<StrategicPlanPreparation> {
-        self.shared_ref("prepare_strategic_report")?
+        self.work_ref("prepare_strategic_report")?
             .prepare_strategic_report(report, evidence)
     }
 
     /// Evaluates one policy cycle from Runtime-owned facts, resources, time, and seed.
     pub fn evaluate_policy_cycle(&self, trigger: PolicyTrigger) -> RuntimeHostResult<PolicyCycle> {
-        self.shared_ref("evaluate_policy_cycle")?
+        self.work_ref("evaluate_policy_cycle")?
             .evaluate_policy_cycle(trigger)
     }
 
@@ -910,7 +928,7 @@ impl RuntimeHost {
         seed: u64,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
-        self.shared_ref("evaluate_policy_cycle")?
+        self.work_ref("evaluate_policy_cycle")?
             .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
     }
 
@@ -932,7 +950,7 @@ impl RuntimeHost {
         seed: u64,
         config: ForwardProjectionConfig,
     ) -> RuntimeHostResult<ForwardProjection> {
-        self.shared_ref("project_policy_forward")?
+        self.work_ref("project_policy_forward")?
             .project_policy_forward(facts, resources, time, seed, config)
     }
 
@@ -941,13 +959,13 @@ impl RuntimeHost {
         &self,
         query: &MaintenanceLedgerQuery,
     ) -> RuntimeHostResult<MaintenanceAssessment> {
-        self.shared_ref("assess_predictive_maintenance")?
+        self.work_ref("assess_predictive_maintenance")?
             .assess_and_publish_predictive_maintenance(query)
     }
 
     /// Validates and durably publishes one Runtime-owned fact into the GlobalLedger.
     pub fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
-        self.shared_ref("publish_fact")?.publish_fact(record)
+        self.work_ref("publish_fact")?.publish_fact(record)
     }
 
     /// Returns an immutable ledger-pinned fact projection for one instance context.
@@ -965,7 +983,7 @@ impl RuntimeHost {
         reason_chain: &DecisionReasonChain,
         context: &PolicyAdmissionContext,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        self.shared_ref("admit_policy_dispatch")?
+        self.work_ref("admit_policy_dispatch")?
             .admit_policy_dispatch(intent, reason_chain, context)
     }
 
@@ -979,7 +997,7 @@ impl RuntimeHost {
 
     #[cfg(test)]
     pub(crate) fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
-        self.shared_ref("complete_policy_dispatch")?
+        self.work_ref("complete_policy_dispatch")?
             .record_policy_dispatch_outcome(decision_id, &PolicyExecutionInput::Succeeded, None)
             .map(|_| ())
     }
@@ -990,7 +1008,7 @@ impl RuntimeHost {
         decision_id: &str,
         input: &PolicyExecutionInput,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
-        self.shared_ref("record_policy_dispatch_outcome")?
+        self.work_ref("record_policy_dispatch_outcome")?
             .record_policy_dispatch_outcome(decision_id, input, None)
     }
 
@@ -1199,7 +1217,7 @@ impl RuntimeHost {
         context: &PolicyRunContext,
         request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<RuntimeReceipt> {
-        let shared = self.shared_ref("run_scheduled_contained_task")?;
+        let shared = self.work_ref("run_scheduled_contained_task")?;
         let (request, success) = match shared.run_scheduled_contained_task(context, request) {
             Ok(success) => success,
             Err(failure) => {
@@ -1225,7 +1243,7 @@ impl RuntimeHost {
         PolicyExecutionEventData,
         Option<SchedulingOutcomeProjection>,
     )> {
-        self.shared_ref("complete_scheduled_policy_run")?
+        self.work_ref("complete_scheduled_policy_run")?
             .complete_scheduled_policy_run(context, receipt)
     }
 
@@ -1244,7 +1262,7 @@ impl RuntimeHost {
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
-        self.shared_ref("record_policy_planning_signal")?
+        self.work_ref("record_policy_planning_signal")?
             .record_policy_planning_signal(signal)
     }
 
@@ -1252,7 +1270,7 @@ impl RuntimeHost {
         &self,
         signal: PipelinePerformanceSignal,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("record_pipeline_performance")?
+        self.work_ref("record_pipeline_performance")?
             .record_pipeline_performance(signal)
     }
 
@@ -1651,17 +1669,39 @@ impl RuntimeHost {
         })
     }
 
+    fn work_ref(&self, operation: &'static str) -> RuntimeHostResult<HostWork<'_>> {
+        let shared = self.shared_ref(operation)?;
+        let guard = shared.begin_work()?.ok_or_else(|| {
+            RuntimeHostError::request(
+                "runtime_stopping",
+                operation,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?;
+        Ok(HostWork {
+            shared,
+            _guard: guard,
+        })
+    }
+
     fn shutdown(&mut self) -> RuntimeHostResult<()> {
         let Some(shared) = self.shared.take() else {
             return Ok(());
         };
         shared.fatal.request_shutdown();
-        let mut failure = shared
-            .append_lifecycle_observed(
-                RuntimeLifecyclePhase::ShutdownRequested,
-                EventLinksDraft::default(),
-            )
-            .err();
+        let mut failure = match shared.fatal.current() {
+            Ok(failure) => failure,
+            Err(error) => Some(error),
+        };
+        record_failure(
+            &mut failure,
+            shared
+                .append_lifecycle_observed(
+                    RuntimeLifecyclePhase::ShutdownRequested,
+                    EventLinksDraft::default(),
+                )
+                .map(|_| ()),
+        );
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
@@ -2930,8 +2970,29 @@ fn append_agent_wake(
     Ok(persisted)
 }
 
+/// A scoped Runtime-owned policy admission; dropping it does not stop or close the host.
+pub struct RuntimePolicyWork<'a> {
+    _guard: RwLockReadGuard<'a, bool>,
+}
+
+struct HostWork<'a> {
+    shared: &'a HostShared,
+    _guard: RwLockReadGuard<'a, bool>,
+}
+
+impl std::ops::Deref for HostWork<'_> {
+    type Target = HostShared;
+
+    fn deref(&self) -> &Self::Target {
+        self.shared
+    }
+}
+
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
+    shutdown_target: actingcommand_contract::RuntimeShutdownTarget,
+    // Concurrent work holds the read side; idle shutdown never waits for a busy writer slot.
+    lifecycle_admission: RwLock<bool>,
     scheduler: Mutex<SeedScheduler>,
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
@@ -3160,6 +3221,116 @@ struct ActionFailure {
 }
 
 impl HostShared {
+    fn work_guard(&self) -> RuntimeHostResult<RwLockReadGuard<'_, bool>> {
+        self.lifecycle_admission.read().map_err(|_| {
+            RuntimeHostError::fatal(
+                "runtime_lifecycle_admission_poisoned",
+                "admit_runtime_work",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })
+    }
+
+    fn begin_work(&self) -> RuntimeHostResult<Option<RwLockReadGuard<'_, bool>>> {
+        let guard = self.work_guard()?;
+        if *guard {
+            return Ok(None);
+        }
+        Ok(Some(guard))
+    }
+
+    fn request_shutdown(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        target: actingcommand_contract::RuntimeShutdownTarget,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        use actingcommand_contract::RuntimeShutdownDecision;
+        let admission = match self.lifecycle_admission.try_write() {
+            Ok(guard) => Some(guard),
+            Err(TryLockError::WouldBlock) => None,
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "runtime_lifecycle_admission_poisoned",
+                        "request_runtime_shutdown",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+        };
+        if let Some(error) = self
+            .fatal
+            .current()
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            return Err(RequestFailure::poison_without_terminal(error));
+        }
+        let decision = if target != self.shutdown_target {
+            RuntimeShutdownDecision::OwnerMismatch
+        } else if self.fatal.is_shutdown_requested() {
+            RuntimeShutdownDecision::AlreadyStopping
+        } else if admission.is_none() {
+            RuntimeShutdownDecision::Busy
+        } else {
+            let scheduler = lock(&self.scheduler, "check_shutdown_leases")
+                .map_err(RequestFailure::poison_without_terminal)?;
+            let queued = lock(&self.queued_requests, "check_shutdown_queue")
+                .map_err(RequestFailure::poison_without_terminal)?;
+            if !scheduler.active_tokens().is_empty() || !queued.is_empty() {
+                RuntimeShutdownDecision::Busy
+            } else {
+                RuntimeShutdownDecision::Accepted
+            }
+        };
+        let event = self.append_event(
+            if decision == RuntimeShutdownDecision::Accepted {
+                EventSeverity::Info
+            } else {
+                EventSeverity::Warning
+            },
+            request.source(),
+            OriginModule::Runtime,
+            request.actor(),
+            request.event_links(None, None, None),
+            RuntimePayloadDraft::lifecycle_observed(
+                self.owner_epoch,
+                RuntimeLifecyclePhase::ShutdownRequest { target, decision },
+                AuditInput::new(),
+            ),
+        )?;
+        match decision {
+            RuntimeShutdownDecision::Accepted => {
+                // Persist the exact target before closing admission. The daemon owns close/join.
+                let mut admission = admission.expect("acceptance requires exclusive admission");
+                *admission = true;
+                self.fatal.request_shutdown();
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Admitted,
+                    terminal: Some(terminal(&event)),
+                    result: RuntimeResult::ShutdownAccepted { target },
+                })
+            }
+            denied => Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "runtime_shutdown_denied",
+                    "request_runtime_shutdown",
+                    match denied {
+                        RuntimeShutdownDecision::Busy => RuntimeErrorCode::RuntimeBusy,
+                        RuntimeShutdownDecision::OwnerMismatch => {
+                            RuntimeErrorCode::RuntimeOwnerMismatch
+                        }
+                        RuntimeShutdownDecision::AlreadyStopping => {
+                            RuntimeErrorCode::RuntimeUnavailable
+                        }
+                        RuntimeShutdownDecision::Accepted => unreachable!(),
+                    },
+                ),
+                RuntimeReceiptState::Denied,
+                Some(terminal(&event)),
+            )),
+        }
+    }
+
     fn expire_agent_sessions(&self) -> RuntimeHostResult<()> {
         if self.agent_dispatcher_config.is_none() {
             return Ok(());
@@ -5333,6 +5504,24 @@ impl HostShared {
                 );
             }
         };
+        let _work = if matches!(
+            request.operation(),
+            RuntimeOperation::RequestShutdown { .. }
+        ) {
+            None
+        } else {
+            match self.begin_work()? {
+                Some(work) => Some(work),
+                None => {
+                    return runtime_error_receipt(
+                        request,
+                        RuntimeReceiptState::Denied,
+                        None,
+                        RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeUnavailable, false),
+                    );
+                }
+            }
+        };
         match self.process_validated(request, &validated, connection_id) {
             Ok(success) => success.into_receipt(request),
             Err(failure) => {
@@ -5356,6 +5545,9 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         match request.operation() {
+            RuntimeOperation::RequestShutdown { target } => {
+                self.request_shutdown(validated, *target)
+            }
             RuntimeOperation::Health => Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: None,
@@ -17152,7 +17344,10 @@ fn connection_boundary(
     } else {
         LeaseReleaseReason::Disconnect
     };
-    let cleanup = shared.cleanup_connection(connection_id, reason);
+    let cleanup = (|| {
+        let _work = shared.work_guard()?;
+        shared.cleanup_connection(connection_id, reason)
+    })();
     #[cfg(feature = "test-observation")]
     crate::test_observation::emit_connection(
         crate::test_observation::HostTestObservationPoint::ConnectionCleanupResult,
@@ -17267,6 +17462,15 @@ fn connection_loop(
             }
         };
         context.request_decoded = true;
+        // Idle sockets hold no admission. A decoded request remains in flight through its reply.
+        let _work = if matches!(
+            request.operation(),
+            RuntimeOperation::RequestShutdown { .. }
+        ) {
+            None
+        } else {
+            shared.begin_work()?
+        };
         if let Ok(validated) = request.validate() {
             context.links = validated.event_links(None, None, None);
         }
@@ -17402,6 +17606,9 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         if shared.fatal.is_shutdown_requested() {
             break;
         }
+        let Some(_work) = shared.begin_work()? else {
+            break;
+        };
         if let Err(error) = shared.expire_due_leases() {
             shared.fatal.mark(error.clone())?;
             return Err(error);
@@ -17423,6 +17630,9 @@ fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             if shared.fatal.is_shutdown_requested() {
                 return Ok(());
             }
+            let Some(_work) = shared.begin_work()? else {
+                return Ok(());
+            };
             if let Err(error) = shared.run_monitor_probe(&probe) {
                 shared.fatal.mark(error.clone())?;
                 return Err(error);
@@ -17460,6 +17670,9 @@ fn performance_monitor_loop(
         if shared.fatal.is_shutdown_requested() {
             break;
         }
+        let Some(_work) = shared.begin_work()? else {
+            break;
+        };
         let observed_at_unix_ms = unix_ms_now()?;
         match shared.sample_performance(observed_at_unix_ms) {
             Ok(true) => break,

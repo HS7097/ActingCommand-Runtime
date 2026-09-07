@@ -2282,6 +2282,9 @@ impl RuntimeEventBatch {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeOperation {
     Health,
+    RequestShutdown {
+        target: RuntimeShutdownTarget,
+    },
     Status,
     ProjectInterface {
         request: ProjectInterfaceRequest,
@@ -2469,6 +2472,7 @@ impl RuntimeOperation {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
+            Self::RequestShutdown { target } => target.validate(),
             Self::Health
             | Self::Status
             | Self::MonitorStatus
@@ -2614,6 +2618,7 @@ impl fmt::Debug for RuntimeOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
+            Self::RequestShutdown { .. } => "RuntimeOperation::RequestShutdown",
             Self::Status => "RuntimeOperation::Status",
             Self::ProjectInterface { .. } => {
                 "RuntimeOperation::ProjectInterface(<version-negotiation>)"
@@ -2741,6 +2746,11 @@ impl RuntimeRequest {
         }
         if !valid_client_origin(self.actor, self.source) {
             return Err(RuntimeContractError::new("invalid_client_origin"));
+        }
+        if matches!(self.operation, RuntimeOperation::RequestShutdown { .. })
+            && (self.actor != EventActor::Cli || self.source != EventSource::Cli)
+        {
+            return Err(RuntimeContractError::new("invalid_shutdown_origin"));
         }
         if matches!(
             self.operation,
@@ -3003,6 +3013,8 @@ impl ContainedTaskCancellationStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeErrorCode {
+    RuntimeBusy,
+    RuntimeOwnerMismatch,
     InvalidRequest,
     RuntimeUnavailable,
     RuntimeFatal,
@@ -3146,6 +3158,9 @@ impl IdentifierIssuer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeResult {
+    ShutdownAccepted {
+        target: RuntimeShutdownTarget,
+    },
     Health {
         owner_epoch: OwnerEpoch,
     },
@@ -3410,6 +3425,12 @@ impl RuntimeReceipt {
             token.validate()?;
         }
         match &self.result {
+            Some(RuntimeResult::ShutdownAccepted { target }) => {
+                target.validate()?;
+                if self.state != RuntimeReceiptState::Admitted || self.terminal.is_none() {
+                    return Err(RuntimeContractError::new("invalid_shutdown_receipt"));
+                }
+            }
             Some(RuntimeResult::Status { status }) => status.validate()?,
             Some(RuntimeResult::ProjectInterface { response }) => response
                 .validate()
@@ -3546,7 +3567,41 @@ pub struct RuntimeInfo {
     started_at_unix_ms: u64,
 }
 
+/// Exact process selected by local Runtime discovery; this is not an authentication credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeShutdownTarget {
+    pub owner_epoch: OwnerEpoch,
+    pub pid: u32,
+    pub started_at_unix_ms: u64,
+}
+
+impl RuntimeShutdownTarget {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.pid == 0 || self.started_at_unix_ms == 0 {
+            return Err(RuntimeContractError::new("invalid_shutdown_target"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeShutdownDecision {
+    Accepted,
+    Busy,
+    OwnerMismatch,
+    AlreadyStopping,
+}
+
 impl RuntimeInfo {
+    pub const fn shutdown_target(&self) -> RuntimeShutdownTarget {
+        RuntimeShutdownTarget {
+            owner_epoch: self.owner_epoch,
+            pid: self.pid,
+            started_at_unix_ms: self.started_at_unix_ms,
+        }
+    }
     pub fn new(
         pid: u32,
         host: impl Into<String>,
