@@ -2111,6 +2111,14 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             entered_event_id: *strategic_entered.transport(),
         },
         crate::RuntimeLifecyclePhase::ShutdownRequested,
+        crate::RuntimeLifecyclePhase::ShutdownRequest {
+            target: RuntimeShutdownTarget {
+                owner_epoch,
+                pid: 42,
+                started_at_unix_ms: 1,
+            },
+            decision: RuntimeShutdownDecision::Accepted,
+        },
     ] {
         let event_id = match phase {
             crate::RuntimeLifecyclePhase::PolicyForwardEntered => forward_entered,
