@@ -253,6 +253,18 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
     {
         diagnostic_ids.insert(projection.artifact.artifact_id);
     }
+    if let Some(arrival) = &record.arrival {
+        for sample in &arrival.samples {
+            if let Some(projection) = &sample.projection {
+                diagnostic_ids.insert(projection.artifact.artifact_id);
+            }
+        }
+    }
+    let diagnostic_limit = if prepared.after.is_some() {
+        MAX_LAB_ARRIVAL_FRAMES + 3
+    } else {
+        4
+    };
     let diagnostics = events
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
@@ -260,7 +272,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         .filter(|artifact| artifact.kind == ArtifactKind::DiagnosticJson)
         .collect::<Vec<_>>();
     if diagnostics.len() != diagnostic_ids.len()
-        || diagnostics.len() > 4
+        || diagnostics.len() > diagnostic_limit
         || diagnostics
             .iter()
             .any(|artifact| !diagnostic_ids.contains(&artifact.artifact_id))
@@ -268,7 +280,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             .iter()
             .map(|artifact| artifact.byte_count)
             .sum::<u64>()
-            > 1024 * 1024
+            > diagnostic_limit as u64 * MAX_OBSERVATION_ARTIFACT_BYTES as u64
     {
         return Err(lab_error("runtime_lab_diagnostic_budget_mismatch"));
     }
@@ -322,6 +334,70 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 verify_lab_projection(source, events, prepared, frame, projection)?;
             }
         }
+    }
+    if let Some(arrival) = &record.arrival {
+        for sample in &arrival.samples {
+            verify_lab_artifact(
+                source,
+                events,
+                sample.frame.observation.artifact(),
+                sample.frame.verified,
+                prepared,
+            )?;
+            if let Some(reference) = &sample.projection {
+                let bytes = verify_lab_artifact(
+                    source,
+                    events,
+                    &reference.artifact,
+                    reference.verified,
+                    prepared,
+                )?;
+                let evidence: ContainedObservationEvidence = serde_json::from_slice(&bytes)
+                    .map_err(|_| lab_error("runtime_lab_projection_decode_failed"))?;
+                let projection = ContainedPageObservation {
+                    instance_id: evidence.instance_id,
+                    expected_package_sha256: evidence.expected_package_sha256,
+                    actual_package_sha256: evidence.actual_package_sha256,
+                    frame: evidence.frame,
+                    status: evidence.status,
+                    projection: evidence.projection,
+                    facts: evidence.facts,
+                    artifact: reference.artifact.clone(),
+                    projection_sequence: reference.verified.sequence,
+                    projection_event_id: reference.verified.event_id,
+                };
+                projection.validate()?;
+                verify_lab_projection(source, events, prepared, &sample.frame, &projection)?;
+            }
+        }
+    }
+    let mut frame_ids = BTreeSet::new();
+    for frame in [&prepared.before_frame, &record.after_frame]
+        .into_iter()
+        .flatten()
+    {
+        frame_ids.insert(frame.observation.artifact().artifact_id);
+    }
+    if let Some(arrival) = &record.arrival {
+        frame_ids.extend(
+            arrival
+                .samples
+                .iter()
+                .map(|sample| sample.frame.observation.artifact().artifact_id),
+        );
+    }
+    let frame_artifacts = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .flat_map(|event| &event.artifacts)
+        .filter(|artifact| artifact.kind == ArtifactKind::CaptureFrame)
+        .collect::<Vec<_>>();
+    if frame_artifacts.len() != frame_ids.len()
+        || frame_artifacts
+            .iter()
+            .any(|artifact| !frame_ids.contains(&artifact.artifact_id))
+    {
+        return Err(lab_error("runtime_lab_frame_budget_mismatch"));
     }
     if let Some(action) = &prepared.action {
         let projection = prepared
