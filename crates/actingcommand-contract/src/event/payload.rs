@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod signature;
+pub use signature::*;
+
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
     EventFamily, EventType, EvidenceCompleteness, PinnedFrameReason, PolicyFailureClass,
@@ -1492,6 +1495,8 @@ pub struct DiagnosticPayload {
 pub struct OutcomePayload {
     action: EventAction,
     effect_disposition: EffectDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: SanitizedAudit,
 }
 
@@ -1507,6 +1512,8 @@ pub struct DiagnosticOutcomePayload {
     cleanup_cause: Option<Box<CleanupCauseRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: SanitizedAudit,
 }
 
@@ -1567,6 +1574,8 @@ pub struct MonitorOutcomePayload {
     effect_disposition: EffectDisposition,
     observation: MonitorObservation,
     decision: MonitorDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: SanitizedAudit,
 }
 
@@ -3619,6 +3628,9 @@ pub struct RecoveryPayload {
 }
 
 trait PayloadDetail {
+    fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
+        None
+    }
     fn action(&self) -> EventAction;
     fn diagnostic_code(&self) -> Option<DiagnosticCode>;
     fn effect_disposition(&self) -> Option<EffectDisposition>;
@@ -4168,6 +4180,9 @@ impl PayloadDetail for DiagnosticPayload {
 }
 
 impl PayloadDetail for OutcomePayload {
+    fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
+        self.runtime_state.as_deref()
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -4186,6 +4201,9 @@ impl PayloadDetail for OutcomePayload {
 }
 
 impl PayloadDetail for DiagnosticOutcomePayload {
+    fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
+        self.runtime_state.as_deref()
+    }
     fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
         self.lifecycle_failure.as_deref()
     }
@@ -4215,6 +4233,9 @@ impl PayloadDetail for DiagnosticOutcomePayload {
 }
 
 impl PayloadDetail for MonitorOutcomePayload {
+    fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
+        self.runtime_state.as_deref()
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -4593,6 +4614,7 @@ struct DiagnosticDraft {
 struct OutcomeDraft {
     action: EventAction,
     effect_disposition: EffectDisposition,
+    runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: AuditInput,
 }
 
@@ -4603,6 +4625,7 @@ struct DiagnosticOutcomeDraft {
     detail: Option<DiagnosticDetailDraft>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureDraft>>,
+    runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: AuditInput,
 }
 
@@ -4611,6 +4634,7 @@ struct MonitorOutcomeDraft {
     effect_disposition: EffectDisposition,
     observation: MonitorObservation,
     decision: MonitorDecision,
+    runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: AuditInput,
 }
 
@@ -6060,6 +6084,7 @@ impl OutcomeDraft {
         Self {
             action,
             effect_disposition,
+            runtime_state: None,
             audit,
         }
     }
@@ -6071,6 +6096,7 @@ impl OutcomeDraft {
         Ok(OutcomePayload {
             action: self.action,
             effect_disposition: self.effect_disposition,
+            runtime_state: self.runtime_state,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6090,6 +6116,7 @@ impl DiagnosticOutcomeDraft {
             detail: None,
             cleanup_cause: None,
             lifecycle_failure: None,
+            runtime_state: None,
             audit,
         }
     }
@@ -6108,6 +6135,7 @@ impl DiagnosticOutcomeDraft {
             detail: Some(detail),
             cleanup_cause: None,
             lifecycle_failure: None,
+            runtime_state: None,
             audit,
         }
     }
@@ -6127,6 +6155,7 @@ impl DiagnosticOutcomeDraft {
             detail,
             cleanup_cause: cleanup_cause.map(Box::new),
             lifecycle_failure: None,
+            runtime_state: None,
             audit,
         }
     }
@@ -6139,6 +6168,7 @@ impl DiagnosticOutcomeDraft {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            runtime_state: self.runtime_state,
             detail: self
                 .detail
                 .map(DiagnosticDetailDraft::sanitize)
@@ -6178,6 +6208,7 @@ impl MonitorOutcomeDraft {
             effect_disposition: self.effect_disposition,
             observation: self.observation,
             decision: self.decision,
+            runtime_state: self.runtime_state,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6582,6 +6613,23 @@ enum MonitorDraftKind {
 pub struct MonitorPayloadDraft(MonitorDraftKind);
 
 impl MonitorPayloadDraft {
+    pub fn with_runtime_state(
+        mut self,
+        state: crate::RuntimeStateFact,
+    ) -> Result<Self, SanitizationError> {
+        state.validate()?;
+        match &mut self.0 {
+            MonitorDraftKind::Completed(detail) => detail.runtime_state = Some(Box::new(state)),
+            MonitorDraftKind::Failed(detail) => detail.runtime_state = Some(Box::new(state)),
+            _ => {
+                return Err(SanitizationError::new(
+                    "invalid_monitor_state_event",
+                    "runtime_state",
+                ));
+            }
+        }
+        Ok(self)
+    }
     pub fn requested(audit: AuditInput) -> Self {
         Self(MonitorDraftKind::Requested(ObservationDraft::new(
             EventAction::MonitorProbe,
@@ -6607,6 +6655,7 @@ impl MonitorPayloadDraft {
             effect_disposition,
             observation,
             decision,
+            runtime_state: None,
             audit,
         }))
     }
@@ -6654,6 +6703,16 @@ impl MonitorPayloadDraft {
 pub struct CommandPayloadDraft(CommandDraftKind);
 
 impl CommandPayloadDraft {
+    pub fn validated_runtime_state(
+        action: EventAction,
+        effect: EffectDisposition,
+        state: crate::RuntimeStateFact,
+        audit: AuditInput,
+    ) -> Self {
+        let mut detail = OutcomeDraft::new(action, effect, audit);
+        detail.runtime_state = Some(Box::new(state));
+        Self(CommandDraftKind::Validated(detail))
+    }
     pub fn received(action: EventAction, audit: AuditInput) -> Self {
         Self(CommandDraftKind::Received(ObservationDraft::new(
             action, audit,
@@ -7397,11 +7456,16 @@ impl ResourceAuthoringPayloadDraft {
 
 enum LedgerDraftKind {
     Recovered(RecoveryDraft),
+    Signature(LedgerSignatureEvent, AuditInput),
 }
 
 pub struct LedgerPayloadDraft(LedgerDraftKind);
 
 impl LedgerPayloadDraft {
+    pub fn signature(event: LedgerSignatureEvent, audit: AuditInput) -> Self {
+        Self(LedgerDraftKind::Signature(event, audit))
+    }
+
     pub fn recovered(
         reason: RecoveryReason,
         segment_index: Option<u64>,
@@ -8198,6 +8262,7 @@ pub enum ClientPayload {
 )]
 pub enum LedgerPayload {
     Recovered(RecoveryPayload),
+    Signature(LedgerSignaturePayload),
 }
 
 trait FamilyPayload {
@@ -8388,9 +8453,20 @@ family_payload!(ClientPayload, {
     CliCommand => EventType::CliCommand,
     LabRequest => EventType::LabRequest,
 });
-family_payload!(LedgerPayload, {
-    Recovered => EventType::LedgerRecovered,
-});
+impl FamilyPayload for LedgerPayload {
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::Recovered(_) => EventType::LedgerRecovered,
+            Self::Signature(payload) => payload.record().event_type(),
+        }
+    }
+    fn detail(&self) -> &dyn PayloadDetail {
+        match self {
+            Self::Recovered(payload) => payload,
+            Self::Signature(payload) => payload,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -8761,6 +8837,13 @@ impl EventPayloadDraft {
                 LedgerDraftKind::Recovered(detail) => {
                     LedgerPayload::Recovered(detail.sanitize(fingerprinter)?)
                 }
+                LedgerDraftKind::Signature(record, audit) => {
+                    record.validate()?;
+                    LedgerPayload::Signature(LedgerSignaturePayload {
+                        record,
+                        audit: audit.sanitize(fingerprinter)?,
+                    })
+                }
             }),
         })
     }
@@ -8846,7 +8929,9 @@ impl EventPayload {
         }
         if matches!(
             self,
-            Self::Performance(_) | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+            Self::Performance(_)
+                | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+                | Self::Ledger(LedgerPayload::Signature(_))
         ) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
@@ -8873,6 +8958,9 @@ impl EventPayload {
         if matches!(self, Self::Agent(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
+        if self.runtime_state().is_some() {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
         sensitivity
     }
 
@@ -8888,8 +8976,41 @@ impl EventPayload {
         self.family_payload().detail().diagnostic_code()
     }
 
+    pub fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
+        self.family_payload().detail().runtime_state()
+    }
+
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(state) = detail.runtime_state() {
+            state.validate()?;
+            let expected_action = match state {
+                crate::RuntimeStateFact::Observed { .. }
+                | crate::RuntimeStateFact::MonitorImported { .. } => EventAction::RuntimeAction,
+                crate::RuntimeStateFact::MonitorChanged { change, .. } => match change.kind {
+                    crate::RuntimeMonitorChangeKind::Configure => EventAction::MonitorConfigure,
+                    crate::RuntimeMonitorChangeKind::Clear => EventAction::MonitorClear,
+                    crate::RuntimeMonitorChangeKind::Probe => EventAction::MonitorProbe,
+                },
+            };
+            let correct_event = if expected_action == EventAction::MonitorProbe {
+                matches!(
+                    self,
+                    Self::Monitor(MonitorPayload::Completed(_) | MonitorPayload::Failed(_))
+                )
+            } else {
+                matches!(self, Self::Command(CommandPayload::Validated(_)))
+            };
+            if self.action() != expected_action || !correct_event {
+                return Err(SanitizationError::new(
+                    "invalid_runtime_state_owner",
+                    "runtime_state",
+                ));
+            }
+        }
+        if let Self::Ledger(LedgerPayload::Signature(payload)) = self {
+            payload.record().validate()?;
+        }
         if let Some(config) = detail.device_diagnostic_config() {
             if !matches!(
                 self.event_type(),

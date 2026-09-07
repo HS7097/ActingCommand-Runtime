@@ -196,6 +196,7 @@ mod runtime_stream_adapter;
 mod safe_file_stem;
 mod session_management;
 mod sha256;
+mod signature_cli;
 mod state_roots;
 mod unix_time;
 mod user_config_keys;

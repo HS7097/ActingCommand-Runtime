@@ -7,6 +7,7 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_host::{ProviderStartup, RuntimeHostResult};
 use actingcommand_vision_ffi::{FastDeployPpocrBackend, OnnxRuntimeBackend, VisionFfiError};
+use std::io;
 
 impl ConfiguredExecutionBackendRegistry {
     pub(crate) fn assemble_provider(

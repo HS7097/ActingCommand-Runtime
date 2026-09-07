@@ -143,7 +143,7 @@ impl RuntimeHostError {
                 recorded_event: Arc::clone(error.recorded_event()),
                 causes: error.lifecycle_causes().to_vec(),
                 instance_id: error.instance_id(),
-                native_detail: None,
+                native_detail: error.native_detail().cloned().map(Box::new),
                 resource_quiescence: error.resource_quiescence(),
             }),
         };

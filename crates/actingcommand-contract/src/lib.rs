@@ -21,6 +21,7 @@ pub mod primitive;
 pub mod project;
 pub mod proposal;
 pub mod runtime;
+pub mod runtime_observation;
 pub mod state;
 pub mod taskflow;
 pub mod types;
@@ -37,6 +38,7 @@ pub use primitive::*;
 pub use project::*;
 pub use proposal::*;
 pub use runtime::*;
+pub use runtime_observation::*;
 pub use state::*;
 pub use taskflow::*;
 pub use types::{

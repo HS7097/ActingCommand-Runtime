@@ -762,6 +762,36 @@ fn execution_error_preserves_secondary_cleanup_detail() {
             .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
             .with_diagnostic_context("adb_shell_input", "reset", DeviceErrorSensitivity::Internal),
     );
+    assert!(
+        primary.native_detail().is_none(),
+        "the diagnostic already carries the complete cause"
+    );
+    let native_text = "雪".repeat(1_024);
+    let bounded = ExecutionKernelError::device(
+        "input_backend_operation_failed",
+        &DeviceError::transient(&native_text)
+            .with_diagnostic(DeviceErrorCategory::Native, "device_registry.input.operation")
+            .with_diagnostic_context("maatouch", "swipe", DeviceErrorSensitivity::Secret)
+            .with_diagnostic_message(
+                actingcommand_device::DeviceErrorDiagnosticMessage::DeviceRegistryInputOperationFailed,
+            ),
+    );
+    let native = bounded
+        .native_detail()
+        .expect("original cause accompanies the safe summary");
+    assert_eq!(native.text(), "雪".repeat(341));
+    assert!(native.truncated());
+    assert!(native.text().len() <= 1_024);
+    assert_eq!(
+        bounded
+            .diagnostic_detail()
+            .expect("summary")
+            .declared_sensitivity(),
+        Sensitivity::Secret
+    );
+    assert!(!format!("{bounded:?} {bounded}").contains('雪'));
+    let merged_native = ExecutionKernelError::merge(bounded.clone(), primary.clone());
+    assert_eq!(merged_native.native_detail(), bounded.native_detail());
     let cleanup = ExecutionKernelError::device(
         "input_backend_close_failed",
         &DeviceError::fatal("exit_status=1 stderr=cleanup_failed")

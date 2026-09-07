@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub mod critical;
 mod fact;
 pub mod global;
+pub mod signatures;
 pub use fact::PersistedEvent;
 pub use global::*;
 

@@ -556,9 +556,22 @@ impl RuntimeMonitorInstanceStatus {
 pub struct RuntimeMonitorRegistryStatus {
     owner_epoch: OwnerEpoch,
     instances: Vec<RuntimeMonitorInstanceStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<crate::RuntimeStateSource>,
 }
 
 impl RuntimeMonitorRegistryStatus {
+    pub fn with_source(mut self, source: crate::RuntimeStateSource) -> MonitorDecisionResult<Self> {
+        source
+            .validate()
+            .map_err(|_| MonitorDecisionError::new("invalid_runtime_state_source"))?;
+        self.source = Some(source);
+        Ok(self)
+    }
+
+    pub fn source(&self) -> Option<&crate::RuntimeStateSource> {
+        self.source.as_ref()
+    }
     pub fn new(
         owner_epoch: OwnerEpoch,
         mut instances: Vec<RuntimeMonitorInstanceStatus>,
@@ -567,12 +580,18 @@ impl RuntimeMonitorRegistryStatus {
         let status = Self {
             owner_epoch,
             instances,
+            source: None,
         };
         status.validate()?;
         Ok(status)
     }
 
     pub fn validate(&self) -> MonitorDecisionResult<()> {
+        if let Some(source) = &self.source {
+            source
+                .validate()
+                .map_err(|_| MonitorDecisionError::new("invalid_runtime_state_source"))?;
+        }
         let mut aliases = BTreeSet::new();
         let mut previous_alias = None;
         for instance in &self.instances {

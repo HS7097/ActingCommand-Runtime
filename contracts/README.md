@@ -224,3 +224,6 @@ The UI must use the runtime API and must not own the runtime lifecycle. The exec
 
 Provider construction and read-only checker semantics are defined in
 [Provider startup facts](provider-startup.md).
+
+Status provenance and monitor recovery are defined in
+[Runtime state observations](runtime-state-observation.md).

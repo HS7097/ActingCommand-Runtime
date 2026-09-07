@@ -350,6 +350,173 @@ struct FakeState {
     segmented_swipe_plans: std::sync::Mutex<Vec<PreparedSegmentedSwipePlan>>,
 }
 
+// Workflow #257 SIGNATURE-REPLAY-v1: explicit Runtime writer specification.
+#[test]
+fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effects() {
+    use actingcommand_contract::{
+        AuditInput, CommandPayloadDraft, DiagnosticCode, DiagnosticSignatureDefinition, EventDraft,
+        EventLinksDraft, EventOrigin, RuntimeSignatureMatchRequest, SignaturePageRequest,
+        SignatureReplayGap,
+    };
+    use actingcommand_ledger::Sha256SecretFingerprinter;
+    let input_root = TempDir::new().unwrap();
+    let input = GlobalLedger::open(GlobalLedgerConfig::new(
+        input_root.path().join("ledger"),
+        "signature-source",
+    ))
+    .unwrap();
+    let ids = IdentifierIssuer::new().unwrap();
+    input
+        .append(
+            EventDraft::new(
+                ids.mint_event_id().unwrap(),
+                1,
+                EventSeverity::Error,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                CommandPayloadDraft::rejected(
+                    actingcommand_contract::EventAction::RuntimeStart,
+                    DiagnosticCode::CommandRejected,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&Sha256SecretFingerprinter::new(b"host-signature-spec").unwrap())
+            .unwrap(),
+        )
+        .unwrap();
+    input.close().unwrap();
+    let root = TempDir::new().unwrap();
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    let connection = ConnectionId::new(123).unwrap();
+    let mut client = TestClient::connect(&host);
+    let request = |operation| {
+        RuntimeRequest::new(
+            ids.mint_request_id().unwrap(),
+            ids.mint_correlation_id().unwrap(),
+            None,
+            EventActor::Lab,
+            EventSource::Lab,
+            unix_ms_now().unwrap(),
+            operation,
+        )
+        .unwrap()
+    };
+    let register = request(RuntimeOperation::RegisterDiagnosticSignature {
+        definition: Box::new(DiagnosticSignatureDefinition {
+            signature_id: "command_rejection".into(),
+            version: 1,
+            origin_module: OriginModule::Runtime,
+            diagnostic_code: DiagnosticCode::CommandRejected,
+            event_type: EventType::CommandRejected,
+            minimum_severity: EventSeverity::Error,
+            lifecycle: None,
+        }),
+    });
+    let first = client.send(&register);
+    assert_eq!(first.state(), RuntimeReceiptState::Completed);
+    assert_eq!(first, client.send(&register));
+    let Some(RuntimeResult::SignatureRegistered { registration }) = first.result() else {
+        panic!("registration");
+    };
+    assert_eq!(first.terminal().unwrap().event_id, registration.event_id);
+    assert_eq!(first.terminal().unwrap().sequence, registration.sequence);
+    let registration = registration.clone();
+    let mut forged = serde_json::to_value(&register).unwrap();
+    forged["actor"] = serde_json::json!("cli");
+    forged["source"] = serde_json::json!("cli");
+    let forged: RuntimeRequest = serde_json::from_value(forged).unwrap();
+    assert_eq!(
+        host.process_request_for_test(&forged, connection)
+            .unwrap()
+            .state(),
+        RuntimeReceiptState::Denied
+    );
+    let match_request = |through| {
+        request(RuntimeOperation::MatchDiagnosticSignatures {
+            request: Box::new(RuntimeSignatureMatchRequest {
+                input_state_root: input_root.path().to_str().unwrap().into(),
+                input_through: 1,
+                catalog_through: through,
+                page: SignaturePageRequest::default(),
+            }),
+        })
+    };
+    let matched_request = match_request(registration.sequence);
+    let matched = client.send(&matched_request);
+    assert_eq!(matched.state(), RuntimeReceiptState::Completed);
+    assert!(matched.terminal().is_some());
+    let Some(RuntimeResult::SignaturesMatched { page }) = matched.result() else {
+        panic!("matched page");
+    };
+    assert_eq!(page.matched_count, 1);
+    assert!(page.evidence_complete());
+    assert_eq!(matched, client.send(&matched_request));
+    for _ in 0..2 {
+        let query = runtime_request(
+            &ids,
+            RuntimeOperation::QueryEvents {
+                query: EventQuery {
+                    event_type: Some(EventType::SignatureMatched),
+                    ..Default::default()
+                },
+                profile: ProjectionProfile::Forensic,
+                page: RuntimeEventQueryPageRequest::default(),
+            },
+        );
+        let receipt = host.process_request_for_test(&query, connection).unwrap();
+        let Some(RuntimeResult::EventPage { page }) = receipt.result() else {
+            panic!("event page");
+        };
+        assert_eq!(page.events().len(), 1);
+    }
+    let retired = host
+        .process_request_for_test(
+            &request(RuntimeOperation::RetireDiagnosticSignature {
+                registration: registration.clone(),
+            }),
+            connection,
+        )
+        .unwrap();
+    assert_eq!(retired.state(), RuntimeReceiptState::Completed);
+    let after = host
+        .process_request_for_test(
+            &match_request(retired.terminal().unwrap().sequence),
+            connection,
+        )
+        .unwrap();
+    let Some(RuntimeResult::SignaturesMatched { page }) = after.result() else {
+        panic!("retired page");
+    };
+    assert_eq!(page.matched_count, 0);
+    assert!(!page.evidence_complete());
+    assert!(page.gaps.contains(&SignatureReplayGap::CatalogEmpty));
+    let frozen = host
+        .process_request_for_test(&match_request(registration.sequence), connection)
+        .unwrap();
+    let Some(RuntimeResult::SignaturesMatched { page }) = frozen.result() else {
+        panic!("frozen page");
+    };
+    assert_eq!(page.matched_count, 1);
+    assert!(page.evidence_complete());
+    for counter in [
+        &state.open_count,
+        &state.input_count,
+        &state.capture_open_count,
+        &state.capture_count,
+    ] {
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+    drop(client);
+    host.close().unwrap();
+}
+
 struct FakeBackend {
     state: Arc<FakeState>,
     close_outcome: Option<DeviceResult<actingcommand_device::DeviceResourceCloseOutcome>>,
@@ -2672,6 +2839,31 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
     assert_eq!(snapshot.catalog.as_ref().expect("catalog").goal_count, 1);
     let current = response.current().expect("current runtime view");
     assert_eq!(current.instances.len(), 1);
+    let current_source = current.source.as_ref().expect("committed current source");
+    assert_eq!(current_source.sequence, current.observed_ledger_position);
+    assert!(current_source.sequence > snapshot.ledger_position);
+    let observations = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(request.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        observations.len(),
+        1,
+        "one state observation for the explicit request"
+    );
+    assert_eq!(observations[0].event_id, current_source.event_id);
+    let ProjectionPayload::Full(payload) = &observations[0].payload else {
+        panic!("current source payload");
+    };
+    assert!(
+        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::Observed {
+        state: actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal }, ..
+    }) if status.owner_epoch() == current.owner_epoch && *fatal == current.fatal)
+    );
     assert_eq!(snapshot.facts.len(), 1);
     assert_eq!(snapshot.goals.len(), 1);
     assert_eq!(snapshot.decisions.len(), 1);
@@ -2827,6 +3019,9 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         let snapshot = response.snapshot().expect("current project snapshot");
         let current = response.current().expect("current runtime view");
         assert!(current.observed_ledger_position >= snapshot.ledger_position);
+        let source = current.source.as_ref().expect("paged current source");
+        assert_eq!(source.sequence, current.observed_ledger_position);
+        assert!(source.sequence > snapshot.ledger_position);
         let current_instance = current.instances.first().expect("project instance");
         if page_index == 0 {
             assert!(current_instance.lease_active);
@@ -8280,8 +8475,9 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     .expect("runtime host");
     let mut owner = TestClient::connect(&host);
 
+    let initial_request = owner.request(RuntimeOperation::Status);
     let initial = owner
-        .send_result(&owner.request(RuntimeOperation::Status))
+        .send_result(&initial_request)
         .expect("initial status receipt");
     let RuntimeResult::Status { status } = initial.result().expect("status result") else {
         panic!("expected runtime status");
@@ -8290,6 +8486,43 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     assert_eq!(status.instances().len(), 2);
     assert_eq!(status.instances()[0].instance_alias(), "node.a");
     assert_eq!(status.instances()[1].instance_alias(), "node.c");
+    let initial_source = status.source().expect("committed status source").clone();
+    let source_events = projected_events(
+        &mut owner,
+        EventQuery {
+            from_sequence: Some(initial_source.sequence),
+            to_sequence: Some(initial_source.sequence),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(source_events.len(), 1);
+    let source_event = &source_events[0];
+    assert_eq!(source_event.event_id, initial_source.event_id);
+    assert_eq!(
+        source_event.links.request_id(),
+        Some(&initial_request.request_id())
+    );
+    let ProjectionPayload::Full(payload) = &source_event.payload else {
+        panic!("full source fact");
+    };
+    let Some(actingcommand_contract::RuntimeStateFact::Observed {
+        state: actingcommand_contract::RuntimeObservedState::ControlPlane { status: recorded },
+        sampled_started_at_unix_ms,
+        sampled_completed_at_unix_ms,
+    }) = payload.runtime_state()
+    else {
+        panic!("typed control-plane source");
+    };
+    assert_eq!(recorded.instances(), status.instances());
+    assert_eq!(recorded.owner_epoch(), status.owner_epoch());
+    assert_eq!(
+        *sampled_started_at_unix_ms,
+        initial_source.sampled_started_at_unix_ms
+    );
+    assert_eq!(
+        *sampled_completed_at_unix_ms,
+        initial_source.sampled_completed_at_unix_ms
+    );
     assert!(
         status
             .instances()
@@ -8327,6 +8560,7 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
         panic!("expected live runtime status");
     };
     let active = &status.instances()[0];
+    assert!(status.source().unwrap().sequence > initial_source.sequence);
     assert!(active.lease_active());
     assert_eq!(active.queued_request_count(), 1);
     assert!(!active.takeover_cooldown_active());
@@ -8430,6 +8664,25 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         panic!("expected configured monitor");
     };
     assert_eq!(status.policy(), Some(&policy));
+    let configured_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(configure.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &configured_events[0].payload else {
+        panic!("monitor configuration fact");
+    };
+    let Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. }) =
+        payload.runtime_state()
+    else {
+        panic!("typed monitor configuration");
+    };
+    let configuration_version = change.configuration_version;
+    assert!(change.applied);
+    assert_eq!(&change.status, status);
     assert_eq!(
         event_types_for_request(
             &host,
@@ -8457,7 +8710,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         )
     });
     let journal = root.path().join(MONITOR_FILE_NAME);
-    let first_length = fs::metadata(&journal).expect("monitor metadata").len();
+    assert!(!journal.exists());
 
     let repeated = client.request(RuntimeOperation::ConfigureMonitor {
         instance_alias: "node.a".to_string(),
@@ -8467,9 +8720,21 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         client.send(&repeated).result(),
         Some(RuntimeResult::MonitorConfigured { .. })
     ));
-    assert_eq!(
-        fs::metadata(&journal).expect("monitor metadata").len(),
-        first_length
+    assert!(!journal.exists());
+    let repeated_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(repeated.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &repeated_events[0].payload else {
+        panic!("idempotent configuration fact");
+    };
+    assert!(
+        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. })
+        if !change.applied && change.configuration_version == configuration_version)
     );
     let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
     let RuntimeResult::MonitorStatus { status } = status.result().expect("monitor status") else {
@@ -8477,6 +8742,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     };
     assert_eq!(status.instances().len(), 1);
     assert_eq!(status.instances()[0].policy(), Some(&policy));
+    assert!(status.source().is_some());
     drop(client);
     host.close().expect("close host");
 
@@ -8504,7 +8770,24 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         client.send(&clear).result(),
         Some(RuntimeResult::MonitorCleared { status }) if status.policy().is_none()
     ));
-    let cleared_length = fs::metadata(&journal).expect("monitor metadata").len();
+    assert!(!journal.exists());
+    let cleared_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(clear.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &cleared_events[0].payload else {
+        panic!("monitor clear fact");
+    };
+    let Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. }) =
+        payload.runtime_state()
+    else {
+        panic!("typed clear");
+    };
+    let cleared_version = change.configuration_version;
     let repeated_clear = client.request(RuntimeOperation::ClearMonitor {
         instance_alias: "node.a".to_string(),
     });
@@ -8512,9 +8795,21 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         client.send(&repeated_clear).result(),
         Some(RuntimeResult::MonitorCleared { status }) if status.policy().is_none()
     ));
-    assert_eq!(
-        fs::metadata(&journal).expect("monitor metadata").len(),
-        cleared_length
+    assert!(!journal.exists());
+    let repeated_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(repeated_clear.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &repeated_events[0].payload else {
+        panic!("idempotent clear fact");
+    };
+    assert!(
+        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. })
+        if !change.applied && change.configuration_version == cleared_version)
     );
     drop(client);
     reopened.close().expect("close reopened host");
@@ -10276,7 +10571,7 @@ fn capture_failure_persists_nemu_resolution_context() {
         .with_count(NemuResolutionCountKind::DllVersions, 2, false)
         .with_source(MumuInstallSource::ConfiguredBackendPath)
         .with_provenance(Some(NemuConfiguredAdbClass::SharedMumu), false, false);
-    let mut baseline_types = None;
+    let mut baseline_types: Option<Vec<EventType>> = None;
     for include_context in [false, true] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
@@ -10325,7 +10620,20 @@ fn capture_failure_persists_nemu_resolution_context() {
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         if let Some(baseline) = &baseline_types {
-            assert_eq!(&types, baseline);
+            let mut expected = baseline.clone();
+            let position = expected
+                .iter()
+                .position(|kind| *kind == EventType::RecognitionFailed)
+                .expect("recognition terminal");
+            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause and M4 detail are real facts.
+            expected.splice(
+                position..position,
+                [
+                    EventType::RuntimeFailed,
+                    EventType::RuntimeLifecycleObserved,
+                ],
+            );
+            assert_eq!(types, expected);
         } else {
             baseline_types = Some(types);
         }
@@ -10365,6 +10673,34 @@ fn capture_failure_persists_nemu_resolution_context() {
         let EventPayload::Capture(CapturePayload::Failed(outcome)) = payload.as_ref() else {
             panic!("capture failure")
         };
+        let native_events = events
+            .iter()
+            .filter(|event| event.event_type == EventType::RuntimeFailed)
+            .collect::<Vec<_>>();
+        assert_eq!(native_events.len(), usize::from(include_context));
+        if include_context {
+            let native_event = native_events[0];
+            assert_eq!(native_event.links, flow[2].links);
+            assert_eq!(native_event.sensitivity, Sensitivity::Sensitive);
+            let ProjectionPayload::Full(native_payload) = &native_event.payload else {
+                panic!("full native cause")
+            };
+            let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                native_outcome,
+            )) = native_payload.as_ref()
+            else {
+                panic!("native failure")
+            };
+            let lifecycle = native_outcome.lifecycle_failure().expect("typed lifecycle");
+            assert_eq!(lifecycle.entered_event_id(), Some(flow[2].event_id));
+            assert_eq!(lifecycle.primary_detail(), outcome.detail());
+            let native = lifecycle.native_detail().expect("original cause");
+            assert_eq!(native.text(), "original Nemu resolution error");
+            assert!(!native.truncated());
+            let public = serde_json::to_string(&native_payload.public_projection())
+                .expect("public native failure");
+            assert!(!public.contains("original Nemu resolution error"));
+        }
         let detail = outcome.detail().expect("resolution detail");
         assert_eq!(detail.message(), expected_message);
         assert_eq!(detail.category(), "protocol");
@@ -15915,7 +16251,7 @@ fn input_failure_persists_adb_bounds_context() {
         (100, 200),
         Some(AdbInputConnectGeometry::new(720, 1280, 90)),
     );
-    let mut baseline_types = None;
+    let mut baseline_types: Option<Vec<EventType>> = None;
     for include_context in [false, true] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
@@ -15966,7 +16302,17 @@ fn input_failure_persists_adb_bounds_context() {
             .map(|event| event.event_type)
             .collect::<Vec<_>>();
         if let Some(baseline) = &baseline_types {
-            assert_eq!(&types, baseline);
+            let mut expected = baseline.clone();
+            let position = expected.len();
+            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause and M4 detail are real facts.
+            expected.splice(
+                position..position,
+                [
+                    EventType::RuntimeFailed,
+                    EventType::RuntimeLifecycleObserved,
+                ],
+            );
+            assert_eq!(types, expected);
         } else {
             baseline_types = Some(types);
         }
@@ -15997,6 +16343,34 @@ fn input_failure_persists_adb_bounds_context() {
         let EventPayload::Input(InputPayload::Failed(outcome)) = payload.as_ref() else {
             panic!("input failure")
         };
+        let native_events = events
+            .iter()
+            .filter(|event| event.event_type == EventType::RuntimeFailed)
+            .collect::<Vec<_>>();
+        assert_eq!(native_events.len(), usize::from(include_context));
+        if include_context {
+            let native_event = native_events[0];
+            assert_eq!(native_event.links, flow[1].links);
+            assert_eq!(native_event.sensitivity, Sensitivity::Sensitive);
+            let ProjectionPayload::Full(native_payload) = &native_event.payload else {
+                panic!("full native cause")
+            };
+            let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                native_outcome,
+            )) = native_payload.as_ref()
+            else {
+                panic!("native failure")
+            };
+            let lifecycle = native_outcome.lifecycle_failure().expect("typed lifecycle");
+            assert_eq!(lifecycle.entered_event_id(), Some(flow[1].event_id));
+            assert_eq!(lifecycle.primary_detail(), outcome.detail());
+            let native = lifecycle.native_detail().expect("original cause");
+            assert_eq!(native.text(), "tap x 101 exceeds touch screen max 100");
+            assert!(!native.truncated());
+            let public = serde_json::to_string(&native_payload.public_projection())
+                .expect("public native failure");
+            assert!(!public.contains("tap x 101 exceeds touch screen max 100"));
+        }
         let detail = outcome.detail().expect("bounds detail");
         assert_eq!(detail.message(), expected_message);
         assert_eq!(detail.category(), "protocol");
