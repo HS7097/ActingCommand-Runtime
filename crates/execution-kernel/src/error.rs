@@ -193,7 +193,8 @@ impl ExecutionKernelError {
         }
     }
 
-    pub(crate) fn merge_cleanup(mut primary: Self, secondary: Self) -> Self {
+    /// Retains the primary operation and the real result of its owner-led cleanup.
+    pub fn merge_cleanup(mut primary: Self, secondary: Self) -> Self {
         if primary.cleanup_cause.is_none() {
             primary.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
                 secondary.code,

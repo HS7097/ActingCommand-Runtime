@@ -21,6 +21,82 @@ use std::sync::Arc;
 type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
 type HistoricalInvalidationIdentity = (FactIdentity, String);
+
+/// Replay metadata, retained even when no fact is active for an instance.
+#[derive(Clone, Default)]
+struct InputInvalidationBoundaries {
+    by_instance: BTreeMap<actingcommand_contract::InstanceId, [u64; 2]>,
+}
+
+impl InputInvalidationBoundaries {
+    fn observe(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        let index = match event.event_type() {
+            EventType::InputCommitted => 0,
+            EventType::InputFailed => 1,
+            _ => return Ok(()),
+        };
+        let instance = event
+            .links()
+            .instance_id()
+            .ok_or_else(|| fact_fatal("fact_input_scope_missing", "replay_fact_input_boundary"))?;
+        if !self.by_instance.contains_key(instance)
+            && self.by_instance.len() >= actingcommand_policy::MAX_EVALUATION_INSTANCES
+        {
+            return Err(fact_fatal(
+                "fact_input_scope_capacity_exceeded",
+                "replay_fact_input_boundary",
+            ));
+        }
+        let boundary = self.by_instance.entry(*instance).or_default();
+        boundary[index] = boundary[index].max(event.timestamp_unix_ms());
+        Ok(())
+    }
+
+    fn check(
+        &self,
+        record: &FactRecord,
+        instances: &[actingcommand_contract::InstanceId],
+    ) -> RuntimeHostResult<()> {
+        for instance in instances {
+            if let Some(boundaries) = self.by_instance.get(instance) {
+                for (index, event) in [EventType::InputCommitted, EventType::InputFailed]
+                    .iter()
+                    .enumerate()
+                {
+                    if record.invalidate_on.contains(event)
+                        && record.observed_at_unix_ms <= boundaries[index]
+                    {
+                        return Err(fact_request(
+                            "fact_observation_precedes_input",
+                            "publish_facts",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn invalidation_scope_matches(
+    event: &PersistedEvent,
+    instances: &[actingcommand_contract::InstanceId],
+) -> bool {
+    match event.links().instance_id() {
+        Some(instance) => {
+            instances.contains(instance)
+                || (instances.is_empty()
+                    && !matches!(
+                        event.event_type(),
+                        EventType::InputCommitted | EventType::InputFailed
+                    ))
+        }
+        None => !matches!(
+            event.event_type(),
+            EventType::InputCommitted | EventType::InputFailed
+        ),
+    }
+}
 const MAX_ACTIVE_FACTS: usize = 256;
 const FACT_TOMBSTONE_NAMESPACE: &str = "fact.tombstone.v1";
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
@@ -36,6 +112,7 @@ struct StoredFact {
     record: FactRecord,
     sequence: u64,
     event_id: EventId,
+    scope_instances: Vec<actingcommand_contract::InstanceId>,
 }
 
 #[derive(Clone)]
@@ -47,23 +124,46 @@ struct InvalidationTombstone {
 #[derive(Default)]
 struct HistoricalFactProjection {
     active: BTreeMap<FactIdentity, (FactRecord, EventId)>,
+    scope_instances: BTreeMap<FactIdentity, Vec<actingcommand_contract::InstanceId>>,
     invalidated: BTreeMap<HistoricalInvalidationIdentity, FactInvalidationEventData>,
+    input_boundaries: InputInvalidationBoundaries,
 }
 
 impl HistoricalFactProjection {
     fn replay(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         match event.payload() {
             EventPayload::Fact(FactPayload::Published(payload)) => {
-                self.publish(payload.record().clone(), *event.event_id())
+                self.input_boundaries
+                    .check(payload.record(), payload.scope_instances())
+                    .map_err(|_| {
+                        fact_fatal("fact_observation_precedes_input", "project_fact_history")
+                    })?;
+                for record in payload.records() {
+                    self.publish(record.clone(), *event.event_id())?;
+                    self.scope_instances.insert(
+                        (record.scope.clone(), record.key.clone()),
+                        payload.scope_instances().to_vec(),
+                    );
+                }
+                Ok(())
             }
             EventPayload::Fact(FactPayload::Invalidated(payload)) => {
                 self.invalidate(payload.invalidation().clone())
             }
             _ => {
+                self.input_boundaries.observe(event)?;
                 let invalidations = self
                     .active
                     .values()
-                    .filter(|(record, _)| record.invalidate_on.contains(&event.event_type()))
+                    .filter(|(record, _)| {
+                        record.invalidate_on.contains(&event.event_type())
+                            && invalidation_scope_matches(
+                                event,
+                                self.scope_instances
+                                    .get(&(record.scope.clone(), record.key.clone()))
+                                    .map_or(&[], Vec::as_slice),
+                            )
+                    })
                     .map(|(record, _)| FactInvalidationEventData {
                         scope: record.scope.clone(),
                         key: record.key.clone(),
@@ -143,6 +243,7 @@ impl HistoricalFactProjection {
         }
         self.active.remove(&identity);
         self.invalidated.insert(invalidation_identity, data);
+        self.scope_instances.remove(&identity);
         Ok(())
     }
 
@@ -157,6 +258,8 @@ impl HistoricalFactProjection {
 #[derive(Clone)]
 pub(crate) struct InstanceFactStore {
     active: BTreeMap<FactIdentity, StoredFact>,
+    latest_observed: BTreeMap<FactIdentity, u64>,
+    input_boundaries: InputInvalidationBoundaries,
     invalidated: BTreeMap<(FactIdentity, String), InvalidationTombstone>,
     pending: BTreeMap<InvalidationIdentity, FactInvalidationEventData>,
     last_sequence: u64,
@@ -196,6 +299,8 @@ impl InstanceFactStore {
     ) -> RuntimeHostResult<Self> {
         let mut store = Self {
             active: BTreeMap::new(),
+            latest_observed: BTreeMap::new(),
+            input_boundaries: InputInvalidationBoundaries::default(),
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
@@ -231,17 +336,100 @@ impl InstanceFactStore {
         self.pending.values().cloned().collect()
     }
 
+    pub(crate) fn at_position(
+        &self,
+        ledger: &GlobalLedger,
+        position: u64,
+    ) -> RuntimeHostResult<Self> {
+        let mut snapshot = Self {
+            active: BTreeMap::new(),
+            latest_observed: BTreeMap::new(),
+            input_boundaries: InputInvalidationBoundaries::default(),
+            invalidated: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            last_sequence: 0,
+            state: Arc::clone(&self.state),
+        };
+        for event in ledger
+            .query(EventQuery {
+                to_sequence: Some(position),
+                ..EventQuery::default()
+            })
+            .map_err(|_| fact_fatal("fact_history_read_failed", "project_fact_history"))?
+        {
+            snapshot.replay_event(&event)?;
+        }
+        Ok(snapshot)
+    }
+
+    pub(crate) fn validate_pool_sources(
+        &self,
+        catalog: &actingcommand_policy::CompiledCatalog,
+        mut current_scope_instances: impl FnMut(
+            &FactScope,
+        ) -> RuntimeHostResult<
+            Vec<actingcommand_contract::InstanceId>,
+        >,
+    ) -> RuntimeHostResult<()> {
+        for pool in &catalog.catalog().pools.pools {
+            if pool.value_source.is_static() {
+                continue;
+            }
+            let actingcommand_policy::ObservationRef::Fact { fact_key } = &pool.observation else {
+                continue;
+            };
+            for stored in self.active.values().filter(|stored| {
+                policy_scope(&stored.record.scope) == pool.scope && stored.record.key == *fact_key
+            }) {
+                if stored.scope_instances.is_empty()
+                    || stored.scope_instances != current_scope_instances(&stored.record.scope)?
+                    || ![EventType::InputCommitted, EventType::InputFailed]
+                        .iter()
+                        .all(|event| stored.record.invalidate_on.contains(event))
+                {
+                    return Err(fact_request(
+                        "pool_fact_invalidation_binding_missing",
+                        "project_fact_pools",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_input_boundaries(
+        &self,
+        record: &FactRecord,
+        instances: &[actingcommand_contract::InstanceId],
+    ) -> RuntimeHostResult<()> {
+        self.input_boundaries.check(record, instances)
+    }
+
     fn replay_event(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         match event.payload() {
-            EventPayload::Fact(FactPayload::Published(payload)) => self.commit_publish(
-                payload.record().clone(),
-                event.sequence(),
-                *event.event_id(),
-            ),
+            EventPayload::Fact(FactPayload::Published(payload)) => {
+                self.input_boundaries
+                    .check(payload.record(), payload.scope_instances())
+                    .map_err(|_| {
+                        fact_fatal("fact_observation_precedes_input", "replay_fact_event")
+                    })?;
+                let mut complete = self.clone();
+                for record in payload.records() {
+                    complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
+                    complete
+                        .active
+                        .get_mut(&(record.scope.clone(), record.key.clone()))
+                        .ok_or_else(|| fact_fatal("fact_commit_missing", "replay_fact_event"))?
+                        .scope_instances = payload.scope_instances().to_vec();
+                }
+                *self = complete;
+                Ok(())
+            }
             EventPayload::Fact(FactPayload::Invalidated(payload)) => {
                 self.commit_invalidation(payload.invalidation().clone(), event.sequence())
             }
             _ => {
+                self.input_boundaries.observe(event)?;
                 for invalidation in self.plan_invalidations(event) {
                     self.derive_invalidation(invalidation, event.sequence())?;
                 }
@@ -271,12 +459,22 @@ impl InstanceFactStore {
             ));
         }
         let Some(existing) = self.active.get(&identity) else {
+            if self
+                .latest_observed
+                .get(&identity)
+                .is_some_and(|latest| record.observed_at_unix_ms <= *latest)
+            {
+                return Err(fact_request("fact_observation_not_newer", "publish_fact"));
+            }
             if self.active.len() >= MAX_ACTIVE_FACTS {
                 return Err(fact_request("fact_store_capacity_exceeded", "publish_fact"));
             }
             return Ok(None);
         };
         if existing.record.source_snapshot_id != record.source_snapshot_id {
+            if record.observed_at_unix_ms <= existing.record.observed_at_unix_ms {
+                return Err(fact_request("fact_observation_not_newer", "publish_fact"));
+            }
             return Ok(None);
         }
         if existing.record == *record {
@@ -334,14 +532,96 @@ impl InstanceFactStore {
             return self.advance(sequence, "commit_fact");
         }
         self.active.insert(
-            identity,
+            identity.clone(),
             StoredFact {
                 record,
                 sequence,
                 event_id,
+                scope_instances: Vec::new(),
             },
         );
+        let observed = self.active[&identity].record.observed_at_unix_ms;
+        self.latest_observed
+            .entry(identity)
+            .and_modify(|latest| *latest = (*latest).max(observed))
+            .or_insert(observed);
         self.advance(sequence, "commit_fact")
+    }
+
+    pub(crate) fn preview_observation(
+        &self,
+        observation: &actingcommand_contract::FactObservation,
+        now: u64,
+    ) -> RuntimeHostResult<Option<EventId>> {
+        observation
+            .validate()
+            .map_err(|_| fact_request("fact_observation_invalid", "publish_facts"))?;
+        let first = &observation.records[0];
+        if first.observed_at_unix_ms > now {
+            return Err(fact_request("fact_observation_in_future", "publish_facts"));
+        }
+        let mut reused = BTreeSet::new();
+        let mut new_count = 0;
+        let mut new_identities = 0;
+        for record in &observation.records {
+            match self.preview_publish(record)? {
+                Some(event) => {
+                    reused.insert(event);
+                }
+                None => new_count += 1,
+            }
+            if !self
+                .latest_observed
+                .contains_key(&(record.scope.clone(), record.key.clone()))
+            {
+                new_identities += 1;
+            }
+        }
+        let existing_members = self
+            .active
+            .values()
+            .filter(|stored| {
+                stored.record.scope == first.scope
+                    && stored.record.source_snapshot_id == first.source_snapshot_id
+            })
+            .count();
+        if new_count > 0
+            && observation
+                .records
+                .iter()
+                .filter_map(|record| self.active.get(&(record.scope.clone(), record.key.clone())))
+                .any(|replaced| {
+                    self.active.values().any(|member| {
+                        member.event_id == replaced.event_id
+                            && !observation.records.iter().any(|record| {
+                                record.scope == member.record.scope
+                                    && record.key == member.record.key
+                            })
+                    })
+                })
+        {
+            return Err(fact_request(
+                "fact_observation_incomplete_refresh",
+                "publish_facts",
+            ));
+        }
+        if reused.len() > 1
+            || (!reused.is_empty()
+                && (new_count != 0 || existing_members != observation.records.len()))
+            || (reused.is_empty() && existing_members != 0)
+        {
+            return Err(fact_request(
+                "fact_observation_version_conflict",
+                "publish_facts",
+            ));
+        }
+        if self.latest_observed.len() + new_identities > MAX_ACTIVE_FACTS {
+            return Err(fact_request(
+                "fact_store_capacity_exceeded",
+                "publish_facts",
+            ));
+        }
+        Ok(reused.into_iter().next())
     }
 
     pub(crate) fn plan_invalidations(
@@ -359,6 +639,7 @@ impl InstanceFactStore {
             .filter(|stored| {
                 stored.sequence <= event.sequence()
                     && stored.record.invalidate_on.contains(&event.event_type())
+                    && invalidation_scope_matches(event, &stored.scope_instances)
             })
             .map(|stored| FactInvalidationEventData {
                 scope: stored.record.scope.clone(),
@@ -484,6 +765,10 @@ impl InstanceFactStore {
                 sequence,
             },
         );
+        self.latest_observed
+            .entry(identity.clone())
+            .and_modify(|at| *at = (*at).max(data.invalidated_at_unix_ms))
+            .or_insert(data.invalidated_at_unix_ms);
         if persisted {
             self.persist_tombstone(&data, sequence)?;
             self.trim_recent_tombstones()?;
@@ -799,7 +1084,7 @@ fn instance_context(instance: &InstanceSnapshot) -> InstanceFactContext {
     }
 }
 
-fn policy_scope(scope: &FactScope) -> ScopeSelector {
+pub(crate) fn policy_scope(scope: &FactScope) -> ScopeSelector {
     match scope {
         FactScope::Instance { instance_id } => ScopeSelector::Instance {
             instance_id: instance_id.clone(),
@@ -910,6 +1195,8 @@ mod tests {
     fn store_with_state(state: Arc<RuntimeStateStore>) -> InstanceFactStore {
         InstanceFactStore {
             active: BTreeMap::new(),
+            latest_observed: BTreeMap::new(),
+            input_boundaries: InputInvalidationBoundaries::default(),
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
@@ -1043,6 +1330,51 @@ mod tests {
             .expect("publish");
         store.apply_trigger(EventType::RuntimeTakeover, trigger, 2_000);
         assert_eq!(store.active_count(), 0);
+
+        // LIVE-FACT-POOL-v1 specification: source time survives invalidation.
+        let old = record(
+            FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            "snapshot:old",
+            vec![EventType::RuntimeTakeover],
+        );
+        assert_eq!(
+            store
+                .preview_observation(
+                    &actingcommand_contract::FactObservation {
+                        records: vec![old.clone()]
+                    },
+                    3_000
+                )
+                .unwrap_err()
+                .code(),
+            "fact_observation_not_newer"
+        );
+        let mut fresh = old;
+        fresh.observed_at_unix_ms = 2_001;
+        assert!(
+            store
+                .preview_observation(
+                    &actingcommand_contract::FactObservation {
+                        records: vec![fresh.clone()]
+                    },
+                    3_000
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            store
+                .preview_observation(
+                    &actingcommand_contract::FactObservation {
+                        records: vec![fresh]
+                    },
+                    2_000
+                )
+                .unwrap_err()
+                .code(),
+            "fact_observation_in_future"
+        );
     }
 
     #[test]

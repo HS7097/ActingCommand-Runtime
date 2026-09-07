@@ -86,6 +86,7 @@ use actingcommand_contract::{
     TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
+use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
     ContainedTaskRuntimeErrorClass, ContainedTaskTrace, ExecutionBackendProvenance,
@@ -145,6 +146,7 @@ const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
+const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 
 mod device_diagnostic;
 mod lab_operation;
@@ -222,6 +224,37 @@ impl PolicyInputSnapshot {
     pub fn resources(&self) -> &EvaluationResources {
         &self.resources
     }
+}
+
+fn validate_static_fact_pool_authority(
+    catalog: &actingcommand_policy::CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    operation: &'static str,
+) -> RuntimeHostResult<()> {
+    for pool in &catalog.catalog().pools.pools {
+        if pool.value_source.is_static() {
+            continue;
+        }
+        let actingcommand_policy::ObservationRef::Fact { fact_key } = &pool.observation else {
+            return Err(policy_admission_request(
+                "policy_pool_binding_invalid",
+                operation,
+            ));
+        };
+        if resources.pools.iter().any(|value| value.pool_id == pool.id)
+            || facts
+                .facts
+                .iter()
+                .any(|fact| fact.scope == pool.scope && fact.fact_key == *fact_key)
+        {
+            return Err(policy_admission_request(
+                "policy_pool_authority_conflict",
+                operation,
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4143,12 +4176,39 @@ impl HostShared {
                 observed_at_unix_ms: outcome.terminal_timestamp_unix_ms(),
             });
         }
-        let facts = lock(&self.facts, "project_policy_facts")?.overlay_policy_facts(
+        let fact_store = lock(&self.facts, "project_policy_facts")?;
+        let historical;
+        let fact_projection = if ledger_position == latest_ledger_position {
+            &*fact_store
+        } else {
+            historical = fact_store.at_position(&self.ledger, ledger_position)?;
+            &historical
+        };
+        let catalog = lock(&self.policy, "project_fact_pool_catalog")?.active_loaded();
+        if let Some(catalog) = &catalog {
+            validate_static_fact_pool_authority(
+                catalog.compiled(),
+                inputs.facts(),
+                inputs.resources(),
+                operation,
+            )?;
+        }
+        let facts = fact_projection.overlay_policy_facts(
             &base_facts,
             inputs.resources(),
             ledger_position,
         )?;
-        Ok((facts, inputs.resources().clone()))
+        let resources = if let Some(catalog) = catalog {
+            fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
+                self.fact_scope_instances(scope)
+            })?;
+            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, inputs.resources())
+        } else {
+            inputs.resources().clone()
+        };
+        let facts =
+            fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
+        Ok((facts, resources))
     }
 
     fn validate_policy_input_authority(
@@ -4204,14 +4264,17 @@ impl HostShared {
         seed: u64,
         config: ForwardProjectionConfig,
     ) -> RuntimeHostResult<ForwardProjection> {
-        let facts = {
+        let declared_facts = facts;
+        let (facts, fact_projection) = {
             let mut fact_projection = lock(&self.facts, "project_forward_facts")?.clone();
             fact_projection.synchronize(&self.ledger)?;
             let ledger_position = self
                 .ledger
                 .latest_sequence()
                 .map_err(|_| ledger_error("project_forward_fact_position"))?;
-            fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?
+            let facts =
+                fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?;
+            (facts, fact_projection)
         };
         let (catalog, workloads) = {
             let policy = lock(&self.policy, "project_forward_catalog")?;
@@ -4224,7 +4287,16 @@ impl HostShared {
             })?;
             (catalog, policy.active_performance_workloads()?)
         };
-        let mut resources = resources.clone();
+        validate_static_fact_pool_authority(
+            catalog.compiled(),
+            declared_facts,
+            resources,
+            "project_policy_forward",
+        )?;
+        fact_projection
+            .validate_pool_sources(catalog.compiled(), |scope| self.fact_scope_instances(scope))?;
+        let mut resources =
+            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, resources);
         lock(
             &self.performance_control,
             "apply_forward_performance_control",
@@ -4295,19 +4367,99 @@ impl HostShared {
     }
 
     fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
+        self.publish_facts(
+            actingcommand_contract::FactObservation {
+                records: vec![record],
+            },
+            None,
+        )
+    }
+
+    fn fact_scope_instances(
+        &self,
+        scope: &actingcommand_contract::FactScope,
+    ) -> RuntimeHostResult<Vec<InstanceId>> {
+        let inputs = lock(&self.policy_inputs, "bind_fact_scope")?;
+        let registered = lock(&self.registered_instances, "bind_fact_scope")?;
+        Ok(registered
+            .values()
+            .filter(|instance| match scope {
+                actingcommand_contract::FactScope::Instance { instance_id } => {
+                    instance_id == &instance.instance_alias
+                }
+                _ => inputs.as_ref().is_some_and(|inputs| {
+                    inputs.facts().instances.iter().any(|context| {
+                        context.instance_id == instance.instance_alias
+                            && scope.matches(&InstanceFactContext {
+                                instance_id: context.instance_id.clone(),
+                                server_id: context.server_id.clone(),
+                                game_id: context.game_id.clone(),
+                            })
+                    })
+                }),
+            })
+            .map(|instance| instance.instance_id)
+            .collect())
+    }
+
+    fn publish_facts(
+        &self,
+        observation: actingcommand_contract::FactObservation,
+        source_request: Option<&ValidatedRuntimeRequest<'_>>,
+    ) -> RuntimeHostResult<EventId> {
         let result: RuntimeHostResult<EventId> = (|| {
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
             self.synchronize_fact_store_under_gate()?;
-            if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_publish(&record)? {
+            if let Some(event_id) = lock(&self.facts, "publish_fact")?
+                .preview_observation(&observation, self.clock.sample()?.unix_ms)?
+            {
                 return Ok(event_id);
             }
+            let scope = &observation.records[0].scope;
+            let inputs = lock(&self.policy_inputs, "bind_fact_scope")?;
+            if inputs.as_ref().is_some_and(|inputs| {
+                observation.records.iter().any(|record| {
+                    inputs.facts().facts.iter().any(|fact| {
+                        fact.scope == crate::fact_store::policy_scope(&record.scope)
+                            && fact.fact_key == record.key
+                    })
+                })
+            }) {
+                return Err(policy_admission_request(
+                    "policy_fact_authority_conflict",
+                    "publish_facts",
+                ));
+            }
+            drop(inputs);
+            let scope_instances = self.fact_scope_instances(scope)?;
+            lock(&self.facts, "validate_fact_input_boundary")?
+                .validate_input_boundaries(&observation.records[0], &scope_instances)?;
+            if scope_instances.is_empty()
+                && observation.records[0].invalidate_on.iter().any(|event| {
+                    matches!(event, EventType::InputCommitted | EventType::InputFailed)
+                })
+            {
+                return Err(policy_admission_request(
+                    "fact_invalidation_scope_unbound",
+                    "publish_facts",
+                ));
+            }
+            let payload =
+                FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
+                    .map_err(|_| {
+                        policy_admission_request("fact_observation_invalid", "publish_facts")
+                    })?;
+            let links = match source_request {
+                Some(request) => self.events.request_links(request, None, None, None),
+                None => self.events.system_links()?,
+            };
             let event = self.append_event_under_fact_gate(
                 EventSeverity::Info,
                 EventSource::Runtime,
                 OriginModule::FactStore,
                 EventActor::Runtime,
-                self.events.system_links()?,
-                FactPayloadDraft::published(record.clone(), AuditInput::new()),
+                links,
+                payload,
             )?;
             self.synchronize_fact_store_under_gate()?;
             Ok(*event.event_id())
@@ -5737,13 +5889,36 @@ impl HostShared {
                 )
                 .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {
-                let event_id = self.publish_fact(record.clone()).map_err(|error| {
-                    if error.is_fatal() {
-                        RequestFailure::poison_without_terminal(error)
-                    } else {
-                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                    }
-                })?;
+                let event_id = self
+                    .publish_facts(
+                        actingcommand_contract::FactObservation {
+                            records: vec![record.clone()],
+                        },
+                        Some(validated),
+                    )
+                    .map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::FactPublished { event_id },
+                })
+            }
+            RuntimeOperation::PublishFacts { observation } => {
+                let event_id = self
+                    .publish_facts(observation.clone(), Some(validated))
+                    .map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
                 Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
@@ -8253,6 +8428,10 @@ impl HostShared {
     fn run_monitor_probe(&self, probe: &DueMonitorProbe) -> RuntimeHostResult<()> {
         let started_at_unix_ms = unix_ms_now()?;
         let instance = self.monitor_instance(&probe.instance_alias)?;
+        let instance_guard = self
+            .instance_guard(instance.instance_id())
+            .map_err(|failure| *failure.error)?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
         if instance.provenance() != ExecutionBackendProvenance::PhysicalDevice {
             return Err(RuntimeHostError::fatal(
                 "fixture_monitor_scope_forbidden",
@@ -8312,9 +8491,8 @@ impl HostShared {
         {
             Ok(frame) => frame,
             Err(error) => {
-                let error = self
-                    .execution
-                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
+                let error =
+                    self.finish_capture_failure_while_guarded(error, links.clone(), &admission)?;
                 let error = RuntimeHostError::execution("run_monitor_capture", &error);
                 if self.retain_unconfirmed_resources(&error, links.clone())? {
                     return Err(error);
@@ -8718,6 +8896,15 @@ impl HostShared {
         if let Some(run_links) = run_links {
             links = run_links.apply(links);
         }
+        self.grant_prepared_lease_with_links(resolved, preparation, links)
+    }
+
+    fn grant_prepared_lease_with_links(
+        &self,
+        resolved: &RegisteredInstance,
+        preparation: LeasePreparation,
+        links: EventLinksDraft,
+    ) -> Result<OperationSuccess, RequestFailure> {
         let intent = self.lease_intent(
             EventAction::LeaseAcquire,
             links.clone(),
@@ -10356,12 +10543,15 @@ impl HostShared {
         if let Some((_, run_id)) = debug_run {
             artifact_links = artifact_links.with_run_id(run_id);
         }
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
         self.capture_observation_with_links(
             request,
             instance_alias,
             links,
             artifact_links,
             retain_native_artifact_error,
+            &admission,
         )
     }
 
@@ -10372,6 +10562,7 @@ impl HostShared {
         links: EventLinksDraft,
         artifact_links: ArtifactLinksDraft,
         retain_native_artifact_error: bool,
+        admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.append_event(
             EventSeverity::Info,
@@ -10399,8 +10590,8 @@ impl HostShared {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
-                    .execution
-                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
+                    .finish_capture_failure_while_guarded(error, links.clone(), admission)
+                    .map_err(RequestFailure::poison_without_terminal)?;
                 let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
                 if self
                     .retain_unconfirmed_resources(&runtime_error, links.clone())
@@ -13325,6 +13516,9 @@ impl HostShared {
     fn record_owner_resource_close(&self) -> RuntimeHostResult<OwnerResourceDisposition> {
         // The same owner lock spans InUse and session registration on every acquisition.
         let mut owner = lock(&self.owner, "record_owner_resource_close")?;
+        if let Some(disposition) = owner.retained_resource_disposition()? {
+            return Ok(disposition);
+        }
         let has_sessions = self.execution.has_sessions().map_err(|error| {
             RuntimeHostError::execution("inspect_remaining_execution_sessions", &error)
         })?;
@@ -13367,9 +13561,36 @@ impl HostShared {
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> Result<(), RequestFailure> {
+        self.close_instance_resources_result(token, connection_id, links)?
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "close_execution_session",
+                    &error,
+                ))
+            })
+    }
+
+    fn close_instance_resources_result(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+    ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
+        if let Some(error) = self
+            .execution
+            .unconfirmed_instance_close_error(token.instance_id())
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "read_execution_close_result",
+                    &error,
+                ))
+            })?
+        {
+            return Ok(Err(error));
+        }
         let has_session = self
             .execution
-            .has_session(token.instance_id())
+            .has_owned_resources(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
                     "inspect_execution_session",
@@ -13378,7 +13599,7 @@ impl HostShared {
             })?;
         if !has_session {
             self.record_owner_resource_close()?;
-            return Ok(());
+            return Ok(Ok(()));
         }
         lock(&self.scheduler, "begin_destructive_resource_close")?
             .begin_resource_close(token, connection_id, self.monotonic_ms()?)
@@ -13413,10 +13634,11 @@ impl HostShared {
                             &error,
                         ))
                     })?;
-                Ok(())
+                Ok(Ok(()))
             }
-            Err(error) => {
-                let error = RuntimeHostError::execution("close_execution_session", &error);
+            Err(execution_error) => {
+                let error =
+                    RuntimeHostError::execution("close_execution_session", &execution_error);
                 let lifecycle_result = self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&error),
@@ -13430,7 +13652,7 @@ impl HostShared {
                     lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
                     retain_result.map_err(RequestFailure::poison_without_terminal)?;
                     fatal_result.map_err(RequestFailure::poison_without_terminal)?;
-                    return Err(RequestFailure::poison_without_terminal(error));
+                    return Ok(Err(execution_error));
                 }
                 lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
                 self.record_owner_resource_close()?;
@@ -13442,7 +13664,146 @@ impl HostShared {
                             &scheduler_error,
                         ))
                     })?;
-                Err(RequestFailure::poison_without_terminal(error))
+                Ok(Err(execution_error))
+            }
+        }
+    }
+
+    /// The instance admission guard excludes capture registration and business native calls.
+    fn close_retained_instance_while_guarded(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        reuse_active_lease: bool,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
+        if !self
+            .execution
+            .has_owned_resources(instance_id)
+            .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
+        {
+            return Ok(Ok(()));
+        }
+        let active = lock(&self.scheduler, "read_resource_close_lease")?
+            .active_tokens()
+            .into_iter()
+            .find(|token| token.instance_id() == instance_id);
+        let (token, connection_id, acquired) = if let Some(token) = active {
+            if !reuse_active_lease {
+                return Err(RuntimeHostError::scheduler(
+                    "acquire_resource_close_lease",
+                    &SchedulerError::Busy {
+                        holder_id: token.holder_id(),
+                        lease_id: token.lease_id(),
+                        expires_at_monotonic_ms: token.expires_at_monotonic_ms(),
+                    },
+                ));
+            }
+            let connection_id = lock(&self.scheduler, "read_resource_close_connection")?
+                .connection_for_token(&token)
+                .map_err(|error| {
+                    RuntimeHostError::scheduler("read_resource_close_connection", &error)
+                })?;
+            (token, connection_id, false)
+        } else {
+            let resolved = lock(&self.registered_instances, "read_resource_close_instance")?
+                .get(&instance_id)
+                .cloned()
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "resource_close_instance_missing",
+                        "acquire_resource_close_lease",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            let request_id = self
+                .events
+                .issuer()
+                .mint_request_id()
+                .map_err(|_| runtime_identifier_error())?;
+            let holder_id = self
+                .events
+                .issuer()
+                .mint_holder_id()
+                .map_err(|_| runtime_identifier_error())?;
+            let connection_id =
+                ConnectionId::new(RESOURCE_CLOSE_CONNECTION_VALUE).map_err(|error| {
+                    RuntimeHostError::scheduler("build_resource_close_connection", &error)
+                })?;
+            let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
+                .prepare_resource_close(
+                    *request_id.transport(),
+                    instance_id,
+                    *holder_id.transport(),
+                    connection_id,
+                    self.monotonic_ms()?,
+                )
+                .map_err(|error| {
+                    RuntimeHostError::scheduler("prepare_resource_close_lease", &error)
+                })?;
+            let token = preparation.token().clone();
+            let grant_links = self
+                .events
+                .synthetic_links(&token, self.events.action_id()?)?
+                .with_request_id(request_id);
+            self.grant_prepared_lease_with_links(&resolved, preparation, grant_links)
+                .map_err(|failure| *failure.error)?;
+            (token, connection_id, true)
+        };
+        let result = self
+            .close_instance_resources_result(&token, connection_id, links)
+            .map_err(|failure| *failure.error)?;
+        let confirmed = result
+            .as_ref()
+            .err()
+            .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
+        if acquired && confirmed {
+            self.cleanup_token_inner(
+                &token,
+                connection_id,
+                LeaseReleaseReason::HostShutdown,
+                None,
+                Some(admission),
+            )?;
+        }
+        Ok(result)
+    }
+
+    fn finish_capture_failure_while_guarded(
+        &self,
+        primary: ExecutionKernelError,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<ExecutionKernelError> {
+        let Some(instance_id) = primary.instance_id() else {
+            return Ok(primary);
+        };
+        match self.close_retained_instance_while_guarded(
+            instance_id,
+            links.clone(),
+            true,
+            admission,
+        ) {
+            Ok(Ok(())) => Ok(primary),
+            Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
+            Err(cleanup) => {
+                let primary = RuntimeHostError::execution("finish_capture_failure", &primary);
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&primary),
+                    links.clone(),
+                    None,
+                )?;
+                let cleanup = cleanup.into_fatal();
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&cleanup),
+                    links,
+                    None,
+                )?;
+                lock(&self.owner, "retain_unconfirmed_owner")?.retain_unconfirmed()?;
+                self.fatal.mark(cleanup.clone())?;
+                Err(cleanup)
             }
         }
     }
@@ -13600,7 +13961,7 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
     ) -> RuntimeHostResult<()> {
-        self.cleanup_token_inner(token, connection_id, reason, None)
+        self.cleanup_token_inner(token, connection_id, reason, None, None)
     }
 
     /// The sole producer of a run-linked scheduled failure cleanup.
@@ -13619,6 +13980,7 @@ impl HostShared {
             connection_id,
             LeaseReleaseReason::BackendFailure,
             Some((request, run_links)),
+            None,
         )
     }
 
@@ -13628,6 +13990,7 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
         request_links: Option<(&ValidatedRuntimeRequest<'_>, RuntimeRunLinks)>,
+        admission: Option<&MutexGuard<'_, ()>>,
     ) -> RuntimeHostResult<()> {
         let resolved = lock(&self.registered_instances, "read_instance_registry")?
             .get(&token.instance_id())
@@ -13650,7 +14013,11 @@ impl HostShared {
         let instance_guard = self
             .instance_guard(token.instance_id())
             .map_err(|failure| *failure.error)?;
-        let _admission = lock(&instance_guard, "lock_instance_admission")?;
+        let _owned_admission = if admission.is_none() {
+            Some(lock(&instance_guard, "lock_instance_admission")?)
+        } else {
+            None
+        };
         self.expire_queued_for_instance(token.instance_id())
             .map_err(|failure| *failure.error)?;
         self.close_instance_resources(token, connection_id, EventLinksDraft::default())
@@ -14185,34 +14552,19 @@ impl HostShared {
     }
 
     fn close(self) -> RuntimeHostResult<()> {
+        let mut failure = None;
         let tokens = match lock(&self.scheduler, "list_runtime_leases") {
             Ok(scheduler) => scheduler.active_tokens(),
             Err(error) => {
-                let mut failure = None;
                 self.record_lifecycle_result(
                     RuntimeLifecycleFailureStage::HostClose,
                     &mut failure,
                     Err(error),
                 );
-                self.finish_device_diagnostics(&mut failure);
-                return failure.map_or(Ok(()), Err);
+                Vec::new()
             }
         };
-        let mut failure = None;
         for token in tokens {
-            match self.fatal.current() {
-                Ok(Some(_)) => break,
-                Ok(None) => {}
-                Err(error) => {
-                    self.record_lifecycle_result(
-                        RuntimeLifecycleFailureStage::HostClose,
-                        &mut failure,
-                        Err(error),
-                    );
-                    self.finish_device_diagnostics(&mut failure);
-                    return failure.map_or(Ok(()), Err);
-                }
-            }
             let connection_id =
                 lock(&self.scheduler, "read_lease_connection").and_then(|scheduler| {
                     scheduler.connection_for_token(&token).map_err(|error| {
@@ -14232,7 +14584,47 @@ impl HostShared {
                 ),
             }
         }
-        if let Err(mut error) = self.execution.close() {
+        match self.execution.owned_instance_ids() {
+            Ok(instances) => {
+                for instance_id in instances {
+                    let result = (|| {
+                        // Cached Unconfirmed outcomes are reduced below without another close attempt.
+                        if !self.execution.has_session(instance_id).map_err(|error| {
+                            RuntimeHostError::execution("inspect_retained_session", &error)
+                        })? {
+                            return Ok(());
+                        }
+                        let instance_guard = self
+                            .instance_guard(instance_id)
+                            .map_err(|failure| *failure.error)?;
+                        let admission = lock(&instance_guard, "lock_instance_admission")?;
+                        self.close_retained_instance_while_guarded(
+                            instance_id,
+                            EventLinksDraft::default(),
+                            false,
+                            &admission,
+                        )?
+                        .map_err(|error| {
+                            RuntimeHostError::execution("close_execution_session", &error)
+                        })
+                    })();
+                    self.record_lifecycle_result(
+                        RuntimeLifecycleFailureStage::SessionClose,
+                        &mut failure,
+                        result,
+                    );
+                }
+            }
+            Err(error) => self.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::SessionClose,
+                &mut failure,
+                Err(RuntimeHostError::execution(
+                    "list_retained_sessions",
+                    &error,
+                )),
+            ),
+        }
+        if let Err(mut error) = self.execution.close_after_resource_retirement() {
             let aggregate_error = RuntimeHostError::execution("close_execution_kernel", &error);
             let unconfirmed = error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed);
             let closed_sessions = error.take_closed_sessions();
@@ -14302,8 +14694,6 @@ impl HostShared {
                     &mut failure,
                     Err(error),
                 );
-                self.finish_device_diagnostics(&mut failure);
-                return failure.map_or(Ok(()), Err);
             }
         }
         self.finish_device_diagnostics(&mut failure);
@@ -16449,6 +16839,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
 
     fn capture(&mut self) -> Result<Frame, Self::Error> {
         self.ensure_active()?;
+        let instance_guard = self.host.instance_guard(self.token.instance_id())?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
         let frame_id = self
             .host
             .events
@@ -16560,8 +16952,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             Err(error) => {
                 let error = self
                     .host
-                    .execution
-                    .finish_failed_capture(error, DeviceCloseAuthority::LocalOnly);
+                    .finish_capture_failure_while_guarded(error, links.clone(), &admission)
+                    .map_err(RequestFailure::poison_without_terminal)?;
                 let runtime_error =
                     RuntimeHostError::execution("run_contained_task_capture", &error);
                 if self
