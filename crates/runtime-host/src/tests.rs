@@ -393,6 +393,7 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let connection = ConnectionId::new(123).unwrap();
+    let mut client = TestClient::connect(&host);
     let request = |operation| {
         RuntimeRequest::new(
             ids.mint_request_id().unwrap(),
@@ -416,15 +417,9 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
             lifecycle: None,
         }),
     });
-    let first = host
-        .process_request_for_test(&register, connection)
-        .unwrap();
+    let first = client.send(&register);
     assert_eq!(first.state(), RuntimeReceiptState::Completed);
-    assert_eq!(
-        first,
-        host.process_request_for_test(&register, connection)
-            .unwrap()
-    );
+    assert_eq!(first, client.send(&register));
     let Some(RuntimeResult::SignatureRegistered { registration }) = first.result() else {
         panic!("registration");
     };
@@ -452,9 +447,7 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
         })
     };
     let matched_request = match_request(registration.sequence);
-    let matched = host
-        .process_request_for_test(&matched_request, connection)
-        .unwrap();
+    let matched = client.send(&matched_request);
     assert_eq!(matched.state(), RuntimeReceiptState::Completed);
     assert!(matched.terminal().is_some());
     let Some(RuntimeResult::SignaturesMatched { page }) = matched.result() else {
@@ -462,11 +455,7 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
     };
     assert_eq!(page.matched_count, 1);
     assert!(page.evidence_complete());
-    assert_eq!(
-        matched,
-        host.process_request_for_test(&matched_request, connection)
-            .unwrap()
-    );
+    assert_eq!(matched, client.send(&matched_request));
     for _ in 0..2 {
         let query = runtime_request(
             &ids,
@@ -522,6 +511,7 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
     ] {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
+    drop(client);
     host.close().unwrap();
 }
 
