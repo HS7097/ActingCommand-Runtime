@@ -10536,8 +10536,10 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
                 }
             );
             assert_eq!(
-                label["data"]["raw"]["score"],
-                serde_json::json!(if index == 1023 { 0.98_f32 } else { 0.25_f32 })
+                serde_json::from_value::<f32>(label["data"]["raw"]["score"].clone())
+                    .unwrap()
+                    .to_bits(),
+                (if index == 1023 { 0.98_f32 } else { 0.25_f32 }).to_bits()
             );
         }
         assert_eq!(labels[1023]["data"]["derived"]["rank"], 0);
