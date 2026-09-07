@@ -2929,9 +2929,12 @@ fn project_ocr_fields(
                 }
                 match (&declared.value, &field.value) {
                     (
-                        OcrFieldType::UnsignedInteger { min, max },
+                        OcrFieldType::UnsignedInteger { min, max, format },
                         Some(OcrFieldValue::UnsignedInteger(value)),
-                    ) if value >= min && value <= max => {}
+                    ) if field
+                        .normalized_text
+                        .as_deref()
+                        .is_some_and(|text| format.parse(text, *min, *max) == Ok(*value)) => {}
                     (
                         OcrFieldType::DictionaryEntry { .. },
                         Some(OcrFieldValue::DictionaryEntry(value)),

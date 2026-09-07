@@ -1159,20 +1159,14 @@ fn parse_ocr_field(
         return (None, OcrFieldReason::Empty);
     }
     match value_type {
-        OcrFieldType::UnsignedInteger { min, max } => {
-            if !text.bytes().all(|b| b.is_ascii_digit()) {
-                return (None, OcrFieldReason::InvalidInteger);
+        OcrFieldType::UnsignedInteger { min, max, format } => {
+            match format.parse(text, *min, *max) {
+                Ok(value) => (
+                    Some(OcrFieldValue::UnsignedInteger(value)),
+                    OcrFieldReason::Resolved,
+                ),
+                Err(reason) => (None, reason),
             }
-            let Ok(value) = text.parse::<u64>() else {
-                return (None, OcrFieldReason::Overflow);
-            };
-            if value < *min || value > *max {
-                return (None, OcrFieldReason::OutOfRange);
-            }
-            (
-                Some(OcrFieldValue::UnsignedInteger(value)),
-                OcrFieldReason::Resolved,
-            )
         }
         OcrFieldType::DictionaryEntry { .. } => {
             let Some(dictionary) = dictionary else {

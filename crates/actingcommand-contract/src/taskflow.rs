@@ -200,10 +200,79 @@ pub enum OcrFieldType {
     UnsignedInteger {
         min: u64,
         max: u64,
+        #[serde(
+            default,
+            skip_serializing_if = "OcrUnsignedIntegerFormat::is_ascii_decimal"
+        )]
+        format: OcrUnsignedIntegerFormat,
     },
     DictionaryEntry {
         dictionary: OcrFieldDictionaryReference,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrUnsignedIntegerFormat {
+    #[default]
+    AsciiDecimal,
+    CommaGrouped,
+    CurrentCapacity,
+}
+
+impl OcrUnsignedIntegerFormat {
+    fn is_ascii_decimal(&self) -> bool {
+        *self == Self::AsciiDecimal
+    }
+
+    /// Parses the complete already-trimmed observation without changing its text.
+    pub fn parse(self, text: &str, min: u64, max: u64) -> Result<u64, OcrFieldReason> {
+        if text.is_empty() {
+            return Err(OcrFieldReason::Empty);
+        }
+        let decimal = |digits: &str| {
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(OcrFieldReason::InvalidInteger);
+            }
+            digits.parse::<u64>().map_err(|_| OcrFieldReason::Overflow)
+        };
+        let value = match self {
+            Self::AsciiDecimal => decimal(text)?,
+            Self::CommaGrouped => {
+                let mut groups = text.split(',');
+                let first = groups.next().ok_or(OcrFieldReason::InvalidInteger)?;
+                if first.is_empty()
+                    || first.len() > 3
+                    || !first.bytes().all(|byte| byte.is_ascii_digit())
+                    || (first.starts_with('0') && (first.len() > 1 || text.contains(',')))
+                    || !groups.all(|group| {
+                        group.len() == 3 && group.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                {
+                    return Err(OcrFieldReason::InvalidInteger);
+                }
+                text.bytes()
+                    .filter(|byte| *byte != b',')
+                    .try_fold(0_u64, |value, byte| {
+                        value
+                            .checked_mul(10)
+                            .and_then(|value| value.checked_add(u64::from(byte - b'0')))
+                            .ok_or(OcrFieldReason::Overflow)
+                    })?
+            }
+            Self::CurrentCapacity => {
+                let (current, capacity) =
+                    text.split_once('/').ok_or(OcrFieldReason::InvalidInteger)?;
+                let current = decimal(current)?;
+                decimal(capacity)?;
+                current
+            }
+        };
+        if value < min || value > max {
+            return Err(OcrFieldReason::OutOfRange);
+        }
+        Ok(value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,7 +375,7 @@ impl OcrFieldsDeclaration {
                 return Err("ocr_fields_binding_invalid");
             }
             match &field.value {
-                OcrFieldType::UnsignedInteger { min, max } if min > max => {
+                OcrFieldType::UnsignedInteger { min, max, .. } if min > max => {
                     return Err("ocr_fields_range_invalid");
                 }
                 OcrFieldType::DictionaryEntry { dictionary }
