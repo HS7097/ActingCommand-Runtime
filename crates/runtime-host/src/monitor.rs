@@ -524,7 +524,7 @@ fn read_legacy_snapshot(
     }
     let content = std::str::from_utf8(&content)
         .map_err(|_| invalid_monitor_record("read_monitor_registry"))?;
-    let mut previous_revision = 0;
+    let mut previous_revision = 0_u64;
     let mut last = None;
     for line in content.lines().filter(|line| !line.trim().is_empty()) {
         let record = serde_json::from_str::<MonitorRecord>(line)
