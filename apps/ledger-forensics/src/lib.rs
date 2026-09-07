@@ -238,8 +238,8 @@ where
         catalog_through: catalog_through
             .filter(|value| *value > 0)
             .ok_or_else(|| invalid_arguments("missing positive --catalog-through"))?,
-        page: actingcommand_contract::SignaturePageRequest {
-            limit: limit.unwrap_or(actingcommand_contract::MAX_SIGNATURE_PAGE_ROWS),
+        page: actingcommand_ledger_forensics::SignaturePageRequest {
+            limit: limit.unwrap_or(actingcommand_ledger_forensics::MAX_SIGNATURE_PAGE_ROWS),
             cursor,
         },
     };

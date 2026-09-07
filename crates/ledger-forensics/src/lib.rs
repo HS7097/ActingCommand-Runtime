@@ -12,6 +12,7 @@ use actingcommand_contract::{
     EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventQuery, EventType, FrameId,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, ProjectedArtifactReference, RunId, TaskId,
 };
+pub use actingcommand_contract::{MAX_SIGNATURE_PAGE_ROWS, SignaturePageRequest};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerReadOnly,
     GlobalLedgerReadOnlyConfig, GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot,

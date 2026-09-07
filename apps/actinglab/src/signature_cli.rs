@@ -61,7 +61,7 @@ pub(super) fn options(operation: &str) -> Vec<&'static str> {
     }
 }
 
-pub(super) fn run(args: &[String]) -> CliOutcome<Value> {
+pub(super) fn run_signatures(args: &[String]) -> CliOutcome<Value> {
     let (operation, rest) = args
         .split_first()
         .ok_or_else(|| CliError::usage("lab signatures requires register, match or retire"))?;
