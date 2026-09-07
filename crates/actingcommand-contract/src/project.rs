@@ -510,6 +510,8 @@ pub struct ProjectRuntimeView {
     pub ledger_position: u64,
     pub fatal: bool,
     pub instance_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::RuntimeStateSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -611,6 +613,14 @@ pub struct ProjectInterfaceSnapshot {
 
 impl ProjectInterfaceSnapshot {
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if let Some(source) = &self.runtime.source {
+            source
+                .validate()
+                .map_err(|_| ProjectInterfaceError::new("project_current_source_invalid"))?;
+            if source.sequence < self.ledger_position {
+                return Err(ProjectInterfaceError::new("project_current_source_invalid"));
+            }
+        }
         if self.ledger_position == 0
             || self.runtime.ledger_position != self.ledger_position
             || self.runtime.instance_count != self.instances.len() as u32
@@ -722,7 +732,7 @@ impl ProjectLedgerSnapshot {
     }
 }
 
-/// Explicitly live Runtime state that is not part of the historical ledger snapshot.
+/// Runtime state sampled and committed separately from the historical pagination position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectCurrentView {
@@ -730,10 +740,20 @@ pub struct ProjectCurrentView {
     pub owner_epoch: OwnerEpoch,
     pub fatal: bool,
     pub instances: Vec<ProjectInstanceView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::RuntimeStateSource>,
 }
 
 impl ProjectCurrentView {
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if let Some(source) = &self.source {
+            source
+                .validate()
+                .map_err(|_| ProjectInterfaceError::new("project_current_source_invalid"))?;
+            if source.sequence != self.observed_ledger_position {
+                return Err(ProjectInterfaceError::new("project_current_source_invalid"));
+            }
+        }
         if self.observed_ledger_position == 0 || self.instances.len() > MAX_PROJECT_INSTANCES {
             return Err(ProjectInterfaceError::new("project_current_view_invalid"));
         }
@@ -1232,6 +1252,7 @@ mod tests {
             }],
             runtime: ProjectRuntimeView {
                 owner_epoch: *ids.mint_owner_epoch().expect("owner").transport(),
+                source: None,
                 ledger_position: 7,
                 fatal: false,
                 instance_count: 1,
@@ -1263,6 +1284,7 @@ mod tests {
             },
             ProjectCurrentView {
                 observed_ledger_position: 7,
+                source: None,
                 owner_epoch: legacy.runtime.owner_epoch,
                 fatal: legacy.runtime.fatal,
                 instances: legacy.instances,

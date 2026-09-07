@@ -1343,8 +1343,8 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(contract.contains("MonitorStatus"));
     assert!(registry.contains("struct MonitorRegistry"));
     assert!(registry.contains("struct DueMonitorProbe"));
-    assert!(registry.contains("complete_probe"));
-    assert!(registry.contains("fail_probe"));
+    assert!(registry.contains("prepare_completion"));
+    assert!(registry.contains("prepare_failure"));
     assert!(registry.contains("MONITOR_FILE_NAME"));
     assert!(host.contains("monitor_registry: Mutex<MonitorRegistry>"));
     assert!(host.contains("fn monitor_probe_loop"));

@@ -550,6 +550,9 @@ impl RuntimeHost {
             registered_instances
                 .values()
                 .map(|instance| instance.instance_alias.clone()),
+            owner_epoch,
+            &ledger,
+            &events,
         )?;
         let state = Arc::new(
             RuntimeStateStore::open(&config.state_root, &config.secret_fingerprint_salt)
@@ -5737,12 +5740,14 @@ impl HostShared {
                     owner_epoch: self.owner_epoch,
                 },
             }),
-            RuntimeOperation::Status => self.control_plane_status(),
-            RuntimeOperation::ProjectInterface { request } => self.project_interface(request),
+            RuntimeOperation::Status => self.control_plane_status(validated),
+            RuntimeOperation::ProjectInterface { request } => {
+                self.project_interface(validated, request)
+            }
             RuntimeOperation::ProjectPolicyInputIdentity {
                 as_of_ledger_position,
             } => self.project_policy_input_identity(*as_of_ledger_position),
-            RuntimeOperation::MonitorStatus => self.monitor_status(),
+            RuntimeOperation::MonitorStatus => self.monitor_status(validated),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,
                 policy,
@@ -8012,6 +8017,7 @@ impl HostShared {
 
     fn project_interface(
         &self,
+        validated: &ValidatedRuntimeRequest<'_>,
         request: &ProjectInterfaceRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
         request.negotiate().map_err(|error| {
@@ -8040,7 +8046,6 @@ impl HostShared {
                 RuntimeErrorCode::ProtocolInvalid,
             )));
         }
-        let status = self.control_plane_status_projection()?;
         let facts = InstanceFactStore::active_records_at(&self.ledger, ledger_position)
             .map_err(RequestFailure::poison_without_terminal)?;
         let approvals =
@@ -8085,11 +8090,25 @@ impl HostShared {
                 event_type: event.event_type(),
             })
             .collect();
-        let fatal = self
-            .fatal
-            .current()
-            .map_err(RequestFailure::poison_without_terminal)?
-            .is_some();
+        let (state, source) = self.observe_runtime_state(validated, || {
+            let status = self.control_plane_status_projection()?;
+            let fatal = self
+                .fatal
+                .current()
+                .map_err(RequestFailure::poison_without_terminal)?
+                .is_some();
+            Ok(actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal })
+        })?;
+        let actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal } = state
+        else {
+            return Err(RequestFailure::poison_without_terminal(ledger_error(
+                "project_state_observation_kind",
+            )));
+        };
+        let current_ledger_position = source.sequence;
+        let status = status.with_source(source).map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error("project_state_source"))
+        })?;
         let response = ProjectInterfaceProjection {
             ledger_position,
             current_ledger_position,
@@ -8112,13 +8131,90 @@ impl HostShared {
         })
     }
 
-    fn control_plane_status(&self) -> Result<OperationSuccess, RequestFailure> {
-        let status = self.control_plane_status_projection()?;
+    fn control_plane_status(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let (state, source) = self.observe_runtime_state(validated, || {
+            Ok(actingcommand_contract::RuntimeObservedState::ControlPlane {
+                status: self.control_plane_status_projection()?,
+            })
+        })?;
+        let actingcommand_contract::RuntimeObservedState::ControlPlane { status } = state else {
+            return Err(RequestFailure::poison_without_terminal(ledger_error(
+                "runtime_state_observation_kind",
+            )));
+        };
+        let status = status.with_source(source).map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error("runtime_state_source"))
+        })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::Status { status },
         })
+    }
+
+    fn observe_runtime_state(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+        sample: impl FnOnce() -> Result<actingcommand_contract::RuntimeObservedState, RequestFailure>,
+    ) -> Result<
+        (
+            actingcommand_contract::RuntimeObservedState,
+            actingcommand_contract::RuntimeStateSource,
+        ),
+        RequestFailure,
+    > {
+        let sampled_started_at_unix_ms = self
+            .clock
+            .sample()
+            .map_err(RequestFailure::poison_without_terminal)?
+            .unix_ms;
+        let state = sample()?;
+        let sampled_completed_at_unix_ms = self
+            .clock
+            .sample()
+            .map_err(RequestFailure::poison_without_terminal)?
+            .unix_ms;
+        let observed = self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            self.events.request_links(validated, None, None, None),
+            CommandPayloadDraft::validated_runtime_state(
+                EventAction::RuntimeAction,
+                EffectDisposition::NotPerformed,
+                actingcommand_contract::RuntimeStateFact::Observed {
+                    sampled_started_at_unix_ms,
+                    sampled_completed_at_unix_ms,
+                    state,
+                },
+                AuditInput::new(),
+            ),
+        )?;
+        let Some(actingcommand_contract::RuntimeStateFact::Observed {
+            sampled_started_at_unix_ms,
+            sampled_completed_at_unix_ms,
+            state,
+        }) = observed.payload().runtime_state()
+        else {
+            return Err(RequestFailure::poison_without_terminal(ledger_error(
+                "runtime_state_observation_missing",
+            )));
+        };
+        let source = actingcommand_contract::RuntimeStateSource {
+            event_id: *observed.event_id(),
+            sequence: observed.sequence(),
+            sampled_started_at_unix_ms: *sampled_started_at_unix_ms,
+            sampled_completed_at_unix_ms: *sampled_completed_at_unix_ms,
+        };
+        source.validate().map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error("runtime_state_source"))
+        })?;
+        let state = state.clone();
+        Ok((state, source))
     }
 
     fn control_plane_status_projection(&self) -> Result<RuntimeControlPlaneStatus, RequestFailure> {
@@ -8175,10 +8271,24 @@ impl HostShared {
         Ok(status)
     }
 
-    fn monitor_status(&self) -> Result<OperationSuccess, RequestFailure> {
-        let status = lock(&self.monitor_registry, "read_monitor_registry")?
-            .status(self.owner_epoch)
-            .map_err(RequestFailure::poison_without_terminal)?;
+    fn monitor_status(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let (state, source) = self.observe_runtime_state(validated, || {
+            let status = lock(&self.monitor_registry, "read_monitor_registry")?
+                .status(self.owner_epoch)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            Ok(actingcommand_contract::RuntimeObservedState::Monitor { status })
+        })?;
+        let actingcommand_contract::RuntimeObservedState::Monitor { status } = state else {
+            return Err(RequestFailure::poison_without_terminal(ledger_error(
+                "monitor_state_observation_kind",
+            )));
+        };
+        let status = status.with_source(source).map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error("monitor_state_source"))
+        })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -8201,7 +8311,8 @@ impl HostShared {
             EventAction::MonitorConfigure,
             None,
         )?;
-        let update = match lock(&self.monitor_registry, "configure_monitor_registry")?.configure(
+        let mut registry = lock(&self.monitor_registry, "configure_monitor_registry")?;
+        let update = match registry.prepare_configure(
             instance_alias,
             policy,
             unix_ms_now().map_err(RequestFailure::from)?,
@@ -8215,9 +8326,13 @@ impl HostShared {
                 )?);
             }
         };
-        self.monitor_mutation_success(links, EventAction::MonitorConfigure, update, |status| {
-            RuntimeResult::MonitorConfigured { status }
-        })
+        self.monitor_mutation_success(
+            &mut registry,
+            links,
+            EventAction::MonitorConfigure,
+            update,
+            |status| RuntimeResult::MonitorConfigured { status },
+        )
     }
 
     fn clear_monitor(
@@ -8234,24 +8349,29 @@ impl HostShared {
             EventAction::MonitorClear,
             None,
         )?;
-        let update =
-            match lock(&self.monitor_registry, "clear_monitor_registry")?.clear(instance_alias) {
-                Ok(update) => update,
-                Err(error) => {
-                    return Err(self.monitor_mutation_failure(
-                        links,
-                        EventAction::MonitorClear,
-                        error,
-                    )?);
-                }
-            };
-        self.monitor_mutation_success(links, EventAction::MonitorClear, update, |status| {
-            RuntimeResult::MonitorCleared { status }
-        })
+        let mut registry = lock(&self.monitor_registry, "clear_monitor_registry")?;
+        let update = match registry.prepare_clear(instance_alias) {
+            Ok(update) => update,
+            Err(error) => {
+                return Err(self.monitor_mutation_failure(
+                    links,
+                    EventAction::MonitorClear,
+                    error,
+                )?);
+            }
+        };
+        self.monitor_mutation_success(
+            &mut registry,
+            links,
+            EventAction::MonitorClear,
+            update,
+            |status| RuntimeResult::MonitorCleared { status },
+        )
     }
 
     fn monitor_mutation_success(
         &self,
+        registry: &mut MonitorRegistry,
         links: EventLinksDraft,
         action: EventAction,
         update: MonitorUpdate,
@@ -8268,12 +8388,31 @@ impl HostShared {
             OriginModule::Runtime,
             EventActor::Runtime,
             links,
-            CommandPayloadDraft::validated(action, effect, AuditInput::new()),
+            CommandPayloadDraft::validated_runtime_state(
+                action,
+                effect,
+                update.fact,
+                AuditInput::new(),
+            ),
         )?;
+        registry
+            .apply(&event)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. }) =
+            event.payload().runtime_state()
+        else {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "monitor_committed_state_missing",
+                    "commit_monitor_update",
+                    RuntimeErrorCode::LedgerFailure,
+                ),
+            ));
+        };
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
-            result: result(update.status),
+            result: result(change.status.clone()),
         })
     }
 
@@ -8461,7 +8600,14 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        self.append_event_raw(
+        let mut registry = lock(&self.monitor_registry, "complete_monitor_probe")?;
+        let update = registry.prepare_completion(
+            probe,
+            started_at_unix_ms,
+            unix_ms_now()?,
+            decision.clone(),
+        )?;
+        let completed = self.append_event_raw(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::Runtime,
@@ -8472,16 +8618,19 @@ impl HostShared {
                 observation,
                 decision.clone(),
                 AuditInput::new(),
-            ),
+            )
+            .with_runtime_state(update.fact)
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "monitor_state_invalid",
+                    "complete_monitor_probe",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?,
         )?;
-        let completed_at_unix_ms = unix_ms_now()?;
-        let current = lock(&self.monitor_registry, "complete_monitor_probe")?.complete_probe(
-            probe,
-            started_at_unix_ms,
-            completed_at_unix_ms,
-            decision.clone(),
-        )?;
-        if current {
+        registry.apply(&completed)?;
+        drop(registry);
+        if update.changed {
             self.record_monitor_recovery_coordination(&instance, &issued, &decision)?;
         }
         Ok(())
@@ -8615,7 +8764,10 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        self.append_event_raw(
+        let mut registry = lock(&self.monitor_registry, "fail_monitor_probe")?;
+        let update =
+            registry.prepare_failure(probe, started_at_unix_ms, unix_ms_now()?, runtime_code)?;
+        let failed = self.append_event_raw(
             EventSeverity::Error,
             EventSource::Runtime,
             OriginModule::Runtime,
@@ -8625,15 +8777,17 @@ impl HostShared {
                 diagnostic,
                 EffectDisposition::NotPerformed,
                 AuditInput::new(),
-            ),
+            )
+            .with_runtime_state(update.fact)
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "monitor_state_invalid",
+                    "fail_monitor_probe",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?,
         )?;
-        let completed_at_unix_ms = unix_ms_now()?;
-        lock(&self.monitor_registry, "fail_monitor_probe")?.fail_probe(
-            probe,
-            started_at_unix_ms,
-            completed_at_unix_ms,
-            runtime_code,
-        )?;
+        registry.apply(&failed)?;
         if error.code() == "monitor_observation_invalid" {
             return Err(error);
         }
