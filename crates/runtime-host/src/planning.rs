@@ -172,12 +172,12 @@ pub(crate) fn collect_maintenance_evidence(
                 }
             }
             EventPayload::Fact(FactPayload::Published(payload)) => {
-                let record = payload.record();
-                if &record.scope == query.fact_scope()
-                    && record.key == query.fact_key()
-                    && record.observed_at_unix_ms >= window_start
-                    && record.observed_at_unix_ms <= query.as_of_unix_ms
-                {
+                for record in payload.records().filter(|record| {
+                    &record.scope == query.fact_scope()
+                        && record.key == query.fact_key()
+                        && record.observed_at_unix_ms >= window_start
+                        && record.observed_at_unix_ms <= query.as_of_unix_ms
+                }) {
                     confidences.push(ConfidenceEvidence {
                         ledger_sequence: event.sequence(),
                         observed_at_unix_ms: record.observed_at_unix_ms,
