@@ -1195,14 +1195,20 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
                 .iter()
                 .any(|dependency| {
                     dependency["kind"].is_null()
-                        && dependency["name"] == "actingcommand-ledger-forensics"
+                        && matches!(
+                            dependency["name"].as_str(),
+                            Some(
+                                "actingcommand-ledger-forensics"
+                                    | "actingcommand-vision-provider-check"
+                            )
+                        )
                 })
         })
         .filter_map(|package| package["name"].as_str())
         .collect::<Vec<_>>();
     assert!(
         production_dependants.is_empty(),
-        "production packages depend on forensic leaf: {}",
+        "production packages depend on forensic leaf or Provider checker: {}",
         production_dependants.join(", ")
     );
 
