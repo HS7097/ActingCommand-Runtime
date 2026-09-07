@@ -407,18 +407,16 @@ pub fn project_fact_pools(
             continue;
         }
         projected.pools.retain(|value| value.pool_id != pool.id);
-        if let Some(observation) = pool_fact(pool, facts) {
-            if let FactValue::Integer(value) = observation.value {
-                if let Ok(value) = u64::try_from(value) {
-                    if value <= pool.capacity {
-                        projected.pools.push(PoolValueSnapshot {
-                            pool_id: pool.id.clone(),
-                            value,
-                            observed_at_unix_ms: observation.observed_at_unix_ms,
-                        });
-                    }
-                }
-            }
+        if let Some(observation) = pool_fact(pool, facts)
+            && let FactValue::Integer(value) = observation.value
+            && let Ok(value) = u64::try_from(value)
+            && value <= pool.capacity
+        {
+            projected.pools.push(PoolValueSnapshot {
+                pool_id: pool.id.clone(),
+                value,
+                observed_at_unix_ms: observation.observed_at_unix_ms,
+            });
         }
     }
     projected

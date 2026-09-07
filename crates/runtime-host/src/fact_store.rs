@@ -460,10 +460,11 @@ impl InstanceFactStore {
                 scope_instances: Vec::new(),
             },
         );
-        self.latest_observed.insert(
-            identity.clone(),
-            self.active[&identity].record.observed_at_unix_ms,
-        );
+        let observed = self.active[&identity].record.observed_at_unix_ms;
+        self.latest_observed
+            .entry(identity)
+            .and_modify(|latest| *latest = (*latest).max(observed))
+            .or_insert(observed);
         self.advance(sequence, "commit_fact")
     }
 

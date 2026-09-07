@@ -1047,17 +1047,15 @@ fn validate_pools(
         if let crate::PoolValueSource::LedgerFact {
             minimum_confidence_milli,
         } = pool.value_source
+            && (!(1..=1_000).contains(&minimum_confidence_milli)
+                || !matches!(pool.observation, ObservationRef::Fact { .. }))
         {
-            if !(1..=1_000).contains(&minimum_confidence_milli)
-                || !matches!(pool.observation, ObservationRef::Fact { .. })
-            {
-                diagnostics.push(map.diagnostic(
-                    CatalogDiagnosticCode::LimitExceeded,
-                    path.clone(),
-                    "ledger fact pools require a fact observation and confidence in 1..=1000",
-                    descriptor,
-                ));
-            }
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                path.clone(),
+                "ledger fact pools require a fact observation and confidence in 1..=1000",
+                descriptor,
+            ));
         }
         match &pool.observation {
             ObservationRef::Fact { fact_key } => validate_identifier(
