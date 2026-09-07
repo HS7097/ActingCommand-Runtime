@@ -402,6 +402,12 @@ pub enum EventType {
     AgentSessionEscalated,
     #[serde(rename = "ledger.recovered")]
     LedgerRecovered,
+    #[serde(rename = "signature.registered")]
+    SignatureRegistered,
+    #[serde(rename = "signature.matched")]
+    SignatureMatched,
+    #[serde(rename = "signature.retired")]
+    SignatureRetired,
 }
 
 impl EventType {
@@ -511,7 +517,10 @@ impl EventType {
             | Self::AgentResponseRecorded
             | Self::AgentSessionCompleted
             | Self::AgentSessionEscalated => EventFamily::Agent,
-            Self::LedgerRecovered => EventFamily::Ledger,
+            Self::LedgerRecovered
+            | Self::SignatureRegistered
+            | Self::SignatureMatched
+            | Self::SignatureRetired => EventFamily::Ledger,
         }
     }
 }

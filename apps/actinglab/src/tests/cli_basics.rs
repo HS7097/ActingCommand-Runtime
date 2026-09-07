@@ -1,3 +1,69 @@
+// Workflow #257 SIGNATURE-REPLAY-v1: official CLI argument specification.
+#[test]
+fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_before_connecting() {
+    let _guard = env_lock();
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("runtime-must-not-exist");
+    let _runtime_env = use_runtime_state_root(&root);
+    for operation in ["register", "match", "retire"] {
+        let name = format!("lab signatures {operation}");
+        let capability = command_capabilities()
+            .into_iter()
+            .find(|entry| entry["command"] == name)
+            .unwrap();
+        assert_eq!(capability["needs"], json!(["running_runtime"]));
+    }
+    for args in [
+        vec!["register"],
+        vec![
+            "register",
+            "--signature-id",
+            "true",
+            "--signature-version",
+            "0",
+        ],
+        vec![
+            "match",
+            "--input-state-root",
+            "true",
+            "--input-through",
+            "0",
+            "--catalog-through",
+            "1",
+        ],
+        vec![
+            "match",
+            "--input-state-root",
+            "true",
+            "--input-through",
+            "1",
+            "--catalog-through",
+            "1",
+            "--limit",
+            "0",
+        ],
+        vec![
+            "retire",
+            "--signature-id",
+            "close",
+            "--signature-id",
+            "close",
+        ],
+        vec!["register", "--regex", ".*"],
+        vec!["register", "--signature-id"],
+    ] {
+        let result = run_cli(
+            ["--json", "lab", "signatures"]
+                .into_iter()
+                .chain(args)
+                .map(str::to_owned),
+            true,
+        );
+        assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
+        assert!(!root.exists());
+    }
+}
+
     // Specification: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5556059085
     #[test]
     fn scheduling_inspection_compiles_and_queries_without_runtime_state() {

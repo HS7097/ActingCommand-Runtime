@@ -17,6 +17,7 @@ use actingcommand_ledger_forensics::{
 enum CliRequest {
     StateRoot(ForensicRequest),
     Replay(ForensicReplayRequest),
+    Signatures(actingcommand_ledger_forensics::ForensicSignatureRequest),
 }
 
 #[derive(Debug)]
@@ -60,10 +61,14 @@ where
     let report = match parse_args(args)? {
         CliRequest::StateRoot(request) => actingcommand_ledger_forensics::run(request),
         CliRequest::Replay(request) => actingcommand_ledger_forensics::replay(request),
+        CliRequest::Signatures(request) => {
+            actingcommand_ledger_forensics::replay_signatures_read_only(request)
+        }
     }
     .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
     let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
     let task_evidence_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) if !report.gaps.is_empty());
+    let signatures_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Signatures(report)) if !report.evidence_complete);
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -77,6 +82,13 @@ where
         }
     }
     output.flush().map_err(output_error)?;
+    if signatures_incomplete {
+        return Err(CliError::new(
+            "signature_replay_incomplete",
+            "replay_signatures",
+            "see frozen prefixes, source snapshots and explicit gaps in the report",
+        ));
+    }
     if stability_incomplete {
         return Err(CliError::new(
             "stability_export_incomplete",
@@ -123,6 +135,7 @@ where
     }
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
+        "signatures" => return parse_signatures(state_root, args).map(CliRequest::Signatures),
         "open" => ForensicCommand::Open,
         "events" => {
             return parse_events(state_root, args, ForensicCommand::Events)
@@ -163,6 +176,78 @@ where
     Ok(CliRequest::StateRoot(ForensicRequest::new(
         state_root, command,
     )))
+}
+
+fn parse_signatures<I>(
+    input_state_root: PathBuf,
+    mut args: I,
+) -> Result<actingcommand_ledger_forensics::ForensicSignatureRequest, CliError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let mut catalog_state_root = None;
+    let mut input_through = None;
+    let mut catalog_through = None;
+    let mut limit = None;
+    let mut cursor = None;
+    while let Some(option) = args.next() {
+        let option = option
+            .into_string()
+            .map_err(|_| invalid_arguments("signature option is not UTF-8"))?;
+        let value = next_value(&mut args, &option)?;
+        match option.as_str() {
+            "--catalog-state-root" if catalog_state_root.is_none() => {
+                catalog_state_root = Some(PathBuf::from(value))
+            }
+            "--through" if input_through.is_none() => {
+                input_through = Some(parse_u64(&value, "--through")?)
+            }
+            "--catalog-through" if catalog_through.is_none() => {
+                catalog_through = Some(parse_u64(&value, "--catalog-through")?)
+            }
+            "--limit" if limit.is_none() => {
+                limit = Some(
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| invalid_arguments("invalid signature limit"))?,
+                )
+            }
+            "--cursor" if cursor.is_none() => {
+                if value.len() > 4096 {
+                    return Err(invalid_arguments("signature cursor exceeds bound"));
+                }
+                cursor = Some(
+                    serde_json::from_str(&value)
+                        .map_err(|_| invalid_arguments("invalid signature cursor"))?,
+                );
+            }
+            _ => {
+                return Err(invalid_arguments(format!(
+                    "duplicate or unsupported signature option {option}"
+                )));
+            }
+        }
+    }
+    let request = actingcommand_ledger_forensics::ForensicSignatureRequest {
+        input_state_root,
+        catalog_state_root: catalog_state_root
+            .ok_or_else(|| invalid_arguments("missing --catalog-state-root"))?,
+        input_through: input_through
+            .filter(|value| *value > 0)
+            .ok_or_else(|| invalid_arguments("missing positive --through"))?,
+        catalog_through: catalog_through
+            .filter(|value| *value > 0)
+            .ok_or_else(|| invalid_arguments("missing positive --catalog-through"))?,
+        page: actingcommand_ledger_forensics::SignaturePageRequest {
+            limit: limit.unwrap_or(actingcommand_ledger_forensics::MAX_SIGNATURE_PAGE_ROWS),
+            cursor,
+        },
+    };
+    request
+        .page
+        .validate()
+        .map_err(|_| invalid_arguments("invalid signature page"))?;
+    Ok(request)
 }
 
 fn parse_replay<I>(mut args: I) -> Result<CliRequest, CliError>

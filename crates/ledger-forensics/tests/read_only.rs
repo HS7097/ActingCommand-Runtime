@@ -23,6 +23,285 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+// Workflow #257 SIGNATURE-REPLAY-v1: dual read-only historical close contexts.
+#[test]
+fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writes() {
+    use actingcommand_contract::{
+        CleanupCauseSeverity, DiagnosticDetailDraft, DiagnosticSignatureDefinition,
+        LedgerPayloadDraft, LedgerSignatureEvent, LifecycleCauseDraft, LifecycleFailurePhase,
+        OwnerResourceDisposition, ResourceQuiescence, RuntimeErrorCode,
+        RuntimeLifecycleFailureDraft, RuntimePayloadDraft, RuntimeResourceClosePhase,
+        RuntimeResourceKind, Sensitivity, SignatureConditionField, SignatureLifecyclePredicate,
+        SignaturePageRequest, SignatureReplayGap, SignatureReplayRow,
+    };
+    use actingcommand_ledger_forensics::{ForensicSignatureRequest, replay_signatures_read_only};
+    let input_root = tempfile::tempdir().unwrap();
+    let catalog_root = tempfile::tempdir().unwrap();
+    let input = GlobalLedger::open(GlobalLedgerConfig::new(
+        input_root.path().join("ledger"),
+        "input-spec",
+    ))
+    .unwrap();
+    let catalog = GlobalLedger::open(GlobalLedgerConfig::new(
+        catalog_root.path().join("ledger"),
+        "catalog-spec",
+    ))
+    .unwrap();
+    let ids = IdentifierIssuer::new().unwrap();
+    let append = |ledger: &GlobalLedger, payload: EventPayloadDraft, origin, severity| {
+        ledger
+            .append(
+                EventDraft::new(
+                    event_id(),
+                    1,
+                    severity,
+                    origin,
+                    EventLinksDraft::default(),
+                    payload,
+                )
+                .sanitize(&Sha256SecretFingerprinter::new(b"signature-read-only").unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let runtime_origin = || {
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        )
+    };
+    let mut source_ids = Vec::new();
+    for operation in ["close_execution_session", "close_execution_kernel"] {
+        let cause = LifecycleCauseDraft::new(
+            LifecycleFailurePhase::ResourceClose,
+            "nemu_ipc",
+            "capture_backend_close_failed",
+            CleanupCauseSeverity::Fatal,
+        )
+        .with_resource_context(
+            RuntimeResourceKind::ProviderConnection,
+            RuntimeResourceClosePhase::DisconnectCall,
+            None,
+            None,
+            ResourceQuiescence::Unconfirmed,
+            OwnerResourceDisposition::Unconfirmed,
+            1,
+            0,
+        );
+        let lifecycle = RuntimeLifecycleFailureDraft::new(
+            *ids.mint_owner_epoch().unwrap().transport(),
+            "runtime.lifecycle.session_close",
+            "runtime_host",
+            "capture_backend_close_failed",
+        )
+        .with_operation(Some(operation))
+        .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
+        .with_cause(Some(cause));
+        let detail = DiagnosticDetailDraft::new(
+            "runtime_lifecycle",
+            "runtime.lifecycle.session_close",
+            "runtime_host",
+            operation,
+            "close unconfirmed",
+            Sensitivity::Internal,
+        );
+        let source = append(
+            &input,
+            RuntimePayloadDraft::failed_with_lifecycle(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                detail,
+                lifecycle,
+                AuditInput::new(),
+            )
+            .into(),
+            runtime_origin(),
+            EventSeverity::Fatal,
+        );
+        source_ids.push(*source.event_id());
+        let definition = DiagnosticSignatureDefinition {
+            signature_id: operation.into(),
+            version: 1,
+            origin_module: OriginModule::Runtime,
+            diagnostic_code: DiagnosticCode::RuntimeDiagnostic,
+            event_type: EventType::RuntimeFailed,
+            minimum_severity: EventSeverity::Error,
+            lifecycle: Some(SignatureLifecyclePredicate {
+                stage: Some("runtime.lifecycle.session_close".into()),
+                operation: Some(operation.into()),
+                code: Some("capture_backend_close_failed".into()),
+                cause_phase: Some(LifecycleFailurePhase::ResourceClose),
+                cause_source: Some("nemu_ipc".into()),
+                resource: Some(RuntimeResourceKind::ProviderConnection),
+                resource_phase: Some(RuntimeResourceClosePhase::DisconnectCall),
+                quiescence: Some(ResourceQuiescence::Unconfirmed),
+            }),
+        };
+        append(
+            &catalog,
+            LedgerPayloadDraft::signature(
+                LedgerSignatureEvent::Registered { definition },
+                AuditInput::new(),
+            )
+            .into(),
+            EventOrigin::new(
+                EventSource::Lab,
+                OriginModule::GlobalLedger,
+                EventActor::Lab,
+            ),
+            EventSeverity::Info,
+        );
+    }
+    // Severity alone and an absent diagnostic code do not satisfy the tuple.
+    append(
+        &input,
+        CommandPayloadDraft::rejected(
+            EventAction::RuntimeStart,
+            DiagnosticCode::CommandRejected,
+            EffectDisposition::NotPerformed,
+            AuditInput::new(),
+        )
+        .into(),
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::PerformanceMonitor,
+            EventActor::Runtime,
+        ),
+        EventSeverity::Error,
+    );
+    append(
+        &input,
+        CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
+        runtime_origin(),
+        EventSeverity::Error,
+    );
+    let request = ForensicSignatureRequest {
+        input_state_root: input_root.path().into(),
+        catalog_state_root: catalog_root.path().into(),
+        input_through: 4,
+        catalog_through: 2,
+        page: SignaturePageRequest {
+            limit: 1,
+            cursor: None,
+        },
+    };
+    let report = |request| match replay_signatures_read_only(request).unwrap() {
+        ForensicOutput::Machine(ForensicReport::Signatures(report)) => report,
+        _ => panic!("signature report"),
+    };
+    let before_input = tree_bytes(input_root.path());
+    let before_catalog = tree_bytes(catalog_root.path());
+    let first = report(request.clone());
+    assert!(first.evidence_complete);
+    assert_eq!(first.page.matched_count, 2);
+    assert_eq!(first.page.missing_fields_count, 0);
+    assert!(
+        matches!(&first.page.rows[0], SignatureReplayRow::Matched { source_event_id, source_sequence: 1, registration }
+        if *source_event_id == source_ids[0] && registration.signature_id == "close_execution_session")
+    );
+    let mut continuation = request.clone();
+    continuation.page.cursor = first.page.next_cursor.clone();
+    let second = report(continuation.clone());
+    assert!(second.page.next_cursor.is_none());
+    assert!(
+        matches!(&second.page.rows[0], SignatureReplayRow::Matched { source_event_id, source_sequence: 2, registration }
+        if *source_event_id == source_ids[1] && registration.signature_id == "close_execution_kernel")
+    );
+    assert_eq!(second, report(continuation.clone()));
+    assert_eq!(before_input, tree_bytes(input_root.path()));
+    assert_eq!(before_catalog, tree_bytes(catalog_root.path()));
+    let mut changed = continuation.clone();
+    changed.catalog_through = 1;
+    assert!(replay_signatures_read_only(changed).is_err());
+    let mut changed = continuation.clone();
+    changed.input_through = 3;
+    assert!(replay_signatures_read_only(changed).is_err());
+    append(
+        &input,
+        RuntimePayloadDraft::failed(
+            DiagnosticCode::RuntimeDiagnostic,
+            EffectDisposition::Indeterminate,
+            DiagnosticDetailDraft::new(
+                "runtime_lifecycle",
+                "runtime.lifecycle.session_close",
+                "runtime_host",
+                "close_execution_session",
+                "missing lifecycle context",
+                Sensitivity::Internal,
+            ),
+            AuditInput::new(),
+        )
+        .into(),
+        runtime_origin(),
+        EventSeverity::Fatal,
+    );
+    assert_eq!(
+        first.page,
+        report(request.clone()).page,
+        "later facts do not change the frozen prefix"
+    );
+    let mut missing = request.clone();
+    missing.input_through = 5;
+    missing.page = SignaturePageRequest::default();
+    let gaps = report(missing.clone());
+    assert!(!gaps.evidence_complete);
+    assert_eq!(gaps.page.matched_count, 2);
+    assert_eq!(gaps.page.missing_fields_count, 2);
+    assert!(
+        matches!(&gaps.page.rows[2], SignatureReplayRow::MissingFields { fields, source_sequence: 5, .. }
+        if fields == &[SignatureConditionField::Lifecycle])
+    );
+    input.close().unwrap();
+    catalog.close().unwrap();
+    append_bytes(
+        &latest_segment(&input_root.path().join("ledger")),
+        b"broken-tail",
+    );
+    let before = tree_bytes(input_root.path());
+    let damaged = report(missing);
+    assert!(
+        damaged
+            .page
+            .gaps
+            .contains(&SignatureReplayGap::InputIncomplete)
+    );
+    assert!(!damaged.evidence_complete);
+    assert_eq!(before, tree_bytes(input_root.path()));
+    let empty_root = tempfile::tempdir().unwrap();
+    GlobalLedger::open(GlobalLedgerConfig::new(
+        empty_root.path().join("ledger"),
+        "empty-catalog-spec",
+    ))
+    .unwrap()
+    .close()
+    .unwrap();
+    let mut empty = request;
+    empty.catalog_state_root = empty_root.path().into();
+    let before_empty = tree_bytes(empty_root.path());
+    let empty = report(empty);
+    assert!(empty.page.gaps.contains(&SignatureReplayGap::CatalogEmpty));
+    assert!(
+        empty
+            .page
+            .gaps
+            .contains(&SignatureReplayGap::CatalogIncomplete)
+    );
+    assert!(!empty.evidence_complete);
+    assert_eq!(before_empty, tree_bytes(empty_root.path()));
+    let absent = ForensicSignatureRequest {
+        input_state_root: input_root.path().into(),
+        catalog_state_root: empty_root.path().join("absent"),
+        input_through: 4,
+        catalog_through: 1,
+        page: SignaturePageRequest::default(),
+    };
+    assert!(
+        replay_signatures_read_only(absent).is_err(),
+        "unreadable paths preserve the native read failure"
+    );
+}
+
 #[test]
 fn forensic_snapshot_commands_are_read_only_and_deterministic() {
     use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};

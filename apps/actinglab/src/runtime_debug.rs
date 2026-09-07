@@ -58,7 +58,7 @@ pub(super) fn run_runtime_debug(subcommand: &str, args: &[String]) -> CliOutcome
     }
 }
 
-pub(super) fn capabilities() -> [Value; 6] {
+pub(super) fn capabilities() -> [Value; 9] {
     [
         command_cap("lab status", ["running_runtime"], "available"),
         command_cap("lab receipt", ["running_runtime"], "available"),
@@ -70,6 +70,9 @@ pub(super) fn capabilities() -> [Value; 6] {
         },
         command_cap("lab export-evidence", ["running_runtime"], "available"),
         command_cap("lab replay-evidence", ["offline"], "available"),
+        crate::signature_cli::capability("register"),
+        crate::signature_cli::capability("match"),
+        crate::signature_cli::capability("retire"),
     ]
 }
 
@@ -137,7 +140,7 @@ fn package_debug_request(flags: &FlagArgs, command: &str) -> CliOutcome<Prepared
     Ok(PreparedPackageDebug { request, reader })
 }
 
-fn runtime_lab_client() -> CliOutcome<RuntimeClient> {
+pub(super) fn runtime_lab_client() -> CliOutcome<RuntimeClient> {
     RuntimeClient::connect(RuntimeClientConfig::new(
         runtime_state_root()?,
         EventActor::Lab,
@@ -310,7 +313,7 @@ fn watch_query(flags: &FlagArgs) -> CliOutcome<EventQuery> {
         .map_err(|error| CliError::usage(format!("invalid lab watch query: {error}")))
 }
 
-fn parse_u64_flag(flags: &FlagArgs, name: &str, default: u64) -> CliOutcome<u64> {
+pub(super) fn parse_u64_flag(flags: &FlagArgs, name: &str, default: u64) -> CliOutcome<u64> {
     match flags.optional(name) {
         None => Ok(default),
         Some(value) if value != "true" => value
@@ -320,7 +323,7 @@ fn parse_u64_flag(flags: &FlagArgs, name: &str, default: u64) -> CliOutcome<u64>
     }
 }
 
-fn parse_u16_flag(flags: &FlagArgs, name: &str, default: u16) -> CliOutcome<u16> {
+pub(super) fn parse_u16_flag(flags: &FlagArgs, name: &str, default: u16) -> CliOutcome<u16> {
     let value = parse_u64_flag(flags, name, u64::from(default))?;
     u16::try_from(value)
         .map_err(|error| CliError::usage(format!("failed to parse {name} '{value}': {error}")))

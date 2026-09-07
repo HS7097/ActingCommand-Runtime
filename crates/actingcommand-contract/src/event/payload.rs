@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod signature;
+pub use signature::*;
+
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
     EventFamily, EventType, EvidenceCompleteness, PinnedFrameReason, PolicyFailureClass,
@@ -7397,11 +7400,16 @@ impl ResourceAuthoringPayloadDraft {
 
 enum LedgerDraftKind {
     Recovered(RecoveryDraft),
+    Signature(LedgerSignatureEvent, AuditInput),
 }
 
 pub struct LedgerPayloadDraft(LedgerDraftKind);
 
 impl LedgerPayloadDraft {
+    pub fn signature(event: LedgerSignatureEvent, audit: AuditInput) -> Self {
+        Self(LedgerDraftKind::Signature(event, audit))
+    }
+
     pub fn recovered(
         reason: RecoveryReason,
         segment_index: Option<u64>,
@@ -8198,6 +8206,7 @@ pub enum ClientPayload {
 )]
 pub enum LedgerPayload {
     Recovered(RecoveryPayload),
+    Signature(LedgerSignaturePayload),
 }
 
 trait FamilyPayload {
@@ -8388,9 +8397,20 @@ family_payload!(ClientPayload, {
     CliCommand => EventType::CliCommand,
     LabRequest => EventType::LabRequest,
 });
-family_payload!(LedgerPayload, {
-    Recovered => EventType::LedgerRecovered,
-});
+impl FamilyPayload for LedgerPayload {
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::Recovered(_) => EventType::LedgerRecovered,
+            Self::Signature(payload) => payload.record().event_type(),
+        }
+    }
+    fn detail(&self) -> &dyn PayloadDetail {
+        match self {
+            Self::Recovered(payload) => payload,
+            Self::Signature(payload) => payload,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -8761,6 +8781,13 @@ impl EventPayloadDraft {
                 LedgerDraftKind::Recovered(detail) => {
                     LedgerPayload::Recovered(detail.sanitize(fingerprinter)?)
                 }
+                LedgerDraftKind::Signature(record, audit) => {
+                    record.validate()?;
+                    LedgerPayload::Signature(LedgerSignaturePayload {
+                        record,
+                        audit: audit.sanitize(fingerprinter)?,
+                    })
+                }
             }),
         })
     }
@@ -8846,7 +8873,9 @@ impl EventPayload {
         }
         if matches!(
             self,
-            Self::Performance(_) | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+            Self::Performance(_)
+                | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+                | Self::Ledger(LedgerPayload::Signature(_))
         ) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
@@ -8890,6 +8919,9 @@ impl EventPayload {
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Self::Ledger(LedgerPayload::Signature(payload)) = self {
+            payload.record().validate()?;
+        }
         if let Some(config) = detail.device_diagnostic_config() {
             if !matches!(
                 self.event_type(),
