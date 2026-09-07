@@ -328,6 +328,8 @@ struct FakeState {
     capture_count: AtomicUsize,
     capture_delay_ms: AtomicU64,
     capture_close_count: AtomicUsize,
+    require_fenced_capture_close: AtomicBool,
+    unfenced_capture_close_count: AtomicUsize,
     capture_close_error: std::sync::Mutex<Option<DeviceError>>,
     fail_capture: AtomicBool,
     transient_capture_failure: AtomicBool,
@@ -563,7 +565,7 @@ impl CaptureBackend for FakeCapture {
 
     fn close_once(
         &mut self,
-        _authority: actingcommand_device::DeviceCloseAuthority,
+        authority: actingcommand_device::DeviceCloseAuthority,
     ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         if let Some(outcome) = &self.close_outcome {
             return outcome.clone();
@@ -571,6 +573,30 @@ impl CaptureBackend for FakeCapture {
         self.state
             .capture_close_count
             .fetch_add(1, Ordering::AcqRel);
+        if self
+            .state
+            .require_fenced_capture_close
+            .load(Ordering::Acquire)
+            && authority != actingcommand_device::DeviceCloseAuthority::FencedDeviceWrite
+        {
+            self.state
+                .unfenced_capture_close_count
+                .fetch_add(1, Ordering::AcqRel);
+            let outcome = Err(DeviceError::fatal(
+                "capture close requires current fenced authority",
+            )
+            .with_resource_close_cause(
+                actingcommand_device::DeviceResourceKind::ProviderConnection,
+                actingcommand_device::DeviceResourceClosePhase::DisconnectCall,
+                "fake_capture",
+                None,
+                None,
+                actingcommand_device::DeviceResourceQuiescence::Unconfirmed,
+                1,
+            ));
+            self.close_outcome = Some(outcome.clone());
+            return outcome;
+        }
         let outcome = match self
             .state
             .capture_close_error
@@ -8767,6 +8793,9 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
 fn monitor_capture_failure_is_persisted_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    state
+        .require_fenced_capture_close
+        .store(true, Ordering::Release);
     state.fail_capture.store(true, Ordering::Release);
     let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
@@ -8838,6 +8867,10 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close host");
+    assert_eq!(
+        state.unfenced_capture_close_count.load(Ordering::Acquire),
+        0
+    );
 }
 
 #[test]
@@ -8902,8 +8935,11 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
 fn invalid_monitor_provider_observation_poison_runtime_after_recording_failure() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    state
+        .require_fenced_capture_close
+        .store(true, Ordering::Release);
     state.monitor_mode.store(usize::MAX, Ordering::Release);
-    let host = host_with_state(&root, "node.a", state);
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
         instance_alias: "node.a".to_string(),
@@ -8924,6 +8960,11 @@ fn invalid_monitor_provider_observation_poison_runtime_after_recording_failure()
             .expect_err("invalid observation must fail host")
             .code(),
         "monitor_observation_invalid"
+    );
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        state.unfenced_capture_close_count.load(Ordering::Acquire),
+        0
     );
 }
 
@@ -13317,6 +13358,109 @@ fn task_teardown_precedes_terminal_and_lease_release() {
     host.close().expect("close host");
 }
 
+// Task Contract: Workflow #257 / READ-SESSION-CLOSE-v1. Test class: Defect regression.
+// First red: Workflow #269 issuecomment-5571706024 (W32).
+#[test]
+fn readonly_sessions_close_through_real_resource_leases_without_input() {
+    for mode in 0..3 {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        state
+            .require_fenced_capture_close
+            .store(true, Ordering::Release);
+        state.fail_capture.store(mode == 1, Ordering::Release);
+        state
+            .transient_capture_failure
+            .store(mode == 1, Ordering::Release);
+        let host = host_with_state(&root, "node.a", Arc::clone(&state));
+        let mut client = TestClient::connect(&host);
+        let business_lease = (mode == 2).then(|| client.acquire("node.a").1);
+        let observe = client.request(RuntimeOperation::ObserveReadonly {
+            instance_alias: "node.a".into(),
+        });
+        let receipt = client.send(&observe);
+        assert_eq!(
+            receipt.state(),
+            if mode == 1 {
+                RuntimeReceiptState::Failed
+            } else {
+                RuntimeReceiptState::Completed
+            }
+        );
+        if mode == 1 {
+            let error = receipt.error_projection().expect("real capture failure");
+            assert_eq!(error.code, RuntimeErrorCode::CaptureFailed);
+            assert!(!error.fatal);
+        }
+        if let Some(token) = business_lease {
+            let release = client.request(RuntimeOperation::ReleaseLease { token });
+            assert_eq!(
+                client.send(&release).state(),
+                RuntimeReceiptState::Completed
+            );
+            assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+            let observe = client.request(RuntimeOperation::ObserveReadonly {
+                instance_alias: "node.a".into(),
+            });
+            assert_eq!(
+                client.send(&observe).state(),
+                RuntimeReceiptState::Completed
+            );
+        }
+        assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        assert!(host.fatal_error().expect("health").is_none());
+        drop(client);
+        host.close().expect("owned read resources close normally");
+        assert_eq!(
+            state.capture_close_count.load(Ordering::Acquire),
+            if mode == 2 { 2 } else { 1 }
+        );
+        assert_eq!(
+            state.unfenced_capture_close_count.load(Ordering::Acquire),
+            0
+        );
+        let ledger = GlobalLedger::open_read_only(
+            actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+            |reference| {
+                Some(
+                    actingcommand_artifact_store::verify_projected_read_only(
+                        root.path(),
+                        reference,
+                    )
+                    .expect("verify original capture artifact"),
+                )
+            },
+        )
+        .expect("closed authoritative ledger");
+        assert!(ledger.corrupt_tail().is_none());
+        let events = ledger.query(&EventQuery::default());
+        assert!(!events.iter().any(|event| matches!(
+            event.event_type(),
+            EventType::InputIntent | EventType::InputCommitted
+        )));
+        let grants = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::LeaseGranted)
+            .collect::<Vec<_>>();
+        assert_eq!(grants.len(), if mode == 2 { 2 } else { 1 });
+        for grant in grants {
+            let released = events
+                .iter()
+                .find(|event| {
+                    event.event_type() == EventType::LeaseReleased
+                        && event.links().lease_id() == grant.links().lease_id()
+                })
+                .expect("real lease released");
+            assert!(events.iter().any(|event| {
+                grant.sequence() < event.sequence() && event.sequence() < released.sequence()
+                    && matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
+                        if matches!(payload.phase(), actingcommand_contract::RuntimeLifecyclePhase::ResourceQuiescence { quiescence: actingcommand_contract::ResourceQuiescence::Confirmed, .. }))
+            }));
+        }
+    }
+}
+
 // Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
 #[test]
 fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
@@ -13330,6 +13474,9 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         fs::write(&package, &bytes).expect("write package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
+        state
+            .require_fenced_capture_close
+            .store(true, Ordering::Release);
         state
             .transition_capture_after_input
             .store(true, Ordering::Release);
@@ -13422,6 +13569,11 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         assert_eq!(takeover.code(), "owner_conflict");
         drop(client);
         assert!(host.close().is_err());
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+        assert_eq!(
+            state.unfenced_capture_close_count.load(Ordering::Acquire),
+            0
+        );
     }
 }
 
@@ -15992,6 +16144,9 @@ fn required_failure_events_preserve_cleanup_detail() {
         for cleanup_detail in [None, Some(false), Some(true)] {
             let root = TempDir::new().expect("tempdir");
             let state = Arc::new(FakeState::default());
+            state
+                .require_fenced_capture_close
+                .store(capture, Ordering::Release);
             let host = host_with_state(&root, "node.a", Arc::clone(&state));
             let mut client = TestClient::connect(&host);
             let (_, token) = client.acquire("node.a");
@@ -16086,6 +16241,21 @@ fn required_failure_events_preserve_cleanup_detail() {
             let mut types = Vec::new();
             let mut resource_causes = 0;
             for event in &events {
+                if let ProjectionPayload::Full(payload) = &event.payload
+                    && let EventPayload::Runtime(
+                        actingcommand_contract::RuntimePayload::LifecycleObserved(value),
+                    ) = payload.as_ref()
+                    && let actingcommand_contract::RuntimeLifecyclePhase::ResourceQuiescence {
+                        quiescence,
+                        ..
+                    } = value.phase()
+                {
+                    assert_eq!(
+                        quiescence,
+                        actingcommand_contract::ResourceQuiescence::Confirmed
+                    );
+                    continue;
+                }
                 if let ProjectionPayload::Full(payload) = &event.payload
                     && let Some(budget) = payload.device_diagnostics()
                 {
