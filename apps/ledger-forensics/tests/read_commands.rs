@@ -314,6 +314,10 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
         vec!["--limit", "0"],
         vec!["--limit", "1025"],
         vec!["--limit", "1", "--limit", "2"],
+        vec!["--record-limit", "0"],
+        vec!["--record-limit", "65"],
+        vec!["--record-cursor", "{}"],
+        vec!["--include-private", "--include-private"],
     ] {
         let mut command = vec!["export".to_string(), "--task-evidence".to_string()];
         command.extend(suffix.into_iter().map(str::to_string));
@@ -325,6 +329,165 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
     assert_eq!(snapshot(), before);
     let writer =
         GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "legacy-input-source")).unwrap();
+    use actingcommand_artifact_store::ArtifactStore;
+    use actingcommand_contract::{
+        ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, OcrRegionEvidence, OcrRegionRect,
+        TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticOcrData, TaskDiagnosticPayload,
+        TaskDiagnosticRecord,
+    };
+    struct Sink<'a>(&'a GlobalLedger);
+    impl ArtifactEventSink for Sink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            self.0
+                .append(
+                    draft
+                        .sanitize(
+                            &Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap(),
+                        )
+                        .unwrap(),
+                )
+                .map(|_| ())
+                .map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        error.code(),
+                        "append_cli_fixture",
+                        "artifact event append failed",
+                    )
+                })
+        }
+    }
+    let store = ArtifactStore::open(state_root).unwrap();
+    let correlation = identifiers.mint_correlation_id().unwrap();
+    let task = identifiers.mint_task_id().unwrap();
+    let run_id = identifiers.mint_run_id().unwrap();
+    let instance = identifiers.mint_instance_id().unwrap();
+    let lease = identifiers.mint_lease_id().unwrap();
+    let mut stream = store
+        .begin_stream(
+            ArtifactKind::DiagnosticJson,
+            ArtifactWriteContext::new(
+                ArtifactLinksDraft::default()
+                    .with_correlation_id(correlation)
+                    .with_run_id(run_id),
+                EventLinksDraft::default()
+                    .with_request_id(request_id)
+                    .with_correlation_id(correlation)
+                    .with_task_id(task)
+                    .with_run_id(run_id)
+                    .with_instance_id(instance)
+                    .with_lease_id(lease),
+                1_752_147_200_001,
+            ),
+            ArtifactIssuePolicy::new(
+                ArtifactProducer::ArtifactStore,
+                RetentionClass::DebugFull,
+                ArtifactRedactionState::Pending,
+            ),
+        )
+        .unwrap();
+    let header = serde_json::to_vec(&TaskDiagnosticHeader {
+        schema_version: TASK_DIAGNOSTIC_SCHEMA.into(),
+        request_id: *request_id.transport(),
+        correlation_id: *correlation.transport(),
+        task_id: *task.transport(),
+        run_id: *run_id.transport(),
+        instance_id: *instance.transport(),
+        lease_id: *lease.transport(),
+    })
+    .unwrap();
+    stream.append(&header[..header.len() - 1]).unwrap();
+    stream.append(b",\"records\":[\n").unwrap();
+    for index in 1..=3 {
+        if index > 1 {
+            stream.append(b",").unwrap();
+        }
+        serde_json::to_writer(
+            &mut stream,
+            &TaskDiagnosticRecord {
+                index,
+                frame_id: None,
+                step_action_id: None,
+                physical_action_id: None,
+                parent_index: None,
+                payload: TaskDiagnosticPayload::Ocr(Box::new(TaskDiagnosticOcrData::Evaluated {
+                    region: OcrRegionEvidence {
+                        frame_width: 2,
+                        frame_height: 2,
+                        anchor_target_id: None,
+                        anchor_match: None,
+                        offset: None,
+                        width: 2,
+                        height: 2,
+                        roi: Some(OcrRegionRect {
+                            x: 0,
+                            y: 0,
+                            width: 2,
+                            height: 2,
+                        }),
+                        unresolved: None,
+                    },
+                    raw_text: format!("neutral private {index}"),
+                    derived_text: format!("neutral private {index}"),
+                    confidence: None,
+                    matched_expected: None,
+                    match_mode: "exact".to_owned(),
+                    block_count: 0,
+                })),
+            },
+        )
+        .unwrap();
+        stream.append(b"\n").unwrap();
+    }
+    stream.append(b"]}\n").unwrap();
+    let artifact = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
+    let through = writer.latest_sequence().unwrap().to_string();
+    writer.close().unwrap();
+    let command = vec![
+        "export".into(),
+        "--task-evidence".into(),
+        "--through".into(),
+        through,
+        "--record-limit".into(),
+        "1".into(),
+    ];
+    let fixture_before = snapshot();
+    let withheld = invoke(binary, state_root, &command);
+    assert!(withheld.status.success(), "{withheld:?}");
+    assert!(!String::from_utf8_lossy(&withheld.stdout).contains("neutral private"));
+    let withheld: serde_json::Value = serde_json::from_slice(&withheld.stdout).unwrap();
+    assert_eq!(
+        withheld["data"]["diagnostics"][0]["state"],
+        "privacy_withheld"
+    );
+    let mut cursor = None;
+    let mut indices = Vec::new();
+    loop {
+        let mut command = command.clone();
+        command.push("--include-private".into());
+        if let Some(value) = cursor.take() {
+            command.extend(["--record-cursor".into(), value]);
+        }
+        let output = invoke(binary, state_root, &command);
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let page = &value["data"]["diagnostics"][0];
+        assert_eq!(page["state"], "verified");
+        assert_eq!(page["records"].as_array().unwrap().len(), 1);
+        assert_eq!(page["artifact"]["sha256"], artifact.reference().sha256());
+        indices.push(page["records"][0]["index"].as_u64().unwrap());
+        if page["next_cursor"].is_null() {
+            break;
+        }
+        cursor = Some(serde_json::to_string(&page["next_cursor"]).unwrap());
+    }
+    assert_eq!(indices, vec![1, 2, 3]);
+    assert_eq!(snapshot(), fixture_before);
+    let writer = GlobalLedger::open_with_artifact_verifier(
+        GlobalLedgerConfig::new(&ledger_root, "legacy-input-source"),
+        |reference| store.verify_recovery_reference(reference).ok(),
+    )
+    .unwrap();
     writer
         .append(
             EventDraft::new(

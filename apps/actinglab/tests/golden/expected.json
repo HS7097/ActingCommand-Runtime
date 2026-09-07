@@ -1734,6 +1734,112 @@
               "timestamp_unix_ms": "<TIME>"
             },
             {
+              "artifacts": [
+                {
+                  "artifact_id": "<ARTIFACT_ID>",
+                  "byte_count": "<BYTES>",
+                  "correlation_id": "<CORRELATION_ID>",
+                  "created_at_unix_ms": "<TIME>",
+                  "kind": "diagnostic.json",
+                  "media_type": "application/json",
+                  "object_key": "artifacts/<SHARD>/<ARTIFACT_ID>.json",
+                  "producer": "artifact_store",
+                  "redaction_state": "pending",
+                  "retention_class": "debug_full",
+                  "run_id": "<RUN_ID>",
+                  "sha256": "<SHA256>"
+                }
+              ],
+              "event_id": "<EVENT_ID>",
+              "event_type": "artifact.created",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
+              },
+              "origin": {
+                "actor": "system",
+                "module": "artifact-store",
+                "source": "system"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "artifact",
+                  "payload": {
+                    "data": {
+                      "action": "artifact.store",
+                      "audit": {},
+                      "effect_disposition": "performed"
+                    },
+                    "kind": "created"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.artifact.v1",
+              "schema_version": "actingcommand.event.v2",
+              "sensitivity": "secret",
+              "sequence": 25,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>"
+            },
+            {
+              "artifacts": [
+                {
+                  "artifact_id": "<ARTIFACT_ID>",
+                  "byte_count": "<BYTES>",
+                  "correlation_id": "<CORRELATION_ID>",
+                  "created_at_unix_ms": "<TIME>",
+                  "kind": "diagnostic.json",
+                  "media_type": "application/json",
+                  "object_key": "artifacts/<SHARD>/<ARTIFACT_ID>.json",
+                  "producer": "artifact_store",
+                  "redaction_state": "pending",
+                  "retention_class": "debug_full",
+                  "run_id": "<RUN_ID>",
+                  "sha256": "<SHA256>"
+                }
+              ],
+              "event_id": "<EVENT_ID>",
+              "event_type": "artifact.verified",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
+              },
+              "origin": {
+                "actor": "system",
+                "module": "artifact-store",
+                "source": "system"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "artifact",
+                  "payload": {
+                    "data": {
+                      "action": "artifact.verify",
+                      "audit": {},
+                      "effect_disposition": "performed"
+                    },
+                    "kind": "verified"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.artifact.v1",
+              "schema_version": "actingcommand.event.v2",
+              "sensitivity": "secret",
+              "sequence": 26,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>"
+            },
+            {
               "artifacts": [],
               "event_id": "<EVENT_ID>",
               "event_type": "capture.summary_committed",
@@ -1833,7 +1939,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 25,
+              "sequence": 27,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1876,7 +1982,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 26,
+              "sequence": 28,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1913,7 +2019,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 27,
+              "sequence": 29,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1951,7 +2057,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 28,
+              "sequence": 30,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1990,7 +2096,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 29,
+              "sequence": 31,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             }
@@ -2012,7 +2118,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 26
+              "sequence": 28
             }
           }
         }

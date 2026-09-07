@@ -2,14 +2,15 @@
 
 use crate::{ArtifactStoreError, ArtifactStoreResult};
 use actingcommand_contract::{
-    ArtifactIssuePolicy, ArtifactLinksDraft, ArtifactPayloadDraft, ArtifactReference,
-    ArtifactStoreIssuer, AuditInput, DiagnosticCode, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule,
-    ProjectedArtifactReference, StoreIssuedArtifact, VerifiedArtifactReference,
+    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactMaterial,
+    ArtifactMaterialAccumulator, ArtifactPayloadDraft, ArtifactReference, ArtifactStoreIssuer,
+    AuditInput, DiagnosticCode, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventSeverity, EventSource, IdentifierIssuer, OriginModule, ProjectedArtifactReference,
+    StoreIssuedArtifact, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -102,6 +103,104 @@ impl PreparedArtifact {
     }
 }
 
+/// An unpublished stream owned by one task. The owner must seal it or explicitly abort it.
+/// Fatal process termination can leave a partial file, which is never a verified artifact.
+#[must_use = "seal the artifact stream or abort it before normal task termination"]
+pub struct ArtifactStream {
+    root: PathBuf,
+    temp_path: PathBuf,
+    file: Option<File>,
+    kind: ArtifactKind,
+    context: ArtifactWriteContext,
+    policy: ArtifactIssuePolicy,
+    material: ArtifactMaterialAccumulator,
+    failure: Option<ArtifactStoreError>,
+}
+
+impl ArtifactStream {
+    pub fn append(&mut self, bytes: &[u8]) -> ArtifactStoreResult<()> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        self.write_all(bytes).map_err(|error| {
+            self.failure.clone().unwrap_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "artifact_write_failed",
+                    "write_artifact_stream",
+                    error.to_string(),
+                )
+            })
+        })
+    }
+
+    /// Abandons unpublished bytes. Cleanup errors propagate to the task's existing fatal path.
+    pub fn abort(mut self) -> ArtifactStoreResult<()> {
+        self.file.take();
+        let removal = fs::remove_file(&self.temp_path);
+        match removal {
+            Ok(()) => self.failure.map_or(Ok(()), Err),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.failure.map_or(Ok(()), Err)
+            }
+            Err(error) => {
+                let cleanup = ArtifactStoreError::fatal(
+                    "artifact_cleanup_failed",
+                    "cleanup_artifact_temp",
+                    error.to_string(),
+                );
+                Err(self
+                    .failure
+                    .map_or_else(|| cleanup.clone(), |error| error.with_secondary(&cleanup)))
+            }
+        }
+    }
+
+    fn fail(&mut self, error: ArtifactStoreError) -> ArtifactStoreError {
+        self.file.take();
+        let error = cleanup_temp(&self.temp_path, error);
+        self.failure = Some(error.clone());
+        error
+    }
+}
+
+impl Write for ArtifactStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if let Some(error) = &self.failure {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        let result = self
+            .file
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("artifact stream is closed"))
+            .and_then(|file| file.write(bytes))
+            .and_then(|count| {
+                if count == 0 && !bytes.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "artifact stream write returned zero",
+                    ));
+                }
+                self.material.update(&bytes[..count])?;
+                Ok(count)
+            });
+        result.map_err(|error| {
+            std::io::Error::other(self.fail(ArtifactStoreError::fatal(
+                "artifact_write_failed",
+                "write_artifact_stream",
+                error.to_string(),
+            )))
+        })
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(error) = &self.failure {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        // File writes have no userspace buffer; durability is required by seal_stream.
+        Ok(())
+    }
+}
+
 pub struct ArtifactStore {
     root: PathBuf,
     artifacts: ArtifactStoreIssuer,
@@ -147,6 +246,166 @@ impl ArtifactStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Opens a task-owned staging stream without publishing an identity or ledger event.
+    pub fn begin_stream(
+        &self,
+        kind: ArtifactKind,
+        context: ArtifactWriteContext,
+        policy: ArtifactIssuePolicy,
+    ) -> ArtifactStoreResult<ArtifactStream> {
+        if context.created_at_unix_ms == 0 {
+            return Err(ArtifactStoreError::fatal(
+                "artifact_issue_failed",
+                "begin_artifact_stream",
+                "artifact timestamp must be positive",
+            ));
+        }
+        let temp_path = temporary_path(&self.root.join("artifact-stream"))?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_write_failed",
+                    "create_artifact_temp",
+                    error.to_string(),
+                )
+            })?;
+        Ok(ArtifactStream {
+            root: self.root.clone(),
+            temp_path,
+            file: Some(file),
+            kind,
+            context,
+            policy,
+            material: ArtifactMaterialAccumulator::default(),
+            failure: None,
+        })
+    }
+
+    /// Syncs and re-reads actual staged bytes, then publishes once through created → verified.
+    pub fn seal_stream(
+        &self,
+        mut stream: ArtifactStream,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<StoredArtifact> {
+        if let Some(error) = stream.failure.clone() {
+            return Err(stream.fail(error));
+        }
+        if stream.root != self.root {
+            return Err(stream.fail(ArtifactStoreError::fatal(
+                "artifact_path_invalid",
+                "seal_artifact_stream",
+                "stream belongs to another artifact root",
+            )));
+        }
+        let _writer = self.writer.lock().map_err(|_| {
+            stream.fail(ArtifactStoreError::fatal(
+                "artifact_writer_poisoned",
+                "store_artifact",
+                "artifact writer lock is poisoned",
+            ))
+        })?;
+        let material = (|| {
+            let file = stream.file.as_mut().ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "artifact_write_failed",
+                    "seal_artifact_stream",
+                    "artifact stream is closed",
+                )
+            })?;
+            file.sync_all().map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_sync_failed",
+                    "sync_artifact_temp",
+                    error.to_string(),
+                )
+            })?;
+            file.rewind().map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_verify_failed",
+                    "rewind_artifact_temp",
+                    error.to_string(),
+                )
+            })?;
+            ArtifactMaterial::read_from(file).map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_verify_failed",
+                    "read_artifact_for_verification",
+                    error.to_string(),
+                )
+            })
+        })()
+        .map_err(|error| stream.fail(error))?;
+        let written = std::mem::take(&mut stream.material).finish();
+        if material.byte_count() != written.byte_count() || material.sha256() != written.sha256() {
+            return Err(stream.fail(ArtifactStoreError::fatal(
+                "artifact_hash_mismatch",
+                "seal_artifact_stream",
+                "staged bytes do not match the written stream",
+            )));
+        }
+        let issued = self
+            .artifacts
+            .issue(
+                stream.kind,
+                stream.context.artifact_links.clone(),
+                material,
+                stream.context.created_at_unix_ms,
+                stream.policy,
+            )
+            .map_err(|error| {
+                stream.fail(ArtifactStoreError::fatal(
+                    "artifact_issue_failed",
+                    "seal_artifact_stream",
+                    error.to_string(),
+                ))
+            })?;
+        let path = safe_object_path(&self.root, issued.reference().object_key())
+            .map_err(|error| stream.fail(error))?;
+        stream.file.take();
+        let publication = (|| {
+            let parent = path.parent().ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "artifact_path_invalid",
+                    "store_artifact",
+                    "artifact object has no parent directory",
+                )
+            })?;
+            fs::create_dir_all(parent).map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_directory_failed",
+                    "store_artifact",
+                    error.to_string(),
+                )
+            })?;
+            publish_temp(&stream.temp_path, &path)
+        })();
+        if let Err(error) = publication {
+            let error = stream.fail(error);
+            return Err(self.report_failure(
+                error,
+                sink,
+                &stream.context,
+                &issued,
+                ArtifactPayloadDraft::store_failed(
+                    DiagnosticCode::ArtifactWriteFailed,
+                    AuditInput::new(),
+                ),
+            ));
+        }
+        self.finish_publication(
+            PreparedArtifact {
+                issued,
+                path,
+                context: stream.context,
+            },
+            sink,
+        )
     }
 
     pub fn put(
@@ -221,6 +480,14 @@ impl ArtifactStore {
             ));
         }
 
+        self.finish_publication(prepared, sink)
+    }
+
+    fn finish_publication(
+        &self,
+        prepared: PreparedArtifact,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<StoredArtifact> {
         if let Err(error) = self.append_event(
             sink,
             &prepared.context,
@@ -295,7 +562,14 @@ impl ArtifactStore {
             )
         })?;
         let path = safe_object_path(&self.root, object_key)?;
-        let bytes = fs::read(path).map_err(|error| {
+        let mut file = File::open(path).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_read_failed",
+                "verify_recovery_artifact",
+                error.to_string(),
+            )
+        })?;
+        let material = ArtifactMaterial::read_from(&mut file).map_err(|error| {
             ArtifactStoreError::fatal(
                 "artifact_read_failed",
                 "verify_recovery_artifact",
@@ -303,7 +577,7 @@ impl ArtifactStore {
             )
         })?;
         self.artifacts
-            .verify_existing(projected.clone(), &bytes)
+            .verify_existing_material(projected.clone(), material)
             .map_err(|error| {
                 ArtifactStoreError::fatal(
                     "artifact_verify_failed",
@@ -405,6 +679,150 @@ impl ArtifactStore {
     }
 }
 
+/// A bounded reader whose bytes remain provisional until `finish` verifies the entire object.
+/// Consumers must obtain their reference from the ledger and enforce its privacy policy.
+#[must_use = "finish the reader before treating any streamed bytes as verified"]
+pub struct ArtifactReader {
+    file: File,
+    reference: ProjectedArtifactReference,
+    material: ArtifactMaterialAccumulator,
+    verified: Option<VerifiedArtifactReference>,
+    failure: Option<ArtifactStoreError>,
+}
+
+impl ArtifactReader {
+    pub fn read_chunk(&mut self, buffer: &mut [u8]) -> ArtifactStoreResult<usize> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        if buffer.is_empty() || self.verified.is_some() {
+            return Ok(0);
+        }
+        let result = self.read_next(buffer);
+        if let Err(error) = &result {
+            self.failure = Some(error.clone());
+        }
+        result
+    }
+
+    fn read_next(&mut self, buffer: &mut [u8]) -> ArtifactStoreResult<usize> {
+        let remaining = self
+            .reference
+            .byte_count
+            .saturating_sub(self.material.byte_count());
+        let limit = usize::try_from(remaining.saturating_add(1))
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let count = self.file.read(&mut buffer[..limit]).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_read_failed",
+                "read_projected_artifact",
+                error.to_string(),
+            )
+        })?;
+        self.material.update(&buffer[..count]).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_verify_failed",
+                "read_projected_artifact",
+                error.to_string(),
+            )
+        })?;
+        if self.material.byte_count() > self.reference.byte_count {
+            return Err(ArtifactStoreError::fatal(
+                "artifact_hash_mismatch",
+                "verify_projected_artifact",
+                "artifact exceeds its published byte count",
+            ));
+        }
+        if count == 0 {
+            let material = std::mem::take(&mut self.material).finish();
+            verify_projected_material(&material, &self.reference)?;
+            self.verified = Some(
+                ArtifactStoreIssuer::new()
+                    .map_err(|error| {
+                        ArtifactStoreError::fatal(
+                            "artifact_issuer_failed",
+                            "verify_projected_read_only",
+                            error.to_string(),
+                        )
+                    })?
+                    .verify_existing_material(self.reference.clone(), material)
+                    .map_err(|error| {
+                        ArtifactStoreError::fatal(
+                            "artifact_verify_failed",
+                            "verify_projected_read_only",
+                            error.to_string(),
+                        )
+                    })?,
+            );
+        }
+        Ok(count)
+    }
+
+    /// Drains the remaining bytes in bounded chunks and returns authority only after full validation.
+    pub fn finish(mut self) -> ArtifactStoreResult<VerifiedArtifactReference> {
+        let mut buffer = [0_u8; 65_536];
+        while self.read_chunk(&mut buffer)? != 0 {}
+        self.verified.ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "artifact_verify_failed",
+                "verify_projected_read_only",
+                "artifact did not reach a verified EOF",
+            )
+        })
+    }
+}
+
+impl Read for ArtifactReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.read_chunk(buffer).map_err(std::io::Error::other)
+    }
+}
+
+/// Opens an immutable ledger-referenced object without taking a writer lock or repairing files.
+/// Opening or reading a prefix does not verify it; the caller must complete `finish`.
+pub fn open_projected_stream(
+    root: impl AsRef<Path>,
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<ArtifactReader> {
+    reference.validate().map_err(|error| {
+        ArtifactStoreError::fatal(
+            "artifact_reference_invalid",
+            "read_projected_artifact",
+            error.to_string(),
+        )
+    })?;
+    let object_key = reference.object_key().ok_or_else(|| {
+        ArtifactStoreError::fatal(
+            "artifact_object_key_missing",
+            "read_projected_artifact",
+            "projected artifact reference does not include an object key",
+        )
+    })?;
+    let root = root.as_ref().canonicalize().map_err(|error| {
+        ArtifactStoreError::fatal(
+            "artifact_root_failed",
+            "read_projected_artifact",
+            error.to_string(),
+        )
+    })?;
+    let path = safe_object_path(&root, object_key)?;
+    let file = File::open(path).map_err(|error| {
+        ArtifactStoreError::fatal(
+            "artifact_read_failed",
+            "read_projected_artifact",
+            error.to_string(),
+        )
+    })?;
+    Ok(ArtifactReader {
+        file,
+        reference: reference.clone(),
+        material: ArtifactMaterialAccumulator::default(),
+        verified: None,
+        failure: None,
+    })
+}
+
 pub fn read_projected_verified(
     root: impl AsRef<Path>,
     reference: &ProjectedArtifactReference,
@@ -452,23 +870,7 @@ pub fn verify_projected_read_only(
     root: impl AsRef<Path>,
     reference: &ProjectedArtifactReference,
 ) -> ArtifactStoreResult<VerifiedArtifactReference> {
-    let bytes = read_projected_verified(root, reference)?;
-    ArtifactStoreIssuer::new()
-        .map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_issuer_failed",
-                "verify_projected_read_only",
-                error.to_string(),
-            )
-        })?
-        .verify_existing(reference.clone(), &bytes)
-        .map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_verify_failed",
-                "verify_projected_read_only",
-                error.to_string(),
-            )
-        })
+    open_projected_stream(root, reference)?.finish()
 }
 
 fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
@@ -554,7 +956,7 @@ fn write_synced_with(
 
 fn publish_temp(temp_path: &Path, final_path: &Path) -> ArtifactStoreResult<()> {
     // Runtime owns one artifact-store writer per state root; the store mutex makes this
-    // no-overwrite check and same-directory rename indivisible relative to its writers.
+    // no-overwrite check and same-filesystem rename indivisible relative to its writers.
     if final_path.exists() {
         return Err(ArtifactStoreError::fatal(
             "artifact_collision",
@@ -587,15 +989,35 @@ fn verify_file(path: &Path, reference: &ArtifactReference) -> ArtifactStoreResul
             error.to_string(),
         )
     })?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|error| {
+    let material = ArtifactMaterial::read_from(&mut file).map_err(|error| {
         ArtifactStoreError::fatal(
             "artifact_verify_failed",
             "read_artifact_for_verification",
             error.to_string(),
         )
     })?;
-    verify_bytes(&bytes, reference)
+    if material.byte_count() != reference.byte_count() || material.sha256() != reference.sha256() {
+        return Err(ArtifactStoreError::fatal(
+            "artifact_hash_mismatch",
+            "verify_artifact",
+            "artifact byte count or SHA-256 does not match issued metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_projected_material(
+    material: &ArtifactMaterial,
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<()> {
+    if material.byte_count() != reference.byte_count() || material.sha256() != reference.sha256() {
+        return Err(ArtifactStoreError::fatal(
+            "artifact_hash_mismatch",
+            "verify_projected_artifact",
+            "artifact byte count or SHA-256 does not match projected metadata",
+        ));
+    }
+    Ok(())
 }
 
 fn verify_bytes(bytes: &[u8], reference: &ArtifactReference) -> ArtifactStoreResult<()> {
@@ -684,6 +1106,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         event_types: Vec<EventType>,
+        references: Vec<ArtifactReference>,
         fail_at: Option<usize>,
     }
 
@@ -704,6 +1127,7 @@ mod tests {
                 )
             })?;
             self.event_types.push(sanitized.event_type());
+            self.references.extend_from_slice(sanitized.artifacts());
             Ok(())
         }
     }
@@ -783,6 +1207,88 @@ mod tests {
             stored.reference().retention_class(),
             RetentionClass::DebugFull
         );
+
+        let request = request(b"stream context");
+        let expected_links = request.context.artifact_links.clone();
+        let mut stream = store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                request.context,
+                request.policy,
+            )
+            .expect("begin stream");
+        let staging = stream.temp_path.clone();
+        let mut stream_sink = RecordingSink::default();
+        let mut expected_hash = Sha256::new();
+        stream.append(b"\"").expect("open JSON string");
+        expected_hash.update(b"\"");
+        for index in 0..257 {
+            let chunk = [b'a' + (index % 26) as u8; 4096];
+            stream.append(&chunk[..17]).expect("partial chunk");
+            stream.append(&chunk[17..]).expect("remaining chunk");
+            expected_hash.update(chunk);
+        }
+        stream.append(b"\"").expect("close JSON string");
+        expected_hash.update(b"\"");
+        let expected_bytes = 257 * 4096 + 2;
+        assert!(expected_bytes > 1_048_576);
+        assert_eq!(
+            fs::metadata(&staging).expect("staging metadata").len(),
+            expected_bytes
+        );
+        assert!(stream_sink.event_types.is_empty());
+        assert_eq!(all_files(temp.path()).len(), 2);
+
+        let streamed = store
+            .seal_stream(stream, &mut stream_sink)
+            .expect("sealed stream");
+        assert!(!staging.exists());
+        assert_eq!(all_files(temp.path()).len(), 2);
+        assert!(streamed.path().starts_with(store.root()));
+        assert_eq!(streamed.reference().kind(), ArtifactKind::DiagnosticJson);
+        assert_eq!(streamed.reference().byte_count(), expected_bytes);
+        assert_eq!(
+            streamed.reference().sha256(),
+            format!("sha256:{:x}", expected_hash.finalize())
+        );
+        assert_eq!(
+            stream_sink.event_types,
+            [EventType::ArtifactCreated, EventType::ArtifactVerified]
+        );
+        assert_eq!(
+            stream_sink.references,
+            [streamed.reference().clone(), streamed.reference().clone()]
+        );
+        let expected = store
+            .artifacts
+            .issue(
+                ArtifactKind::DiagnosticJson,
+                expected_links,
+                b"link comparison",
+                1_752_147_200_000,
+                request.policy,
+            )
+            .expect("comparison reference");
+        assert_eq!(streamed.reference().run_id(), expected.reference().run_id());
+        assert_eq!(
+            streamed.reference().frame_id(),
+            expected.reference().frame_id()
+        );
+        assert_eq!(
+            streamed.reference().correlation_id(),
+            expected.reference().correlation_id()
+        );
+        assert_ne!(
+            streamed.reference().artifact_id(),
+            stored.reference().artifact_id()
+        );
+        assert_eq!(
+            store
+                .verify_recovery_reference(&streamed.reference().project(true))
+                .expect("stream recovery")
+                .reference(),
+            streamed.reference()
+        );
     }
 
     #[test]
@@ -798,6 +1304,64 @@ mod tests {
         assert_eq!(
             read_projected_verified(temp.path(), &projected).expect("read projected artifact"),
             b"trusted projected bytes"
+        );
+
+        let request = request(b"stream context");
+        let mut stream = store
+            .begin_stream(ArtifactKind::TextReport, request.context, request.policy)
+            .expect("begin stream");
+        let chunk = [b'v'; 4093];
+        for _ in 0..257 {
+            stream.append(&chunk).expect("stream chunk");
+        }
+        let streamed = store.seal_stream(stream, &mut sink).expect("sealed stream");
+        let stream_reference = streamed.reference().project(true);
+        let mut reader =
+            open_projected_stream(temp.path(), &stream_reference).expect("open stream");
+        let mut buffer = [0_u8; 997];
+        let first = reader.read_chunk(&mut buffer).expect("first chunk");
+        assert!(first > 0);
+        assert!(buffer[..first].iter().all(|value| *value == b'v'));
+        assert!(reader.verified.is_none());
+        let mut total = first;
+        loop {
+            let count = reader.read_chunk(&mut buffer).expect("read chunk");
+            if count == 0 {
+                break;
+            }
+            assert!(buffer[..count].iter().all(|value| *value == b'v'));
+            total += count;
+        }
+        assert_eq!(total, 257 * chunk.len());
+        assert!(total > 1_048_576);
+        assert_eq!(
+            reader.finish().expect("complete verification").reference(),
+            streamed.reference()
+        );
+        assert_eq!(
+            verify_projected_read_only(temp.path(), &stream_reference)
+                .expect("read-only verification")
+                .reference(),
+            streamed.reference()
+        );
+
+        let mut reader =
+            open_projected_stream(temp.path(), &stream_reference).expect("open before corruption");
+        reader.read_chunk(&mut buffer).expect("provisional prefix");
+        assert!(reader.verified.is_none());
+        let mut corrupt = OpenOptions::new()
+            .write(true)
+            .open(streamed.path())
+            .expect("open tail");
+        corrupt.seek(std::io::SeekFrom::End(-1)).expect("seek tail");
+        corrupt.write_all(b"x").expect("corrupt same-length tail");
+        drop(corrupt);
+        assert_eq!(
+            reader
+                .finish()
+                .expect_err("corrupt tail cannot verify a prefix")
+                .code(),
+            "artifact_hash_mismatch"
         );
 
         fs::write(stored.path(), b"tampered projected bytes").expect("tamper artifact");
@@ -890,6 +1454,24 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert!(all_files(temp.path()).is_empty());
+
+        let request = request(b"stream context");
+        let mut stream = store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                request.context,
+                request.policy,
+            )
+            .expect("begin stream");
+        stream.append(b"{\"result\":").expect("first chunk");
+        stream.append(b"\"complete\"}").expect("second chunk");
+        let error = store
+            .seal_stream(stream, &mut sink)
+            .expect_err("stream created failure");
+        assert_eq!(error.code(), "injected_event_failure");
+        assert!(error.is_fatal());
+        assert!(sink.event_types.is_empty());
+        assert!(all_files(temp.path()).is_empty());
     }
 
     #[test]
@@ -906,6 +1488,29 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert_eq!(sink.event_types, [EventType::ArtifactCreated]);
+        assert!(all_files(temp.path()).is_empty());
+
+        let request = request(b"stream context");
+        let mut stream = store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                request.context,
+                request.policy,
+            )
+            .expect("begin stream");
+        stream.append(b"{\"result\":").expect("first chunk");
+        stream.append(b"\"complete\"}").expect("second chunk");
+        let mut stream_sink = RecordingSink {
+            fail_at: Some(1),
+            ..RecordingSink::default()
+        };
+        let error = store
+            .seal_stream(stream, &mut stream_sink)
+            .expect_err("stream verified failure");
+        assert_eq!(error.code(), "injected_event_failure");
+        assert!(error.is_fatal());
+        assert_eq!(stream_sink.event_types, [EventType::ArtifactCreated]);
+        assert_eq!(stream_sink.references.len(), 1);
         assert!(all_files(temp.path()).is_empty());
     }
 

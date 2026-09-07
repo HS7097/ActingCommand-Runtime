@@ -24,6 +24,9 @@ use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
+mod task_records;
+pub use task_records::{TaskDiagnosticGap, TaskDiagnosticPage, TaskRecordsRequest};
+
 pub const MAX_FORENSIC_EVENTS: usize = 1_024;
 pub const MAX_FORENSIC_REPAIRS: usize = 1_024;
 pub const MAX_STABILITY_ARTIFACT_BYTES: u64 = 16 * 1_024;
@@ -153,6 +156,7 @@ pub struct ForensicRequest {
     pub state_root: PathBuf,
     pub command: ForensicCommand,
     events: ForensicEventsRequest,
+    task_records: TaskRecordsRequest,
 }
 
 impl ForensicRequest {
@@ -161,6 +165,7 @@ impl ForensicRequest {
             state_root: state_root.as_ref().to_path_buf(),
             command,
             events: ForensicEventsRequest::default(),
+            task_records: TaskRecordsRequest::default(),
         }
     }
 
@@ -169,6 +174,7 @@ impl ForensicRequest {
             state_root: state_root.as_ref().to_path_buf(),
             command: ForensicCommand::Events,
             events,
+            task_records: TaskRecordsRequest::default(),
         }
     }
 
@@ -177,6 +183,7 @@ impl ForensicRequest {
             state_root: state_root.as_ref().to_path_buf(),
             command: ForensicCommand::Performance,
             events,
+            task_records: TaskRecordsRequest::default(),
         }
     }
 
@@ -185,6 +192,7 @@ impl ForensicRequest {
             state_root: state_root.as_ref().to_path_buf(),
             command: ForensicCommand::Stability,
             events,
+            task_records: TaskRecordsRequest::default(),
         }
     }
 
@@ -193,11 +201,27 @@ impl ForensicRequest {
             state_root: state_root.as_ref().to_path_buf(),
             command: ForensicCommand::TaskEvidence,
             events,
+            task_records: TaskRecordsRequest::default(),
         }
+    }
+
+    pub fn with_task_records(mut self, records: TaskRecordsRequest) -> ForensicResult<Self> {
+        if self.command != ForensicCommand::TaskEvidence
+            || records.limit == 0
+            || records.limit > actingcommand_contract::MAX_TASK_DIAGNOSTIC_PAGE_RECORDS
+        {
+            return Err(ForensicError::new(
+                "invalid_task_record_page",
+                "task_evidence",
+                "invalid task record pagination",
+            ));
+        }
+        self.task_records = records;
+        Ok(self)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
     Open(OpenReport),
@@ -304,7 +328,7 @@ pub struct TaskStepEvidence {
     pub physical_inputs: TaskEvidenceRelation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskEvidenceReport {
     pub page: EventsReport,
     pub inputs: Vec<TaskInputEvidence>,
@@ -313,6 +337,8 @@ pub struct TaskEvidenceReport {
     pub corrupt_tail: Option<CorruptTailReport>,
     pub failures: Vec<StabilityFailure>,
     pub gaps: Vec<&'static str>,
+    pub diagnostics: Vec<TaskDiagnosticPage>,
+    pub diagnostic_gaps: Vec<TaskDiagnosticGap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -484,7 +510,7 @@ pub struct ReplayReport {
     pub manifest: EvidenceManifest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ForensicOutput {
     Machine(ForensicReport),
     Human(String),
@@ -556,12 +582,20 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         GlobalLedgerReadOnlyConfig::new(request.state_root.join("ledger")),
         |reference| {
             let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
-                check_diagnostic_artifact_size(
-                    &artifact_root,
-                    reference,
-                    MAX_STABILITY_ARTIFACT_BYTES,
-                )
-                .and_then(|()| verify_projected_read_only(&artifact_root, reference))
+                let size = match task_records::is_task_stream(&artifact_root, reference) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => check_diagnostic_artifact_size(
+                        &artifact_root,
+                        reference,
+                        MAX_STABILITY_ARTIFACT_BYTES,
+                    ),
+                    Err(error) => Err(ArtifactStoreError::fatal(
+                        error.code(),
+                        error.operation(),
+                        error.to_string(),
+                    )),
+                };
+                size.and_then(|()| verify_projected_read_only(&artifact_root, reference))
             } else {
                 verify_projected_read_only(&artifact_root, reference)
             };
@@ -609,13 +643,13 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
                 artifact_failures,
             )?),
         ))),
-        ForensicCommand::TaskEvidence => Ok(ForensicOutput::Machine(ForensicReport::TaskEvidence(
-            Box::new(task_evidence_report(
-                &snapshot,
-                request.events,
-                artifact_failures,
-            )?),
-        ))),
+        ForensicCommand::TaskEvidence => {
+            let mut report = task_evidence_report(&snapshot, request.events, artifact_failures)?;
+            task_records::expand(&artifact_root, &request.task_records, &mut report)?;
+            Ok(ForensicOutput::Machine(ForensicReport::TaskEvidence(
+                Box::new(report),
+            )))
+        }
         ForensicCommand::Chain { request_id } => {
             let query =
                 serde_json::from_value(json!({ "request_id": request_id })).map_err(query_error)?;
@@ -850,6 +884,8 @@ fn task_evidence_report(
         corrupt_tail,
         failures,
         gaps: gaps.into_iter().collect(),
+        diagnostics: Vec::new(),
+        diagnostic_gaps: Vec::new(),
     })
 }
 
@@ -1302,6 +1338,9 @@ fn project_stability(
     reference: &ProjectedArtifactReference,
     matched_count: &mut usize,
 ) -> ForensicResult<Option<StabilityComparison>> {
+    if task_records::is_task_stream(root, reference)? {
+        return Ok(None);
+    }
     let invalid = |code| {
         ForensicError::new(
             code,
@@ -1610,6 +1649,9 @@ fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult
                 && artifact.producer() == ArtifactProducer::ArtifactStore
         }) {
             let reference = artifact.project(true);
+            if task_records::is_task_stream(root, &reference)? {
+                continue;
+            }
             let invalid = |code| {
                 ForensicError::new(
                     code,
