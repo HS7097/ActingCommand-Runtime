@@ -10847,19 +10847,25 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     })
                     .map(move |artifact| (event, artifact))
             })
-            .map(|(event, artifact)| {
+            .filter_map(|(event, artifact)| {
+                let bytes = read_projected_verified(root.path(), &artifact.project(true)).unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if value.get("schema_version").and_then(serde_json::Value::as_str)
+                    != Some(actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA)
+                {
+                    return None;
+                }
                 assert!(
                     artifact.byte_count()
                         <= actingcommand_contract::MAX_EFFECTIVE_CONFIGURATION_BYTES
                 );
-                let bytes = read_projected_verified(root.path(), &artifact.project(true)).unwrap();
-                let record: EffectiveConfigurationRecord = serde_json::from_slice(&bytes).unwrap();
+                let record: EffectiveConfigurationRecord = serde_json::from_value(value).unwrap();
                 assert_eq!(event.links().task_id(), Some(&record.task_id));
                 assert_eq!(event.links().run_id(), Some(&record.run_id));
                 assert_eq!(event.links().frame_id(), record.frame_id.as_ref());
                 assert_eq!(event.links().action_id(), record.action_id.as_ref());
                 assert_eq!(event.links().request_id(), Some(&record.request_id));
-                (event, record)
+                Some((event, record))
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -11180,11 +11186,14 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 artifact.kind() == ArtifactKind::DiagnosticJson
                     && artifact.producer() == ArtifactProducer::ArtifactStore
             })
-            .map(|artifact| {
-                serde_json::from_slice::<EffectiveConfigurationRecord>(
+            .filter_map(|artifact| {
+                let value: serde_json::Value = serde_json::from_slice(
                     &read_projected_verified(root.path(), &artifact.project(true)).unwrap(),
                 )
-                .unwrap()
+                .unwrap();
+                (value.get("schema_version").and_then(serde_json::Value::as_str)
+                    == Some(actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA))
+                .then(|| serde_json::from_value::<EffectiveConfigurationRecord>(value).unwrap())
             })
             .collect::<Vec<_>>();
         assert_eq!(
