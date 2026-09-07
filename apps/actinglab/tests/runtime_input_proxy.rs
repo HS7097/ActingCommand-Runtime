@@ -350,7 +350,8 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
     fs::write(seed_dir.join("assets/HOME.png"), &template).unwrap();
     let source_task = json!({"schema_version":"0.6","task_id":"seed","game":"neutral","server_scope":["test"],"locale":"en-US",
         "coordinate_space":{"width":2,"height":2},"defaults":{"template_threshold":0.9,"color_max_distance":0.0},
-        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.9}],
+        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.9,
+            "color_check":{"region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}}],
         "color_probes":[{"id":"private-value","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}],
         "entry_page":"home","target_page":"home","goal":"Explicit neutral author goal",
         "operations":[{"id":"seed-tap","purpose":"source purpose","from":"home","to":null,"click":{"kind":"point","x":1,"y":1},
@@ -2164,6 +2165,11 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     let pack = fs::read_to_string(&pack_path).expect("recognition pack");
     fs::write(&pack_path, pack.replace("[255,0,0]", "[0,0,255]"))
         .expect("mismatched recognition pack");
+    fs::write(
+        resources.join("recognition/arknights.cn.pages.json"),
+        br#"{"schema_version":"0.3","pages":[{"id":"arknights/home","required":["home_button"]}]}"#,
+    )
+    .expect("declared arrival page");
     write_semantic_package(&semantic_package, &resources);
     let expected_sha256 = format!(
         "{:x}",
