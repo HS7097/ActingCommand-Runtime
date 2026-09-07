@@ -70,6 +70,11 @@ pub(super) fn is_task_stream(
     root: &Path,
     artifact: &ProjectedArtifactReference,
 ) -> ForensicResult<bool> {
+    if artifact.kind != ArtifactKind::DiagnosticJson
+        || artifact.producer != ArtifactProducer::ArtifactStore
+    {
+        return Ok(false);
+    }
     let mut reader = BufReader::new(
         open_projected_stream(root, artifact)
             .map_err(|_| invalid("task_diagnostic_open_failed"))?,
