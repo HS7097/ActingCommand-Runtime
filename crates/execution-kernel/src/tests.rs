@@ -121,6 +121,60 @@ fn c1b9_d02_readonly_close_authority() {
     kernel
         .close_after_resource_retirement()
         .expect("local final close");
+
+    // Workflow #269 INPUT-FAILURE-CLOSE-v1: retained input regressions.
+    // First red: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5575761897
+    for open_failure in [false, true] {
+        let state = Arc::new(Mutex::new(FakeState {
+            fail_input_open: open_failure,
+            fail_input: !open_failure,
+            ..FakeState::default()
+        }));
+        let id = instance();
+        let retained = self::kernel(Arc::clone(&state), &[("node.a", id, "private-a")]);
+        retained.capture("node.a").expect("capture already open");
+        let error = retained
+            .input_prepared_retained_with_registration_guard(
+                "node.a",
+                retained
+                    .prepare_input(InputAction::Reset)
+                    .expect("input plan"),
+                (),
+            )
+            .expect_err("input failure returned to close owner");
+        assert_eq!(
+            error.code(),
+            if open_failure {
+                "input_backend_open_failed"
+            } else {
+                "input_backend_operation_failed"
+            }
+        );
+        assert!(error.cleanup_cause().is_none());
+        assert_eq!(state.lock().expect("state").capture_closes, 0);
+        assert_eq!(state.lock().expect("state").input_closes, 0);
+        assert!(
+            retained
+                .has_owned_resources(id)
+                .expect("actual retained session")
+        );
+        let closed = retained
+            .close_instance(
+                id,
+                actingcommand_device::DeviceCloseAuthority::FencedDeviceWrite,
+            )
+            .expect("owner supplied close authority");
+        assert_eq!(closed.resource_count(), if open_failure { 1 } else { 2 });
+        assert_eq!(state.lock().expect("state").capture_closes, 1);
+        assert_eq!(
+            state.lock().expect("state").input_closes,
+            usize::from(!open_failure)
+        );
+        assert!(!retained.has_owned_resources(id).expect("retired session"));
+        retained
+            .close_after_resource_retirement()
+            .expect("retired kernel");
+    }
 }
 
 #[test]

@@ -316,6 +316,7 @@ struct FakeState {
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
     open_count: AtomicUsize,
+    input_open_error: std::sync::Mutex<Option<DeviceError>>,
     input_count: AtomicUsize,
     close_count: AtomicUsize,
     close_error: std::sync::Mutex<Option<DeviceError>>,
@@ -888,6 +889,15 @@ impl ExecutionBackendProvider for FakeProvider {
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
         entry.state.open_count.fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = entry
+            .state
+            .input_open_error
+            .lock()
+            .expect("input open error")
+            .clone()
+        {
+            return Err(error);
+        }
         Ok(Box::new(FakeBackend {
             state: Arc::clone(&entry.state),
             close_outcome: None,
@@ -16237,6 +16247,200 @@ fn backend_failure_is_visible_and_revokes_the_guard() {
     drop(client);
     assert!(host.fatal_error().expect("health").is_none());
     host.close().expect("close host");
+}
+
+// Workflow #269 INPUT-FAILURE-CLOSE-v1, authorized Defect regression.
+// First reds: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5575761897
+// and https://github.com/HS7097/ActingCommand-Workflow/issues/278#issuecomment-5575797919.
+#[test]
+fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
+    use actingcommand_contract::{ResourceQuiescence, RuntimeLifecyclePhase};
+    use actingcommand_device::{
+        DeviceErrorDiagnosticMessage, DeviceResourceClosePhase, DeviceResourceKind,
+        DeviceResourceQuiescence,
+    };
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+
+    for (contained, open_failure, close_failure) in [
+        (false, true, false),
+        (true, true, false),
+        (false, false, false),
+        (true, false, false),
+        (false, true, true),
+        (true, true, true),
+        (false, false, true),
+        (true, false, true),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        state
+            .require_fenced_capture_close
+            .store(true, Ordering::Release);
+        let primary_text =
+            "child_operation=screen_size; source_error=private synthetic input failure";
+        let primary = DeviceError::transient(primary_text)
+            .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.bounds_validate")
+            .with_diagnostic_context(
+                "adb_shell_input",
+                if open_failure {
+                    "bounds_validate"
+                } else if contained {
+                    "tap"
+                } else {
+                    "reset"
+                },
+                DeviceErrorSensitivity::Sensitive,
+            )
+            .with_diagnostic_message(
+                DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
+            );
+        if open_failure {
+            *state.input_open_error.lock().expect("input open error") = Some(primary);
+        } else {
+            *state.input_error.lock().expect("input error") = Some(primary);
+        }
+        if close_failure {
+            *state
+                .capture_close_error
+                .lock()
+                .expect("capture close error") = Some(
+                DeviceError::fatal("private synthetic disconnect failure")
+                    .with_resource_close_cause(
+                        DeviceResourceKind::ProviderConnection,
+                        DeviceResourceClosePhase::DisconnectCall,
+                        "fake_capture",
+                        None,
+                        None,
+                        DeviceResourceQuiescence::Unconfirmed,
+                        1,
+                    ),
+            );
+        }
+        let host = host_with_state(&root, "node.a", Arc::clone(&state));
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .expect("official RuntimeClient");
+        let error = if contained {
+            let bytes = neutral_contained_task_package();
+            let package = root.path().join("input-failure-task.zip");
+            fs::write(&package, &bytes).expect("existing inline package");
+            let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+            client
+                .run_contained_task(
+                    "node.a",
+                    ContainedTaskRequest::new(package.display().to_string(), expected)
+                        .expect("task request"),
+                )
+                .expect_err("contained input failure")
+        } else {
+            client
+                .observe_readonly("node.a")
+                .expect("retained capture before input");
+            let token = client.acquire_lease("node.a").expect("business lease");
+            client
+                .input(&token, InputAction::Reset)
+                .expect_err("ordinary input failure")
+        };
+        assert_eq!(
+            error.projection().expect("original input failure").code,
+            if open_failure {
+                RuntimeErrorCode::BackendOpenFailed
+            } else {
+                RuntimeErrorCode::BackendOperationFailed
+            }
+        );
+        assert_eq!(error.is_fatal(), close_failure);
+        assert!(!format!("{error:?} {error}").contains(primary_text));
+        assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+        assert_eq!(
+            state.unfenced_capture_close_count.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            state.close_count.load(Ordering::Acquire),
+            usize::from(!open_failure)
+        );
+        let events = host
+            .query_persisted_events_for_test(EventQuery::default())
+            .expect("original ledger");
+        let inputs = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::InputFailed)
+            .collect::<Vec<_>>();
+        assert_eq!(inputs.len(), 1);
+        let failed = inputs[0];
+        let EventPayload::Input(InputPayload::Failed(outcome)) = failed.payload() else {
+            panic!("typed input failure")
+        };
+        let detail = outcome.detail().expect("primary detail");
+        assert_eq!(detail.category(), "protocol");
+        assert_eq!(detail.stage(), "adb.input.bounds_validate");
+        assert_eq!(detail.backend(), "adb_shell_input");
+        assert_eq!(outcome.cleanup_cause().is_some(), close_failure);
+        assert_eq!(failed.links().run_id().is_some(), contained);
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type() == EventType::InputCommitted)
+        );
+        let native = events
+            .iter()
+            .find_map(|event| {
+                if let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
+                    failure,
+                )) = event.payload()
+                {
+                    let lifecycle = failure.lifecycle_failure()?;
+                    (lifecycle.native_detail()?.text() == primary_text)
+                        .then_some((event, lifecycle))
+                } else {
+                    None
+                }
+            })
+            .expect("original private native input detail");
+        assert_eq!(native.0.links(), failed.links());
+        assert_eq!(native.1.primary_detail(), outcome.detail());
+        assert!(!native.1.native_detail().unwrap().truncated());
+        assert!(
+            !serde_json::to_string(&native.0.payload().public_projection())
+                .unwrap()
+                .contains(primary_text)
+        );
+        let released = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::LeaseReleased)
+            .collect::<Vec<_>>();
+        assert_eq!(released.len(), usize::from(!close_failure));
+        let quiescence = events.iter().find(|event| matches!(event.payload(),
+            EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
+            if matches!(payload.phase(), RuntimeLifecyclePhase::ResourceQuiescence { quiescence: ResourceQuiescence::Confirmed, .. })));
+        if close_failure {
+            assert!(quiescence.is_none());
+            assert!(host.fatal_error().unwrap().is_some());
+        } else {
+            let closed = quiescence.expect("real close completion");
+            assert_eq!(closed.links().lease_id(), failed.links().lease_id());
+            assert_eq!(released[0].links().lease_id(), failed.links().lease_id());
+            assert!(closed.sequence() < released[0].sequence());
+            assert!(host.fatal_error().unwrap().is_none());
+        }
+        let terminals = events.iter().filter(|event| matches!(event.payload(),
+            EventPayload::Task(TaskPayload::Semantic(payload))
+            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
+        assert_eq!(terminals.len(), usize::from(contained && !close_failure));
+        if let Some(terminal) = terminals.first() {
+            assert_eq!(terminal.links().run_id(), failed.links().run_id());
+        }
+        drop(client);
+        assert_eq!(host.close().is_err(), close_failure);
+        assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    }
 }
 
 #[test]
