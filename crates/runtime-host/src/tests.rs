@@ -12234,7 +12234,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                         == actingcommand_contract::ArtifactRedactionState::Pending
             })
             .expect("verified BRAW stream");
-        let document: Value = serde_json::from_slice(
+        let document: serde_json::Value = serde_json::from_slice(
             &read_projected_verified(root.path(), stream).expect("verified stream bytes"),
         )
         .unwrap();
