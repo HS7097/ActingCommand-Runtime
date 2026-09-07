@@ -24,7 +24,11 @@ use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
+mod signatures;
 mod task_records;
+pub use signatures::{
+    ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,
+};
 pub use task_records::{TaskDiagnosticGap, TaskDiagnosticPage, TaskRecordsRequest};
 
 pub const MAX_FORENSIC_EVENTS: usize = 1_024;
@@ -223,6 +227,7 @@ impl ForensicRequest {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
+    Signatures(Box<SignatureReplayReport>),
     Open(OpenReport),
     Events(EventsReport),
     Performance(Box<PerformanceReport>),

@@ -11,6 +11,146 @@ use crate::{
 
 struct RejectSecrets;
 
+// Workflow #257 SIGNATURE-REPLAY-v1: typed contract specification.
+#[test]
+fn diagnostic_signatures_validate_typed_conditions_origins_and_prefixes() {
+    use crate::*;
+    let ids = issuer();
+    let definition = DiagnosticSignatureDefinition {
+        signature_id: "close_unconfirmed".into(),
+        version: 1,
+        origin_module: OriginModule::Runtime,
+        diagnostic_code: DiagnosticCode::RuntimeDiagnostic,
+        event_type: EventType::RuntimeFailed,
+        minimum_severity: EventSeverity::Error,
+        lifecycle: Some(SignatureLifecyclePredicate {
+            operation: Some("close_execution_session".into()),
+            ..Default::default()
+        }),
+    };
+    definition.validate().unwrap();
+    let mut invalid = definition.clone();
+    invalid.version = 0;
+    assert!(invalid.validate().is_err());
+    invalid = definition.clone();
+    invalid.lifecycle.as_mut().unwrap().operation = Some("close.*".into());
+    assert!(invalid.validate().is_err());
+    let mut wire = serde_json::to_value(&definition).unwrap();
+    wire["jsonpath"] = serde_json::json!("$.payload");
+    assert!(serde_json::from_value::<DiagnosticSignatureDefinition>(wire).is_err());
+    let registration = SignatureRegistrationRef {
+        signature_id: definition.signature_id.clone(),
+        version: 1,
+        event_id: *ids.mint_event_id().unwrap().transport(),
+        sequence: 1,
+    };
+    for operation in [
+        RuntimeOperation::RegisterDiagnosticSignature {
+            definition: Box::new(definition.clone()),
+        },
+        RuntimeOperation::RetireDiagnosticSignature { registration },
+        RuntimeOperation::MatchDiagnosticSignatures {
+            request: Box::new(RuntimeSignatureMatchRequest {
+                input_state_root: "private-historical-root".into(),
+                input_through: 1,
+                catalog_through: 1,
+                page: SignaturePageRequest::default(),
+            }),
+        },
+    ] {
+        assert!(!format!("{operation:?}").contains("private-historical-root"));
+        let request = RuntimeRequest::new(
+            ids.mint_request_id().unwrap(),
+            ids.mint_correlation_id().unwrap(),
+            None,
+            EventActor::Lab,
+            EventSource::Lab,
+            1,
+            operation.clone(),
+        )
+        .unwrap();
+        let decoded: RuntimeRequest =
+            serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
+        decoded.validate().unwrap();
+        assert!(
+            RuntimeRequest::new(
+                ids.mint_request_id().unwrap(),
+                ids.mint_correlation_id().unwrap(),
+                None,
+                EventActor::Cli,
+                EventSource::Cli,
+                1,
+                operation
+            )
+            .is_err()
+        );
+    }
+    let record = LedgerSignatureEvent::Registered { definition };
+    let draft = EventDraft::new(
+        ids.mint_event_id().unwrap(),
+        1,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Lab,
+            OriginModule::GlobalLedger,
+            EventActor::Lab,
+        ),
+        EventLinksDraft::default(),
+        LedgerPayloadDraft::signature(record, AuditInput::new()).into(),
+    )
+    .sanitize(&RejectSecrets)
+    .unwrap();
+    let payload = draft.payload();
+    payload.validate().unwrap();
+    assert_eq!(payload.sensitivity(), Sensitivity::Internal);
+    let decoded: EventPayload =
+        serde_json::from_value(serde_json::to_value(payload).unwrap()).unwrap();
+    assert_eq!(&decoded, payload);
+    assert!(
+        !serde_json::to_string(&payload.public_projection())
+            .unwrap()
+            .contains("close_unconfirmed")
+    );
+    let prefix = SignaturePrefixIdentity {
+        through_sequence: 2,
+        observed_through_sequence: 2,
+        event_count: 2,
+        sha256: format!("sha256:{}", "a".repeat(64)),
+        complete: true,
+    };
+    prefix.validate().unwrap();
+    let mut invalid = prefix.clone();
+    invalid.event_count = 1;
+    assert!(invalid.validate().is_err());
+    let page = SignatureReplayPage {
+        input: prefix.clone(),
+        catalog: prefix,
+        active_signatures: 1,
+        matched_count: 0,
+        missing_fields_count: 0,
+        gaps: vec![],
+        row_offset: 0,
+        rows: vec![],
+        next_cursor: None,
+    };
+    page.validate().unwrap();
+    assert!(page.evidence_complete());
+    let mut invalid = page;
+    invalid.input.complete = false;
+    assert!(invalid.validate().is_err());
+    invalid.gaps.push(SignatureReplayGap::InputIncomplete);
+    invalid.validate().unwrap();
+    assert!(!invalid.evidence_complete());
+    assert!(
+        SignaturePageRequest {
+            limit: 0,
+            cursor: None
+        }
+        .validate()
+        .is_err()
+    );
+}
+
 #[test]
 fn runtime_lifecycle_causes_roundtrip_and_project() {
     use crate::{

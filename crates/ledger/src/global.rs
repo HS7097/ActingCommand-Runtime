@@ -6,6 +6,8 @@ mod projection;
 mod read_only;
 mod storage;
 
+pub(crate) use projection::query_matches;
+
 // Read-only performance views accompany ledger-owned persisted events.
 pub use actingcommand_contract::{
     PerformanceLedgerSample, PerformanceProcessOwnership, PerformanceProcessSummary,
@@ -83,7 +85,7 @@ impl GlobalLedgerError {
         }
     }
 
-    fn request(code: &'static str, operation: &'static str) -> Self {
+    pub(crate) fn request(code: &'static str, operation: &'static str) -> Self {
         Self {
             code,
             operation,

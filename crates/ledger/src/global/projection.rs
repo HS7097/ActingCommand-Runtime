@@ -343,7 +343,7 @@ pub(super) fn project_scheduling_outcomes(
     })
 }
 
-fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
+pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
     let links = event.links();
     query
         .from_sequence

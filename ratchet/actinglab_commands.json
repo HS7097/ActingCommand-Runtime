@@ -92,6 +92,7 @@
     "env status",
     "lab run",
     "lab validate",
+    "lab signatures",
     "lab debug-package",
     "lab watch",
     "lab export-evidence",

@@ -2369,6 +2369,15 @@ pub enum RuntimeOperation {
     SubscribeEvents {
         request: RuntimeSubscriptionRequest,
     },
+    RegisterDiagnosticSignature {
+        definition: Box<crate::DiagnosticSignatureDefinition>,
+    },
+    MatchDiagnosticSignatures {
+        request: Box<crate::RuntimeSignatureMatchRequest>,
+    },
+    RetireDiagnosticSignature {
+        registration: crate::SignatureRegistrationRef,
+    },
     DebugPackage {
         request: PackageDebugRequest,
     },
@@ -2492,6 +2501,15 @@ impl RuntimeOperation {
                 Ok(())
             }
             Self::SubscribeEvents { request } => request.validate(),
+            Self::RegisterDiagnosticSignature { definition } => definition
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_signature_definition")),
+            Self::MatchDiagnosticSignatures { request } => request
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_signature_match_request")),
+            Self::RetireDiagnosticSignature { registration } => registration
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_signature_registration")),
             Self::DebugPackage { request } => request.validate(),
             Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
@@ -2657,6 +2675,15 @@ impl fmt::Debug for RuntimeOperation {
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
+            Self::RegisterDiagnosticSignature { .. } => {
+                "RuntimeOperation::RegisterDiagnosticSignature(<typed-definition>)"
+            }
+            Self::MatchDiagnosticSignatures { .. } => {
+                "RuntimeOperation::MatchDiagnosticSignatures(<frozen-input>)"
+            }
+            Self::RetireDiagnosticSignature { .. } => {
+                "RuntimeOperation::RetireDiagnosticSignature(<registration>)"
+            }
             Self::DebugPackage { .. } => "RuntimeOperation::DebugPackage(<redacted>)",
             Self::ExportEvidence { .. } => "RuntimeOperation::ExportEvidence(<redacted>)",
             Self::RecordAuthoringEvent { .. } => {
@@ -2760,6 +2787,15 @@ impl RuntimeRequest {
             return Err(RuntimeContractError::new(
                 "invalid_resource_authoring_origin",
             ));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::RegisterDiagnosticSignature { .. }
+                | RuntimeOperation::MatchDiagnosticSignatures { .. }
+                | RuntimeOperation::RetireDiagnosticSignature { .. }
+        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
+        {
+            return Err(RuntimeContractError::new("invalid_signature_origin"));
         }
         if matches!(
             self.operation,
@@ -3257,6 +3293,15 @@ pub enum RuntimeResult {
     EventBatch {
         batch: RuntimeEventBatch,
     },
+    SignatureRegistered {
+        registration: crate::SignatureRegistrationRef,
+    },
+    SignaturesMatched {
+        page: Box<crate::SignatureReplayPage>,
+    },
+    SignatureRetired {
+        registration: crate::SignatureRegistrationRef,
+    },
     PackageDebugCompleted {
         summary: PackageDebugSummary,
     },
@@ -3425,6 +3470,41 @@ impl RuntimeReceipt {
             token.validate()?;
         }
         match &self.result {
+            Some(
+                RuntimeResult::SignatureRegistered { registration }
+                | RuntimeResult::SignatureRetired { registration },
+            ) => {
+                registration
+                    .validate()
+                    .map_err(|_| RuntimeContractError::new("invalid_signature_receipt"))?;
+                let terminal = self
+                    .terminal
+                    .filter(|_| self.state == RuntimeReceiptState::Completed)
+                    .ok_or_else(|| RuntimeContractError::new("invalid_signature_receipt"))?;
+                if matches!(
+                    &self.result,
+                    Some(RuntimeResult::SignatureRegistered { .. })
+                ) {
+                    if terminal.event_id != registration.event_id
+                        || terminal.sequence != registration.sequence
+                    {
+                        return Err(RuntimeContractError::new("invalid_signature_receipt"));
+                    }
+                } else if terminal.sequence <= registration.sequence {
+                    return Err(RuntimeContractError::new("invalid_signature_receipt"));
+                }
+            }
+            Some(RuntimeResult::SignaturesMatched { page }) => {
+                page.validate()
+                    .map_err(|_| RuntimeContractError::new("invalid_signature_receipt"))?;
+                if self.state != RuntimeReceiptState::Completed
+                    || self.terminal.is_none_or(|terminal| {
+                        terminal.sequence <= page.catalog.observed_through_sequence
+                    })
+                {
+                    return Err(RuntimeContractError::new("invalid_signature_receipt"));
+                }
+            }
             Some(RuntimeResult::ShutdownAccepted { target }) => {
                 target.validate()?;
                 if self.state != RuntimeReceiptState::Admitted || self.terminal.is_none() {

@@ -147,6 +147,9 @@ closed_code!(EventAction {
     ResourcePromote => "resource.promote",
     CriticalTest => "critical.test",
     LedgerRecovery => "ledger.recovery",
+    SignatureRegister => "signature.register",
+    SignatureMatch => "signature.match",
+    SignatureRetire => "signature.retire",
 });
 
 closed_code!(DiagnosticCode {
