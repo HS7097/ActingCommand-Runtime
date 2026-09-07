@@ -6,6 +6,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 
 - `runtime-api.openapi.yaml` — local HTTP API reserved for the UI.
 - `runtime-events.schema.json` — WebSocket event envelope and payload schema.
+- `global-ledger-query.md` — shared query predicates, indexes, bounded watch and read-only event pages.
 - `task-flow.schema.json` — declarative task-flow schema.
 - `ocr-fields.md` — operation 0.8 typed post-admission fields and task-run projection.
 - `task-diagnostic-stream.md` — task-owned raw evaluation records, verified streaming and bounded read-only export.
