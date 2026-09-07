@@ -13220,6 +13220,18 @@ impl HostShared {
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> Result<Result<(), ExecutionKernelError>, RequestFailure> {
+        if let Some(error) = self
+            .execution
+            .unconfirmed_instance_close_error(token.instance_id())
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "read_execution_close_result",
+                    &error,
+                ))
+            })?
+        {
+            return Ok(Err(error));
+        }
         let has_session = self
             .execution
             .has_owned_resources(token.instance_id())

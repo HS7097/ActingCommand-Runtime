@@ -299,6 +299,23 @@ impl ExecutionKernel {
             }))
     }
 
+    /// Reads the retained close outcome without attempting resource retirement again.
+    pub fn unconfirmed_instance_close_error(
+        &self,
+        instance_id: InstanceId,
+    ) -> ExecutionKernelResult<Option<ExecutionKernelError>> {
+        Ok(self
+            .lock_state()?
+            .instance_closes
+            .get(&instance_id)
+            .and_then(|result| result.as_ref().err())
+            .filter(|error| {
+                error.resource_quiescence()
+                    == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+            })
+            .cloned())
+    }
+
     fn session(&self, instance_alias: &str) -> ExecutionKernelResult<Arc<ExecutionSession>> {
         let resolved = self.resolve(instance_alias)?;
         let mut state = self.lock_state()?;
