@@ -25,6 +25,9 @@ use std::time::{Duration, Instant};
 
 mod probe_run;
 use probe_run::DEFAULT_CHECKPOINT_FRAMES;
+mod ledger;
+
+type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeviceCommand {
@@ -152,8 +155,24 @@ fn main() {
     }
 }
 
-fn run() -> DeviceResult<()> {
-    let (mut config, commands) = parse_args(env::args().skip(1))?;
+fn run() -> CliResult<()> {
+    run_with_args(env::args().skip(1), &mut std::io::stdout())
+}
+
+fn run_with_args(
+    args: impl IntoIterator<Item = String>,
+    output: &mut impl std::io::Write,
+) -> CliResult<()> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    if args.first().is_some_and(|command| command == "ledger") {
+        return ledger::run(&args[1..], output);
+    }
+    run_device(args)?;
+    Ok(())
+}
+
+fn run_device(args: Vec<String>) -> DeviceResult<()> {
+    let (mut config, commands) = parse_args(args)?;
     if let Some(warning) = resolve_adb_for_device_commands(&mut config, &commands)? {
         eprintln!("{warning}");
     }
@@ -1813,6 +1832,10 @@ where
 
 fn print_help() {
     println!(
+        "Runtime ledger (independent read-only command): {}",
+        ledger::HELP
+    );
+    println!(
         "Usage:\n\
          cargo run -p actingcommand-device-test -- [options] reset\n\
          cargo run -p actingcommand-device-test -- [options] tap <x> <y>\n\
@@ -1848,7 +1871,7 @@ mod tests {
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
-    fn parses_multiple_commands_for_one_session() {
+    fn parses_device_sessions_and_independent_ledger_requests() {
         let (_, commands) = parse_args([
             "reset".to_string(),
             "tap".to_string(),
@@ -1873,10 +1896,67 @@ mod tests {
                 },
             ]
         );
+
+        use actingcommand_contract::IdentifierIssuer;
+        use actingcommand_ledger_forensics::{
+            ForensicEventFilter, ForensicEventsRequest, ForensicRequest,
+        };
+        let correlation = IdentifierIssuer::new()
+            .expect("identifiers")
+            .mint_correlation_id()
+            .expect("correlation");
+        let correlation = serde_json::to_value(correlation.transport())
+            .expect("serialize correlation")
+            .as_str()
+            .expect("correlation token")
+            .to_owned();
+        let tokens = [
+            "--state-root",
+            "runtime-state",
+            "--origin-module",
+            "capture",
+            "--diagnostic-code",
+            "capture.failed",
+            "--severity",
+            "error",
+            "--correlation-id",
+            &correlation,
+            "--after",
+            "2",
+            "--through",
+            "8",
+            "--limit",
+            "3",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            ledger::parse_args(&tokens).expect("ledger request"),
+            ForensicRequest::events(
+                "runtime-state",
+                ForensicEventsRequest::new(
+                    ForensicEventFilter::new(
+                        Some("capture".into()),
+                        Some("capture.failed".into()),
+                        Some("error".into()),
+                        Some(correlation)
+                    )
+                    .expect("filter"),
+                    2,
+                    Some(8),
+                    3,
+                )
+                .expect("page")
+            ),
+        );
+        assert_eq!(
+            ledger::parse_args(&["--state-root", "runtime-state"].map(str::to_owned))
+                .expect("default ledger request"),
+            ForensicRequest::events("runtime-state", ForensicEventsRequest::default()),
+        );
     }
 
     #[test]
-    fn adb_resolution_preserves_explicit_command_timeout() {
+    fn adb_resolution_preserves_timeout_and_ledger_bypasses_device_setup() {
         let (mut config, commands) = parse_args([
             "--command-timeout-ms".to_string(),
             "3456".to_string(),
@@ -1895,6 +1975,117 @@ mod tests {
         assert_eq!(config.adb.adb_path, "C:\\tools\\adb.exe");
         assert_eq!(config.adb.command_timeout, Duration::from_millis(3_456));
         assert!(warning.is_none());
+
+        use actingcommand_contract::{
+            AuditInput, CommandPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft,
+            EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule,
+        };
+        use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
+        use actingcommand_ledger_forensics::{ForensicError, ForensicOutput};
+
+        let root = temp_fixture_dir("ledger-read");
+        let missing = root.join("missing");
+        let mut output = Vec::new();
+        let error = run_with_args(
+            [
+                "ledger".to_owned(),
+                "--state-root".to_owned(),
+                missing.display().to_string(),
+            ],
+            &mut output,
+        )
+        .expect_err("missing Runtime ledger");
+        assert!(error.downcast_ref::<ForensicError>().is_some());
+        assert!(output.is_empty());
+        assert!(
+            !missing.exists(),
+            "read-only dispatch must not create state"
+        );
+
+        let identifiers = IdentifierIssuer::new().expect("identifiers");
+        let fingerprint =
+            Sha256SecretFingerprinter::new(b"device-test-read-spec").expect("fingerprinter");
+        let writer = GlobalLedger::open(GlobalLedgerConfig::new(
+            root.join("ledger"),
+            "device-test-read-spec",
+        ))
+        .expect("test ledger");
+        for offset in 0..3 {
+            let draft = EventDraft::new(
+                identifiers.mint_event_id().expect("event id"),
+                1_752_147_200_000 + offset,
+                EventSeverity::Info,
+                EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::User),
+                EventLinksDraft::default(),
+                CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
+            )
+            .sanitize(&fingerprint)
+            .expect("sanitize event");
+            writer.append(draft).expect("append test event");
+        }
+        writer.close().expect("close test ledger");
+        let state_root = root.display().to_string();
+        let tokens = [
+            "--state-root",
+            &state_root,
+            "--origin-module",
+            "actingctl",
+            "--after",
+            "0",
+            "--through",
+            "3",
+            "--limit",
+            "1",
+        ]
+        .map(str::to_owned);
+        let ForensicOutput::Machine(expected) = actingcommand_ledger_forensics::run(
+            ledger::parse_args(&tokens).expect("native request"),
+        )
+        .expect("native read") else {
+            panic!("events must use machine output")
+        };
+        run_with_args(
+            std::iter::once("ledger".to_owned()).chain(tokens),
+            &mut output,
+        )
+        .expect("independent read");
+        let actual: serde_json::Value = serde_json::from_slice(&output).expect("complete report");
+        assert_eq!(
+            actual,
+            serde_json::to_value(expected).expect("native report")
+        );
+        assert_eq!(actual["data"]["through_sequence"], 3);
+        assert_eq!(
+            actual["data"]["events"].as_array().expect("events").len(),
+            1
+        );
+        assert_eq!(actual["data"]["next_after_sequence"], 1);
+        output.clear();
+        run_with_args(
+            [
+                "ledger",
+                "--state-root",
+                &state_root,
+                "--origin-module",
+                "actingctl",
+                "--after",
+                "1",
+                "--through",
+                "3",
+                "--limit",
+                "2",
+            ]
+            .map(str::to_owned),
+            &mut output,
+        )
+        .expect("second frozen page");
+        let actual: serde_json::Value = serde_json::from_slice(&output).expect("second report");
+        assert_eq!(actual["data"]["through_sequence"], 3);
+        assert_eq!(
+            actual["data"]["events"].as_array().expect("events").len(),
+            2
+        );
+        assert!(actual["data"].get("next_after_sequence").is_none());
     }
 
     #[test]
@@ -1932,9 +2123,75 @@ mod tests {
     }
 
     #[test]
-    fn rejects_capture_without_out() {
+    fn rejects_missing_capture_output_and_invalid_ledger_invocations() {
         let err = parse_args(["capture".to_string()]).expect_err("missing out");
         assert!(err.message().contains("--out"));
+
+        for tokens in [
+            vec![],
+            vec!["--state-root"],
+            vec!["--state-root", "state", "--limit", "0"],
+            vec!["--state-root", "state", "--limit", "1025"],
+            vec!["--state-root", "state", "--after", "9", "--through", "8"],
+            vec!["--state-root", "state", "--origin-module", "unknown"],
+            vec!["--state-root", "state", "--diagnostic-code", "unknown"],
+            vec!["--state-root", "state", "--severity", "unknown"],
+            vec!["--state-root", "state", "--correlation-id", "invalid"],
+            vec!["--state-root", "state", "--after", "invalid"],
+            vec!["--state-root", "state", "--limit", "1", "--limit", "2"],
+            vec!["--state-root", "state", "--state-root", "other"],
+        ] {
+            assert!(
+                ledger::parse_args(&tokens.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+                    .is_err(),
+                "invalid ledger arguments: {tokens:?}"
+            );
+        }
+        for device_option in [
+            "--adb",
+            "--serial",
+            "--host",
+            "--port",
+            "--local",
+            "--remote",
+            "--capture-backend",
+            "--touch-backend",
+            "--capture",
+            "--no-connect",
+            "--no-push",
+            "--command-timeout-ms",
+            "--handshake-timeout-ms",
+            "--shutdown-timeout-ms",
+            "reset",
+            "tap",
+            "longtap",
+            "swipe",
+            "capture",
+            "recognize",
+            "detect-page",
+            "task-dry-run",
+            "probe-run",
+            "benchmark",
+            "runner",
+        ] {
+            let mut output = Vec::new();
+            let err = run_with_args(
+                ["ledger", "--state-root", "state", device_option].map(str::to_owned),
+                &mut output,
+            )
+            .expect_err("device arguments are exclusive");
+            assert!(
+                err.to_string().contains("unsupported ledger option"),
+                "{device_option}: {err}"
+            );
+            assert!(output.is_empty());
+        }
+        let err = run_with_args(
+            ["--adb", "unused-adb", "ledger", "--state-root", "state"].map(str::to_owned),
+            &mut Vec::new(),
+        )
+        .expect_err("device-prefixed ledger command");
+        assert!(err.to_string().contains("ledger"));
     }
 
     #[test]

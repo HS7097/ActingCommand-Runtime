@@ -50,3 +50,26 @@ writer nor records matching facts, and creates no secondary signature store.
 
 [Diagnostic signatures](diagnostic-signatures.md) provide explicit Runtime
 registration, matching and retirement plus B's read-only historical replay.
+
+`device-test ledger` is an independent read-only consumer of the same
+`ledger-forensics` events request and result:
+
+```text
+device-test ledger --state-root <runtime-state> --origin-module capture --diagnostic-code capture.failed --severity error --after 0 --through <sequence> --limit 64
+```
+
+`--state-root` selects the Runtime state directory containing `ledger` and its
+artifact store. Optional `--origin-module`, `--diagnostic-code`, `--severity`,
+`--correlation-id`, `--after`, `--through` and `--limit` have the native offline
+events semantics. Defaults are after zero, a snapshot-frozen upper bound, and
+the leaf's maximum of 1024 events. Continue with the returned
+`next_after_sequence` and the same `through_sequence` and filters.
+
+The command emits the complete native JSON report, retaining event provenance,
+verified artifact references and the leaf's sensitive-data projection. Native
+read or validation failures propagate to the CLI's fatal exit. Dispatch occurs
+before device configuration, ADB resolution or backend creation; device options
+and commands cannot be combined with this read. Existing non-production device
+commands retain their permissions and behavior. The selected facts come from
+Runtime's GlobalLedger; the tool's execution journal is not imported as Runtime
+facts.

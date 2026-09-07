@@ -90,7 +90,7 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 | `actingd` | 常驻 daemon 进程适配器,承载下列全部内核组件 |
 | `actingctl` | 生产用户 CLI(observe / status / monitor-* / stream / reset / task-run,支持 `--recovery-package` 自动回位);成功结果为单行 JSON |
 | `actinglab` | 调试探针 + 资源制作(录制→草稿→构包→事务化发布→`package dry-run` 离线预演);**非生产依赖** |
-| `device-test` | 设备后端诊断工具 |
+| `device-test` | 设备后端诊断工具；独立 `ledger --state-root <runtime-state>` 通过 B 只读查询 Runtime 账本（[查询参数](contracts/global-ledger-query.md)） |
 | `vision-provider-check` | 读取指定 Runtime 的 Provider 启动账本；文件哈希与 PE 导出表机械观察 |
 | `actingledger` (`apps/ledger-forensics`) | GlobalLedger 只读取证 CLI |
 
