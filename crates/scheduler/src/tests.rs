@@ -1059,6 +1059,73 @@ fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
             .expect_err("close requires an unexpired lease"),
         SchedulerError::LeaseExpired
     );
+
+    // READ-SESSION-CLOSE-v1: the same owner issues a close-only lease without input authority.
+    let mut closing = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("close scheduler");
+    let prepared = closing
+        .prepare_resource_close(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(3),
+            1,
+        )
+        .expect("prepare close-only lease");
+    let close_token = closing
+        .commit_acquire(prepared, 1)
+        .expect("commit real close lease");
+    assert_eq!(
+        closing
+            .validate_write(&close_token, connection(3), 2)
+            .expect_err("no business input"),
+        SchedulerError::ResourceCloseOnly
+    );
+    assert_eq!(
+        closing
+            .begin_resource_close(&close_token, connection(4), 2)
+            .expect_err("connection fenced"),
+        SchedulerError::ConnectionMismatch
+    );
+    closing
+        .begin_resource_close(&close_token, connection(3), 2)
+        .expect("real close permission");
+    assert_eq!(
+        closing
+            .begin_resource_close(&close_token, connection(3), 2)
+            .expect_err("one in-flight close"),
+        SchedulerError::DestructiveStateMismatch
+    );
+    closing
+        .finish_destructive_step(&close_token, connection(3))
+        .expect("close completed");
+    assert_eq!(
+        closing
+            .validate_write(&close_token, connection(3), 2)
+            .expect_err("still close-only"),
+        SchedulerError::ResourceCloseOnly
+    );
+    assert_eq!(
+        closing
+            .begin_resource_close(
+                &close_token,
+                connection(3),
+                close_token.expires_at_monotonic_ms()
+            )
+            .expect_err("expiry fenced"),
+        SchedulerError::LeaseExpired
+    );
+    closing
+        .release_owned(
+            &close_token,
+            connection(3),
+            LeaseReleaseReason::HostShutdown,
+        )
+        .expect("release closed resources");
+    assert!(
+        closing
+            .begin_resource_close(&close_token, connection(3), 3)
+            .is_err()
+    );
 }
 
 #[test]

@@ -100,12 +100,27 @@ fn c1b9_d02_readonly_close_authority() {
         .expect_err("capture failure returned to owner");
     assert_eq!(state.lock().expect("state").capture_closes, 0);
     assert!(kernel.has_session(id).expect("owned session"));
+    assert_eq!(kernel.owned_instance_ids().expect("owned instances"), [id]);
+    assert!(
+        kernel
+            .has_owned_resources(id)
+            .expect("retained capture resources")
+    );
     let error = kernel.finish_failed_capture(
         failure,
         actingcommand_device::DeviceCloseAuthority::LocalOnly,
     );
     assert_eq!(error.code(), "capture_backend_operation_failed");
     assert_eq!(state.lock().expect("state").capture_closes, 1);
+    assert!(
+        kernel
+            .owned_instance_ids()
+            .expect("retired instances")
+            .is_empty()
+    );
+    kernel
+        .close_after_resource_retirement()
+        .expect("local final close");
 }
 
 #[test]

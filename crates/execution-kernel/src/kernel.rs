@@ -9,7 +9,7 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, InputAction, InstanceId, MonitorObservation,
 };
 use actingcommand_device::{DeviceCloseAuthority, Frame};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
@@ -225,6 +225,67 @@ impl ExecutionKernel {
 
     pub fn has_session(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
         Ok(self.lock_state()?.sessions.contains_key(&instance_id))
+    }
+
+    pub fn owned_instance_ids(&self) -> ExecutionKernelResult<Vec<InstanceId>> {
+        let state = self.lock_state()?;
+        let mut instances = state.sessions.keys().copied().collect::<BTreeSet<_>>();
+        instances.extend(
+            state
+                .instance_closes
+                .iter()
+                .filter_map(|(instance, result)| {
+                    result
+                        .as_ref()
+                        .is_err_and(|error| {
+                            error.resource_quiescence()
+                                == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+                        })
+                        .then_some(*instance)
+                }),
+        );
+        Ok(instances.into_iter().collect())
+    }
+
+    pub fn has_owned_resources(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
+        let state = self.lock_state()?;
+        Ok(state.sessions.contains_key(&instance_id)
+            || state
+                .instance_closes
+                .get(&instance_id)
+                .is_some_and(|result| {
+                    result.as_ref().is_err_and(|error| {
+                        error.resource_quiescence()
+                            == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+                    })
+                }))
+    }
+
+    /// Host has retired permitted resources. Remaining sessions must retain their owners.
+    pub fn close_after_resource_retirement(&self) -> ExecutionKernelResult<()> {
+        {
+            let mut state = self.lock_state()?;
+            if let Some(result) = &state.close_result {
+                return result.clone();
+            }
+            state.closed = true;
+            for (instance, session) in std::mem::take(&mut state.sessions) {
+                let error = ExecutionKernelError::device(
+                    "execution_resource_close_incomplete",
+                    &actingcommand_device::DeviceError::fatal(
+                        "execution session retained because resource-close authority or completion was not established",
+                    ).with_resource_close_cause(
+                        actingcommand_device::DeviceResourceKind::InProcessWorker,
+                        actingcommand_device::DeviceResourceClosePhase::Close,
+                        "execution_kernel", None, None,
+                        actingcommand_device::DeviceResourceQuiescence::Unconfirmed, 1,
+                    ),
+                ).with_instance_id(instance);
+                std::mem::forget(session);
+                state.instance_closes.entry(instance).or_insert(Err(error));
+            }
+        }
+        self.close()
     }
 
     pub fn has_sessions(&self) -> ExecutionKernelResult<bool> {
