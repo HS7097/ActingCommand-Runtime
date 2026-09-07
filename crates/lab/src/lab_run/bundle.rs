@@ -182,7 +182,7 @@ struct LabControl {
 
 impl LabControl {
     fn validate(&self) -> CliOutcome<()> {
-        if self.schema_version != CONTROL_SCHEMA {
+        if self.schema_version != CONTROL_SCHEMA && self.schema_version != actingcommand_contract::PHASED_CONTROL_SCHEMA {
             return Err(CliError::package_invalid(format!(
                 "unsupported control schema_version '{}', expected {CONTROL_SCHEMA}",
                 self.schema_version

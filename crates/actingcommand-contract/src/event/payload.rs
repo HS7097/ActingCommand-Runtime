@@ -2644,6 +2644,8 @@ pub enum TaskSemanticFact {
         step_index: u32,
         operation_label: String,
         from_page: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<crate::TaskPhaseEvidence>,
     },
     EffectIntent {
         step_index: u32,
@@ -2658,6 +2660,8 @@ pub enum TaskSemanticFact {
         step_index: u32,
         operation_label: String,
         page_label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<crate::TaskPhaseEvidence>,
     },
     Finalizing {
         outcome: TaskOutcome,
@@ -3375,7 +3379,14 @@ impl TaskSemanticFact {
                 step_index,
                 operation_label,
                 from_page,
+                phase,
             } => {
+                if let Some(phase) = phase {
+                    validate_task_semantic_label(&phase.id, "phase_id")?;
+                    if phase.index as usize >= crate::MAX_TASK_PHASES || phase.completed {
+                        return Err(SanitizationError::new("invalid_task_phase", "phase"));
+                    }
+                }
                 validate_task_step(*step_index)?;
                 validate_task_semantic_label(operation_label, "operation_label")?;
                 validate_task_semantic_label(from_page, "from_page")?;
@@ -3402,7 +3413,14 @@ impl TaskSemanticFact {
                 step_index,
                 operation_label,
                 page_label,
+                phase,
             } => {
+                if let Some(phase) = phase {
+                    validate_task_semantic_label(&phase.id, "phase_id")?;
+                    if phase.index as usize >= crate::MAX_TASK_PHASES {
+                        return Err(SanitizationError::new("invalid_task_phase", "phase"));
+                    }
+                }
                 validate_task_step(*step_index)?;
                 validate_task_semantic_label(operation_label, "operation_label")?;
                 validate_task_semantic_label(page_label, "page_label")?;

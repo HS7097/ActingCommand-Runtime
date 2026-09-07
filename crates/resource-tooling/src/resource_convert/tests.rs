@@ -213,7 +213,7 @@ fn schema_0_7_task_timeout_is_optional_bounded_and_non_mutating() {
 
     for invalid in [
         json!(0),
-        json!(600_001),
+        json!(1_800_001),
         json!(-1),
         json!(1.5),
         json!("300000"),

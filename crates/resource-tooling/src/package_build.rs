@@ -16,9 +16,9 @@ use crate::{
 };
 use actingcommand_contract::{
     LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
-    OcrFieldsDeclaration, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
-    SchedulingOutcomeDeclaration,
+    OcrFieldsDeclaration, PHASED_CONTROL_SCHEMA, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SchedulingOutcomeDeclaration, TaskPhase,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
@@ -47,7 +47,7 @@ const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
 const DEFAULT_RECOVERY_TASK_ID: &str = "return_home";
 const MAX_STABILITY_TERMINATION_STEPS: u32 = 1_000;
 const MAX_CAPTURE_PIXEL_BYTES: usize = 4;
-const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 
 fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -209,6 +209,7 @@ impl PreparedPackageBuildTask {
                 &self.task_id,
                 ControlOptions {
                     timeout_ms: self.task_timeout_ms,
+                    source: Some(find_bundle(&self.converter, &self.task_id)?),
                     max_steps: self.task_max_steps,
                     stability_termination: self.stability_termination.as_ref(),
                 },
@@ -395,6 +396,7 @@ impl PackageBuildCatalog {
                 &task_id,
                 ControlOptions {
                     timeout_ms: task_timeout_ms,
+                    source: Some(bundle),
                     max_steps: task_max_steps,
                     stability_termination: stability_termination.as_ref(),
                 },
@@ -462,6 +464,7 @@ impl PackageBuildCatalog {
                 &entry_task_id,
                 ControlOptions {
                     timeout_ms: task_timeout_ms,
+                    source: Some(entry_bundle),
                     max_steps: task_max_steps,
                     stability_termination: stability_termination.as_ref(),
                 },
@@ -578,6 +581,7 @@ fn validate_execution_mode(mode: &str) -> CliOutcome<()> {
 
 #[derive(Default)]
 struct ControlOptions<'a> {
+    source: Option<&'a Bundle>,
     timeout_ms: Option<u64>,
     max_steps: Option<u32>,
     stability_termination: Option<&'a StabilityTermination>,
@@ -593,6 +597,7 @@ fn control_json(
     options: ControlOptions<'_>,
 ) -> CliOutcome<Value> {
     let ControlOptions {
+        source,
         timeout_ms,
         max_steps,
         stability_termination,
@@ -600,7 +605,14 @@ fn control_json(
     let mut control = ordered_object([
         (
             "schema_version",
-            Value::String("Lab-1y.control.v1".to_string()),
+            Value::String(
+                if source.is_some_and(|bundle| bundle.data["schema_version"] == "0.9") {
+                    PHASED_CONTROL_SCHEMA
+                } else {
+                    CONTROL_SCHEMA
+                }
+                .to_string(),
+            ),
         ),
         ("package_id", Value::String(package_id.to_string())),
         ("execution_mode", Value::String(execution_mode.to_string())),
@@ -615,6 +627,18 @@ fn control_json(
         ),
         ("entry_task_id", Value::String(entry_task_id.to_string())),
     ]);
+    if let Some(bundle) = source {
+        crate::resource_convert::validate_phases_bundle(bundle)?;
+        if let Some(phases) = bundle.data.get("phases") {
+            if execution_mode != "navigable_route" {
+                return Err(CliError::package_invalid("phases require navigable_route"));
+            }
+            control
+                .as_object_mut()
+                .expect("control object")
+                .insert("phases".to_owned(), phases.clone());
+        }
+    }
     if timeout_ms.is_some_and(|timeout_ms| !(1..=MAX_TASK_TIMEOUT_MS).contains(&timeout_ms)) {
         return Err(CliError::package_invalid(format!(
             "timeout_ms must be in 1..={MAX_TASK_TIMEOUT_MS}"
@@ -2175,7 +2199,7 @@ fn validate_entry_task_timeout(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8")
+        Some("0.7" | "0.8" | "0.9")
     ) {
         return Err(CliError::package_invalid(format!(
             "task '{}' timeout_ms requires schema_version '0.7'",
@@ -2203,7 +2227,7 @@ fn validate_entry_task_max_steps(
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8")
+        Some("0.7" | "0.8" | "0.9")
     ) {
         return Err(CliError::package_invalid(format!(
             "task '{}' max_steps requires schema_version '0.7'",
@@ -2316,6 +2340,8 @@ struct LabControl {
     server: String,
     resolution: Resolution,
     entry_task_id: String,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    phases: Option<Vec<TaskPhase>>,
     #[serde(default)]
     capture_interval_ms: Option<u64>,
     #[serde(default)]
@@ -2346,7 +2372,11 @@ struct LabControl {
 
 impl LabControl {
     fn validate(&self) -> CliOutcome<()> {
-        if self.schema_version != CONTROL_SCHEMA {
+        if !matches!(
+            self.schema_version.as_str(),
+            CONTROL_SCHEMA | PHASED_CONTROL_SCHEMA
+        ) || (self.phases.is_some() && self.schema_version != PHASED_CONTROL_SCHEMA)
+        {
             return Err(CliError::package_invalid(format!(
                 "unsupported control schema_version '{}', expected {CONTROL_SCHEMA}",
                 self.schema_version
@@ -2608,6 +2638,8 @@ struct OperationBundle {
     anchors: Vec<OperationAnchor>,
     #[serde(default)]
     entry_page: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    phases: Option<Vec<TaskPhase>>,
     #[serde(default)]
     target_page: Option<PageDeclaration>,
     #[serde(default)]
@@ -2673,7 +2705,7 @@ impl OperationBundle {
         mut operation_asset_exists: impl FnMut(&str) -> CliOutcome<bool>,
     ) -> CliOutcome<()> {
         let schema_valid = match self.schema_version.as_str() {
-            "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
+            "0.3" | "0.4" | "0.5" | "0.6" | "0.9" => self.post_admission_ocr.is_none(),
             "0.7" | "0.8" => self.post_admission_ocr.is_some(),
             _ => false,
         };
@@ -2685,6 +2717,55 @@ impl OperationBundle {
         }
         self.validate_task_timeout(control)?;
         self.validate_task_max_steps(control)?;
+        if (self.task_id == control.entry_task_id
+            && (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA))
+            || (self.task_id == control.entry_task_id && self.phases != control.phases)
+            || (self.phases.is_some() && self.schema_version != "0.9")
+        {
+            return Err(CliError::package_invalid(
+                "operation/control phases mismatch",
+            ));
+        }
+        if let Some(phases) = &self.phases {
+            if control.execution_mode != "navigable_route"
+                || control.stop_on_confirmation == Some(false)
+                || self.recovery.is_some()
+                || self.stability_termination.is_some()
+            {
+                return Err(CliError::package_invalid("task_phases_invalid"));
+            }
+            let scheduling: SchedulingOutcomeDeclaration =
+                serde_json::from_value(self.scheduling_outcome.clone().unwrap_or_default())
+                    .map_err(|error| CliError::package_invalid(error.to_string()))?;
+            let operations = self
+                .operations
+                .iter()
+                .map(|operation| actingcommand_contract::TaskPhaseOperation {
+                    id: &operation.id,
+                    from: &operation.from,
+                    destinations: operation
+                        .expect_after
+                        .as_ref()
+                        .map(|expect| &expect.page_id)
+                        .or(operation.to.as_ref())
+                        .map(|pages| pages.pages().to_vec())
+                        .unwrap_or_default(),
+                    retryable: operation.retryable.unwrap_or(false),
+                })
+                .collect::<Vec<_>>();
+            actingcommand_contract::validate_phased_route(
+                &self.game,
+                self.entry_page.as_deref().unwrap_or_default(),
+                phases,
+                self.target_page
+                    .as_ref()
+                    .map(PageDeclaration::pages)
+                    .unwrap_or_default(),
+                &operations,
+                &scheduling,
+            )
+            .map_err(CliError::package_invalid)?;
+        }
         if self.task_id != control.entry_task_id && self.task_id != "return_home" {
             return Err(CliError::package_invalid(format!(
                 "operation task_id '{}' does not match control entry_task_id '{}'",
@@ -2858,7 +2939,7 @@ impl OperationBundle {
 
     fn validate_task_timeout(&self, control: &LabControl) -> CliOutcome<()> {
         match self.schema_version.as_str() {
-            "0.7" | "0.8" => {
+            "0.7" | "0.8" | "0.9" => {
                 if self
                     .timeout_ms
                     .is_some_and(|timeout_ms| !(1..=MAX_TASK_TIMEOUT_MS).contains(&timeout_ms))
@@ -2882,7 +2963,7 @@ impl OperationBundle {
 
     fn validate_task_max_steps(&self, control: &LabControl) -> CliOutcome<()> {
         match self.schema_version.as_str() {
-            "0.7" | "0.8" => {
+            "0.7" | "0.8" | "0.9" => {
                 let max_steps = self
                     .max_steps
                     .map(usize::try_from)
@@ -3404,7 +3485,7 @@ impl OperationClick {
                 Ok(())
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                if !matches!(schema_version, "0.7" | "0.8")
+                if !matches!(schema_version, "0.7" | "0.8" | "0.9")
                     || self.x.is_some()
                     || self.y.is_some()
                     || self.width.is_some()
@@ -4344,7 +4425,7 @@ mod tests {
         )
         .expect("bounded task timeout");
         assert_eq!(propagated["timeout_ms"], json!(300_000));
-        for invalid in [0, 600_001] {
+        for invalid in [0, 1_800_001] {
             control_json(
                 "neutral.test.fixture",
                 "navigable_route",

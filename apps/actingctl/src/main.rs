@@ -424,7 +424,7 @@ mod tests {
             request.response_deadline_ms(),
             ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
         );
-        assert_eq!(request.response_deadline_ms(), 600_000);
+        assert_eq!(request.response_deadline_ms(), 1_800_000);
     }
 
     // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342

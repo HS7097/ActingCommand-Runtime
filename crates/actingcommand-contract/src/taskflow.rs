@@ -8,7 +8,200 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Explicit operation postcondition polling budget; independent of step timeout.
-pub const MAX_POSTCONDITION_TIMEOUT_MS: u64 = 600_000;
+pub const MAX_POSTCONDITION_TIMEOUT_MS: u64 = MAX_CONTAINED_TASK_TIMEOUT_MS;
+pub const MAX_CONTAINED_TASK_TIMEOUT_MS: u64 = 1_800_000;
+pub const PHASED_CONTROL_SCHEMA: &str = "Lab-1y.control.v2";
+pub const MAX_TASK_PHASES: usize = 32;
+
+/// One linear stage inside the same task, run and lease.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPhase {
+    pub id: String,
+    pub operations: Vec<String>,
+    pub target_pages: Vec<String>,
+}
+
+pub fn validate_task_phases(
+    phases: &[TaskPhase],
+    operation_ids: &[&str],
+) -> Result<(), &'static str> {
+    let label = |value: &str| {
+        !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+    };
+    let mut ids = std::collections::BTreeSet::new();
+    if phases.is_empty() || phases.len() > MAX_TASK_PHASES {
+        return Err("task_phases_invalid");
+    }
+    for phase in phases {
+        if !label(&phase.id)
+            || !ids.insert(&phase.id)
+            || phase.operations.is_empty()
+            || phase.operations.len() > operation_ids.len()
+            || phase
+                .operations
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != phase.operations.len()
+            || phase
+                .operations
+                .iter()
+                .any(|id| !operation_ids.contains(&id.as_str()))
+            || phase.target_pages.is_empty()
+            || phase.target_pages.len() > 256
+            || phase
+                .target_pages
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != phase.target_pages.len()
+            || phase
+                .target_pages
+                .iter()
+                .any(|page| !label(page) || page == "any")
+        {
+            return Err("task_phases_invalid");
+        }
+    }
+    Ok(())
+}
+
+/// Recorded on the existing step chain; completed means this step advances the cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPhaseEvidence {
+    pub index: u32,
+    pub id: String,
+    pub completed: bool,
+}
+
+/// A view of already parsed operations for the common phase reachability check.
+pub struct TaskPhaseOperation<'a> {
+    pub id: &'a str,
+    pub from: &'a str,
+    pub destinations: Vec<String>,
+    pub retryable: bool,
+}
+
+pub fn validate_phased_route(
+    game: &str,
+    entry_page: &str,
+    phases: &[TaskPhase],
+    target_pages: &[String],
+    operations: &[TaskPhaseOperation<'_>],
+    scheduling: &SchedulingOutcomeDeclaration,
+) -> Result<(), &'static str> {
+    validate_task_phases(
+        phases,
+        &operations
+            .iter()
+            .map(|operation| operation.id)
+            .collect::<Vec<_>>(),
+    )?;
+    scheduling
+        .validate()
+        .map_err(|_| "task_phases_outcome_invalid")?;
+    let prefix = format!("{game}/");
+    let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
+    let pages = |values: &[String]| {
+        values
+            .iter()
+            .map(|page| canonical(page))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    if entry_page.trim().is_empty()
+        || entry_page == "any"
+        || pages(target_pages) != pages(&phases.last().unwrap().target_pages)
+    {
+        return Err("task_phases_invalid");
+    }
+    let designated = scheduling.designated_operation();
+    if designated.is_some_and(|id| {
+        operations
+            .iter()
+            .filter(|operation| operation.id == id)
+            .count()
+            != 1
+    }) || operations
+        .iter()
+        .any(|operation| designated == Some(operation.id) && operation.retryable)
+    {
+        return Err("task_phases_designated_effect_invalid");
+    }
+    let mut pending = std::collections::VecDeque::from([(0_usize, canonical(entry_page), false)]);
+    let mut visited = std::collections::BTreeSet::new();
+    let mut terminals = 0;
+    while let Some((index, page, effect)) = pending.pop_front() {
+        if !visited.insert((index, page.clone(), effect)) {
+            continue;
+        }
+        if index == phases.len() {
+            let condition = if effect {
+                SchedulingEffectCondition::DesignatedEffectCompleted
+            } else {
+                SchedulingEffectCondition::NoDesignatedEffect
+            };
+            if scheduling
+                .mappings()
+                .iter()
+                .filter(|mapping| {
+                    mapping.effect() == condition
+                        && mapping
+                            .terminal_pages()
+                            .iter()
+                            .any(|target| canonical(target) == page)
+                })
+                .count()
+                != 1
+            {
+                return Err("task_phases_outcome_incomplete");
+            }
+            terminals += 1;
+            continue;
+        }
+        let phase = &phases[index];
+        let eligible = |operation: &&TaskPhaseOperation<'_>| {
+            phase.operations.iter().any(|id| id == operation.id)
+        };
+        let operation = operations
+            .iter()
+            .filter(eligible)
+            .find(|operation| operation.from != "any" && canonical(operation.from) == page)
+            .or_else(|| {
+                operations
+                    .iter()
+                    .filter(eligible)
+                    .find(|operation| operation.from == "any")
+            })
+            .ok_or("task_phases_unreachable")?;
+        if effect && designated == Some(operation.id) {
+            return Err("task_phases_designated_effect_repeated");
+        }
+        if operation.destinations.is_empty() {
+            return Err("task_phases_postcondition_missing");
+        }
+        let next_effect = effect || designated == Some(operation.id);
+        for destination in &operation.destinations {
+            if destination == "any" {
+                return Err("task_phases_postcondition_missing");
+            }
+            let destination = canonical(destination);
+            let next_index = index
+                + usize::from(
+                    phase
+                        .target_pages
+                        .iter()
+                        .any(|target| canonical(target) == destination),
+                );
+            pending.push_back((next_index, destination, next_effect));
+        }
+    }
+    if terminals == 0 {
+        return Err("task_phases_unreachable");
+    }
+    Ok(())
+}
 
 pub const fn postcondition_timeout_is_valid(timeout_ms: Option<u64>) -> bool {
     match timeout_ms {

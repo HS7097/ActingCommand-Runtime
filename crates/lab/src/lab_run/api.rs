@@ -172,8 +172,8 @@ pub fn validate_lab_package_bytes(
     let entry_count = bundle.entry_count();
     let control = lab_control_from_bundle(&bundle)?;
     control.validate()?;
-    let resources = if bundle.operation()["schema_version"] == "0.8" {
-        // Fields packages use Runtime admission before the existing offline interpreter.
+    let resources = if matches!(bundle.operation()["schema_version"].as_str(), Some("0.8" | "0.9")) {
+        // These contracts use Runtime admission; the offline interpreter cannot execute them.
         actingcommand_execution_kernel::PreparedContainedTask::load(
             input_label, bytes, expected_input_sha256,
         ).map_err(|error| CliError::package_invalid(error.to_string()))?;
