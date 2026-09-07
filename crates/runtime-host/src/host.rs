@@ -10190,12 +10190,15 @@ impl HostShared {
         if let Some((_, run_id)) = debug_run {
             artifact_links = artifact_links.with_run_id(run_id);
         }
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = lock(&instance_guard, "lock_instance_admission")?;
         self.capture_observation_with_links(
             request,
             instance_alias,
             links,
             artifact_links,
             retain_native_artifact_error,
+            &admission,
         )
     }
 
@@ -10206,10 +10209,8 @@ impl HostShared {
         links: EventLinksDraft,
         artifact_links: ArtifactLinksDraft,
         retain_native_artifact_error: bool,
+        admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
-        let instance = self.resolve_instance(instance_alias)?;
-        let instance_guard = self.instance_guard(instance.instance_id())?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
         self.append_event(
             EventSeverity::Info,
             EventSource::Device,
@@ -10236,7 +10237,7 @@ impl HostShared {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
-                    .finish_capture_failure_while_guarded(error, links.clone(), &admission)
+                    .finish_capture_failure_while_guarded(error, links.clone(), admission)
                     .map_err(RequestFailure::poison_without_terminal)?;
                 let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
                 if self
