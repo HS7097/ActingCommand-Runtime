@@ -2409,11 +2409,27 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
         .iter()
         .map(|client| client.snapshot().expect("project snapshot"))
         .collect::<Vec<_>>();
-    assert!(snapshots.windows(2).all(|pair| pair[0] == pair[1]));
+    for pair in snapshots.windows(2) {
+        assert!(pair[1].ledger_position > pair[0].ledger_position);
+        let mut expected = pair[0].clone();
+        expected.ledger_position = pair[1].ledger_position;
+        expected.decision_page = actingcommand_contract::ProjectDecisionPage::new(
+            expected.ledger_position,
+            pair[0].decision_page.requested_limit(),
+            pair[0].decision_page.returned_count(),
+            pair[0].decision_page.has_more(),
+            pair[0].decision_page.next_cursor().cloned(),
+        )
+        .expect("same decision page at the next observed ledger position");
+        assert_eq!(pair[1], expected);
+    }
     let status = clients[0].status().expect("runtime status");
     assert_eq!(status.instances()[0].instance_alias(), "instance-neutral");
     assert!(snapshots[0].project.is_none());
     assert!(snapshots[0].catalog.is_none());
+    let status_source = status.source().expect("committed runtime status source");
+    let mut previous_position = snapshots.last().expect("client snapshots").ledger_position;
+    assert!(status_source.sequence > previous_position);
     for version in [
         actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2,
         actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1,
@@ -2421,7 +2437,9 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
         let snapshot = clients[0]
             .snapshot_with_versions(vec![version.to_owned()])
             .expect("legacy project snapshot");
-        assert_eq!(snapshot.ledger_position, snapshots[0].ledger_position);
+        assert!(snapshot.ledger_position > previous_position);
+        assert!(snapshot.ledger_position >= status_source.sequence);
+        previous_position = snapshot.ledger_position;
         assert!(!snapshot.decision_page.has_more());
     }
     assert_eq!(state.opens.load(Ordering::Acquire), 0);
