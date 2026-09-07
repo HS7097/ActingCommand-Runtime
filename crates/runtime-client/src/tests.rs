@@ -2485,6 +2485,14 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     );
     let token = client.acquire_lease("node.a").expect("lease");
     assert!(client.status().expect("leased status").instances()[0].lease_active());
+    let busy = client
+        .request_shutdown()
+        .expect_err("active lease prevents shutdown");
+    assert_eq!(
+        busy.projection().expect("typed busy").code,
+        RuntimeErrorCode::RuntimeBusy
+    );
+    assert!(!host.is_shutdown_requested().expect("still serving"));
     client
         .input(&token, InputAction::Tap { x: 10, y: 20 })
         .expect("input");
@@ -2506,6 +2514,39 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    let target = client.runtime_info().shutdown_target();
+    let started = Instant::now();
+    let accepted = loop {
+        match client.request_shutdown() {
+            Ok(receipt) => break receipt,
+            Err(error) => {
+                assert_eq!(
+                    error
+                        .projection()
+                        .expect("only busy may be retried by this specification")
+                        .code,
+                    RuntimeErrorCode::RuntimeBusy
+                );
+                eprintln!(
+                    "WARNING shutdown specification: {error}; wait for existing work to finish"
+                );
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "shutdown remained busy"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    };
+    assert_eq!(
+        accepted.state(),
+        actingcommand_contract::RuntimeReceiptState::Admitted
+    );
+    assert!(
+        matches!(accepted.result(), Some(RuntimeResult::ShutdownAccepted { target: actual }) if *actual == target)
+    );
+    assert!(accepted.terminal().is_some());
+    assert!(host.is_shutdown_requested().expect("accepted shutdown"));
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);

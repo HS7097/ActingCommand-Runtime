@@ -8995,6 +8995,18 @@ fn queued_release_transfers_only_after_the_durable_transfer_fact() {
     let (_, old_token) = first.acquire("node.a");
     let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
     assert!(!status.preempt_requested());
+    let shutdown = first.request(RuntimeOperation::RequestShutdown {
+        target: host.runtime_info().shutdown_target(),
+    });
+    let denied = first.send(&shutdown);
+    assert_eq!(
+        denied
+            .error_projection()
+            .expect("queued work prevents shutdown")
+            .code,
+        RuntimeErrorCode::RuntimeBusy
+    );
+    assert!(!host.is_shutdown_requested().expect("queue remains live"));
 
     let release = first.request(RuntimeOperation::ReleaseLease {
         token: old_token.clone(),
@@ -13256,6 +13268,15 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         assert_eq!(fatal.code(), "capture_backend_close_failed");
         assert_eq!(fatal.operation(), "close_execution_session");
         assert!(fatal.is_fatal());
+        let shutdown = client.request(RuntimeOperation::RequestShutdown {
+            target: host.runtime_info().shutdown_target(),
+        });
+        let shutdown = host
+            .process_request_for_test(&shutdown, ConnectionId::new(177).expect("connection"))
+            .expect("fatal wins shutdown");
+        assert_eq!(shutdown.state(), RuntimeReceiptState::Failed);
+        assert_eq!(shutdown.error_projection(), Some(fatal.projection()));
+        assert!(shutdown.terminal().is_none());
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
         let events = host
             .query_persisted_events_for_test(EventQuery {
@@ -15333,11 +15354,121 @@ fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
     };
     assert_eq!(error.code(), "owner_conflict");
     assert_eq!(error.projection().code, RuntimeErrorCode::OwnerConflict);
+    // C-SHUTDOWN-v1 specification: exact owner, scoped work, and one admission.
+    let ids = IdentifierIssuer::new().expect("shutdown ids");
+    let connection = ConnectionId::new(999).expect("shutdown connection");
+    let target = first.runtime_info().shutdown_target();
+    for wrong in [
+        actingcommand_contract::RuntimeShutdownTarget {
+            pid: target.pid + 1,
+            ..target
+        },
+        actingcommand_contract::RuntimeShutdownTarget {
+            started_at_unix_ms: target.started_at_unix_ms + 1,
+            ..target
+        },
+    ] {
+        let request = runtime_request(&ids, RuntimeOperation::RequestShutdown { target: wrong });
+        let denied = first
+            .process_request_for_test(&request, connection)
+            .expect("owner rejection");
+        assert_eq!(
+            denied.error_projection().expect("typed mismatch").code,
+            RuntimeErrorCode::RuntimeOwnerMismatch
+        );
+        assert!(denied.terminal().is_some());
+        assert!(!first.is_shutdown_requested().expect("still running"));
+    }
+    let request = runtime_request(&ids, RuntimeOperation::RequestShutdown { target });
+    let mut forged = serde_json::to_value(&request).expect("request JSON");
+    forged["actor"] = serde_json::json!("agent");
+    forged["source"] = serde_json::json!("adapter");
+    let forged = serde_json::from_value(forged).expect("unvalidated origin");
+    let denied = first
+        .process_request_for_test(&forged, connection)
+        .expect("origin rejection");
+    assert_eq!(
+        denied
+            .error_projection()
+            .expect("typed origin rejection")
+            .code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    assert!(denied.terminal().is_none());
+    {
+        let _work = first
+            .begin_policy_work()
+            .expect("policy admission")
+            .expect("running");
+        let busy = first
+            .process_request_for_test(&request, connection)
+            .expect("work rejection");
+        assert_eq!(
+            busy.error_projection().expect("typed busy").code,
+            RuntimeErrorCode::RuntimeBusy
+        );
+        assert!(!first.is_shutdown_requested().expect("still running"));
+    }
+    let started = Instant::now();
+    let accepted = loop {
+        let receipt = first
+            .process_request_for_test(&request, connection)
+            .expect("shutdown receipt");
+        if receipt.state() == RuntimeReceiptState::Admitted {
+            break receipt;
+        }
+        assert_eq!(
+            receipt.error_projection().expect("only busy").code,
+            RuntimeErrorCode::RuntimeBusy
+        );
+        eprintln!("WARNING shutdown specification: RuntimeBusy; waiting for existing sweep");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "shutdown remained busy"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(
+        matches!(accepted.result(), Some(RuntimeResult::ShutdownAccepted { target: actual }) if *actual == target)
+    );
+    assert!(
+        first
+            .begin_policy_work()
+            .expect("closed admission")
+            .is_none()
+    );
+    let repeated = first
+        .process_request_for_test(&request, connection)
+        .expect("second shutdown");
+    assert_eq!(
+        repeated.error_projection().expect("already stopping").code,
+        RuntimeErrorCode::RuntimeUnavailable
+    );
+    let events = first
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("shutdown facts");
+    assert_eq!(events.iter().filter(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload)) if matches!(payload.phase(), actingcommand_contract::RuntimeLifecyclePhase::ShutdownRequest { decision: actingcommand_contract::RuntimeShutdownDecision::Accepted, .. }))).count(), 1);
+    assert!(!events.iter().any(|event| matches!(
+        event.event_type(),
+        EventType::LeaseGranted | EventType::InputCommitted
+    )));
     first.close().expect("close first host");
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 
     let second = host_with_state(&root, "node.a", state);
     assert_ne!(second.runtime_info().owner_epoch(), first_epoch);
+    let denied = second
+        .process_request_for_test(&request, connection)
+        .expect("old epoch rejected");
+    assert_eq!(
+        denied.error_projection().expect("epoch mismatch").code,
+        RuntimeErrorCode::RuntimeOwnerMismatch
+    );
+    assert!(
+        !second
+            .is_shutdown_requested()
+            .expect("new owner stays running")
+    );
     second.close().expect("close second host");
 }
 

@@ -125,6 +125,26 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
 
     let status = run_json(binary, ["status", "--state-root", state_root]);
     assert_eq!(status["instances"][0]["instance_alias"], "node.a");
+    let holder = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("maintenance client");
+    let token = holder
+        .acquire_lease("node.a")
+        .expect("lease for maintenance exclusion");
+    let busy = Command::new(binary)
+        .args(["request-shutdown", "--state-root", state_root])
+        .output()
+        .expect("request shutdown through ordinary CLI");
+    assert!(!busy.status.success());
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("RuntimeBusy"));
+    runtime.assert_alive();
+    holder
+        .release_lease(&token)
+        .expect("release maintenance exclusion");
+    drop(holder);
 
     let monitor_status = run_json(binary, ["monitor-status", "--state-root", state_root]);
     assert_eq!(monitor_status["instances"][0]["instance_alias"], "node.a");

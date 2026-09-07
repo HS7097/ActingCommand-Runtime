@@ -57,6 +57,9 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     .map_err(ActingctlError::runtime)?;
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
     let output = match command {
+        Command::RequestShutdown => Ok(serde_json::json!({
+            "receipt": client.request_shutdown().map_err(ActingctlError::runtime)?,
+        })),
         Command::Reset => serde_json::to_value(
             client
                 .safe_reset(instance()?)
@@ -149,6 +152,7 @@ struct Invocation {
 }
 
 enum Command {
+    RequestShutdown,
     Observe,
     Reset,
     Status,
@@ -222,6 +226,7 @@ impl Invocation {
         let state_root = state_root.ok_or(ActingctlError::Usage)?;
         let instance = instance.filter(|value: &String| !value.trim().is_empty());
         let command = match command {
+            "request-shutdown" => Command::RequestShutdown,
             "reset" => Command::Reset,
             "observe" => Command::Observe,
             "status" => Command::Status,
@@ -268,7 +273,10 @@ impl Invocation {
 
 impl Command {
     const fn requires_instance(&self) -> bool {
-        !matches!(self, Self::Status | Self::MonitorStatus)
+        !matches!(
+            self,
+            Self::Status | Self::MonitorStatus | Self::RequestShutdown
+        )
     }
 }
 
@@ -313,7 +321,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash> [--recovery-package <zip> --recovery-expected-sha256 <hash>]]"),
+                .write_str("usage: actingctl <observe|reset|status|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash> [--recovery-package <zip> --recovery-expected-sha256 <hash>]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::Output => formatter.write_str("failed to write JSON output"),
@@ -358,6 +366,25 @@ mod tests {
             .map(OsString::from)
             .collect();
         assert!(Invocation::parse(args).is_ok());
+        let args = ["request-shutdown", "--state-root", "state"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        assert!(matches!(
+            Invocation::parse(args).expect("shutdown command").command,
+            Command::RequestShutdown
+        ));
+        let args = [
+            "request-shutdown",
+            "--state-root",
+            "state",
+            "--instance",
+            "node.a",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(Invocation::parse(args).is_err());
     }
 
     #[test]

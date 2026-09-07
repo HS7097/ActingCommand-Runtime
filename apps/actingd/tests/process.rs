@@ -135,8 +135,65 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
     );
     drop(agent);
 
-    child.0.kill().expect("kill actingd");
-    assert!(!child.0.wait().expect("wait actingd").success());
+    let maintenance = connect(root.path());
+    let started = Instant::now();
+    let accepted = loop {
+        match maintenance.request_shutdown() {
+            Ok(receipt) => break receipt,
+            Err(error) => {
+                assert_eq!(
+                    error.projection().expect("typed busy").code,
+                    RuntimeErrorCode::RuntimeBusy
+                );
+                eprintln!("WARNING shutdown specification: {error}; waiting for in-flight work");
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "shutdown stayed busy"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    };
+    assert_eq!(accepted.state(), RuntimeReceiptState::Admitted);
+    assert!(
+        matches!(accepted.result(), Some(RuntimeResult::ShutdownAccepted { target }) if target.owner_epoch == owner_epoch)
+    );
+    drop(maintenance);
+    loop {
+        if let Some(status) = child.0.try_wait().expect("normal shutdown exit") {
+            assert!(status.success(), "normal close must exit zero");
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "normal close did not finish"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+    let ledger = actingcommand_ledger::GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(root.path(), reference)
+                    .expect("verify closed daemon artifact"),
+            )
+        },
+    )
+    .expect("closed ledger");
+    assert!(ledger.corrupt_tail().is_none());
+    let events = ledger.query(&EventQuery::default());
+    let terminal = accepted.terminal().expect("accepted ledger reference");
+    assert!(events.iter().any(
+        |event| *event.event_id() == terminal.event_id && event.sequence() == terminal.sequence
+    ));
+    assert!(!events.iter().any(|event| matches!(
+        event.event_type(),
+        EventType::LeaseGranted | EventType::InputCommitted | EventType::RuntimeFailed
+    )));
+    assert!(
+        matches!(events.last().expect("final close summary").payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload)) if payload.phase() == actingcommand_contract::RuntimeLifecyclePhase::DeviceDiagnosticSummary)
+    );
 }
 
 #[test]
@@ -1140,8 +1197,66 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         assert!(child.0.try_wait().expect("process state").is_none());
 
         drop(client);
-        child.0.kill().expect("kill actingd");
-        child.0.wait().expect("wait actingd");
+        let maintenance = connect(root.path());
+        let started = Instant::now();
+        let accepted = loop {
+            match maintenance.request_shutdown() {
+                Ok(receipt) => break receipt,
+                Err(error) => {
+                    assert_eq!(
+                        error.projection().expect("typed busy").code,
+                        RuntimeErrorCode::RuntimeBusy
+                    );
+                    eprintln!(
+                        "WARNING policy shutdown specification: {error}; waiting for in-flight work"
+                    );
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "policy shutdown stayed busy"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        };
+        assert_eq!(accepted.state(), RuntimeReceiptState::Admitted);
+        drop(maintenance);
+        loop {
+            if let Some(status) = child.0.try_wait().expect("policy shutdown exit") {
+                assert!(
+                    status.success(),
+                    "{case}: normal policy close must exit zero"
+                );
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "policy close did not finish"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let ledger = actingcommand_ledger::GlobalLedger::open_read_only(
+            actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+            |reference| {
+                Some(
+                    actingcommand_artifact_store::verify_projected_read_only(
+                        root.path(),
+                        reference,
+                    )
+                    .expect("verify closed policy artifact"),
+                )
+            },
+        )
+        .expect("closed policy ledger");
+        assert!(ledger.corrupt_tail().is_none());
+        let events = ledger.query(&EventQuery::default());
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type() == EventType::RuntimeFailed)
+        );
+        assert!(
+            matches!(events.last().expect("policy close summary").payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload)) if payload.phase() == actingcommand_contract::RuntimeLifecyclePhase::DeviceDiagnosticSummary)
+        );
     }
 }
 

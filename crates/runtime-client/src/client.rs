@@ -728,6 +728,33 @@ impl RuntimeClient {
         }
     }
 
+    /// Submits once to the owner frozen at connect time. Accepted is not a close result.
+    pub fn request_shutdown(&self) -> RuntimeClientResult<RuntimeReceipt> {
+        let target = self.shared.info.shutdown_target();
+        let receipt = self
+            .execute_receipt(
+                "request_runtime_shutdown",
+                RuntimeOperation::RequestShutdown { target },
+                None,
+            )
+            .map_err(|error| {
+                if error.projection().is_some() {
+                    error
+                } else {
+                    RuntimeClientError::fatal(
+                        "runtime_shutdown_receipt_unconfirmed",
+                        "request_runtime_shutdown",
+                    )
+                    .with_related(error)
+                }
+            })?;
+        if !matches!(receipt.result(), Some(RuntimeResult::ShutdownAccepted { target: accepted }) if *accepted == target)
+        {
+            return Err(self.unexpected_result("request_runtime_shutdown"));
+        }
+        Ok(receipt)
+    }
+
     pub fn status(&self) -> RuntimeClientResult<RuntimeControlPlaneStatus> {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
@@ -2095,8 +2122,11 @@ impl RuntimeClient {
                     return Ok(receipt);
                 }
                 let mut error = RuntimeClientError::rejected(operation_name, error.clone());
-                if matches!(operation, RuntimeOperation::RunContainedTask { .. })
-                    && receipt.terminal().is_some()
+                if matches!(
+                    operation,
+                    RuntimeOperation::RunContainedTask { .. }
+                        | RuntimeOperation::RequestShutdown { .. }
+                ) && receipt.terminal().is_some()
                 {
                     error = error.with_committed_receipt(receipt.clone());
                 }
