@@ -12605,7 +12605,10 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
 
         let receipt = client.send(&request);
         assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
-        assert_eq!(state.input_count.load(Ordering::Acquire), max_steps as usize);
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            max_steps as usize
+        );
         let events = projected_events(
             &mut client,
             EventQuery {
@@ -12666,8 +12669,7 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
             panic!("one native task diagnostic stream")
         };
         let document: serde_json::Value =
-            serde_json::from_slice(&read_projected_verified(root.path(), stream).unwrap())
-                .unwrap();
+            serde_json::from_slice(&read_projected_verified(root.path(), stream).unwrap()).unwrap();
         let terminal = document["records"].as_array().unwrap().last().unwrap();
         assert_eq!(terminal["kind"], "terminal");
         assert_eq!(terminal["data"]["execution"], "task_error");
@@ -13694,9 +13696,8 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         ),
     );
     let receipt = thread::scope(|scope| {
-        let worker = scope.spawn(|| {
-            host.process_request_for_test(&request, ConnectionId::new(174).unwrap())
-        });
+        let worker = scope
+            .spawn(|| host.process_request_for_test(&request, ConnectionId::new(174).unwrap()));
         let wait_deadline = Instant::now() + Duration::from_secs(5);
         while !state.input_started.load(Ordering::Acquire) && Instant::now() < wait_deadline {
             thread::sleep(Duration::from_millis(1));
@@ -13704,7 +13705,10 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         let input_started = state.input_started.load(Ordering::Acquire);
         clock.advance(25);
         state.block_input.store(false, Ordering::Release);
-        assert!(input_started, "mid-step input reached its existing boundary");
+        assert!(
+            input_started,
+            "mid-step input reached its existing boundary"
+        );
         worker
             .join()
             .expect("mid-step worker")
