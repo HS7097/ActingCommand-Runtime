@@ -16303,7 +16303,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         AuditInput::new(),
                     ),
                 )?;
-                self.end_diagnostic_step(diagnostic_ended, true)
+                self.end_diagnostic_step(diagnostic_ended, true)?;
+                self.diagnostic_physical = None;
+                Ok(())
             }
             ContainedTaskTrace::StabilityBaseline {
                 step_index,
