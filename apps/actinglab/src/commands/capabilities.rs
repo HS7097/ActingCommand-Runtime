@@ -18,6 +18,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("capabilities", ["offline"], "available"),
         command_cap("resource validate", ["offline"], "available"),
         command_cap("resource convert", ["offline"], "available"),
+        command_cap("resource restore", ["offline"], "available"),
         command_cap("scheduling compile", ["offline", "read_only"], "available"),
         command_cap("scheduling timeline", ["offline", "read_only"], "available"),
         command_cap("resource compile-maa", ["offline"], "available"),

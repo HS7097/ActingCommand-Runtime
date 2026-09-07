@@ -30,6 +30,7 @@ pub(super) fn run_resource(
     let repo = flags.required_path("--repo")?;
     let resource_root = resolve_resource_root(&repo);
     match sub {
+        "restore" => crate::resource_restore::run_resource_restore(args),
         "validate" => {
             let mut validation = validate_resource_repo(&resource_root.root)?;
             if let Some(object) = validation.as_object_mut() {
