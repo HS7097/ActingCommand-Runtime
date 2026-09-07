@@ -1453,15 +1453,40 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
         .with_action_id(action_id())
         .with_recognition_id(recognition_id());
     let correlated = ledger
-        .append(event_with_links(
-            "evt-correlated",
-            links.clone(),
-            AuditInput::new(),
-        ))
+        .append(
+            EventDraft::new(
+                event_id(),
+                1_752_147_200_000,
+                EventSeverity::Error,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                links.clone(),
+                CommandPayloadDraft::rejected(
+                    EventAction::RuntimeStart,
+                    DiagnosticCode::CommandRejected,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&Sha256SecretFingerprinter::new(b"test-private-salt").expect("fingerprinter"))
+            .expect("sanitize query event"),
+        )
         .expect("append correlated");
     ledger.append(event("evt-after")).expect("append after");
 
     let filters = [
+        EventQuery {
+            origin_module: Some(OriginModule::Runtime),
+            ..EventQuery::default()
+        },
+        EventQuery {
+            diagnostic_code: Some(DiagnosticCode::CommandRejected),
+            ..EventQuery::default()
+        },
         EventQuery {
             instance_id: links.instance_id().copied(),
             ..EventQuery::default()
@@ -1517,8 +1542,76 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
                 ..EventQuery::default()
             })
             .expect("sequence query"),
-        vec![correlated]
+        vec![correlated.clone()]
     );
+    let combined = EventQuery {
+        from_sequence: Some(correlated.sequence()),
+        to_sequence: Some(correlated.sequence()),
+        event_type: Some(correlated.event_type()),
+        minimum_severity: Some(EventSeverity::Warning),
+        source: Some(EventSource::Runtime),
+        origin_module: Some(OriginModule::Runtime),
+        diagnostic_code: Some(DiagnosticCode::CommandRejected),
+        instance_id: links.instance_id().copied(),
+        request_id: links.request_id().copied(),
+        correlation_id: links.correlation_id().copied(),
+        causation_id: links.causation_id().copied(),
+        task_id: links.task_id().copied(),
+        run_id: links.run_id().copied(),
+        lease_id: links.lease_id().copied(),
+        frame_id: links.frame_id().copied(),
+        action_id: links.action_id().copied(),
+        recognition_id: links.recognition_id().copied(),
+    };
+    assert_eq!(
+        ledger.query(combined.clone()).unwrap(),
+        vec![correlated.clone()]
+    );
+    assert!(project_subscription_event(&correlated, &combined, ProjectionProfile::Lab).is_some());
+    let snapshot =
+        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(temp.path()), |_| None)
+            .expect("read-only query index");
+    assert_eq!(snapshot.query(&combined), vec![correlated.clone()]);
+    assert_eq!(
+        snapshot
+            .query_page(&combined, 0, correlated.sequence(), 1)
+            .unwrap(),
+        ledger
+            .query_page(combined.clone(), 0, correlated.sequence(), 1)
+            .unwrap(),
+    );
+    for mismatch in [
+        EventQuery {
+            origin_module: Some(OriginModule::Actingctl),
+            ..combined.clone()
+        },
+        EventQuery {
+            diagnostic_code: Some(DiagnosticCode::LeaseBusy),
+            ..combined.clone()
+        },
+        EventQuery {
+            minimum_severity: Some(EventSeverity::Fatal),
+            ..combined.clone()
+        },
+        EventQuery {
+            source: Some(EventSource::Cli),
+            ..combined.clone()
+        },
+        EventQuery {
+            to_sequence: Some(correlated.sequence() - 1),
+            ..combined.clone()
+        },
+    ] {
+        assert!(ledger.query(mismatch.clone()).unwrap().is_empty());
+        assert!(snapshot.query(&mismatch).is_empty());
+        assert!(
+            project_subscription_event(&correlated, &mismatch, ProjectionProfile::Lab).is_none()
+        );
+    }
+    ledger.close().unwrap();
+    let reopened = GlobalLedger::open(config(&temp, "query-index-reopened")).unwrap();
+    assert_eq!(reopened.query(combined).unwrap(), vec![correlated]);
+    reopened.close().unwrap();
 }
 
 #[test]
@@ -1589,6 +1682,7 @@ fn indexed_event_pages_visit_history_once_and_retain_only_each_page() {
     let indexes = projection::EventIndexes::from_events(&events);
     let query = EventQuery {
         event_type: Some(EventType::CommandReceived),
+        origin_module: Some(OriginModule::Actingctl),
         ..EventQuery::default()
     };
     let mut after_sequence = 0;
@@ -1626,6 +1720,21 @@ fn indexed_event_pages_visit_history_once_and_retain_only_each_page() {
     );
     assert!(missing.is_empty());
     assert_eq!(visited, 0);
+    for absent in [
+        EventQuery {
+            origin_module: Some(OriginModule::Runtime),
+            ..EventQuery::default()
+        },
+        EventQuery {
+            diagnostic_code: Some(DiagnosticCode::CommandRejected),
+            ..EventQuery::default()
+        },
+    ] {
+        let (page, visited) =
+            indexes.query_page_with_visit_count(&events, &absent, 0, EVENT_COUNT, PAGE_EVENTS);
+        assert!(page.is_empty());
+        assert_eq!(visited, 0, "missing module/code uses its empty index");
+    }
 }
 
 #[test]

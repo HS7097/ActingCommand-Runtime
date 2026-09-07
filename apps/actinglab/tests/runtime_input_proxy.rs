@@ -13,7 +13,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
@@ -1564,6 +1564,95 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     );
     assert!(watch["data"]["progress"].get("percent").is_none());
     assert!(watch["data"]["progress"].get("completed").is_none());
+    let first = &watch["data"]["events"][0];
+    let sequence = first["sequence"].as_u64().unwrap().to_string();
+    let filtered = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "watch",
+            "--correlation-id",
+            correlation_id,
+            "--origin-module",
+            first["origin"]["module"].as_str().unwrap(),
+            "--source",
+            first["origin"]["source"].as_str().unwrap(),
+            "--event-type",
+            first["event_type"].as_str().unwrap(),
+            "--minimum-severity",
+            first["severity"].as_str().unwrap(),
+            "--from-sequence",
+            &sequence,
+            "--to-sequence",
+            &sequence,
+            "--after",
+            "0",
+            "--wait-ms",
+            "1",
+            "--max-events",
+            "1",
+        ],
+    );
+    assert_eq!(filtered["data"]["events"], json!([first]));
+    assert_eq!(filtered["data"]["filter"]["correlation_id"], correlation_id);
+    assert_eq!(
+        filtered["data"]["filter"]["origin_module"],
+        first["origin"]["module"]
+    );
+    let absent = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "watch",
+            "--req",
+            correlation_id,
+            "--diagnostic-code",
+            "runtime.owner_conflict",
+            "--from-sequence",
+            &sequence,
+            "--to-sequence",
+            &sequence,
+            "--wait-ms",
+            "1",
+            "--max-events",
+            "1",
+        ],
+    );
+    assert_eq!(absent["data"]["events"], json!([]));
+    assert_eq!(absent["data"]["progress"]["state"], "idle");
+    for invalid in [
+        vec!["--origin-module", "unknown"],
+        vec!["--diagnostic-code", "unknown"],
+        vec!["--request-id", correlation_id],
+        vec!["--req"],
+        vec!["--req", correlation_id, "--correlation-id", correlation_id],
+        vec!["--origin-module", "runtime", "--origin-module", "runtime"],
+        vec!["--unsupported", "value"],
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+            .args(["--json", "lab", "watch"])
+            .args(invalid)
+            .env("ACTINGLAB_CONFIG_PATH", &config_path)
+            .env(
+                "ACTINGCOMMAND_RUNTIME_STATE_ROOT",
+                root.path().join("absent-runtime"),
+            )
+            .env("LOCALAPPDATA", &local_app_data)
+            .output()
+            .expect("invalid watch command");
+        assert_eq!(
+            result.status.code(),
+            Some(2),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
 

@@ -546,6 +546,10 @@ pub struct EventQuery {
     pub event_type: Option<EventType>,
     pub minimum_severity: Option<EventSeverity>,
     pub source: Option<EventSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_module: Option<OriginModule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<DiagnosticCode>,
     pub instance_id: Option<InstanceId>,
     pub request_id: Option<RequestId>,
     pub correlation_id: Option<CorrelationId>,
