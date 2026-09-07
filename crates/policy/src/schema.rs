@@ -434,7 +434,25 @@ pub struct PoolSpec {
     pub capacity: u64,
     pub projection: RegenProjection,
     pub observation: ObservationRef,
+    #[serde(default, skip_serializing_if = "PoolValueSource::is_static")]
+    pub value_source: PoolValueSource,
     pub group_delay: Option<GroupDelayPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PoolValueSource {
+    #[default]
+    StaticSnapshot,
+    LedgerFact {
+        minimum_confidence_milli: u16,
+    },
+}
+
+impl PoolValueSource {
+    pub fn is_static(&self) -> bool {
+        matches!(self, Self::StaticSnapshot)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
