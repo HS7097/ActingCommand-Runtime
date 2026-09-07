@@ -419,6 +419,8 @@ pub struct StabilityComparison {
     pub prior_consecutive_unchanged: u32,
     pub new_consecutive_unchanged: u32,
     pub consecutive_unchanged_threshold: u32,
+    #[serde(default)]
+    pub max_steps: Option<u32>,
     #[serde(deserialize_with = "Option::<String>::deserialize")]
     pub terminal_reason: Option<String>,
 }

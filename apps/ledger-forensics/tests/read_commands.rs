@@ -1454,7 +1454,9 @@ fn stability_cli_pages_errors_and_source_files_are_explicit() {
             assert_eq!(page["rows"], serde_json::json!([]));
             assert_eq!(page["next_after_sequence"], first.sequence());
         } else if after < 3 {
-            assert_eq!(page["rows"][0]["comparison"], fact);
+            let mut expected = fact.clone();
+            expected["max_steps"] = serde_json::Value::Null;
+            assert_eq!(page["rows"][0]["comparison"], expected);
             assert_eq!(
                 page["rows"][0]["artifact"],
                 serde_json::to_value(&references[0]).expect("reference")
