@@ -1031,7 +1031,21 @@ mod tests {
                     field: None,
                     parsed: false,
                     raw_text: Some("private-original".into()),
-                    value: Some(json!({"text":"private-original"})),
+                    value: Some(json!({
+                        "text": "private-original",
+                        "evaluations": [{
+                            "evaluation_index": 0,
+                            "evaluation": {
+                                "kind": "template",
+                                "passed": false,
+                                "template": {
+                                    "raw_score": 0.71305007_f32,
+                                    "score": 0.71305007_f32,
+                                    "threshold": 0.98_f32
+                                }
+                            }
+                        }]
+                    })),
                     detail: Some("private-original".into()),
                     privacy: None,
                 });
@@ -1045,6 +1059,9 @@ mod tests {
                 );
                 let mut transported: PageProjection =
                     serde_json::from_value(serde_json::to_value(&output).unwrap()).unwrap();
+                transported.verify_transport().unwrap();
+                let mut transported: PageProjection =
+                    serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
                 transported.verify_transport().unwrap();
                 transported.metrics.emitted_count += 1;
                 assert!(transported.verify_transport().is_err());
