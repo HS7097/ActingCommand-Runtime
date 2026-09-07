@@ -819,6 +819,16 @@ mod tests {
             assert_eq!(detail.category(), "monitor_registry");
             assert_eq!(detail.stage(), "runtime.monitor.restore");
             assert_eq!(detail.message(), "monitor_record_invalid");
+            assert_eq!(
+                detail.declared_sensitivity(),
+                actingcommand_contract::Sensitivity::Sensitive
+            );
+            assert_eq!(
+                event.payload().sensitivity(),
+                actingcommand_contract::Sensitivity::Sensitive
+            );
+            let public = serde_json::to_string(&event.payload().public_projection()).unwrap();
+            assert!(!public.contains("monitor_record_invalid"));
         }
         ledger.close().unwrap();
     }
