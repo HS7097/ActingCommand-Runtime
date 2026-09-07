@@ -14838,7 +14838,9 @@ impl HostShared {
         outcome: &PersistedEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
-        let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
+        if error.lifecycle.native_detail.is_none() {
+            let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
+        }
         self.append_lifecycle_failure(
             RuntimeLifecycleFailureStage::OperationCleanup,
             RuntimeLifecycleFailure::Host(error),
