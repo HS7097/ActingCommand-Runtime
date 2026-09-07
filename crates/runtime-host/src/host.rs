@@ -15572,10 +15572,12 @@ impl RuntimeContainedTask<'_> {
                 step_index,
                 operation_label,
                 from_page,
+                phase,
             } => ContainedTaskTrace::StepStarted {
                 step_index: self.absolute_step_index(step_index)?,
                 operation_label,
                 from_page,
+                phase,
             },
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -15601,10 +15603,12 @@ impl RuntimeContainedTask<'_> {
                 step_index,
                 operation_label,
                 page_label,
+                phase,
             } => ContainedTaskTrace::StepFinished {
                 step_index: self.absolute_step_index(step_index)?,
                 operation_label,
                 page_label,
+                phase,
             },
             ContainedTaskTrace::StabilityBaseline {
                 step_index,
@@ -16718,6 +16722,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 step_index,
                 operation_label,
                 from_page,
+                phase,
             } => {
                 let diagnostic_started = self
                     .host
@@ -16749,6 +16754,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             step_index,
                             operation_label,
                             from_page,
+                            phase,
                         },
                         AuditInput::new(),
                     ),
@@ -16813,6 +16819,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 step_index,
                 operation_label,
                 page_label,
+                phase,
             } => {
                 let diagnostic_ended = self
                     .host
@@ -16836,6 +16843,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             step_index,
                             operation_label,
                             page_label,
+                            phase,
                         },
                         AuditInput::new(),
                     ),

@@ -1556,7 +1556,7 @@ const fn default_contained_task_response_deadline_ms() -> u64 {
 
 impl ContainedTaskRequest {
     pub const DEFAULT_RESPONSE_DEADLINE_MS: u64 = 60_000;
-    pub const MAX_RESPONSE_DEADLINE_MS: u64 = 600_000;
+    pub const MAX_RESPONSE_DEADLINE_MS: u64 = crate::MAX_CONTAINED_TASK_TIMEOUT_MS;
 
     pub fn new(
         package_path: impl Into<String>,

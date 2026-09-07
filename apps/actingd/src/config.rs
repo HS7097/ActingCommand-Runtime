@@ -520,6 +520,9 @@ fn contained_task_request(
         .strip_prefix("sha256:")
         .ok_or("procedure_package_digest_invalid")?;
     ContainedTaskRequest::new(path.to_string_lossy().into_owned(), expected_sha256)
+        .and_then(|request| {
+            request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+        })
         .map_err(|_| "procedure_task_request_invalid")
 }
 
