@@ -37,6 +37,8 @@ mod online_observation;
 pub use online_observation::*;
 mod lab_operation;
 pub use lab_operation::*;
+mod lab_operation_evidence;
+pub use lab_operation_evidence::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";

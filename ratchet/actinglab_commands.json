@@ -52,7 +52,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 128,
+  "command_count": 129,
   "commands": [
     "help",
     "version",
@@ -128,6 +128,7 @@
     "scheduler stop",
     "scheduling compile",
     "scheduling timeline",
+    "resource restore",
     "resource validate",
     "resource convert",
     "resource compile-maa",
