@@ -90,7 +90,7 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 | `actingd` | Resident daemon process adapter hosting all kernel components below |
 | `actingctl` | Production user CLI (observe / status / monitor-* / stream / reset / task-run, with `--recovery-package` auto-repositioning); successful results are single-line JSON |
 | `actinglab` | Debug probe + resource authoring (record → draft → build → transactional publish → offline `package dry-run`); **not a production dependency** |
-| `device-test` | Device backend diagnostic tool |
+| `device-test` | Device backend diagnostic tool; independent `ledger --state-root <runtime-state>` reads Runtime facts through B ([query options](contracts/global-ledger-query.md)) |
 | `vision-provider-check` | Read Provider startup facts from a specified Runtime ledger; mechanical file hashes and PE exports |
 | `actingledger` (`apps/ledger-forensics`) | Read-only GlobalLedger forensics CLI |
 

@@ -1093,6 +1093,10 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .iter()
         .find(|package| package["name"] == "actingcommand-vision-provider-check")
         .expect("Provider ledger consumer package");
+    let device_test = packages
+        .iter()
+        .find(|package| package["name"] == "actingcommand-device-test")
+        .expect("non-production device ledger consumer package");
 
     let internal_dependencies = |package: &serde_json::Value| {
         let mut names = package["dependencies"]
@@ -1130,6 +1134,19 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
             "actingcommand-vision-ffi".to_owned(),
         ],
         "Provider checker internal dependency boundary changed"
+    );
+    // DEVICE-TEST-B-READ-v1: the named non-production tool also consumes B.
+    assert_eq!(
+        internal_dependencies(device_test),
+        vec![
+            "actingcommand-device".to_owned(),
+            "actingcommand-execution-kernel".to_owned(),
+            "actingcommand-ledger-forensics".to_owned(),
+            "actingcommand-page-detector".to_owned(),
+            "actingcommand-recognition".to_owned(),
+            "actingcommand-recognition-pack".to_owned(),
+        ],
+        "device-test internal dependency boundary changed"
     );
 
     let artifact_dependency = leaf["dependencies"]
@@ -1185,7 +1202,11 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .filter(|package| {
             !matches!(
                 package["name"].as_str(),
-                Some("actingledger" | "actingcommand-vision-provider-check")
+                Some(
+                    "actingledger"
+                        | "actingcommand-vision-provider-check"
+                        | "actingcommand-device-test"
+                )
             )
         })
         .filter(|package| {
@@ -1200,6 +1221,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
                             Some(
                                 "actingcommand-ledger-forensics"
                                     | "actingcommand-vision-provider-check"
+                                    | "actingcommand-device-test"
                             )
                         )
                 })
@@ -1208,7 +1230,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .collect::<Vec<_>>();
     assert!(
         production_dependants.is_empty(),
-        "production packages depend on forensic leaf or Provider checker: {}",
+        "production packages depend on forensic leaf or its tool consumers: {}",
         production_dependants.join(", ")
     );
 
