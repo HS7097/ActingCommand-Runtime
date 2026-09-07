@@ -48,17 +48,374 @@ pub enum TaskDiagnosticKind {
     Terminal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskDiagnosticRecord {
     pub index: u64,
-    pub kind: TaskDiagnosticKind,
     pub frame_id: Option<FrameId>,
     pub step_action_id: Option<super::ActionId>,
     pub physical_action_id: Option<super::ActionId>,
     /// Index of the actual page/target record that owns this row, when applicable.
     pub parent_index: Option<u64>,
-    pub data: serde_json::Value,
+    #[serde(flatten)]
+    pub payload: TaskDiagnosticPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum TaskDiagnosticPayload {
+    Page(Box<TaskDiagnosticPageData>),
+    Target(Box<TaskDiagnosticTargetData>),
+    Ocr(Box<TaskDiagnosticOcrData>),
+    OcrBlock(TaskDiagnosticOcrBlockData),
+    Nn(TaskDiagnosticNnData),
+    NnLabel(TaskDiagnosticNnLabelData),
+    Error(Box<TaskDiagnosticErrorData>),
+    Unexecuted(TaskDiagnosticUnexecutedData),
+    StepStarted(TaskDiagnosticStepStartedData),
+    StepElapsed(TaskDiagnosticStepElapsedData),
+    Artifact(Box<TaskDiagnosticArtifactData>),
+    Terminal(TaskDiagnosticTerminalData),
+}
+
+// Decode the bounded wire record strictly before exposing its typed payload.
+// The private intermediate also rejects unknown envelope fields.
+impl<'de> Deserialize<'de> for TaskDiagnosticRecord {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            index: u64,
+            frame_id: Option<FrameId>,
+            step_action_id: Option<super::ActionId>,
+            physical_action_id: Option<super::ActionId>,
+            parent_index: Option<u64>,
+            kind: TaskDiagnosticKind,
+            data: serde_json::Value,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let payload = match wire.kind {
+            TaskDiagnosticKind::Page => TaskDiagnosticPayload::Page(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Target => TaskDiagnosticPayload::Target(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Ocr => TaskDiagnosticPayload::Ocr(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::OcrBlock => TaskDiagnosticPayload::OcrBlock(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Nn => TaskDiagnosticPayload::Nn(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::NnLabel => TaskDiagnosticPayload::NnLabel(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Error => TaskDiagnosticPayload::Error(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Unexecuted => TaskDiagnosticPayload::Unexecuted(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::StepStarted => TaskDiagnosticPayload::StepStarted(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::StepElapsed => TaskDiagnosticPayload::StepElapsed(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Artifact => TaskDiagnosticPayload::Artifact(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+            TaskDiagnosticKind::Terminal => TaskDiagnosticPayload::Terminal(
+                serde_json::from_value(wire.data).map_err(de::Error::custom)?,
+            ),
+        };
+        Ok(Self {
+            index: wire.index,
+            frame_id: wire.frame_id,
+            step_action_id: wire.step_action_id,
+            physical_action_id: wire.physical_action_id,
+            parent_index: wire.parent_index,
+            payload,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TaskDiagnosticPageData {
+    Evaluated {
+        phase: String,
+        index: usize,
+        page_id: String,
+        matched: bool,
+        message: String,
+        required_passed: usize,
+        required_total: usize,
+        any_of_passed: usize,
+        any_of_total: usize,
+        optional_passed: usize,
+        optional_total: usize,
+        forbidden_passed: usize,
+        forbidden_total: usize,
+    },
+    Failed {
+        phase: String,
+        index: usize,
+        page_id: String,
+        error: String,
+        failed_target: Option<TaskDiagnosticTargetFailure>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticTargetFailure {
+    pub target_id: String,
+    pub role: String,
+    pub group_index: Option<usize>,
+    pub target_index: usize,
+    pub cause: TaskDiagnosticRecognitionError,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticRecognitionError {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<Box<crate::OcrRegionEvidence>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticTargetData {
+    pub id: String,
+    pub kind: String,
+    pub passed: bool,
+    pub message: String,
+    pub template: Option<TaskDiagnosticTemplateData>,
+    pub color: Option<TaskDiagnosticColorData>,
+    pub source: TaskDiagnosticTargetSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TaskDiagnosticTargetSource {
+    Page {
+        role: String,
+        group_index: Option<usize>,
+        target_index: usize,
+        target_id: String,
+        passed: bool,
+        message: String,
+    },
+    Guard {
+        phase: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticTemplateData {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub raw_score: f32,
+    pub score: f32,
+    pub threshold: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticColorData {
+    pub distance: f32,
+    pub max_distance: f32,
+    pub mean: [u8; 3],
+    pub expected: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TaskDiagnosticOcrData {
+    Evaluated {
+        region: crate::OcrRegionEvidence,
+        raw_text: String,
+        derived_text: String,
+        confidence: Option<f32>,
+        matched_expected: Option<String>,
+        match_mode: String,
+        block_count: usize,
+    },
+    Observed {
+        phase: String,
+        target_id: String,
+        region: crate::OcrRegionEvidence,
+        raw_text: String,
+        derived_text: String,
+        confidence: Option<f32>,
+        block_count: usize,
+        execution: Box<TaskDiagnosticOcrExecution>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticOcrExecution {
+    pub invocation_id: String,
+    pub session_id: String,
+    pub session_generation: u64,
+    pub requested_provider: String,
+    pub resolved_provider: String,
+    pub requested_cuda_ordinal: Option<u32>,
+    pub requested_cuda_identity: Option<String>,
+    pub resolved_cuda_ordinal: Option<u32>,
+    pub resolved_cuda_identity: Option<String>,
+    pub provider_implementation: String,
+    pub provider_binary_sha256: String,
+    pub runtime_version: String,
+    pub model_ref: String,
+    pub model_sha256: String,
+    pub cpu_ep_registered: bool,
+    pub cpu_fallback_disabled: bool,
+    pub fallback_forbidden: bool,
+    pub fallback_observed: Option<bool>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticOcrBlockData {
+    pub source_index: usize,
+    pub derived_rank: usize,
+    pub raw: TaskDiagnosticOcrBlock,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticOcrBlock {
+    pub text: String,
+    pub rect: crate::OcrRegionRect,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticNnData {
+    pub requested_region: crate::OcrRegionRect,
+    pub selected_label: Option<String>,
+    pub selected_score: Option<f32>,
+    pub selection: String,
+    pub label_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticNnLabelData {
+    pub source_index: usize,
+    pub raw: TaskDiagnosticNnLabel,
+    pub derived: TaskDiagnosticNnRank,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticNnLabel {
+    pub label: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticNnRank {
+    pub candidate: bool,
+    pub rank: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TaskDiagnosticErrorData {
+    Page {
+        phase: String,
+        message: String,
+    },
+    Recognition {
+        phase: String,
+        target_id: Option<String>,
+        error: TaskDiagnosticRecognitionError,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TaskDiagnosticUnexecutedData {
+    Page {
+        phase: String,
+        page: TaskDiagnosticUnexecutedPage,
+    },
+    Guard {
+        phase: String,
+        target_id: Option<String>,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticUnexecutedPage {
+    pub index: usize,
+    pub page_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticStepStartedData {
+    pub step_index: u32,
+    pub monotonic_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticStepElapsedData {
+    pub step_index: u32,
+    pub started_monotonic_ms: u64,
+    pub ended_monotonic_ms: u64,
+    pub elapsed_ms: u64,
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticArtifactData {
+    pub source_sequence: u64,
+    pub artifact: ProjectedArtifactReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "execution", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskDiagnosticTerminalData {
+    Returned {
+        outcome: crate::TaskOutcome,
+        executed_steps: u32,
+        final_page: Option<String>,
+    },
+    TaskError {
+        code: String,
+        detail: Option<String>,
+        executed_steps: Option<u32>,
+    },
+    OperationError {
+        code: crate::RuntimeErrorCode,
+        executed_steps: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

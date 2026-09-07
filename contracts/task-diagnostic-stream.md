@@ -51,6 +51,16 @@ record is appended as a byte chunk; no whole-task document is assembled.
 
 `kind` determines `data`:
 
+The contract's `TaskDiagnosticPayload` is the discriminated transport type for
+these twelve kinds. Host explicitly maps its existing evaluation values to the
+contract DTOs; the contract has no dependency on evaluators or Host. Forensics
+decodes the same `TaskDiagnosticRecord` and rejects unknown envelope/payload
+fields and mismatched payload shapes. The private wire decoder resolves
+`kind/data` before exposing a typed record. Nullable values stay nullable and
+floating data uses `PartialEq`. Serialization retains the existing JSON number
+precision within the current bounded record. Business results remain owned by
+their original evaluators.
+
 | Kind | Actual data |
 | --- | --- |
 | `page` | phase (`page` or `home_preflight`), native page index/ID, matched flag, group pass/total counts and message; errors carry the failed target and original typed cause |

@@ -331,8 +331,9 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
         GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "legacy-input-source")).unwrap();
     use actingcommand_artifact_store::ArtifactStore;
     use actingcommand_contract::{
-        ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, TASK_DIAGNOSTIC_SCHEMA,
-        TaskDiagnosticHeader, TaskDiagnosticKind, TaskDiagnosticRecord,
+        ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, OcrRegionEvidence, OcrRegionRect,
+        TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticOcrData, TaskDiagnosticPayload,
+        TaskDiagnosticRecord,
     };
     struct Sink<'a>(&'a GlobalLedger);
     impl ArtifactEventSink for Sink<'_> {
@@ -404,12 +405,34 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
             &mut stream,
             &TaskDiagnosticRecord {
                 index,
-                kind: TaskDiagnosticKind::Ocr,
                 frame_id: None,
                 step_action_id: None,
                 physical_action_id: None,
                 parent_index: None,
-                data: serde_json::json!({"raw_text": format!("neutral private {index}")}),
+                payload: TaskDiagnosticPayload::Ocr(Box::new(TaskDiagnosticOcrData::Evaluated {
+                    region: OcrRegionEvidence {
+                        frame_width: 2,
+                        frame_height: 2,
+                        anchor_target_id: None,
+                        anchor_match: None,
+                        offset: None,
+                        width: 2,
+                        height: 2,
+                        roi: Some(OcrRegionRect {
+                            x: 0,
+                            y: 0,
+                            width: 2,
+                            height: 2,
+                        }),
+                        unresolved: None,
+                    },
+                    raw_text: format!("neutral private {index}"),
+                    derived_text: format!("neutral private {index}"),
+                    confidence: None,
+                    matched_expected: None,
+                    match_mode: "exact".to_owned(),
+                    block_count: 0,
+                })),
             },
         )
         .unwrap();

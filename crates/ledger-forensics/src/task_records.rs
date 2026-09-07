@@ -25,7 +25,7 @@ impl Default for TaskRecordsRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskDiagnosticPage {
     pub source_sequence: u64,
     pub artifact: ProjectedArtifactReference,

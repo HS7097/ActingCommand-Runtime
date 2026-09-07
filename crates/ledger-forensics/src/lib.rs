@@ -221,7 +221,7 @@ impl ForensicRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
     Open(OpenReport),
@@ -328,7 +328,7 @@ pub struct TaskStepEvidence {
     pub physical_inputs: TaskEvidenceRelation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskEvidenceReport {
     pub page: EventsReport,
     pub inputs: Vec<TaskInputEvidence>,
@@ -510,7 +510,7 @@ pub struct ReplayReport {
     pub manifest: EvidenceManifest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ForensicOutput {
     Machine(ForensicReport),
     Human(String),

@@ -922,7 +922,8 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             .any(|gap| gap.run_id == *run_id.transport() && gap.record_count.is_none())
     );
     use actingcommand_contract::{
-        TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticKind, TaskDiagnosticRecord,
+        OcrRegionEvidence, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader,
+        TaskDiagnosticOcrData, TaskDiagnosticPayload, TaskDiagnosticRecord,
     };
     use actingcommand_ledger_forensics::TaskRecordsRequest;
     let context = ArtifactWriteContext::new(
@@ -958,12 +959,34 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         }
         let record = TaskDiagnosticRecord {
             index,
-            kind: TaskDiagnosticKind::Ocr,
             frame_id: Some(*pre.transport()),
             step_action_id: Some(*step.transport()),
             physical_action_id: None,
             parent_index: None,
-            data: serde_json::json!({"raw_text": "neutral ".repeat(8000), "source_index": index-1}),
+            payload: TaskDiagnosticPayload::Ocr(Box::new(TaskDiagnosticOcrData::Evaluated {
+                region: OcrRegionEvidence {
+                    frame_width: 2,
+                    frame_height: 2,
+                    anchor_target_id: None,
+                    anchor_match: None,
+                    offset: None,
+                    width: 2,
+                    height: 2,
+                    roi: Some(OcrRegionRect {
+                        x: 0,
+                        y: 0,
+                        width: 2,
+                        height: 2,
+                    }),
+                    unresolved: None,
+                },
+                raw_text: "neutral ".repeat(8000),
+                derived_text: "neutral".to_owned(),
+                confidence: None,
+                matched_expected: None,
+                match_mode: "exact".to_owned(),
+                block_count: 0,
+            })),
         };
         serde_json::to_writer(&mut stream, &record).unwrap();
         stream.append(b"\n").unwrap();
@@ -1025,7 +1048,13 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         for record in &page.records {
             indices.push(record.index);
             assert_eq!(record.frame_id, Some(*pre.transport()));
-            assert_eq!(record.data["raw_text"], "neutral ".repeat(8000));
+            let TaskDiagnosticPayload::Ocr(ocr) = &record.payload else {
+                panic!("typed OCR record")
+            };
+            let TaskDiagnosticOcrData::Evaluated { raw_text, .. } = ocr.as_ref() else {
+                panic!("evaluated OCR record")
+            };
+            assert_eq!(raw_text, &"neutral ".repeat(8000));
         }
         cursor = page.next_cursor.clone();
         if cursor.is_none() {
