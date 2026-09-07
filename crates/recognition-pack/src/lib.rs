@@ -534,7 +534,7 @@ pub struct TargetEvaluation {
     pub passed: bool,
     pub template: Option<TemplateEvaluation>,
     pub color: Option<ColorEvaluation>,
-    pub ocr: Option<OcrEvaluation>,
+    pub ocr: Option<Box<OcrEvaluation>>,
     pub nn: Option<NnEvaluation>,
     pub message: String,
 }
@@ -1328,7 +1328,7 @@ impl RecognitionEvaluator {
                 passed,
                 template: None,
                 color: None,
-                ocr: Some(OcrEvaluation {
+                ocr: Some(Box::new(OcrEvaluation {
                     raw_text: ocr.raw_text,
                     block_source_order: ocr.block_source_order,
                     region: Box::new(region_evidence.clone()),
@@ -1337,7 +1337,7 @@ impl RecognitionEvaluator {
                     matched_expected,
                     match_mode: target.match_mode,
                     blocks: ocr.blocks,
-                }),
+                })),
                 nn: None,
                 message,
             })
