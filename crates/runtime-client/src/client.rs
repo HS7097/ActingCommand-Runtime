@@ -1923,6 +1923,55 @@ impl RuntimeClient {
         }
     }
 
+    pub fn register_diagnostic_signature(
+        &self,
+        definition: actingcommand_contract::DiagnosticSignatureDefinition,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        let receipt = self.execute_receipt(
+            "register_diagnostic_signature",
+            RuntimeOperation::RegisterDiagnosticSignature {
+                definition: Box::new(definition),
+            },
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::SignatureRegistered { .. }) => Ok(receipt),
+            _ => Err(self.unexpected_result("register_diagnostic_signature")),
+        }
+    }
+
+    pub fn match_diagnostic_signatures(
+        &self,
+        request: actingcommand_contract::RuntimeSignatureMatchRequest,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        let receipt = self.execute_receipt(
+            "match_diagnostic_signatures",
+            RuntimeOperation::MatchDiagnosticSignatures {
+                request: Box::new(request),
+            },
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::SignaturesMatched { .. }) => Ok(receipt),
+            _ => Err(self.unexpected_result("match_diagnostic_signatures")),
+        }
+    }
+
+    pub fn retire_diagnostic_signature(
+        &self,
+        registration: actingcommand_contract::SignatureRegistrationRef,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        let receipt = self.execute_receipt(
+            "retire_diagnostic_signature",
+            RuntimeOperation::RetireDiagnosticSignature { registration },
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::SignatureRetired { .. }) => Ok(receipt),
+            _ => Err(self.unexpected_result("retire_diagnostic_signature")),
+        }
+    }
+
     pub fn begin_authoring_session(&self) -> RuntimeClientResult<RuntimeAuthoringSession> {
         let connection = self.connection("begin_resource_authoring")?;
         if connection.actor != EventActor::Lab || connection.source != EventSource::Lab {

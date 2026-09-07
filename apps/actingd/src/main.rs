@@ -55,7 +55,9 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
-    let host = RuntimeHost::start(host, Arc::new(registry)).map_err(ActingdError::runtime)?;
+    let host =
+        RuntimeHost::start_with_provider(host, |startup| registry.assemble_provider(startup))
+            .map_err(ActingdError::runtime)?;
     let initial_policy_cycle = (|| {
         let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
@@ -582,6 +584,7 @@ fn policy_trigger_for_family(family: EventFamily) -> Option<PolicyTrigger> {
         }
         EventFamily::Fact | EventFamily::Approval => Some(PolicyTrigger::FactsChanged),
         EventFamily::Runtime
+        | EventFamily::Provider
         | EventFamily::Monitor
         | EventFamily::Command
         | EventFamily::Scheduler

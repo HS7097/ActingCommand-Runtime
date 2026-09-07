@@ -159,6 +159,7 @@ pub enum Sensitivity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventFamily {
+    Provider,
     Runtime,
     Monitor,
     Performance,
@@ -185,6 +186,8 @@ pub enum EventFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventType {
+    #[serde(rename = "provider.startup_observed")]
+    ProviderStartupObserved,
     #[serde(rename = "runtime.started")]
     RuntimeStarted,
     #[serde(rename = "runtime.takeover")]
@@ -399,11 +402,18 @@ pub enum EventType {
     AgentSessionEscalated,
     #[serde(rename = "ledger.recovered")]
     LedgerRecovered,
+    #[serde(rename = "signature.registered")]
+    SignatureRegistered,
+    #[serde(rename = "signature.matched")]
+    SignatureMatched,
+    #[serde(rename = "signature.retired")]
+    SignatureRetired,
 }
 
 impl EventType {
     pub fn family(self) -> EventFamily {
         match self {
+            Self::ProviderStartupObserved => EventFamily::Provider,
             Self::RuntimeStarted
             | Self::RuntimeTakeover
             | Self::RuntimeFailed
@@ -507,7 +517,10 @@ impl EventType {
             | Self::AgentResponseRecorded
             | Self::AgentSessionCompleted
             | Self::AgentSessionEscalated => EventFamily::Agent,
-            Self::LedgerRecovered => EventFamily::Ledger,
+            Self::LedgerRecovered
+            | Self::SignatureRegistered
+            | Self::SignatureMatched
+            | Self::SignatureRetired => EventFamily::Ledger,
         }
     }
 }

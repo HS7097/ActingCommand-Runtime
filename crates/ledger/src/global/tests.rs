@@ -33,6 +33,181 @@ fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
         .with_ingress_capacity(8)
 }
 
+// Workflow #257 SIGNATURE-REPLAY-v1: catalog and finite matching specification.
+#[test]
+fn signature_catalog_rebuilds_versions_and_binds_paginated_multiple_matches() {
+    use crate::signatures::{
+        SignatureCatalog, SignaturePrefix, registration_ref, replay_signatures,
+    };
+    use actingcommand_contract::{
+        DiagnosticSignatureDefinition, LedgerPayloadDraft, LedgerSignatureEvent,
+        SignaturePageRequest, SignatureReplayGap, SignatureReplayRow,
+    };
+    let temp = TempDir::new().unwrap();
+    let ledger = GlobalLedger::open(config(&temp, "signature-spec")).unwrap();
+    let append = |payload: EventPayloadDraft, origin, severity| {
+        ledger
+            .append(
+                EventDraft::new(
+                    event_id(),
+                    1,
+                    severity,
+                    origin,
+                    EventLinksDraft::default(),
+                    payload,
+                )
+                .sanitize(&Sha256SecretFingerprinter::new(b"signature-spec").unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let origin = || {
+        EventOrigin::new(
+            EventSource::Lab,
+            OriginModule::GlobalLedger,
+            EventActor::Lab,
+        )
+    };
+    let definition = |id: &str| DiagnosticSignatureDefinition {
+        signature_id: id.into(),
+        version: 1,
+        origin_module: OriginModule::Runtime,
+        diagnostic_code: DiagnosticCode::CommandRejected,
+        event_type: EventType::CommandRejected,
+        minimum_severity: EventSeverity::Error,
+        lifecycle: None,
+    };
+    let a = definition("close_a");
+    let b = definition("close_b");
+    let registration = append(
+        LedgerPayloadDraft::signature(
+            LedgerSignatureEvent::Registered {
+                definition: a.clone(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        origin(),
+        EventSeverity::Info,
+    );
+    let registration_a = registration_ref(&registration, &a);
+    append(
+        LedgerPayloadDraft::signature(
+            LedgerSignatureEvent::Registered { definition: b },
+            AuditInput::new(),
+        )
+        .into(),
+        origin(),
+        EventSeverity::Info,
+    );
+    let source = append(
+        CommandPayloadDraft::rejected(
+            EventAction::RuntimeStart,
+            DiagnosticCode::CommandRejected,
+            EffectDisposition::NotPerformed,
+            AuditInput::new(),
+        )
+        .into(),
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventSeverity::Error,
+    );
+    let input = SignaturePrefix::from_live(&ledger, 3).unwrap();
+    let catalog_prefix = SignaturePrefix::from_live(&ledger, 2).unwrap();
+    let catalog = SignatureCatalog::from_prefix(&catalog_prefix);
+    assert!(catalog.validate_registration(&a).is_err());
+    catalog.validate_retirement(&registration_a).unwrap();
+    let first = replay_signatures(
+        &input,
+        &catalog,
+        &SignaturePageRequest {
+            limit: 1,
+            cursor: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(first.matched_count, 2);
+    assert!(first.evidence_complete());
+    assert!(matches!(&first.rows[0], SignatureReplayRow::Matched {
+        registration, source_event_id, source_sequence: 3
+    } if registration == &registration_a && source_event_id == source.event_id()));
+    let cursor = first.next_cursor.clone().unwrap();
+    let second_request = SignaturePageRequest {
+        limit: 1,
+        cursor: Some(cursor.clone()),
+    };
+    let second = replay_signatures(&input, &catalog, &second_request).unwrap();
+    assert_eq!(second.matched_count, 2);
+    assert!(second.next_cursor.is_none());
+    assert_eq!(
+        second,
+        replay_signatures(&input, &catalog, &second_request).unwrap()
+    );
+    append(
+        LedgerPayloadDraft::signature(
+            LedgerSignatureEvent::Retired {
+                registration: registration_a.clone(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        origin(),
+        EventSeverity::Info,
+    );
+    let retired_prefix = SignaturePrefix::from_live(&ledger, 4).unwrap();
+    let retired = SignatureCatalog::from_prefix(&retired_prefix);
+    assert!(retired.validate_retirement(&registration_a).is_err());
+    let mut next = a.clone();
+    next.version = 2;
+    retired.validate_registration(&next).unwrap();
+    assert!(replay_signatures(&input, &retired, &second_request).is_err());
+    assert_eq!(
+        replay_signatures(&input, &catalog, &second_request).unwrap(),
+        second
+    );
+    append(
+        LedgerPayloadDraft::signature(
+            LedgerSignatureEvent::Registered { definition: next },
+            AuditInput::new(),
+        )
+        .into(),
+        origin(),
+        EventSeverity::Info,
+    );
+    let updated_prefix = SignaturePrefix::from_live(&ledger, 5).unwrap();
+    let updated = SignatureCatalog::from_prefix(&updated_prefix);
+    let result = replay_signatures(&input, &updated, &SignaturePageRequest::default()).unwrap();
+    assert!(
+        matches!(&result.rows[0], SignatureReplayRow::Matched { registration, .. }
+        if registration.version == 2 && registration.sequence == 5)
+    );
+    let incomplete = SignaturePrefix::from_live(&ledger, 6).unwrap();
+    let page = replay_signatures(&incomplete, &catalog, &SignaturePageRequest::default()).unwrap();
+    assert!(!page.evidence_complete());
+    assert!(page.gaps.contains(&SignatureReplayGap::InputIncomplete));
+    append(
+        LedgerPayloadDraft::signature(
+            LedgerSignatureEvent::Registered { definition: a },
+            AuditInput::new(),
+        )
+        .into(),
+        origin(),
+        EventSeverity::Info,
+    );
+    let invalid_prefix = SignaturePrefix::from_live(&ledger, 6).unwrap();
+    let invalid = SignatureCatalog::from_prefix(&invalid_prefix);
+    let result = replay_signatures(&input, &invalid, &SignaturePageRequest::default()).unwrap();
+    assert!(
+        result
+            .gaps
+            .contains(&SignatureReplayGap::CatalogTransitionInvalid)
+    );
+    ledger.close().unwrap();
+}
+
 #[test]
 fn idle_writer_health_needs_no_command_sender_or_new_fact() {
     let temp = TempDir::new().expect("temp");

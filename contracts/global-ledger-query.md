@@ -47,3 +47,6 @@ commands that do not support event filters continue to reject them.
 
 Queries read the original GlobalLedger facts. The offline leaf neither opens a
 writer nor records matching facts, and creates no secondary signature store.
+
+[Diagnostic signatures](diagnostic-signatures.md) provide explicit Runtime
+registration, matching and retirement plus B's read-only historical replay.

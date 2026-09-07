@@ -151,6 +151,7 @@ const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 mod device_diagnostic;
 mod lab_operation;
 mod online_observation;
+mod signatures;
 mod task_diagnostic;
 
 #[derive(Clone, Copy)]
@@ -489,8 +490,16 @@ impl RuntimeHost {
         config: RuntimeHostConfig,
         provider: Arc<dyn ExecutionBackendProvider>,
     ) -> RuntimeHostResult<Self> {
+        Self::start_with_provider(config, |_| Ok(provider))
+    }
+
+    pub fn start_with_provider(
+        config: RuntimeHostConfig,
+        assemble: impl FnOnce(
+            &mut crate::ProviderStartup<'_>,
+        ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>>,
+    ) -> RuntimeHostResult<Self> {
         config.validate()?;
-        let registered_instances = initial_registered_instances(provider.as_ref())?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
             RuntimeHostError::fatal(
                 "state_root_create_failed",
@@ -503,17 +512,11 @@ impl RuntimeHost {
         let clock_origin = config.clock.sample()?;
         let started_at_unix_ms = clock_origin.unix_ms;
         let OwnerStartup {
-            guard: owner,
+            guard: mut owner,
             owner_epoch,
             takeover_instances,
             takeover,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
-        let monitor_registry = MonitorRegistry::open(
-            &config.state_root,
-            registered_instances
-                .values()
-                .map(|instance| instance.instance_alias.clone()),
-        )?;
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler("start_runtime_host", &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
@@ -524,6 +527,30 @@ impl RuntimeHost {
             |reference| artifacts.verify_recovery_reference(reference).ok(),
         )
         .map_err(|_| ledger_error("open_global_ledger"))?;
+        let provider = match assemble(&mut crate::ProviderStartup {
+            ledger: &ledger,
+            events: &events,
+            owner_epoch,
+            links: events.system_links()?,
+        }) {
+            Ok(provider) => provider,
+            Err(original) => {
+                // Assembly has not opened any device session. Native library caches keep
+                // their existing process lifetime; this does not attest SDK shutdown.
+                let ledger_closed = ledger.close();
+                let owner_closed = owner.close(config.clock.sample()?.unix_ms);
+                ledger_closed.map_err(|_| ledger_error("close_startup_ledger"))?;
+                owner_closed?;
+                return Err(original);
+            }
+        };
+        let registered_instances = initial_registered_instances(provider.as_ref())?;
+        let monitor_registry = MonitorRegistry::open(
+            &config.state_root,
+            registered_instances
+                .values()
+                .map(|instance| instance.instance_alias.clone()),
+        )?;
         let state = Arc::new(
             RuntimeStateStore::open(&config.state_root, &config.secret_fingerprint_salt)
                 .map_err(|error| RuntimeHostError::state(&error))?,
@@ -669,6 +696,7 @@ impl RuntimeHost {
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
+            signature_write_gate: Mutex::new(()),
             device_diagnostics: Mutex::new(device_diagnostic::DeviceDiagnosticBudget::new(
                 owner_epoch,
                 config.device_diagnostic_mode,
@@ -3036,6 +3064,8 @@ struct HostShared {
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    // Serialize explicit catalog transitions; the catalog itself is rebuilt by Ledger.
+    signature_write_gate: Mutex<()>,
     device_diagnostics: Mutex<device_diagnostic::DeviceDiagnosticBudget>,
     lifecycle_append_failed: AtomicBool,
     // Detection quota preview, ledger append, and replay-state commit are one ordered transition.
@@ -5900,6 +5930,15 @@ impl HostShared {
                 page,
             } => self.query_events(query, *profile, page),
             RuntimeOperation::SubscribeEvents { request } => self.subscribe_events(request),
+            RuntimeOperation::RegisterDiagnosticSignature { definition } => {
+                self.register_signature(validated, definition)
+            }
+            RuntimeOperation::MatchDiagnosticSignatures { request } => {
+                self.match_signatures(validated, request)
+            }
+            RuntimeOperation::RetireDiagnosticSignature { registration } => {
+                self.retire_signature(validated, registration)
+            }
             RuntimeOperation::DebugPackage { request } => self.debug_package(validated, request),
             RuntimeOperation::ExportEvidence { request } => {
                 self.export_evidence(validated, request)

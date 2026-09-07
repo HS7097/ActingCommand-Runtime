@@ -196,7 +196,10 @@ pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> Pro
     let (payload, include_object_key) = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => (ProjectionPayload::Omitted, false),
         ProjectionProfile::Lab | ProjectionProfile::Verbose
-            if event.event_type() == EventType::RuntimeLifecycleObserved =>
+            if matches!(
+                event.event_type(),
+                EventType::RuntimeLifecycleObserved | EventType::ProviderStartupObserved
+            ) =>
         {
             (
                 ProjectionPayload::Public(Box::new(event.payload().public_projection())),
@@ -343,7 +346,7 @@ pub(super) fn project_scheduling_outcomes(
     })
 }
 
-fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
+pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
     let links = event.links();
     query
         .from_sequence
