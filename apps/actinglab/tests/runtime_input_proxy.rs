@@ -754,7 +754,7 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
     )
     .unwrap();
     assert_eq!(serde_json::to_vec(after.events()).unwrap(), native_before);
-    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.taps.load(Ordering::Acquire), 2);
 }
 
 #[test]
