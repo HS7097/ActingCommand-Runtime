@@ -8815,16 +8815,15 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
-            if let RuntimeLifecyclePhase::ShutdownRequest { target, decision } = value.phase {
-                if target.validate().is_err()
+            if let RuntimeLifecyclePhase::ShutdownRequest { target, decision } = value.phase
+                && (target.validate().is_err()
                     || (decision == crate::RuntimeShutdownDecision::Accepted
-                        && target.owner_epoch != value.owner_epoch)
-                {
-                    return Err(SanitizationError::new(
-                        "invalid_shutdown_target",
-                        "runtime_payload",
-                    ));
-                }
+                        && target.owner_epoch != value.owner_epoch))
+            {
+                return Err(SanitizationError::new(
+                    "invalid_shutdown_target",
+                    "runtime_payload",
+                ));
             }
             let diagnostic = matches!(
                 value.phase,
