@@ -200,7 +200,10 @@ pub enum OcrFieldType {
     UnsignedInteger {
         min: u64,
         max: u64,
-        #[serde(default, skip_serializing_if = "OcrUnsignedIntegerFormat::is_ascii_decimal")]
+        #[serde(
+            default,
+            skip_serializing_if = "OcrUnsignedIntegerFormat::is_ascii_decimal"
+        )]
         format: OcrUnsignedIntegerFormat,
     },
     DictionaryEntry {
@@ -258,7 +261,8 @@ impl OcrUnsignedIntegerFormat {
                     })?
             }
             Self::CurrentCapacity => {
-                let (current, capacity) = text.split_once('/').ok_or(OcrFieldReason::InvalidInteger)?;
+                let (current, capacity) =
+                    text.split_once('/').ok_or(OcrFieldReason::InvalidInteger)?;
                 let current = decimal(current)?;
                 decimal(capacity)?;
                 current

@@ -1159,13 +1159,15 @@ fn parse_ocr_field(
         return (None, OcrFieldReason::Empty);
     }
     match value_type {
-        OcrFieldType::UnsignedInteger { min, max, format } => match format.parse(text, *min, *max) {
-            Ok(value) => (
-                Some(OcrFieldValue::UnsignedInteger(value)),
-                OcrFieldReason::Resolved,
-            ),
-            Err(reason) => (None, reason),
-        },
+        OcrFieldType::UnsignedInteger { min, max, format } => {
+            match format.parse(text, *min, *max) {
+                Ok(value) => (
+                    Some(OcrFieldValue::UnsignedInteger(value)),
+                    OcrFieldReason::Resolved,
+                ),
+                Err(reason) => (None, reason),
+            }
+        }
         OcrFieldType::DictionaryEntry { .. } => {
             let Some(dictionary) = dictionary else {
                 return (None, OcrFieldReason::UnknownEntry);

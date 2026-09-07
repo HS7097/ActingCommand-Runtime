@@ -99,8 +99,20 @@ mod tests {
             assert_eq!(format.parse(text, 0, u64::MAX), Ok(expected), "{text}");
         }
         for text in [
-            "1000", "1,00", "12,34,567", "1,,000", ",123", "123,", "0,123", "01,234", "00",
-            "1.234", "1 234", "+1,234", "１,234", "1,234x",
+            "1000",
+            "1,00",
+            "12,34,567",
+            "1,,000",
+            ",123",
+            "123,",
+            "0,123",
+            "01,234",
+            "00",
+            "1.234",
+            "1 234",
+            "+1,234",
+            "１,234",
+            "1,234x",
         ] {
             assert_eq!(
                 format.parse(text, 0, u64::MAX),
@@ -114,8 +126,14 @@ mod tests {
             Err(OcrFieldReason::Overflow)
         );
         assert_eq!(format.parse("1,234", 1234, 1234), Ok(1234));
-        assert_eq!(format.parse("1,234", 1235, 2000), Err(OcrFieldReason::OutOfRange));
-        assert_eq!(format.parse("1,234", 0, 1233), Err(OcrFieldReason::OutOfRange));
+        assert_eq!(
+            format.parse("1,234", 1235, 2000),
+            Err(OcrFieldReason::OutOfRange)
+        );
+        assert_eq!(
+            format.parse("1,234", 0, 1233),
+            Err(OcrFieldReason::OutOfRange)
+        );
         let mut unknown = grouped_source;
         unknown["format"] = json!("automatic");
         assert!(serde_json::from_value::<OcrFieldType>(unknown).is_err());
@@ -148,8 +166,19 @@ mod tests {
             );
         }
         for text in [
-            "17", "/20", "17/", "17/20/1", "17 /20", "17/ 20", "+17/20", "17/-20", "17/20x",
-            "17/2,000", "1,000/2000", "17/20.0", "17/２０",
+            "17",
+            "/20",
+            "17/",
+            "17/20/1",
+            "17 /20",
+            "17/ 20",
+            "+17/20",
+            "17/-20",
+            "17/20x",
+            "17/2,000",
+            "1,000/2000",
+            "17/20.0",
+            "17/２０",
         ] {
             assert_eq!(
                 format.parse(text, 0, u64::MAX),
@@ -166,8 +195,14 @@ mod tests {
             );
         }
         assert_eq!(format.parse("17/999", 17, 17), Ok(17));
-        assert_eq!(format.parse("17/20", 18, 30), Err(OcrFieldReason::OutOfRange));
-        assert_eq!(format.parse("17/20", 0, 16), Err(OcrFieldReason::OutOfRange));
+        assert_eq!(
+            format.parse("17/20", 18, 30),
+            Err(OcrFieldReason::OutOfRange)
+        );
+        assert_eq!(
+            format.parse("17/20", 0, 16),
+            Err(OcrFieldReason::OutOfRange)
+        );
         let raw = " 17/20 ";
         assert_eq!(format.parse(raw.trim(), 0, u64::MAX), Ok(17));
         assert_eq!(raw, " 17/20 ");
