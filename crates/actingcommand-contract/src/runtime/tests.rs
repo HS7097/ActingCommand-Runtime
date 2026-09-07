@@ -1858,6 +1858,29 @@ fn runtime_event_query_pages_are_bounded_and_cursor_bound_to_the_query() {
     };
     let cursor = RuntimeEventQueryCursor::new(50, 17, &query, ProjectionProfile::Forensic)
         .expect("event cursor");
+    let old_wire = serde_json::to_value(&query).unwrap();
+    assert!(old_wire.get("origin_module").is_none());
+    assert!(old_wire.get("diagnostic_code").is_none());
+    assert_eq!(
+        serde_json::from_value::<EventQuery>(old_wire).unwrap(),
+        query
+    );
+    for added in [
+        EventQuery {
+            origin_module: Some(OriginModule::Runtime),
+            ..query.clone()
+        },
+        EventQuery {
+            diagnostic_code: Some(crate::DiagnosticCode::RuntimeDiagnostic),
+            ..query.clone()
+        },
+    ] {
+        assert!(!cursor.matches(&added, ProjectionProfile::Forensic).unwrap());
+        assert_eq!(
+            serde_json::from_value::<EventQuery>(serde_json::to_value(&added).unwrap()).unwrap(),
+            added
+        );
+    }
     assert!(
         cursor
             .matches(&query, ProjectionProfile::Forensic)
