@@ -147,6 +147,7 @@ const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
 mod lab_operation;
 mod online_observation;
+mod task_diagnostic;
 
 #[derive(Clone, Copy)]
 pub enum RuntimeLifecycleFailureStage {
@@ -10856,30 +10857,70 @@ impl HostShared {
             configuration_records: 0,
             configuration_capture_recorded: false,
             configuration_input_recorded: false,
+            diagnostic_stream: None,
+            diagnostic_records: 0,
+            diagnostic_step: None,
+            diagnostic_physical: None,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
-        let execution =
-            if let Err(failure) = runtime.record_initial_configuration(task_request, &prepared) {
-                Err(ContainedTaskRunError::Boundary(failure))
-            } else if prepared.required_home_entry_page().is_some()
-                && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
-            {
-                self.run_preflighted_contained_task(
-                    instance_alias,
-                    task_request,
-                    &prepared,
-                    &mut runtime,
-                )
-            } else {
-                let execution = prepared.run(&mut runtime);
-                execution
-            };
+        let mut execution = if let Err(failure) = runtime
+            .begin_diagnostic()
+            .and_then(|()| runtime.record_initial_configuration(task_request, &prepared))
+        {
+            Err(ContainedTaskRunError::Boundary(failure))
+        } else if prepared.required_home_entry_page().is_some()
+            && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
+        {
+            self.run_preflighted_contained_task(
+                instance_alias,
+                task_request,
+                &prepared,
+                &mut runtime,
+            )
+        } else {
+            let execution = prepared.run(&mut runtime);
+            execution
+        };
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
                 runtime.record_post_admission_ocr_failure(error.code(), error.detail())
             }
             _ => Ok(()),
         };
+        let fatal = post_admission_ocr_failure_diagnostic.is_err()
+            || matches!(&execution,
+                Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
+                    if failure.poison_runtime || failure.error.is_fatal());
+        let diagnostic_result = if fatal {
+            runtime.abort_diagnostic()
+        } else {
+            runtime.finish_diagnostic(&execution)
+        };
+        if let Err(mut failure) = diagnostic_result {
+            let prior_code = match &execution {
+                Err(ContainedTaskRunError::Task(error)) => Some(error.code()),
+                Err(
+                    ContainedTaskRunError::Boundary(error)
+                    | ContainedTaskRunError::NonfatalOperation(error),
+                ) => Some(error.error.code()),
+                Ok(_) => None,
+            };
+            if let Some(code) = prior_code {
+                failure.error = Box::new(
+                    failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_native_detail(format!("{}; prior_task_code={code}", failure.error)),
+                );
+            }
+            if let Err(cleanup) = runtime.abort_diagnostic() {
+                failure.error = Box::new(failure.error.as_ref().clone().with_native_detail(
+                    format!("{}; diagnostic_cleanup={}", failure.error, cleanup.error),
+                ));
+            }
+            execution = Err(ContainedTaskRunError::Boundary(failure));
+        }
         let finalizing = runtime.finalizing;
         let completed_entry_recovery_steps = runtime.completed_entry_recovery_steps;
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
@@ -14604,6 +14645,10 @@ struct RuntimeContainedTask<'a> {
     configuration_records: u8,
     configuration_capture_recorded: bool,
     configuration_input_recorded: bool,
+    diagnostic_stream: Option<actingcommand_artifact_store::ArtifactStream>,
+    diagnostic_records: u64,
+    diagnostic_step: Option<task_diagnostic::DiagnosticStep>,
+    diagnostic_physical: Option<ActionId>,
 }
 
 struct EntryRecoveryRuntime<'a, 'host> {
@@ -14612,6 +14657,35 @@ struct EntryRecoveryRuntime<'a, 'host> {
 
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
+
+    fn record_page_evaluations(
+        &mut self,
+        phase: &'static str,
+        results: &actingcommand_page_detector::PageBatchResult,
+    ) -> Result<(), Self::Error> {
+        self.inner.diagnostic_pages(phase, results)
+    }
+    fn record_guard_evaluation(
+        &mut self,
+        target: Option<&str>,
+        result: Option<
+            &actingcommand_recognition_pack::RecognitionPackResult<
+                actingcommand_recognition_pack::TargetEvaluation,
+            >,
+        >,
+        reason: &'static str,
+    ) -> Result<(), Self::Error> {
+        self.inner.diagnostic_guard(target, result, reason)
+    }
+    fn record_ocr_evaluation(
+        &mut self,
+        target: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        self.inner.diagnostic_ocr(target, result)
+    }
 
     fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         RuntimeContainedTask::classify_error(error)
@@ -15615,6 +15689,35 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
 
+    fn record_page_evaluations(
+        &mut self,
+        phase: &'static str,
+        results: &actingcommand_page_detector::PageBatchResult,
+    ) -> Result<(), Self::Error> {
+        self.diagnostic_pages(phase, results)
+    }
+    fn record_guard_evaluation(
+        &mut self,
+        target: Option<&str>,
+        result: Option<
+            &actingcommand_recognition_pack::RecognitionPackResult<
+                actingcommand_recognition_pack::TargetEvaluation,
+            >,
+        >,
+        reason: &'static str,
+    ) -> Result<(), Self::Error> {
+        self.diagnostic_guard(target, result, reason)
+    }
+    fn record_ocr_evaluation(
+        &mut self,
+        target: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        self.diagnostic_ocr(target, result)
+    }
+
     fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         if error.error.is_fatal() {
             ContainedTaskRuntimeErrorClass::Fatal
@@ -15813,6 +15916,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.ensure_active()?;
         if let RuntimeResult::InputCommitted { action_id } = success.result {
             self.post_input_action_id = Some(action_id);
+            self.diagnostic_physical = Some(action_id);
             if self.configuration_records > 0 && !self.configuration_input_recorded {
                 self.record_configuration(
                     EffectiveConfigurationFacts::Input {
@@ -16078,6 +16182,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 from_page,
             } => {
+                let diagnostic_started = self
+                    .host
+                    .monotonic_ms()
+                    .map_err(RequestFailure::poison_without_terminal)?;
                 self.capture_evidence
                     .pin_last(PinnedFrameReason::PreInput)?;
                 let action_id = self.host.events.issuer().mint_action_id().map_err(|_| {
@@ -16107,7 +16215,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                self.begin_diagnostic_step(step_index, *action_id.transport(), diagnostic_started)
             }
             ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -16168,6 +16277,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 page_label,
             } => {
+                let diagnostic_ended = self
+                    .host
+                    .monotonic_ms()
+                    .map_err(RequestFailure::poison_without_terminal)?;
                 self.input_step_action_id = None;
                 self.post_input_action_id = None;
                 contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
@@ -16189,7 +16302,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                self.end_diagnostic_step(diagnostic_ended, true)?;
+                self.diagnostic_physical = None;
+                Ok(())
             }
             ContainedTaskTrace::StabilityBaseline {
                 step_index,

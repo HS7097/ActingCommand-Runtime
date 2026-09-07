@@ -336,6 +336,7 @@ dependencies = [
  "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
+ "actingcommand-page-detector",
  "actingcommand-policy",
  "actingcommand-recognition-pack",
  "actingcommand-runtime-client",
