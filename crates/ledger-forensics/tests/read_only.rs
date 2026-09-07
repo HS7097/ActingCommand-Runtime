@@ -915,6 +915,197 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     assert!(next_page.gaps.is_empty());
     assert_eq!(tree_bytes(state_root), original_tree);
 
+    assert!(
+        complete
+            .diagnostic_gaps
+            .iter()
+            .any(|gap| gap.run_id == *run_id.transport() && gap.record_count.is_none())
+    );
+    use actingcommand_contract::{
+        OcrRegionEvidence, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader,
+        TaskDiagnosticOcrData, TaskDiagnosticPayload, TaskDiagnosticRecord,
+    };
+    use actingcommand_ledger_forensics::TaskRecordsRequest;
+    let context = ArtifactWriteContext::new(
+        ArtifactLinksDraft::default()
+            .with_run_id(run_id)
+            .with_correlation_id(correlation_a),
+        links.clone(),
+        1_752_147_200_300,
+    );
+    let policy = ArtifactIssuePolicy::new(
+        ArtifactProducer::ArtifactStore,
+        RetentionClass::DebugFull,
+        ArtifactRedactionState::Pending,
+    );
+    let mut stream = store
+        .begin_stream(ArtifactKind::DiagnosticJson, context.clone(), policy)
+        .unwrap();
+    let header = serde_json::to_vec(&TaskDiagnosticHeader {
+        schema_version: TASK_DIAGNOSTIC_SCHEMA.into(),
+        request_id: *request.transport(),
+        correlation_id: *correlation_a.transport(),
+        task_id: *task.transport(),
+        run_id: *run_id.transport(),
+        instance_id: *instance.transport(),
+        lease_id: *lease.transport(),
+    })
+    .unwrap();
+    stream.append(&header[..header.len() - 1]).unwrap();
+    stream.append(b",\"records\":[\n").unwrap();
+    for index in 1..=35 {
+        if index > 1 {
+            stream.append(b",").unwrap();
+        }
+        let record = TaskDiagnosticRecord {
+            index,
+            frame_id: Some(*pre.transport()),
+            step_action_id: Some(*step.transport()),
+            physical_action_id: None,
+            parent_index: None,
+            payload: TaskDiagnosticPayload::Ocr(Box::new(TaskDiagnosticOcrData::Evaluated {
+                region: OcrRegionEvidence {
+                    frame_width: 2,
+                    frame_height: 2,
+                    anchor_target_id: None,
+                    anchor_match: None,
+                    offset: None,
+                    width: 2,
+                    height: 2,
+                    roi: Some(OcrRegionRect {
+                        x: 0,
+                        y: 0,
+                        width: 2,
+                        height: 2,
+                    }),
+                    unresolved: None,
+                },
+                raw_text: "neutral ".repeat(8000),
+                derived_text: "neutral".to_owned(),
+                confidence: None,
+                matched_expected: None,
+                match_mode: "exact".to_owned(),
+                block_count: 0,
+            })),
+        };
+        serde_json::to_writer(&mut stream, &record).unwrap();
+        stream.append(b"\n").unwrap();
+    }
+    let staging_tree = tree_bytes(state_root);
+    assert!(evidence(0, None, 1024).diagnostics.is_empty());
+    assert_eq!(tree_bytes(state_root), staging_tree);
+    stream.append(b"]}\n").unwrap();
+    let raw = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
+    assert!(raw.reference().byte_count() > 1024 * 1024);
+    let private = evidence(0, None, 1024);
+    assert_eq!(private.diagnostics.len(), 1);
+    assert_eq!(private.diagnostics[0].state, "privacy_withheld");
+    assert!(private.diagnostics[0].records.is_empty());
+    assert_eq!(private.diagnostics[0].total_records, None);
+    assert!(
+        !serde_json::to_string(&private)
+            .unwrap()
+            .contains("neutral neutral")
+    );
+    let record_page = |cursor| {
+        let request = ForensicRequest::task_evidence(
+            state_root,
+            ForensicEventsRequest::new(
+                ForensicEventFilter::default(),
+                0,
+                Some(private.page.through_sequence),
+                1024,
+            )
+            .unwrap(),
+        )
+        .with_task_records(TaskRecordsRequest {
+            cursor,
+            limit: 7,
+            include_private: true,
+        })
+        .unwrap();
+        let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) = run(request).unwrap()
+        else {
+            panic!("records report")
+        };
+        report
+    };
+    let published_tree = tree_bytes(state_root);
+    let mut cursor = None;
+    let mut indices = Vec::new();
+    loop {
+        let report = record_page(cursor.take());
+        let [page] = report.diagnostics.as_slice() else {
+            panic!("one exact artifact")
+        };
+        assert_eq!(page.state, "verified");
+        assert_eq!(page.total_records, Some(35));
+        assert_eq!(
+            page.artifact.artifact_id,
+            raw.reference().artifact_id().to_owned()
+        );
+        assert!(page.records.len() <= 7);
+        for record in &page.records {
+            indices.push(record.index);
+            assert_eq!(record.frame_id, Some(*pre.transport()));
+            let TaskDiagnosticPayload::Ocr(ocr) = &record.payload else {
+                panic!("typed OCR record")
+            };
+            let TaskDiagnosticOcrData::Evaluated { raw_text, .. } = ocr.as_ref() else {
+                panic!("evaluated OCR record")
+            };
+            assert_eq!(raw_text, &"neutral ".repeat(8000));
+        }
+        cursor = page.next_cursor.clone();
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(indices, (1..=35).collect::<Vec<_>>());
+    assert_eq!(tree_bytes(state_root), published_tree);
+    let mut wrong_cursor = record_page(None).diagnostics[0]
+        .next_cursor
+        .clone()
+        .unwrap();
+    wrong_cursor.sha256 = format!("sha256:{}", "0".repeat(64));
+    let wrong = ForensicRequest::task_evidence(
+        state_root,
+        ForensicEventsRequest::new(ForensicEventFilter::default(), 0, None, 1024).unwrap(),
+    )
+    .with_task_records(TaskRecordsRequest {
+        cursor: Some(wrong_cursor),
+        limit: 7,
+        include_private: true,
+    })
+    .unwrap();
+    assert_eq!(
+        run(wrong).unwrap_err().code(),
+        "task_diagnostic_cursor_mismatch"
+    );
+    store
+        .put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::DiagnosticJson,
+                br#"{"schema_version":"neutral.unknown.v1","raw_text":"withheld source"}"#,
+                context,
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::ArtifactStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut Sink(&writer),
+        )
+        .unwrap();
+    let unknown = evidence(0, None, 1024);
+    assert!(unknown.gaps.contains(&"unknown_diagnostic_schema"));
+    assert!(
+        unknown
+            .diagnostics
+            .iter()
+            .any(|page| page.state == "unknown_schema" && page.legacy.is_none())
+    );
+
     let other_run = identifiers.mint_run_id().unwrap();
     append(
         links
@@ -946,6 +1137,22 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         vec![input_event.sequence()]
     );
     writer.close().unwrap();
+    let saved_raw = fs::read(raw.path()).unwrap();
+    fs::write(raw.path(), b"damaged task diagnostic").unwrap();
+    let damaged_raw_tree = tree_bytes(state_root);
+    let damaged_raw = record_page(None);
+    assert!(!damaged_raw.failures.is_empty());
+    assert!(
+        !damaged_raw
+            .diagnostics
+            .iter()
+            .any(
+                |page| page.artifact.artifact_id == *raw.reference().artifact_id()
+                    && page.state == "verified"
+            )
+    );
+    assert_eq!(tree_bytes(state_root), damaged_raw_tree);
+    fs::write(raw.path(), saved_raw).unwrap();
     let saved_frame = fs::read(before.path()).unwrap();
     fs::write(before.path(), b"damaged frame").unwrap();
     let damaged_tree = tree_bytes(state_root);

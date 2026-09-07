@@ -19,7 +19,9 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
-use actingcommand_page_detector::{PageDetector, PageSet};
+use actingcommand_page_detector::{
+    PageBatchResult, PageDetector, PageOutcome, PageSet, require_all_page_evaluations,
+};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     OcrProviderExecutionEvidence, OcrTextEvidence, PackRegion, RecognitionEvaluator,
@@ -118,6 +120,14 @@ pub enum ContainedTaskRunError<E> {
     NonfatalOperation(E),
     Task(ContainedTaskError),
 }
+
+type OcrEvaluationObserver<'a> = dyn FnMut(
+        &str,
+        &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), ContainedTaskError>
+    + 'a;
 
 impl<E> ContainedTaskRunError<E> {
     pub fn task(code: &'static str) -> Self {
@@ -556,14 +566,25 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         self.observe_in_context(game, &evaluator.scene_context(scene), page_label)
     }
 
+    #[cfg(test)]
     fn observe_in_context(
         &mut self,
         game: &str,
         context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         page_label: &str,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        self.observe_in_context_recorded(game, context, page_label, &mut |_, _| Ok(()))
+    }
+
+    fn observe_in_context_recorded(
+        &mut self,
+        game: &str,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        page_label: &str,
+        observer: &mut OcrEvaluationObserver<'_>,
+    ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         if self.fields.is_some() {
-            return self.observe_fields(game, context, page_label);
+            return self.observe_fields(game, context, page_label, observer);
         }
         let Some(prepared) = self.prepared else {
             return Ok(None);
@@ -599,14 +620,14 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             };
             let mut accepted_observation = None;
             for retry_index in 0..=max_retry_index {
-                let evaluated = context
-                    .evaluate_ocr_observation(target_id)
-                    .map_err(|error| {
-                        ContainedTaskError::with_detail(
-                            "contained_task_post_admission_ocr_failed",
-                            error.to_string(),
-                        )
-                    })?;
+                let result = context.evaluate_ocr_observation(target_id);
+                observer(target_id, &result)?;
+                let evaluated = result.map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_post_admission_ocr_failed",
+                        error.to_string(),
+                    )
+                })?;
                 if evaluated.target_id != *target_id
                     || !invocation_ids.insert(evaluated.execution.invocation_id.clone())
                     || stream_binding.as_ref().is_some_and(|binding| {
@@ -866,6 +887,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         game: &str,
         context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         page_label: &str,
+        observer: &mut OcrEvaluationObserver<'_>,
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         let prepared = self
             .fields
@@ -901,7 +923,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                     self.field_failure = Some(OcrFieldReason::LimitExceeded);
                     result.reason = OcrFieldReason::LimitExceeded;
                 } else {
-                    match context.evaluate_ocr_observation(&field.target_id) {
+                    let evaluation = context.evaluate_ocr_observation(&field.target_id);
+                    observer(&field.target_id, &evaluation)?;
+                    match evaluation {
                         Ok(mut evaluated) => {
                             result.region = Some(evaluated.region.clone());
                             regions.insert(field.target_id.clone(), evaluated.region.clone());
@@ -1452,6 +1476,34 @@ pub trait ContainedTaskRuntime {
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error>;
 
+    /// Transports the already computed results; implementations must not evaluate them again.
+    fn record_page_evaluations(
+        &mut self,
+        _phase: &'static str,
+        _results: &PageBatchResult,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn record_guard_evaluation(
+        &mut self,
+        _target_id: Option<&str>,
+        _result: Option<&actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>>,
+        _reason: &'static str,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn record_ocr_evaluation(
+        &mut self,
+        _target_id: &str,
+        _result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error>;
 }
 
@@ -1688,9 +1740,23 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let matched = self
+        let result = self
             .detector
-            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page)
+            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page);
+        let results = Ok(vec![PageOutcome {
+            index: 0,
+            page_id: page.to_owned(),
+            result,
+        }]);
+        runtime
+            .record_page_evaluations("home_preflight", &results)
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let matched = results
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("single page")
+            .result
             .map_err(|error| {
                 ContainedTaskError::with_detail(
                     "contained_task_recognition_failed",
@@ -1903,9 +1969,10 @@ impl PreparedContainedTask {
                             &self.control,
                             &observation,
                             &self.evaluator,
+                            runtime,
                         ) {
                             Ok(outcome) => outcome,
-                            Err(error) => {
+                            Err(ContainedTaskRunError::Task(error)) => {
                                 let Some(policy) = retry_policy.as_ref() else {
                                     return Err(error.into());
                                 };
@@ -1937,6 +2004,7 @@ impl PreparedContainedTask {
                                     }
                                 }
                             }
+                            Err(error) => return Err(error),
                         };
                         let action_seed = runtime
                             .action_seed(step_index, &operation_id)
@@ -2462,9 +2530,15 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let matched_pages = self
-            .detector
-            .evaluate_all_in_context(&context)
+        let results = self.detector.evaluate_all_outcomes_in_context(&context);
+        runtime
+            .record_page_evaluations("page", &results)
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let matched_pages = results
+            .map_err(|error| {
+                actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
+            })
+            .and_then(require_all_page_evaluations)
             .map_err(|error| {
                 ContainedTaskError::with_detail(
                     "contained_task_recognition_failed",
@@ -2508,9 +2582,25 @@ impl PreparedContainedTask {
         let Some(page_label) = page else {
             return Ok(None);
         };
-        if let Some((frame_index, observation)) =
-            ocr_collector.observe_in_context(&self.control.game, &context, &page_label)?
-        {
+        // Preserve a recorder failure's original boundary type across the collector's task error API.
+        let mut recording_failure = None;
+        let observation = ocr_collector.observe_in_context_recorded(
+            &self.control.game,
+            &context,
+            &page_label,
+            &mut |target, result| {
+                runtime
+                    .record_ocr_evaluation(target, result)
+                    .map_err(|error| {
+                        recording_failure = Some(error);
+                        ContainedTaskError::new("contained_task_record_boundary")
+                    })
+            },
+        );
+        if let Some(error) = recording_failure {
+            return Err(ContainedTaskRunError::Boundary(error));
+        }
+        if let Some((frame_index, observation)) = observation? {
             runtime
                 .record(ContainedTaskTrace::PostAdmissionOcrObservation {
                     frame_index,
@@ -4188,13 +4278,20 @@ impl TaskOperation {
             .count())
     }
 
-    fn guard_outcome(
+    fn guard_outcome<R: ContainedTaskRuntime>(
         &self,
         control: &TaskControl,
         observation: &PageObservation,
         evaluator: &RecognitionEvaluator,
-    ) -> Result<(ContainedTaskGuardOutcome, Option<TargetEvaluation>), ContainedTaskError> {
+        runtime: &mut R,
+    ) -> Result<
+        (ContainedTaskGuardOutcome, Option<TargetEvaluation>),
+        ContainedTaskRunError<R::Error>,
+    > {
         if self.unguarded_trusted_coordinate {
+            runtime
+                .record_guard_evaluation(None, None, "trusted_coordinate")
+                .map_err(ContainedTaskRunError::Boundary)?;
             return Ok((ContainedTaskGuardOutcome::TrustedCoordinate, None));
         }
         let guard = self
@@ -4202,27 +4299,34 @@ impl TaskOperation {
             .as_ref()
             .ok_or_else(|| ContainedTaskError::new("contained_task_guard_missing"))?;
         if !crate::page_anchor_matches(&control.game, &observation.page_label, &guard.page_id) {
+            runtime
+                .record_guard_evaluation(Some(&guard.target_id), None, "page_mismatch")
+                .map_err(ContainedTaskRunError::Boundary)?;
             return Err(ContainedTaskError::with_detail(
                 "contained_task_guard_refused",
                 format!(
                     "operation={} expected_page={} observed_page={}",
                     self.id, guard.page_id, observation.page_label
                 ),
-            ));
+            )
+            .into());
         }
-        let target = evaluator
-            .evaluate_target(&observation.scene, &guard.target_id)
-            .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    "contained_task_guard_evaluation_failed",
-                    error.to_string(),
-                )
-            })?;
+        let result = evaluator.evaluate_target(&observation.scene, &guard.target_id);
+        runtime
+            .record_guard_evaluation(Some(&guard.target_id), Some(&result), "evaluated")
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let target = result.map_err(|error| {
+            ContainedTaskError::with_detail(
+                "contained_task_guard_evaluation_failed",
+                error.to_string(),
+            )
+        })?;
         if !target.passed {
             return Err(ContainedTaskError::with_detail(
                 "contained_task_guard_refused",
                 format!("operation={} target={}", self.id, guard.target_id),
-            ));
+            )
+            .into());
         }
         let outcome = ContainedTaskGuardOutcome::Passed {
             page_label: observation.page_label.clone(),

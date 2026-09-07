@@ -534,7 +534,7 @@ pub struct TargetEvaluation {
     pub passed: bool,
     pub template: Option<TemplateEvaluation>,
     pub color: Option<ColorEvaluation>,
-    pub ocr: Option<OcrEvaluation>,
+    pub ocr: Option<Box<OcrEvaluation>>,
     pub nn: Option<NnEvaluation>,
     pub message: String,
 }
@@ -586,6 +586,8 @@ pub struct ColorEvaluation {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OcrEvaluation {
     pub region: Box<OcrRegionEvidence>,
+    pub raw_text: String,
+    pub block_source_order: Vec<usize>,
     pub text: String,
     pub confidence: Option<f32>,
     pub matched_expected: Option<String>,
@@ -604,6 +606,8 @@ pub struct OcrTextEvidence {
 pub struct OcrObservationEvaluation {
     pub region: OcrRegionEvidence,
     pub target_id: String,
+    pub raw_text: String,
+    pub block_source_order: Vec<usize>,
     pub text: String,
     pub confidence: Option<f32>,
     pub blocks: Vec<OcrTextEvidence>,
@@ -612,6 +616,7 @@ pub struct OcrObservationEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NnEvaluation {
+    pub requested_region: PackRect,
     pub selected_label: Option<String>,
     pub selected_score: Option<f32>,
     pub selection: NnSelectionMode,
@@ -620,6 +625,7 @@ pub struct NnEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NnLabelEvidence {
+    pub source_index: usize,
     pub label: String,
     pub score: f32,
     pub candidate: bool,
@@ -1105,6 +1111,8 @@ impl RecognitionEvaluator {
             }
             let ocr = validate_ocr_result(observation.result, region)?;
             Ok(OcrObservationEvaluation {
+                raw_text: ocr.raw_text,
+                block_source_order: ocr.block_source_order,
                 region: region_evidence.clone(),
                 target_id: target.id.clone(),
                 text: ocr.text,
@@ -1320,14 +1328,16 @@ impl RecognitionEvaluator {
                 passed,
                 template: None,
                 color: None,
-                ocr: Some(OcrEvaluation {
+                ocr: Some(Box::new(OcrEvaluation {
+                    raw_text: ocr.raw_text,
+                    block_source_order: ocr.block_source_order,
                     region: Box::new(region_evidence.clone()),
                     text: ocr.text,
                     confidence: ocr.confidence,
                     matched_expected,
                     match_mode: target.match_mode,
                     blocks: ocr.blocks,
-                }),
+                })),
                 nn: None,
                 message,
             })
@@ -1381,6 +1391,7 @@ impl RecognitionEvaluator {
             color: None,
             ocr: None,
             nn: Some(NnEvaluation {
+                requested_region: region,
                 selected_label,
                 selected_score,
                 selection: target.selection,
@@ -2221,6 +2232,8 @@ fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvide
 
 #[derive(Debug)]
 struct ValidatedOcrResult {
+    raw_text: String,
+    block_source_order: Vec<usize>,
     text: String,
     confidence: Option<f32>,
     blocks: Vec<OcrTextEvidence>,
@@ -2259,13 +2272,17 @@ fn validate_ocr_result(
                 "OCR block[{index}] rect is outside the requested ROI"
             )));
         }
-        blocks.push(OcrTextEvidence {
-            text: block.text,
-            rect: block.rect,
-            confidence: block.confidence,
-        });
+        blocks.push((
+            index,
+            OcrTextEvidence {
+                text: block.text,
+                rect: block.rect,
+                confidence: block.confidence,
+            },
+        ));
     }
     blocks.sort_by(|left, right| {
+        let (left, right) = (&left.1, &right.1);
         (
             left.rect.y,
             left.rect.x,
@@ -2281,8 +2298,10 @@ fn validate_ocr_result(
                 &right.text,
             ))
     });
+    let (block_source_order, blocks): (Vec<_>, Vec<_>) = blocks.into_iter().unzip();
+    let raw_text = result.text;
     let text = if blocks.is_empty() {
-        result.text
+        raw_text.clone()
     } else {
         let text = blocks
             .iter()
@@ -2297,6 +2316,8 @@ fn validate_ocr_result(
         text
     };
     Ok(ValidatedOcrResult {
+        raw_text,
+        block_source_order,
         text,
         confidence: result.confidence,
         blocks,
@@ -2330,6 +2351,7 @@ fn validate_nn_result(
         }
         validate_provider_score(label.score, &format!("NN label[{index}] score"))?;
         labels.push(NnLabelEvidence {
+            source_index: index,
             candidate: candidates.contains(label.label.as_str()),
             label: label.label,
             score: label.score,
