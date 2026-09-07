@@ -388,7 +388,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                             TaskOutcome::Success
                         },
                         final_page: Some("fixture/panel".into()),
-                        executed_steps: 0,
+                        executed_steps: Some(0),
                         failure_code: if field_failed {
                             Some("contained_task_ocr_fields_unresolved".into())
                         } else if legacy {
