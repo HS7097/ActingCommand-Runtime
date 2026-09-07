@@ -21,7 +21,7 @@ const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.6";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
-const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS;
 const MAX_TASK_STEPS: u32 = 1_000;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 const MAA_SEMANTIC_MAPPING_PATH: &str = "tasks/maa-semantic-mapping.json";
@@ -879,6 +879,9 @@ impl OperationConverter {
         let declared_anchor_ids = self.declared_anchor_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
+            if let Err(error) = validate_phases_bundle(bundle) {
+                errors.push(error.message);
+            }
             if let Err(error) = validate_task_timeout_bundle(bundle) {
                 errors.push(error.message);
             }
@@ -986,10 +989,10 @@ impl OperationConverter {
             }
             if !matches!(
                 bundle.data.get("schema_version").and_then(Value::as_str),
-                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7" | "0.8")
+                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7" | "0.8" | "0.9")
             ) {
                 errors.push(format!(
-                    "{}: unsupported schema_version, expected 0.3 through 0.8",
+                    "{}: unsupported schema_version, expected 0.3 through 0.9",
                     bundle.task_json_path().display()
                 ));
             }
@@ -2135,7 +2138,7 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
 fn validate_segmented_swipe_source(bundle: &Bundle, click: &Map<String, Value>) -> CliOutcome<()> {
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8")
+        Some("0.7" | "0.8" | "0.9")
     ) {
         return Err(CliError::package_invalid(
             "single_touch_drag_with_vertical_brake_v1 requires schema_version '0.7'",
@@ -2399,7 +2402,7 @@ fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.6" | "0.7" | "0.8")
+        Some("0.6" | "0.7" | "0.8" | "0.9")
     ) {
         return Err(CliError::package_invalid(format!(
             "{}: ocr_targets requires schema_version '0.6' or '0.7'",
@@ -2546,13 +2549,54 @@ fn require_exact_object<'a>(
     Ok(object)
 }
 
+pub(crate) fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
+    let Some(value) = bundle.data.get("phases") else {
+        return Ok(());
+    };
+    if bundle.data["schema_version"] != "0.9" {
+        return Err(CliError::package_invalid(
+            "phases require operation schema_version '0.9'",
+        ));
+    }
+    let phases: Vec<actingcommand_contract::TaskPhase> = serde_json::from_value(value.clone())
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let scheduling: SchedulingOutcomeDeclaration =
+        serde_json::from_value(bundle.data["scheduling_outcome"].clone())
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let mut operations = Vec::new();
+    for operation in array_field(&bundle.data, "operations") {
+        operations.push(actingcommand_contract::TaskPhaseOperation {
+            id: operation["id"]
+                .as_str()
+                .ok_or_else(|| CliError::package_invalid("phase operation id missing"))?,
+            from: operation["from"]
+                .as_str()
+                .ok_or_else(|| CliError::package_invalid("phase operation from missing"))?,
+            destinations: operation_destination_page_ids(bundle, operation)?,
+            retryable: operation
+                .get("retryable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    actingcommand_contract::validate_phased_route(
+        bundle.data["game"].as_str().unwrap_or_default(),
+        bundle.data["entry_page"].as_str().unwrap_or_default(),
+        &phases,
+        &declared_terminal_page_ids(bundle)?.unwrap_or_default(),
+        &operations,
+        &scheduling,
+    )
+    .map_err(CliError::package_invalid)
+}
+
 fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {
     let Some(value) = bundle.data.get("timeout_ms") else {
         return Ok(None);
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8")
+        Some("0.7" | "0.8" | "0.9")
     ) {
         return Err(CliError::package_invalid(format!(
             "{}: timeout_ms requires schema_version '0.7'",
@@ -2577,7 +2621,7 @@ fn validate_task_max_steps_bundle(bundle: &Bundle) -> CliOutcome<Option<u32>> {
     };
     if !matches!(
         bundle.data.get("schema_version").and_then(Value::as_str),
-        Some("0.7" | "0.8")
+        Some("0.7" | "0.8" | "0.9")
     ) {
         return Err(CliError::package_invalid(format!(
             "{}: max_steps requires schema_version '0.7'",
@@ -2877,7 +2921,7 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 bundle.task_json_path().display()
             )));
         }
-        ("0.3" | "0.4" | "0.5" | "0.6", Some(_)) => {
+        ("0.3" | "0.4" | "0.5" | "0.6" | "0.9", Some(_)) => {
             return Err(CliError::package_invalid(format!(
                 "{}: post_admission_ocr requires schema_version '0.7'",
                 bundle.task_json_path().display()

@@ -2,6 +2,7 @@
 
 //! Pure run coordination and successor suggestion decisions.
 
+use actingcommand_contract::{TaskPhase, TaskPhaseEvidence};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
@@ -296,6 +297,8 @@ pub struct RunStateConfig {
     stop_on_confirmation: bool,
     max_task_retries: u32,
     max_steps: u32,
+    phases: Option<Vec<TaskPhase>>,
+    designated_operation: Option<String>,
 }
 
 impl RunStateConfig {
@@ -328,6 +331,8 @@ impl RunStateConfig {
             stop_on_confirmation,
             max_task_retries,
             max_steps,
+            phases: None,
+            designated_operation: None,
         };
         if config.game.trim().is_empty() {
             return Err(RunDecisionError::invalid(
@@ -363,6 +368,16 @@ impl RunStateConfig {
             ));
         }
         Ok(config)
+    }
+
+    pub fn with_phases(
+        mut self,
+        phases: Vec<TaskPhase>,
+        designated_operation: Option<String>,
+    ) -> Self {
+        self.phases = Some(phases);
+        self.designated_operation = designated_operation;
+        self
     }
 }
 
@@ -432,6 +447,8 @@ pub struct RunStateMachine {
     current_page: Option<String>,
     executing_operation: Option<String>,
     terminal: Option<RunTerminal>,
+    phase_index: usize,
+    designated_effect_completed: bool,
 }
 
 impl RunStateMachine {
@@ -452,6 +469,8 @@ impl RunStateMachine {
             current_page: None,
             executing_operation: None,
             terminal: None,
+            phase_index: 0,
+            designated_effect_completed: false,
         })
     }
 
@@ -496,7 +515,12 @@ impl RunStateMachine {
                 "current page '{current_page}' ambiguously matches multiple terminal pages"
             )));
         }
-        if self.config.stop_on_confirmation && matching_targets == 1 {
+        let phases_completed = self
+            .config
+            .phases
+            .as_ref()
+            .is_none_or(|phases| self.phase_index == phases.len());
+        if self.config.stop_on_confirmation && matching_targets == 1 && phases_completed {
             return Ok(self.finish(RunTerminal::Completed {
                 current_page: Some(current_page),
             }));
@@ -514,12 +538,30 @@ impl RunStateMachine {
                 },
             }));
         }
-        let operation = select_run_operation(&self.config.game, &current_page, operations)
+        let phase_operations = operations
+            .iter()
+            .filter(|operation| {
+                self.config.phases.as_ref().is_none_or(|phases| {
+                    phases
+                        .get(self.phase_index)
+                        .is_some_and(|phase| phase.operations.contains(&operation.id))
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let operation = select_run_operation(&self.config.game, &current_page, &phase_operations)
             .ok_or_else(|| {
-                RunDecisionError::invalid(format!(
-                    "no operation can continue from page '{current_page}'"
-                ))
-            })?;
+            RunDecisionError::invalid(format!(
+                "no operation can continue from page '{current_page}'"
+            ))
+        })?;
+        if self.designated_effect_completed
+            && self.config.designated_operation.as_deref() == Some(operation.id())
+        {
+            return Err(RunDecisionError::invalid_transition(
+                "designated effect already completed",
+            ));
+        }
         let step_index = self.completed_steps;
         self.completed_steps += 1;
         self.executing_operation = Some(operation.id.clone());
@@ -536,6 +578,12 @@ impl RunStateMachine {
         current_page: Option<String>,
     ) -> Result<RunDirective, RunDecisionError> {
         self.require_executing(operation_id)?;
+        if self
+            .phase_evidence(current_page.as_deref())
+            .is_some_and(|phase| phase.completed)
+        {
+            self.phase_index += 1;
+        }
         self.executing_operation = None;
         self.current_page = current_page.clone();
         Ok(match current_page {
@@ -583,6 +631,36 @@ impl RunStateMachine {
 
     pub const fn completed_steps(&self) -> u32 {
         self.completed_steps
+    }
+
+    pub fn phase_evidence(&self, confirmed_page: Option<&str>) -> Option<TaskPhaseEvidence> {
+        let phase = self.config.phases.as_ref()?.get(self.phase_index)?;
+        Some(TaskPhaseEvidence {
+            index: self.phase_index as u32,
+            id: phase.id.clone(),
+            completed: confirmed_page.is_some_and(|page| {
+                phase
+                    .target_pages
+                    .iter()
+                    .any(|target| page_anchor_matches(&self.config.game, page, target))
+            }),
+        })
+    }
+
+    pub fn operation_effect_completed(
+        &mut self,
+        operation_id: &str,
+    ) -> Result<(), RunDecisionError> {
+        self.require_executing(operation_id)?;
+        if self.config.designated_operation.as_deref() == Some(operation_id) {
+            if self.designated_effect_completed {
+                return Err(RunDecisionError::invalid_transition(
+                    "designated effect already completed",
+                ));
+            }
+            self.designated_effect_completed = true;
+        }
+        Ok(())
     }
 
     fn require_executing(&self, operation_id: &str) -> Result<(), RunDecisionError> {
