@@ -4401,6 +4401,8 @@ impl HostShared {
             }
             drop(inputs);
             let scope_instances = self.fact_scope_instances(scope)?;
+            lock(&self.facts, "validate_fact_input_boundary")?
+                .validate_input_boundaries(&observation.records[0], &scope_instances)?;
             if scope_instances.is_empty()
                 && observation.records[0].invalidate_on.iter().any(|event| {
                     matches!(event, EventType::InputCommitted | EventType::InputFailed)

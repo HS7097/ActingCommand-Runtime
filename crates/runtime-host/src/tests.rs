@@ -2497,6 +2497,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         )),
     )
     .expect("assessment runtime host");
+    let assessment_at = last_observed_at + 1_000;
     let as_of_ledger_position =
         project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
     let query = MaintenanceLedgerQuery::new(
@@ -2505,7 +2506,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         fact_scope,
         "resource.primary",
         as_of_ledger_position,
-        last_observed_at,
+        assessment_at,
         MaintenanceTrendPolicy::default(),
     )
     .expect("maintenance query");
@@ -2527,7 +2528,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         },
         "resource.primary",
         as_of_ledger_position,
-        last_observed_at + 1_000,
+        assessment_at + 1_000,
         MaintenanceTrendPolicy::default(),
     )
     .expect("later maintenance query");
@@ -2544,7 +2545,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         content: FactContent::Inline {
             value: ContractFactValue::Integer(10),
         },
-        observed_at_unix_ms: last_observed_at - 500,
+        observed_at_unix_ms: last_observed_at + 500,
         expires_at_unix_ms: None,
         ttl_policy: None,
         confidence_milli: 700,
@@ -2570,7 +2571,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         },
         "resource.primary",
         advanced_ledger_position,
-        last_observed_at,
+        assessment_at,
         MaintenanceTrendPolicy::default(),
     )
     .expect("advanced maintenance query");
@@ -2844,7 +2845,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
             queued_waiter = Some(waiter);
             host.complete_policy_dispatch(&admitted.decision_id)
                 .expect("complete after snapshot");
-            host.publish_fact(stored_fact(
+            let mut late_fact = stored_fact(
                 FactScope::Instance {
                     instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
                 },
@@ -2852,8 +2853,10 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
                 ContractFactValue::Integer(9),
                 "snapshot:project-page-late",
                 Vec::new(),
-            ))
-            .expect("publish fact after first page");
+            );
+            late_fact.observed_at_unix_ms += 1;
+            host.publish_fact(late_fact)
+                .expect("publish fact after first page");
             record_policy_approval(
                 &host,
                 late_approval_intent.as_ref().expect("late approval intent"),
@@ -16971,7 +16974,29 @@ fn policy_evaluation_consumes_runtime_owned_fact_projection() {
 fn fact_snapshot_catches_up_with_critical_ledger_events() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let primary_native = instance_id();
+    let peer_native = instance_id();
+    let peer_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                primary_native,
+                state.clone(),
+            ),
+            (
+                "fixture-instance-b".to_owned(),
+                peer_native,
+                peer_state.clone(),
+            ),
+        ])),
+    )
+    .unwrap();
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate first catalog");
     host.publish_fact(stored_fact(
@@ -17009,7 +17034,93 @@ fn fact_snapshot_catches_up_with_critical_ledger_events() {
         1
     );
     drop(client);
+
+    // Defect regression: PR333 review 5133641794, D1 (LIVE-FACT-POOL-v1).
+    // These are existing sealed backend inputs through the real lease/ledger path.
+    let mut observation = stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.current",
+        ContractFactValue::Integer(12),
+        "snapshot:before-first-input",
+        vec![EventType::InputCommitted, EventType::InputFailed],
+    );
+    let mut fresh_event = None;
+    for step in 0..3_u64 {
+        clock.advance(1_000);
+        let mut input_client = TestClient::connect(&host);
+        let (_, token) = input_client.acquire(POLICY_INSTANCE_ALIAS);
+        let input = input_client.request(RuntimeOperation::Input {
+            token: token.clone(),
+            action: InputAction::Tap { x: 10, y: 20 },
+        });
+        assert_eq!(
+            input_client.send(&input).state(),
+            RuntimeReceiptState::Completed
+        );
+        let release = input_client.request(RuntimeOperation::ReleaseLease { token });
+        assert_eq!(
+            input_client.send(&release).state(),
+            RuntimeReceiptState::Completed
+        );
+        drop(input_client);
+        if step != 1 {
+            assert_eq!(
+                host.publish_fact(observation.clone()).unwrap_err().code(),
+                "fact_observation_precedes_input"
+            );
+        }
+        clock.advance(1);
+        observation.observed_at_unix_ms = POLICY_NOW_UNIX_MS + (step + 1) * 1_001;
+        observation.expires_at_unix_ms = Some(observation.observed_at_unix_ms + 60_000);
+        observation.source_snapshot_id = format!("snapshot:after-input-{step}");
+        if step != 1 {
+            fresh_event = Some(host.publish_fact(observation.clone()).unwrap());
+        }
+    }
+    // Another native instance does not invalidate or advance this fact's boundary.
+    clock.advance(1_000);
+    let mut peer = TestClient::connect(&host);
+    let (_, token) = peer.acquire("fixture-instance-b");
+    let input = peer.request(RuntimeOperation::Input {
+        token: token.clone(),
+        action: InputAction::Tap { x: 10, y: 20 },
+    });
+    assert_eq!(peer.send(&input).state(), RuntimeReceiptState::Completed);
+    let release = peer.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(peer.send(&release).state(), RuntimeReceiptState::Completed);
+    drop(peer);
+    assert_eq!(
+        host.publish_fact(observation.clone()).unwrap(),
+        fresh_event.unwrap()
+    );
     host.close().expect("close host");
+    let reopened = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock),
+        Arc::new(FakeProvider::from_entries([
+            (POLICY_INSTANCE_ALIAS.to_owned(), primary_native, state),
+            ("fixture-instance-b".to_owned(), peer_native, peer_state),
+        ])),
+    )
+    .unwrap();
+    let restored = reopened
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .unwrap();
+    assert!(restored.records.contains(&observation));
+    observation.key = "resource.after_restart".to_owned();
+    observation.source_snapshot_id = "snapshot:late-after-recovery".to_owned();
+    observation.observed_at_unix_ms = POLICY_NOW_UNIX_MS + 2_002;
+    observation.expires_at_unix_ms = Some(observation.observed_at_unix_ms + 60_000);
+    assert_eq!(
+        reopened.publish_fact(observation).unwrap_err().code(),
+        "fact_observation_precedes_input"
+    );
+    reopened.close().unwrap();
 }
 
 #[test]

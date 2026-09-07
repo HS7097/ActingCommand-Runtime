@@ -53,3 +53,11 @@ outcome in that scope, so navigation can also require a fresh balance observatio
 Instance membership changes require a fresh observation. Global configuration
 events retain their existing global scope. Invalidation closes later admission;
 it does not undo or resubmit an already committed task or effect.
+
+The fact owner also rebuilds the most recent committed/failed input time for
+each native instance, even while its fact set is empty. A declaration configured
+to invalidate on that input must have been observed strictly after the matching
+boundary. This covers both first publication and refresh after an invalidated
+gap. These bounded replay timestamps contain no balances and have no separate
+persistence path; ordinary recovery and historical projection read the original
+input events from GlobalLedger.

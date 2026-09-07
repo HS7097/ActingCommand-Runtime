@@ -22,6 +22,62 @@ type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
 type HistoricalInvalidationIdentity = (FactIdentity, String);
 
+/// Replay metadata, retained even when no fact is active for an instance.
+#[derive(Clone, Default)]
+struct InputInvalidationBoundaries {
+    by_instance: BTreeMap<actingcommand_contract::InstanceId, [u64; 2]>,
+}
+
+impl InputInvalidationBoundaries {
+    fn observe(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        let index = match event.event_type() {
+            EventType::InputCommitted => 0,
+            EventType::InputFailed => 1,
+            _ => return Ok(()),
+        };
+        let instance = event
+            .links()
+            .instance_id()
+            .ok_or_else(|| fact_fatal("fact_input_scope_missing", "replay_fact_input_boundary"))?;
+        if !self.by_instance.contains_key(instance)
+            && self.by_instance.len() >= actingcommand_policy::MAX_EVALUATION_INSTANCES
+        {
+            return Err(fact_fatal(
+                "fact_input_scope_capacity_exceeded",
+                "replay_fact_input_boundary",
+            ));
+        }
+        let boundary = self.by_instance.entry(*instance).or_default();
+        boundary[index] = boundary[index].max(event.timestamp_unix_ms());
+        Ok(())
+    }
+
+    fn check(
+        &self,
+        record: &FactRecord,
+        instances: &[actingcommand_contract::InstanceId],
+    ) -> RuntimeHostResult<()> {
+        for instance in instances {
+            if let Some(boundaries) = self.by_instance.get(instance) {
+                for (index, event) in [EventType::InputCommitted, EventType::InputFailed]
+                    .iter()
+                    .enumerate()
+                {
+                    if record.invalidate_on.contains(event)
+                        && record.observed_at_unix_ms <= boundaries[index]
+                    {
+                        return Err(fact_request(
+                            "fact_observation_precedes_input",
+                            "publish_facts",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn invalidation_scope_matches(
     event: &PersistedEvent,
     instances: &[actingcommand_contract::InstanceId],
@@ -70,12 +126,18 @@ struct HistoricalFactProjection {
     active: BTreeMap<FactIdentity, (FactRecord, EventId)>,
     scope_instances: BTreeMap<FactIdentity, Vec<actingcommand_contract::InstanceId>>,
     invalidated: BTreeMap<HistoricalInvalidationIdentity, FactInvalidationEventData>,
+    input_boundaries: InputInvalidationBoundaries,
 }
 
 impl HistoricalFactProjection {
     fn replay(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         match event.payload() {
             EventPayload::Fact(FactPayload::Published(payload)) => {
+                self.input_boundaries
+                    .check(payload.record(), payload.scope_instances())
+                    .map_err(|_| {
+                        fact_fatal("fact_observation_precedes_input", "project_fact_history")
+                    })?;
                 for record in payload.records() {
                     self.publish(record.clone(), *event.event_id())?;
                     self.scope_instances.insert(
@@ -89,6 +151,7 @@ impl HistoricalFactProjection {
                 self.invalidate(payload.invalidation().clone())
             }
             _ => {
+                self.input_boundaries.observe(event)?;
                 let invalidations = self
                     .active
                     .values()
@@ -196,6 +259,7 @@ impl HistoricalFactProjection {
 pub(crate) struct InstanceFactStore {
     active: BTreeMap<FactIdentity, StoredFact>,
     latest_observed: BTreeMap<FactIdentity, u64>,
+    input_boundaries: InputInvalidationBoundaries,
     invalidated: BTreeMap<(FactIdentity, String), InvalidationTombstone>,
     pending: BTreeMap<InvalidationIdentity, FactInvalidationEventData>,
     last_sequence: u64,
@@ -236,6 +300,7 @@ impl InstanceFactStore {
         let mut store = Self {
             active: BTreeMap::new(),
             latest_observed: BTreeMap::new(),
+            input_boundaries: InputInvalidationBoundaries::default(),
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
@@ -279,6 +344,7 @@ impl InstanceFactStore {
         let mut snapshot = Self {
             active: BTreeMap::new(),
             latest_observed: BTreeMap::new(),
+            input_boundaries: InputInvalidationBoundaries::default(),
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
@@ -331,9 +397,22 @@ impl InstanceFactStore {
         Ok(())
     }
 
+    pub(crate) fn validate_input_boundaries(
+        &self,
+        record: &FactRecord,
+        instances: &[actingcommand_contract::InstanceId],
+    ) -> RuntimeHostResult<()> {
+        self.input_boundaries.check(record, instances)
+    }
+
     fn replay_event(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         match event.payload() {
             EventPayload::Fact(FactPayload::Published(payload)) => {
+                self.input_boundaries
+                    .check(payload.record(), payload.scope_instances())
+                    .map_err(|_| {
+                        fact_fatal("fact_observation_precedes_input", "replay_fact_event")
+                    })?;
                 let mut complete = self.clone();
                 for record in payload.records() {
                     complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
@@ -350,6 +429,7 @@ impl InstanceFactStore {
                 self.commit_invalidation(payload.invalidation().clone(), event.sequence())
             }
             _ => {
+                self.input_boundaries.observe(event)?;
                 for invalidation in self.plan_invalidations(event) {
                     self.derive_invalidation(invalidation, event.sequence())?;
                 }
@@ -1116,6 +1196,7 @@ mod tests {
         InstanceFactStore {
             active: BTreeMap::new(),
             latest_observed: BTreeMap::new(),
+            input_boundaries: InputInvalidationBoundaries::default(),
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
