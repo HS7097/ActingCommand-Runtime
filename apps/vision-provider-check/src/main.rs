@@ -2,7 +2,7 @@
 
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, FastDeployPpocrArtifacts, OnnxExecutionProvider, OnnxRuntimeArtifacts,
-    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionProviderArtifactManifest,
+    VisionFfiError, VisionFfiResult, VisionProviderArtifactManifest,
 };
 mod ledger;
 use serde::{Deserialize, Serialize};

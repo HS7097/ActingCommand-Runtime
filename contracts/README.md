@@ -220,3 +220,6 @@ The historical Go interfaces were moved to:
 - https://github.com/HS7097/ActingCommand-Legacy-Runtime
 
 The UI must use the runtime API and must not own the runtime lifecycle. The execution layer must return structured observations and image references, not raw frame buffers.
+
+Provider construction and read-only checker semantics are defined in
+[Provider startup facts](provider-startup.md).
