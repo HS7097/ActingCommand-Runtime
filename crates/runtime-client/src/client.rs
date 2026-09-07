@@ -769,6 +769,20 @@ impl RuntimeClient {
         }
     }
 
+    /// Publishes the complete adapter observation through the Runtime fact owner.
+    pub fn publish_facts(
+        &self,
+        observation: actingcommand_contract::FactObservation,
+    ) -> RuntimeClientResult<EventId> {
+        match self.execute(
+            "publish_facts",
+            RuntimeOperation::PublishFacts { observation },
+        )? {
+            RuntimeResult::FactPublished { event_id } => Ok(event_id),
+            _ => Err(self.unexpected_result("publish_facts")),
+        }
+    }
+
     pub fn project_snapshot(
         &self,
         request: ProjectInterfaceRequest,

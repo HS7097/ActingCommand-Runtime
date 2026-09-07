@@ -1666,6 +1666,44 @@ fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
     );
     assert!(!format!("{operation:?}").contains(&record.source_snapshot_id));
 
+    // LIVE-FACT-POOL-v1: the bounded batch has the same v3 Agent/Adapter boundary.
+    let batch = RuntimeOperation::PublishFacts {
+        observation: crate::FactObservation {
+            records: vec![record.clone()],
+        },
+    };
+    for (actor, source, allowed) in [
+        (EventActor::Agent, EventSource::Adapter, true),
+        (EventActor::Cli, EventSource::Cli, false),
+        (EventActor::Agent, EventSource::Cli, false),
+        (EventActor::User, EventSource::Ui, false),
+    ] {
+        let ids = issuer();
+        assert_eq!(
+            RuntimeRequest::new(
+                ids.mint_request_id().unwrap(),
+                ids.mint_correlation_id().unwrap(),
+                None,
+                actor,
+                source,
+                1,
+                batch.clone()
+            )
+            .is_ok(),
+            allowed
+        );
+    }
+    let mut observation = crate::FactObservation {
+        records: vec![record.clone(), record.clone()],
+    };
+    assert!(observation.validate().is_err());
+    observation.records[1].key = "resource.current".to_owned();
+    observation.validate().expect("complete observation");
+    observation.records[1].observed_at_unix_ms += 1;
+    assert!(observation.validate().is_err());
+    observation.records.clear();
+    assert!(observation.validate().is_err());
+
     let ids = issuer();
     let request = RuntimeRequest::new(
         ids.mint_request_id().expect("request"),

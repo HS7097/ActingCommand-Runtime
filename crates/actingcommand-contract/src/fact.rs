@@ -14,6 +14,63 @@ const MAX_FACT_RECORD_FIELDS: usize = 64;
 const MAX_INVALIDATION_EVENTS: usize = 32;
 pub const MIN_FACT_TTL_MS: u64 = 1;
 pub const MAX_FACT_TTL_MS: u64 = 31_536_000_000;
+pub const MAX_FACT_OBSERVATION_BYTES: usize = 512 * 1024;
+
+/// One adapter observation, committed as one durable fact event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactObservation {
+    pub records: Vec<FactRecord>,
+}
+
+impl FactObservation {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        validate_fact_observation(self.records.iter())?;
+        if serde_json::to_vec(self)
+            .map_err(|_| SanitizationError::new("invalid_fact_observation", "records"))?
+            .len()
+            > MAX_FACT_OBSERVATION_BYTES
+        {
+            return Err(SanitizationError::new(
+                "fact_observation_too_large",
+                "records",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_fact_observation<'a>(
+    records: impl Iterator<Item = &'a FactRecord>,
+) -> Result<(), SanitizationError> {
+    let mut records = records.peekable();
+    let first = records
+        .peek()
+        .copied()
+        .ok_or_else(|| SanitizationError::new("empty_fact_observation", "records"))?;
+    let mut keys = BTreeSet::new();
+    for record in records {
+        record.validate()?;
+        if !keys.insert(&record.key)
+            || keys.len() > MAX_FACT_RECORDS
+            || record.scope != first.scope
+            || record.source_snapshot_id != first.source_snapshot_id
+            || record.observed_at_unix_ms != first.observed_at_unix_ms
+            || record.expires_at_unix_ms != first.expires_at_unix_ms
+            || record.ttl_policy != first.ttl_policy
+            || record.source_detector != first.source_detector
+            || record.resource_bundle_hash != first.resource_bundle_hash
+            || record.schema_version != first.schema_version
+            || record.invalidate_on != first.invalidate_on
+        {
+            return Err(SanitizationError::new(
+                "inconsistent_fact_observation",
+                "records",
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Selects the ownership and sharing boundary for a fact.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

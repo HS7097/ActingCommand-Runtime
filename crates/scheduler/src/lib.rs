@@ -129,6 +129,7 @@ pub struct PreparedLease {
     connection_id: ConnectionId,
     acquire_request_id: RequestId,
     priority: LeasePriority,
+    resource_close_only: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -180,6 +181,7 @@ pub enum SchedulerError {
     QueueSequenceOverflow,
     TransferNotSafe,
     DestructiveStateMismatch,
+    ResourceCloseOnly,
 }
 
 impl SchedulerError {
@@ -208,6 +210,7 @@ impl SchedulerError {
             Self::QueueSequenceOverflow => "lease_queue_sequence_overflow",
             Self::TransferNotSafe => "lease_transfer_not_safe",
             Self::DestructiveStateMismatch => "destructive_state_mismatch",
+            Self::ResourceCloseOnly => "resource_close_only",
         }
     }
 
@@ -280,7 +283,7 @@ impl SchedulerError {
             Self::QueueSequenceOverflow => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeFatal, true)
             }
-            Self::TransferNotSafe | Self::DestructiveStateMismatch => {
+            Self::TransferNotSafe | Self::DestructiveStateMismatch | Self::ResourceCloseOnly => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::TransferNotSafe, false)
             }
         }
@@ -299,6 +302,7 @@ impl Error for SchedulerError {}
 struct LeaseEntry {
     token: LeaseToken,
     connection_id: ConnectionId,
+    resource_close_only: bool,
     acquire_request_id: RequestId,
     last_renew: Option<RenewRecord>,
     priority: LeasePriority,
@@ -705,6 +709,36 @@ impl SeedScheduler {
         )
     }
 
+    /// Prepares an exclusive current lease that permits resource retirement only.
+    pub fn prepare_resource_close(
+        &mut self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        holder_id: HolderId,
+        connection_id: ConnectionId,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeasePreparation> {
+        if self
+            .instances
+            .get(&instance_id)
+            .is_some_and(|state| !state.queue.is_empty())
+        {
+            return Err(SchedulerError::TransferNotSafe);
+        }
+        let mut preparation = self.prepare_acquire(
+            request_id,
+            instance_id,
+            holder_id,
+            connection_id,
+            now_monotonic_ms,
+        )?;
+        match &mut preparation {
+            LeasePreparation::New(prepared) => prepared.resource_close_only = true,
+            LeasePreparation::Existing(_) => return Err(SchedulerError::ResourceCloseOnly),
+        }
+        Ok(preparation)
+    }
+
     fn prepare_acquire_with_policy(
         &mut self,
         request_id: RequestId,
@@ -759,6 +793,7 @@ impl SeedScheduler {
             connection_id,
             acquire_request_id: request_id,
             priority: policy.priority,
+            resource_close_only: false,
         }))
     }
 
@@ -799,6 +834,7 @@ impl SeedScheduler {
         state.lease = Some(LeaseEntry {
             token: token.clone(),
             connection_id: prepared.connection_id,
+            resource_close_only: prepared.resource_close_only,
             acquire_request_id: prepared.acquire_request_id,
             last_renew: None,
             priority: prepared.priority,
@@ -1096,7 +1132,7 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<()> {
-        self.validate_write(token, connection_id, now_monotonic_ms)?;
+        self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
         let state = self
             .instances
             .get_mut(&token.instance_id())
@@ -1229,6 +1265,7 @@ impl SeedScheduler {
         state.lease = Some(LeaseEntry {
             token: token.clone(),
             connection_id: queued.connection_id,
+            resource_close_only: false,
             acquire_request_id: queued.request_id,
             last_renew: None,
             priority: queued.priority,
@@ -1372,6 +1409,19 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<()> {
+        let lease = self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
+        if lease.resource_close_only {
+            return Err(SchedulerError::ResourceCloseOnly);
+        }
+        Ok(())
+    }
+
+    fn validate_current_lease(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<&LeaseEntry> {
         self.validate_epoch(token)?;
         if let Some(state) = self.instances.get(&token.instance_id())
             && state.cooldown_until_monotonic_ms > now_monotonic_ms
@@ -1391,7 +1441,8 @@ impl SeedScheduler {
             });
         }
         let lease = state.lease.as_ref().ok_or(SchedulerError::LeaseMissing)?;
-        validate_active_lease(lease, token, connection_id, now_monotonic_ms)
+        validate_active_lease(lease, token, connection_id, now_monotonic_ms)?;
+        Ok(lease)
     }
 
     pub fn due_tokens(&self, now_monotonic_ms: u64) -> Vec<LeaseToken> {

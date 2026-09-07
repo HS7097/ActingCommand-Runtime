@@ -2361,6 +2361,9 @@ pub enum RuntimeOperation {
     PublishFact {
         record: FactRecord,
     },
+    PublishFacts {
+        observation: crate::FactObservation,
+    },
     QueryEvents {
         query: EventQuery,
         profile: ProjectionProfile,
@@ -2520,6 +2523,9 @@ impl RuntimeOperation {
             Self::PublishFact { record } => record
                 .validate()
                 .map_err(|error| RuntimeContractError::new(error.code())),
+            Self::PublishFacts { observation } => observation
+                .validate()
+                .map_err(|error| RuntimeContractError::new(error.code())),
             Self::AuthenticateGovernance { capability } => {
                 if !(MIN_GOVERNANCE_CAPABILITY_BYTES..=MAX_GOVERNANCE_CAPABILITY_BYTES)
                     .contains(&capability.len())
@@ -2673,6 +2679,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
+            Self::PublishFacts { .. } => "RuntimeOperation::PublishFacts(<typed-observation>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
             Self::RegisterDiagnosticSignature { .. } => {
@@ -2827,6 +2834,7 @@ impl RuntimeRequest {
                 | RuntimeOperation::AgentSessionStatus { .. }
                 | RuntimeOperation::RecordAgentResponse { .. }
                 | RuntimeOperation::PublishFact { .. }
+                | RuntimeOperation::PublishFacts { .. }
                 | RuntimeOperation::ProjectPolicyInputIdentity { .. }
                 | RuntimeOperation::PrepareStrategicReport { .. }
                 | RuntimeOperation::ProjectPolicyForward { .. }
