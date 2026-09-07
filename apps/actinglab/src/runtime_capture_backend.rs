@@ -94,11 +94,12 @@ pub(super) fn open_runtime_capture(
     ))
     .map_err(|error| LabError::device(error.to_string()))?;
     let mut backend = RuntimeObservationCaptureBackend {
-        client,
+        client: Some(client),
         endpoint,
         requested: request.config.requested,
         observation: request.observation,
         pending_frame: None,
+        close_result: None,
     };
     // The Lab port requires truthful backend diagnostics at open time, so acquire the first
     // Runtime-owned observation once and return that same frame on the first capture call.
@@ -114,11 +115,12 @@ pub(super) fn open_runtime_capture(
 }
 
 struct RuntimeObservationCaptureBackend {
-    client: RuntimeClient,
+    client: Option<RuntimeClient>,
     endpoint: RuntimeCaptureEndpoint,
     requested: CaptureBackendChoice,
     observation: Option<CaptureBackendObservation>,
     pending_frame: Option<Frame>,
+    close_result: Option<DeviceResult<actingcommand_device::DeviceResourceCloseOutcome>>,
 }
 
 impl CaptureBackend for RuntimeObservationCaptureBackend {
@@ -131,12 +133,30 @@ impl CaptureBackend for RuntimeObservationCaptureBackend {
         self.publish_report(frame.backend_name, started.elapsed().as_millis())?;
         Ok(frame)
     }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
+        let resource_count = u16::from(self.client.take().is_some())
+            .saturating_add(u16::from(self.pending_frame.take().is_some()));
+        let result = Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            resource_count,
+        ));
+        self.close_result = Some(result.clone());
+        result
+    }
 }
 
 impl RuntimeObservationCaptureBackend {
     fn capture_runtime_frame(&self) -> DeviceResult<Frame> {
         let output = self
             .client
+            .as_ref()
+            .ok_or_else(|| DeviceError::fatal("Runtime capture proxy is closed"))?
             .observe_readonly(&self.endpoint.instance_alias)
             .map_err(|error| DeviceError::fatal(error.to_string()))?;
         let observation = match output.receipt().result() {
@@ -233,6 +253,15 @@ mod tests {
                 PixelFormat::Rgb8,
                 CaptureBackendName::NemuIpc,
             )
+        }
+
+        fn close_once(
+            &mut self,
+            _authority: actingcommand_device::DeviceCloseAuthority,
+        ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+            Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                0,
+            ))
         }
     }
 

@@ -427,7 +427,7 @@ fn c6_actinglab_does_not_construct_live_device_backends() {
         "ActingLab input adapter must remain a Runtime proxy without provider authority"
     );
     assert!(
-        capture_production.contains("client: RuntimeClient")
+        capture_production.contains("client: Option<RuntimeClient>")
             && capture_production.contains("observe_readonly")
             && !capture_production.contains("ExecutionBackendProvider"),
         "ActingLab capture adapter must consume Runtime observations without provider authority"

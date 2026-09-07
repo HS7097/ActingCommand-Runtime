@@ -3,8 +3,8 @@
 use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
 use crate::{
-    DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceInfo, DeviceResult, DeviceTarget,
-    HandshakeInfo, InputBackend,
+    DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceInfo, DeviceResourceCloseOutcome,
+    DeviceResourceQuiescence, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
 };
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TOUCH_ID: i32 = 0;
 const DEFAULT_PRESSURE: i32 = 50;
@@ -67,7 +67,9 @@ pub struct MinitouchBackend {
     coordinate_mapper: Option<MinitouchCoordinateMapper>,
     stderr_text: Arc<Mutex<String>>,
     stderr_thread: Option<JoinHandle<()>>,
+    handshake_thread: Mutex<Option<JoinHandle<()>>>,
     closed: bool,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl MinitouchBackend {
@@ -88,7 +90,9 @@ impl MinitouchBackend {
             coordinate_mapper: None,
             stderr_text: Arc::new(Mutex::new(String::new())),
             stderr_thread: None,
+            handshake_thread: Mutex::new(None),
             closed: true,
+            close_result: Some(Ok(DeviceResourceCloseOutcome::confirmed(0))),
         }
     }
 
@@ -142,7 +146,7 @@ impl MinitouchBackend {
             return Err(DeviceError::fatal("minitouch process is already started"));
         }
 
-        let mut child = Command::new(&self.adb_config.adb_path)
+        let child = Command::new(&self.adb_config.adb_path)
             .args([
                 "-s",
                 &self.serial,
@@ -161,99 +165,100 @@ impl MinitouchBackend {
                     )
             })?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            DeviceError::transient("failed to open minitouch stdout").with_diagnostic(
-                DeviceErrorCategory::BackendLaunch,
-                "minitouch.process.stdout_open",
-            )
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            DeviceError::transient("failed to open minitouch stderr").with_diagnostic(
-                DeviceErrorCategory::BackendLaunch,
-                "minitouch.process.stderr_open",
-            )
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            DeviceError::transient("failed to open minitouch stdin").with_diagnostic(
-                DeviceErrorCategory::BackendLaunch,
-                "minitouch.process.stdin_open",
-            )
-        })?;
-
-        self.stderr_text = Arc::new(Mutex::new(String::new()));
-        self.stderr_thread = Some(spawn_minitouch_stderr_reader(
-            stderr,
-            Arc::clone(&self.stderr_text),
-        ));
-
-        let handshake = match self.read_handshake(stdout, &mut child) {
-            Ok(handshake) => handshake,
-            Err(err) => {
-                stop_child(&mut child, self.minitouch_config.shutdown_timeout);
-                let join_result = self.join_stderr_thread();
-                return combine_operation_and_close(Err(err), join_result);
-            }
-        };
-        if let Err(err) = validate_default_pressure(
-            self.minitouch_config.default_pressure,
-            handshake.max_pressure,
-        ) {
-            stop_child(&mut child, self.minitouch_config.shutdown_timeout);
-            let join_result = self.join_stderr_thread();
-            return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
-        }
-        let screen_bounds = match screen_bounds_from_device(device) {
-            Ok(bounds) => bounds,
-            Err(err) => {
-                stop_child(&mut child, self.minitouch_config.shutdown_timeout);
-                let join_result = self.join_stderr_thread();
-                return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
-            }
-        };
-        self.coordinate_mapper = Some(MinitouchCoordinateMapper::new(screen_bounds, &handshake));
         self.child = Some(child);
-        self.stdin = Some(stdin);
-        self.handshake_info = Some(handshake);
         self.closed = false;
-        Ok(())
+        self.close_result = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let child = self.child.as_mut().expect("child acquisition recorded");
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| DeviceError::transient("failed to open minitouch stdout"))?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| DeviceError::transient("failed to open minitouch stderr"))?;
+            self.stdin = Some(
+                child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| DeviceError::transient("failed to open minitouch stdin"))?,
+            );
+            self.stderr_text = Arc::new(Mutex::new(String::new()));
+            self.stderr_thread = Some(spawn_minitouch_stderr_reader(
+                stderr,
+                Arc::clone(&self.stderr_text),
+            ));
+            let handshake = self.receive_handshake(stdout)?;
+            validate_default_pressure(
+                self.minitouch_config.default_pressure,
+                handshake.max_pressure,
+            )
+            .map_err(|error| self.with_stderr(error))?;
+            let screen_bounds =
+                screen_bounds_from_device(device).map_err(|error| self.with_stderr(error))?;
+            self.coordinate_mapper =
+                Some(MinitouchCoordinateMapper::new(screen_bounds, &handshake));
+            self.handshake_info = Some(handshake);
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(DeviceError::fatal("minitouch acquisition panicked")));
+        match result {
+            Ok(()) => Ok(()),
+            Err(primary) => match self.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(_) => Err(primary),
+                Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
+            },
+        }
     }
-
     pub fn read_handshake<R: Read + Send + 'static>(
         &self,
         stdout: R,
-        child: &mut Child,
+        _child: &mut Child,
+    ) -> DeviceResult<HandshakeInfo> {
+        self.receive_handshake(stdout)
+    }
+
+    fn receive_handshake<R: Read + Send + 'static>(
+        &self,
+        stdout: R,
     ) -> DeviceResult<HandshakeInfo> {
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let _ = tx.send(parse_minitouch_handshake(&mut reader));
-        });
+        let mut owned = self
+            .handshake_thread
+            .lock()
+            .map_err(|_| DeviceError::fatal("handshake reader ownership poisoned"))?;
+        *owned = Some(
+            thread::Builder::new()
+                .spawn(move || {
+                    let mut reader = BufReader::new(stdout);
+                    let _ = tx.send(parse_minitouch_handshake(&mut reader));
+                })
+                .map_err(|error| {
+                    DeviceError::fatal(format!("failed to start handshake reader: {error}"))
+                })?,
+        );
+        drop(owned);
 
         match rx.recv_timeout(self.minitouch_config.handshake_timeout) {
             Ok(result) => result.map_err(|err| self.with_stderr(err)),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                stop_child(child, self.minitouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!(
-                        "timed out after {:?} waiting for minitouch handshake",
-                        self.minitouch_config.handshake_timeout
-                    ))
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self.with_stderr(
+                DeviceError::transient(format!(
+                    "timed out after {:?} waiting for minitouch handshake",
+                    self.minitouch_config.handshake_timeout
+                ))
+                .with_diagnostic(
+                    DeviceErrorCategory::Handshake,
+                    "minitouch.handshake.timeout",
+                ),
+            )),
+            Err(err) => Err(self.with_stderr(
+                DeviceError::transient(format!("failed to receive minitouch handshake: {err}"))
                     .with_diagnostic(
-                        DeviceErrorCategory::Handshake,
-                        "minitouch.handshake.timeout",
+                        DeviceErrorCategory::Response,
+                        "minitouch.handshake.channel_receive",
                     ),
-                ))
-            }
-            Err(err) => {
-                stop_child(child, self.minitouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!("failed to receive minitouch handshake: {err}"))
-                        .with_diagnostic(
-                            DeviceErrorCategory::Response,
-                            "minitouch.handshake.channel_receive",
-                        ),
-                ))
-            }
+            )),
         }
     }
 
@@ -349,29 +354,88 @@ impl MinitouchBackend {
         }
     }
 
-    fn join_stderr_thread(&mut self) -> DeviceResult<()> {
-        if let Some(thread) = self.stderr_thread.take() {
-            thread.join().map_err(|_| {
-                DeviceError::fatal("minitouch stderr reader thread panicked during shutdown")
-            })?;
+    fn join_stderr_thread(&mut self, deadline: Instant) -> DeviceResult<()> {
+        let handshake = self.handshake_thread.get_mut().map_err(|_| {
+            DeviceError::fatal("handshake reader ownership poisoned")
+                .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)
+        })?;
+        let mut failure: Option<DeviceError> = None;
+        for (slot, stream) in [
+            (&mut self.stderr_thread, "stderr"),
+            (handshake, "handshake"),
+        ] {
+            let Some(handle) = slot.as_ref() else {
+                continue;
+            };
+            while !handle.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let error = if !handle.is_finished() {
+                Some(
+                    DeviceError::fatal(format!(
+                        "minitouch {stream} reader remains open at shutdown deadline"
+                    ))
+                    .with_resource_close_cause(
+                        crate::DeviceResourceKind::PipeReader,
+                        crate::DeviceResourceClosePhase::WorkerJoin,
+                        "minitouch",
+                        None,
+                        None,
+                        DeviceResourceQuiescence::Unconfirmed,
+                        1,
+                    ),
+                )
+            } else {
+                slot.take()
+                    .expect("reader ownership checked")
+                    .join()
+                    .err()
+                    .map(|_| {
+                        DeviceError::fatal(format!(
+                            "minitouch {stream} reader panicked during shutdown"
+                        ))
+                        .with_resource_close_cause(
+                            crate::DeviceResourceKind::PipeReader,
+                            crate::DeviceResourceClosePhase::WorkerJoin,
+                            "minitouch",
+                            None,
+                            None,
+                            DeviceResourceQuiescence::Confirmed,
+                            1,
+                        )
+                    })
+            };
+            if let Some(error) = error {
+                failure = Some(match failure {
+                    Some(primary) => primary.merge_resource_cleanup(error),
+                    None => error,
+                });
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
-
     fn shutdown(&mut self) -> [Option<DeviceError>; 2] {
         let mut errors = [None, None];
+        let deadline = Instant::now() + self.minitouch_config.shutdown_timeout;
         self.stdin.take();
 
-        if let Some(mut child) = self.child.take()
-            && !stop_child(&mut child, self.minitouch_config.shutdown_timeout)
-        {
-            errors[0] = Some(DeviceError::fatal(format!(
-                "minitouch process did not exit within {:?}",
-                self.minitouch_config.shutdown_timeout
-            )));
+        if let Some(mut child) = self.child.take() {
+            match stop_child(
+                &mut child,
+                self.minitouch_config.shutdown_timeout,
+                "minitouch",
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                        self.child = Some(child);
+                    }
+                    errors[0] = Some(error);
+                }
+            }
         }
 
-        if let Err(err) = self.join_stderr_thread() {
+        if let Err(err) = self.join_stderr_thread(deadline) {
             errors[1] = Some(err);
         }
 
@@ -488,12 +552,32 @@ impl InputBackend for MinitouchBackend {
         self.write_and_flush("r\nc\n")
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
         if self.closed {
-            return Ok(());
+            return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
 
-        let reset = self.reset().err();
+        let reset = match authority {
+            DeviceCloseAuthority::FencedDeviceWrite => self.reset().err(),
+            DeviceCloseAuthority::LocalOnly => Some(
+                DeviceError::fatal("minitouch device reset requires current lease admission")
+                    .with_resource_close_cause(
+                        crate::DeviceResourceKind::InputBackend,
+                        crate::DeviceResourceClosePhase::Close,
+                        "minitouch",
+                        None,
+                        None,
+                        DeviceResourceQuiescence::Unconfirmed,
+                        1,
+                    ),
+            ),
+        };
         let [child_stop, stderr_join] = self.shutdown();
 
         let stderr = self
@@ -505,21 +589,42 @@ impl InputBackend for MinitouchBackend {
             .then(|| DeviceError::fatal(format!("minitouch stderr:\n{stderr}")));
 
         self.closed = true;
-        DeviceError::aggregate_close(
+        let result = DeviceError::aggregate_close(
             "minitouch",
             [reset, child_stop, stderr_join, unexpected_stderr],
         )
+        .map(|()| DeviceResourceCloseOutcome::confirmed(3));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
 impl Drop for MinitouchBackend {
     fn drop(&mut self) {
-        if !self.closed {
-            let _ = self.shutdown();
+        let first_close = self.close_result.is_none();
+        let result = self.close_once(DeviceCloseAuthority::LocalOnly);
+        if let Err(error) = result {
+            if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                if let Some(child) = self.child.take() {
+                    std::mem::forget(child);
+                }
+                if let Some(reader) = self.stderr_thread.take() {
+                    std::mem::forget(reader);
+                }
+                let slot = self
+                    .handshake_thread
+                    .get_mut()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(reader) = slot.take() {
+                    std::mem::forget(reader);
+                }
+            }
+            if first_close && !thread::panicking() {
+                panic!("{error}");
+            }
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ScreenBounds {
     width: i32,
@@ -831,20 +936,6 @@ fn spawn_minitouch_stderr_reader<R: Read + Send + 'static>(
             *guard = text;
         }
     })
-}
-
-fn combine_operation_and_close(
-    operation: DeviceResult<()>,
-    close: DeviceResult<()>,
-) -> DeviceResult<()> {
-    match (operation, close) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(err), Ok(())) | (Ok(()), Err(err)) => Err(err),
-        (Err(operation_err), Err(close_err)) => {
-            let message = format!("{operation_err}; close failed: {close_err}");
-            Err(operation_err.with_severity_and_message(DeviceErrorSeverity::Fatal, message))
-        }
-    }
 }
 
 #[cfg(test)]

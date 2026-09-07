@@ -3000,6 +3000,14 @@ impl CaptureBackend for PlanningSeedCapture {
             CaptureBackendName::AdbScreencap,
         )
     }
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
+    }
 }
 
 impl ExecutionBackendProvider for PlanningSeedProvider {

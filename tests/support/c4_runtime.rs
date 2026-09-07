@@ -2,7 +2,8 @@
 
 use actingcommand_contract::{IdentifierIssuer, InstanceId, RUNTIME_INFO_FILE, RuntimeInfo};
 use actingcommand_device::{
-    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
+    CaptureBackend, CaptureBackendName, DeviceCloseAuthority, DeviceError,
+    DeviceResourceCloseOutcome, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
@@ -50,6 +51,17 @@ impl CaptureBackend for FileCaptureBackend {
         let png = fs::read(&self.frame_path)
             .map_err(|error| DeviceError::fatal(format!("read sealed frame: {error}")))?;
         Frame::from_png(png, CaptureBackendName::AdbScreencap)
+    }
+
+    fn close_once(
+        &mut self,
+        _authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if !self.closed {
+            self.closed = true;
+            record_event(&self.events_path, "capture_close")?;
+        }
+        Ok(DeviceResourceCloseOutcome::confirmed(1))
     }
 }
 
@@ -99,12 +111,16 @@ impl InputBackend for FileBackend {
         self.record("reset")
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
         if self.closed {
-            return Ok(());
+            return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
         self.closed = true;
-        self.record("close")
+        self.record("close")?;
+        Ok(DeviceResourceCloseOutcome::confirmed(1))
     }
 }
 

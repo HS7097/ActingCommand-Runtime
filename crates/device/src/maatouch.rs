@@ -2,14 +2,17 @@
 
 use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
-use crate::{DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceResult, InputBackend};
+use crate::{
+    DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSeverity,
+    DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, InputBackend,
+};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TOUCH_ID: i32 = 0;
 const DEFAULT_PRESSURE: i32 = 50;
@@ -200,7 +203,9 @@ pub struct MaaTouchBackend {
     handshake_info: Option<HandshakeInfo>,
     stderr_text: Arc<Mutex<String>>,
     stderr_thread: Option<JoinHandle<()>>,
+    handshake_thread: Mutex<Option<JoinHandle<()>>>,
     closed: bool,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl MaaTouchBackend {
@@ -220,7 +225,9 @@ impl MaaTouchBackend {
             handshake_info: None,
             stderr_text: Arc::new(Mutex::new(String::new())),
             stderr_thread: None,
+            handshake_thread: Mutex::new(None),
             closed: true,
+            close_result: Some(Ok(DeviceResourceCloseOutcome::confirmed(0))),
         }
     }
 
@@ -275,7 +282,7 @@ impl MaaTouchBackend {
             return Err(DeviceError::fatal("MaaTouch process is already started"));
         }
 
-        let mut child = Command::new(&self.adb_config.adb_path)
+        let child = Command::new(&self.adb_config.adb_path)
             .args([
                 "-s",
                 &self.serial,
@@ -294,87 +301,91 @@ impl MaaTouchBackend {
                     .with_diagnostic(DeviceErrorCategory::BackendLaunch, "maatouch.process.spawn")
             })?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            DeviceError::transient("failed to open MaaTouch stdout").with_diagnostic(
-                DeviceErrorCategory::BackendLaunch,
-                "maatouch.process.stdout_open",
-            )
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            DeviceError::transient("failed to open MaaTouch stderr").with_diagnostic(
-                DeviceErrorCategory::BackendLaunch,
-                "maatouch.process.stderr_open",
-            )
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            DeviceError::transient("failed to open MaaTouch stdin").with_diagnostic(
-                DeviceErrorCategory::BackendLaunch,
-                "maatouch.process.stdin_open",
-            )
-        })?;
-
-        self.stderr_text = Arc::new(Mutex::new(String::new()));
-        self.stderr_thread = Some(spawn_stderr_reader(stderr, Arc::clone(&self.stderr_text)));
-
-        let handshake = match self.read_handshake(stdout, &mut child) {
-            Ok(handshake) => handshake,
-            Err(err) => {
-                stop_child(&mut child, self.maatouch_config.shutdown_timeout);
-                let join_result = self.join_stderr_thread();
-                return combine_operation_and_close(Err(err), join_result);
-            }
-        };
-        if let Err(err) = validate_default_pressure(
-            self.maatouch_config.default_pressure,
-            handshake.max_pressure,
-        ) {
-            stop_child(&mut child, self.maatouch_config.shutdown_timeout);
-            let join_result = self.join_stderr_thread();
-            return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
-        }
         self.child = Some(child);
-        self.stdin = Some(stdin);
-        self.handshake_info = Some(handshake);
         self.closed = false;
-        Ok(())
-    }
+        self.close_result = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let child = self.child.as_mut().expect("child acquisition recorded");
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| DeviceError::transient("failed to open maatouch stdout"))?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| DeviceError::transient("failed to open maatouch stderr"))?;
+            self.stdin = Some(
+                child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| DeviceError::transient("failed to open maatouch stdin"))?,
+            );
+            self.stderr_text = Arc::new(Mutex::new(String::new()));
+            self.stderr_thread = Some(spawn_stderr_reader(stderr, Arc::clone(&self.stderr_text)));
+            let handshake = self.receive_handshake(stdout)?;
+            validate_default_pressure(
+                self.maatouch_config.default_pressure,
+                handshake.max_pressure,
+            )
+            .map_err(|error| self.with_stderr(error))?;
 
+            self.handshake_info = Some(handshake);
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(DeviceError::fatal("maatouch acquisition panicked")));
+        match result {
+            Ok(()) => Ok(()),
+            Err(primary) => match self.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(_) => Err(primary),
+                Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
+            },
+        }
+    }
     pub fn read_handshake<R: Read + Send + 'static>(
         &self,
         stdout: R,
-        child: &mut Child,
+        _child: &mut Child,
     ) -> DeviceResult<HandshakeInfo> {
-        // MaaTouch/minitouch emits its startup handshake on stdout. After that
-        // this backend only writes commands and does not expect stdout replies,
-        // so letting the handshake reader consume and close stdout is safe.
+        self.receive_handshake(stdout)
+    }
+
+    fn receive_handshake<R: Read + Send + 'static>(
+        &self,
+        stdout: R,
+    ) -> DeviceResult<HandshakeInfo> {
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let _ = tx.send(parse_handshake(&mut reader));
-        });
+        let mut owned = self
+            .handshake_thread
+            .lock()
+            .map_err(|_| DeviceError::fatal("handshake reader ownership poisoned"))?;
+        *owned = Some(
+            thread::Builder::new()
+                .spawn(move || {
+                    let mut reader = BufReader::new(stdout);
+                    let _ = tx.send(parse_handshake(&mut reader));
+                })
+                .map_err(|error| {
+                    DeviceError::fatal(format!("failed to start handshake reader: {error}"))
+                })?,
+        );
+        drop(owned);
 
         match rx.recv_timeout(self.maatouch_config.handshake_timeout) {
             Ok(result) => result.map_err(|err| self.with_stderr(err)),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                stop_child(child, self.maatouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!(
-                        "timed out after {:?} waiting for MaaTouch handshake",
-                        self.maatouch_config.handshake_timeout
-                    ))
-                    .with_diagnostic(DeviceErrorCategory::Handshake, "maatouch.handshake.timeout"),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self.with_stderr(
+                DeviceError::transient(format!(
+                    "timed out after {:?} waiting for MaaTouch handshake",
+                    self.maatouch_config.handshake_timeout
                 ))
-            }
-            Err(err) => {
-                stop_child(child, self.maatouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!("failed to receive MaaTouch handshake: {err}"))
-                        .with_diagnostic(
-                            DeviceErrorCategory::Response,
-                            "maatouch.handshake.channel_receive",
-                        ),
-                ))
-            }
+                .with_diagnostic(DeviceErrorCategory::Handshake, "maatouch.handshake.timeout"),
+            )),
+            Err(err) => Err(self.with_stderr(
+                DeviceError::transient(format!("failed to receive MaaTouch handshake: {err}"))
+                    .with_diagnostic(
+                        DeviceErrorCategory::Response,
+                        "maatouch.handshake.channel_receive",
+                    ),
+            )),
         }
     }
 
@@ -475,29 +486,88 @@ impl MaaTouchBackend {
         }
     }
 
-    fn join_stderr_thread(&mut self) -> DeviceResult<()> {
-        if let Some(thread) = self.stderr_thread.take() {
-            thread.join().map_err(|_| {
-                DeviceError::fatal("MaaTouch stderr reader thread panicked during shutdown")
-            })?;
+    fn join_stderr_thread(&mut self, deadline: Instant) -> DeviceResult<()> {
+        let handshake = self.handshake_thread.get_mut().map_err(|_| {
+            DeviceError::fatal("handshake reader ownership poisoned")
+                .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)
+        })?;
+        let mut failure: Option<DeviceError> = None;
+        for (slot, stream) in [
+            (&mut self.stderr_thread, "stderr"),
+            (handshake, "handshake"),
+        ] {
+            let Some(handle) = slot.as_ref() else {
+                continue;
+            };
+            while !handle.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let error = if !handle.is_finished() {
+                Some(
+                    DeviceError::fatal(format!(
+                        "maatouch {stream} reader remains open at shutdown deadline"
+                    ))
+                    .with_resource_close_cause(
+                        crate::DeviceResourceKind::PipeReader,
+                        crate::DeviceResourceClosePhase::WorkerJoin,
+                        "maatouch",
+                        None,
+                        None,
+                        DeviceResourceQuiescence::Unconfirmed,
+                        1,
+                    ),
+                )
+            } else {
+                slot.take()
+                    .expect("reader ownership checked")
+                    .join()
+                    .err()
+                    .map(|_| {
+                        DeviceError::fatal(format!(
+                            "maatouch {stream} reader panicked during shutdown"
+                        ))
+                        .with_resource_close_cause(
+                            crate::DeviceResourceKind::PipeReader,
+                            crate::DeviceResourceClosePhase::WorkerJoin,
+                            "maatouch",
+                            None,
+                            None,
+                            DeviceResourceQuiescence::Confirmed,
+                            1,
+                        )
+                    })
+            };
+            if let Some(error) = error {
+                failure = Some(match failure {
+                    Some(primary) => primary.merge_resource_cleanup(error),
+                    None => error,
+                });
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
-
     fn shutdown(&mut self) -> [Option<DeviceError>; 2] {
         let mut errors = [None, None];
+        let deadline = Instant::now() + self.maatouch_config.shutdown_timeout;
         self.stdin.take();
 
-        if let Some(mut child) = self.child.take()
-            && !stop_child(&mut child, self.maatouch_config.shutdown_timeout)
-        {
-            errors[0] = Some(DeviceError::fatal(format!(
-                "MaaTouch process did not exit within {:?}",
-                self.maatouch_config.shutdown_timeout
-            )));
+        if let Some(mut child) = self.child.take() {
+            match stop_child(
+                &mut child,
+                self.maatouch_config.shutdown_timeout,
+                "maatouch",
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                        self.child = Some(child);
+                    }
+                    errors[0] = Some(error);
+                }
+            }
         }
 
-        if let Err(err) = self.join_stderr_thread() {
+        if let Err(err) = self.join_stderr_thread(deadline) {
             errors[1] = Some(err);
         }
 
@@ -595,12 +665,32 @@ impl InputBackend for MaaTouchBackend {
         self.write_and_flush("r\nc\n")
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
         if self.closed {
-            return Ok(());
+            return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
 
-        let reset = self.reset().err();
+        let reset = match authority {
+            DeviceCloseAuthority::FencedDeviceWrite => self.reset().err(),
+            DeviceCloseAuthority::LocalOnly => Some(
+                DeviceError::fatal("MaaTouch device reset requires current lease admission")
+                    .with_resource_close_cause(
+                        crate::DeviceResourceKind::InputBackend,
+                        crate::DeviceResourceClosePhase::Close,
+                        "maatouch",
+                        None,
+                        None,
+                        DeviceResourceQuiescence::Unconfirmed,
+                        1,
+                    ),
+            ),
+        };
         let [child_stop, stderr_join] = self.shutdown();
 
         let stderr = self
@@ -612,21 +702,42 @@ impl InputBackend for MaaTouchBackend {
             .then(|| DeviceError::fatal(format!("MaaTouch stderr:\n{stderr}")));
 
         self.closed = true;
-        DeviceError::aggregate_close(
+        let result = DeviceError::aggregate_close(
             "maatouch",
             [reset, child_stop, stderr_join, unexpected_stderr],
         )
+        .map(|()| DeviceResourceCloseOutcome::confirmed(3));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
 impl Drop for MaaTouchBackend {
     fn drop(&mut self) {
-        if !self.closed {
-            let _ = self.shutdown();
+        let first_close = self.close_result.is_none();
+        let result = self.close_once(DeviceCloseAuthority::LocalOnly);
+        if let Err(error) = result {
+            if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                if let Some(child) = self.child.take() {
+                    std::mem::forget(child);
+                }
+                if let Some(reader) = self.stderr_thread.take() {
+                    std::mem::forget(reader);
+                }
+                let slot = self
+                    .handshake_thread
+                    .get_mut()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(reader) = slot.take() {
+                    std::mem::forget(reader);
+                }
+            }
+            if first_close && !thread::panicking() {
+                panic!("{error}");
+            }
         }
     }
 }
-
 /// Smoke-test helper for CLI probes; production callers should use `MaaTouchBackend` directly.
 pub fn validate_maatouch(
     config: &MaaTouchValidationConfig,
@@ -695,7 +806,9 @@ pub fn combine_operation_and_close(
         (Ok(()), Err(close)) => Err(close),
         (Err(operation), Err(close)) => {
             let message = format!("{operation}; additionally failed to close MaaTouch: {close}");
-            Err(operation.with_severity_and_message(DeviceErrorSeverity::Fatal, message))
+            Err(operation
+                .with_severity_and_message(DeviceErrorSeverity::Fatal, message)
+                .merge_resource_cleanup(close))
         }
     }
 }
@@ -900,6 +1013,94 @@ fn validate_maatouch_line_token<'a>(name: &str, value: &'a str) -> DeviceResult<
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    // Defect regressions D01/D07: PR298 review 5120590779, Workflow #257 C1B9 v16.
+    #[test]
+    fn c1b9_d01_local_only_close() {
+        let mut backend = MaaTouchBackend::new(
+            AdbConfig::default(),
+            DeviceTarget::default(),
+            MaaTouchConfig::default(),
+        );
+        backend.closed = false;
+        backend.close_result = None;
+        let first = backend
+            .close_once(DeviceCloseAuthority::LocalOnly)
+            .expect_err("no reset admission");
+        assert_eq!(
+            first.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Unconfirmed)
+        );
+        assert!(
+            first.close_causes()[0]
+                .detail
+                .contains("requires current lease admission")
+        );
+        let repeated = backend
+            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+            .expect_err("terminal close cannot be retried with another authority");
+        assert_eq!(first, repeated);
+    }
+
+    #[test]
+    fn c1b9_d07_reader_deadline() {
+        let mut backend = MaaTouchBackend::new(
+            AdbConfig::default(),
+            DeviceTarget::default(),
+            MaaTouchConfig::default(),
+        );
+        let (release, wait) = mpsc::channel();
+        backend.stderr_thread = Some(thread::spawn(move || {
+            wait.recv().expect("release reader");
+        }));
+        let error = backend
+            .join_stderr_thread(Instant::now())
+            .expect_err("unfinished reader");
+        assert_eq!(
+            error.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Unconfirmed)
+        );
+        assert!(backend.stderr_thread.is_some());
+        release.send(()).expect("release");
+        backend
+            .stderr_thread
+            .take()
+            .expect("retained handle")
+            .join()
+            .expect("reader exited");
+    }
+
+    // Defect regression D13: PR298 review 5120590779, Workflow #257 C1B9 v16.
+    #[test]
+    fn c1b9_d13_nested_close_causes() {
+        use crate::{DeviceResourceClosePhase, DeviceResourceKind};
+        let child = DeviceError::fatal("kill failed but exit subsequently confirmed")
+            .with_resource_close_cause(
+                DeviceResourceKind::ExternalChild,
+                DeviceResourceClosePhase::Kill,
+                "maatouch",
+                None,
+                None,
+                DeviceResourceQuiescence::Confirmed,
+                1,
+            );
+        let error = DeviceError::aggregate_close(
+            "maatouch",
+            [
+                None,
+                Some(child.clone()),
+                None,
+                Some(DeviceError::fatal("unexpected stderr after close")),
+            ],
+        )
+        .expect_err("confirmed errors stay errors");
+        assert_eq!(
+            error.resource_quiescence(),
+            Some(DeviceResourceQuiescence::Confirmed)
+        );
+        assert_eq!(error.resource_close_causes(), child.resource_close_causes());
+        assert_eq!(error.close_causes().len(), 2);
+    }
 
     #[test]
     fn device_close_failures_preserve_phase_causes() {

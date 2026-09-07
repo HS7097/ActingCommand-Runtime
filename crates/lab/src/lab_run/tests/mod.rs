@@ -59,8 +59,13 @@ impl InputBackend for NoopInputBackend {
         Ok(())
     }
 
-    fn close(&mut self) -> actingcommand_device::DeviceResult<()> {
-        Ok(())
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> actingcommand_device::DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
     }
 }
 

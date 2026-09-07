@@ -160,6 +160,127 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     old_restored.validate().expect("old record valid");
 }
 
+// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+#[test]
+fn resource_quiescence_causes_roundtrip_and_project() {
+    use crate::{
+        CleanupCauseSeverity, DiagnosticDetailDraft, EventPayload, LifecycleCauseDraft,
+        LifecycleFailurePhase, OwnerResourceDisposition, ProjectionPayload, ResourceQuiescence,
+        RuntimeLifecycleFailureDraft, RuntimePayload, RuntimeResourceClosePhase,
+        RuntimeResourceKind, Sensitivity,
+    };
+    let ids = issuer();
+    let epoch = *ids.mint_owner_epoch().expect("epoch").transport();
+    let instance = *ids.mint_instance_id().expect("instance").transport();
+    let lifecycle = RuntimeLifecycleFailureDraft::new(
+        epoch,
+        "runtime.lifecycle.resource_close",
+        "execution_kernel",
+        "resource_close_unconfirmed",
+    )
+    .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
+    .with_instance_id(Some(instance))
+    .with_cause(Some(
+        LifecycleCauseDraft::new(
+            LifecycleFailurePhase::ResourceClose,
+            "nemu_ipc",
+            "resource_close_unconfirmed",
+            CleanupCauseSeverity::Fatal,
+        )
+        .with_native_detail(crate::LifecycleNativeDetail::new(
+            "first close detail",
+            false,
+        ))
+        .with_last_native_detail(Some(crate::LifecycleNativeDetail::new(
+            "last close detail",
+            false,
+        )))
+        .with_resource_context(
+            RuntimeResourceKind::ProviderConnection,
+            RuntimeResourceClosePhase::DisconnectCall,
+            Some(1),
+            Some(7),
+            ResourceQuiescence::Unconfirmed,
+            OwnerResourceDisposition::Unconfirmed,
+            3,
+            0,
+        ),
+    ));
+    let draft = EventDraft::new(
+        ids.mint_event_id().expect("event"),
+        1,
+        EventSeverity::Fatal,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        RuntimePayloadDraft::failed_with_lifecycle(
+            crate::DiagnosticCode::RuntimeDiagnostic,
+            EffectDisposition::Indeterminate,
+            DiagnosticDetailDraft::new(
+                "resource_quiescence",
+                "runtime.lifecycle.resource_close",
+                "execution_kernel",
+                "close_resources",
+                "resource close unconfirmed",
+                Sensitivity::Internal,
+            ),
+            lifecycle,
+            AuditInput::new(),
+        )
+        .into(),
+    )
+    .sanitize(&RejectSecrets)
+    .expect("valid resource quiescence");
+    let wire = serde_json::to_string(draft.payload()).expect("wire");
+    let restored: EventPayload = serde_json::from_str(&wire).expect("round trip");
+    restored.validate().expect("validated round trip");
+    let EventPayload::Runtime(RuntimePayload::Failed(outcome)) = &restored else {
+        panic!("runtime failure payload");
+    };
+    let cause = outcome
+        .lifecycle_failure()
+        .and_then(|failure| failure.cause())
+        .expect("resource cause");
+    assert_eq!(
+        cause.resource(),
+        Some(RuntimeResourceKind::ProviderConnection)
+    );
+    assert_eq!(
+        cause.resource_phase(),
+        Some(RuntimeResourceClosePhase::DisconnectCall)
+    );
+    assert_eq!(cause.candidate_index(), Some(1));
+    assert_eq!(cause.native_instance(), Some(7));
+    assert_eq!(cause.quiescence(), Some(ResourceQuiescence::Unconfirmed));
+    assert_eq!(
+        cause.owner_disposition(),
+        Some(OwnerResourceDisposition::Unconfirmed)
+    );
+    assert_eq!(cause.observation_count(), Some(3));
+    assert_eq!(cause.dropped_count(), Some(0));
+    assert!(cause.last_native_detail().is_some());
+
+    let full = serde_json::to_string(&ProjectionPayload::Full(Box::new(restored.clone())))
+        .expect("full projection");
+    let public = serde_json::to_string(&restored.public_projection()).expect("public projection");
+    assert!(full.contains("native_instance"));
+    assert!(!public.contains("native_instance"));
+    assert!(full.contains("last close detail"));
+    assert!(!public.contains("last close detail"));
+    for categorical in [
+        "provider_connection",
+        "disconnect_call",
+        "unconfirmed",
+        "observation_count",
+        "dropped_count",
+    ] {
+        assert!(public.contains(categorical), "missing {categorical}");
+    }
+}
+
 impl SecretFingerprinter for RejectSecrets {
     fn fingerprint(
         &self,

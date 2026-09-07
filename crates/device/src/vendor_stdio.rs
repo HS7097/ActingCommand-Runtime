@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::DeviceResult;
+use crate::{
+    DeviceResourceCloseOutcome, DeviceResourceClosePhase, DeviceResourceKind,
+    DeviceResourceQuiescence, DeviceResult,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,13 +21,16 @@ impl VendorStdioCapture {
 pub fn vendor_stdio_session_diagnostic() -> DeviceResult<VendorStdioCapture> {
     let mut session = VendorStdioSession::start()?;
     write_vendor_stdio_diagnostic_noise()?;
-    session.snapshot()
+    let capture = session.snapshot()?;
+    session.finish()?;
+    Ok(capture)
 }
 
 #[cfg(windows)]
 pub(crate) struct VendorStdioSession {
-    _lock: std::sync::MutexGuard<'static, ()>,
+    lock: Option<std::sync::MutexGuard<'static, ()>>,
     guard: Option<imp::RedirectGuard>,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 #[cfg(windows)]
@@ -33,10 +39,19 @@ impl VendorStdioSession {
         let lock = stdio_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let guard = imp::RedirectGuard::new()?;
+        let guard = match imp::RedirectGuard::new() {
+            Ok(guard) => guard,
+            Err(error) => {
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(lock);
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
-            _lock: lock,
+            lock: Some(lock),
             guard: Some(guard),
+            close_result: None,
         })
     }
 
@@ -45,6 +60,45 @@ impl VendorStdioSession {
             .as_mut()
             .ok_or_else(|| crate::DeviceError::fatal("vendor stdio session is closed"))?
             .snapshot()
+    }
+
+    pub(crate) fn finish(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
+        let Some(mut guard) = self.guard.take() else {
+            let result = Ok(DeviceResourceCloseOutcome::confirmed(0));
+            self.close_result = Some(result.clone());
+            return result;
+        };
+        let result = guard
+            .finish()
+            .map(|_| DeviceResourceCloseOutcome::confirmed(6))
+            .map_err(|error| {
+                if error.resource_close_causes().is_empty() {
+                    error.with_resource_close_cause(
+                        DeviceResourceKind::VendorStdio,
+                        DeviceResourceClosePhase::Close,
+                        "nemu_vendor_stdio",
+                        None,
+                        None,
+                        DeviceResourceQuiescence::Unconfirmed,
+                        6,
+                    )
+                } else {
+                    error
+                }
+            });
+        if result.as_ref().is_err_and(|error| {
+            error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+        }) {
+            std::mem::forget(guard);
+            if let Some(lock) = self.lock.take() {
+                std::mem::forget(lock);
+            }
+        }
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
@@ -57,23 +111,37 @@ fn write_vendor_stdio_diagnostic_noise() -> DeviceResult<()> {
 #[cfg(windows)]
 impl Drop for VendorStdioSession {
     fn drop(&mut self) {
-        if let Some(mut guard) = self.guard.take() {
-            let _ = guard.finish();
+        if self.close_result.is_none()
+            && let Err(error) = self.finish()
+            && !std::thread::panicking()
+        {
+            panic!("{error}");
         }
     }
 }
 
 #[cfg(not(windows))]
-pub(crate) struct VendorStdioSession;
+pub(crate) struct VendorStdioSession {
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
+}
 
 #[cfg(not(windows))]
 impl VendorStdioSession {
     pub(crate) fn start() -> DeviceResult<Self> {
-        Ok(Self)
+        Ok(Self { close_result: None })
     }
 
     pub(crate) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
         Ok(VendorStdioCapture::default())
+    }
+
+    pub(crate) fn finish(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
+        let result = Ok(DeviceResourceCloseOutcome::confirmed(0));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
@@ -91,7 +159,10 @@ fn stdio_lock() -> &'static std::sync::Mutex<()> {
 #[cfg(windows)]
 mod imp {
     use super::VendorStdioCapture;
-    use crate::{DeviceError, DeviceResult};
+    use crate::{
+        DeviceError, DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence,
+        DeviceResult,
+    };
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
@@ -139,6 +210,12 @@ mod imp {
         stdout_offset: i32,
         stderr_offset: i32,
         restored: bool,
+        stdout_crt_redirected: bool,
+        stderr_crt_redirected: bool,
+        stdout_win32_redirected: bool,
+        stderr_win32_redirected: bool,
+        restore_result: Option<DeviceResult<()>>,
+        finish_result: Option<DeviceResult<VendorStdioCapture>>,
     }
 
     impl RedirectGuard {
@@ -146,83 +223,49 @@ mod imp {
             let saved_stdout = dup_fd(STDOUT_FD, "stdout")?;
             let saved_stderr = match dup_fd(STDERR_FD, "stderr") {
                 Ok(fd) => fd,
-                Err(err) => {
-                    close_fd(saved_stdout);
-                    return Err(err);
+                Err(error) => {
+                    return Err(cleanup_acquisition(
+                        error,
+                        &[(saved_stdout, "saved stdout")],
+                        &[],
+                    ));
                 }
             };
             let stdout_path = capture_path("stdout");
             let capture_stdout = match open_capture_file(&stdout_path) {
                 Ok(fd) => fd,
-                Err(err) => {
-                    close_fd(saved_stdout);
-                    close_fd(saved_stderr);
-                    return Err(err);
+                Err(error) => {
+                    return Err(cleanup_acquisition(
+                        error,
+                        &[
+                            (saved_stdout, "saved stdout"),
+                            (saved_stderr, "saved stderr"),
+                        ],
+                        &[],
+                    ));
                 }
             };
             let stderr_path = capture_path("stderr");
             let capture_stderr = match open_capture_file(&stderr_path) {
                 Ok(fd) => fd,
-                Err(err) => {
-                    close_fd(saved_stdout);
-                    close_fd(saved_stderr);
-                    close_fd(capture_stdout);
-                    let _ = std::fs::remove_file(&stdout_path);
-                    return Err(err);
+                Err(error) => {
+                    return Err(cleanup_acquisition(
+                        error,
+                        &[
+                            (saved_stdout, "saved stdout"),
+                            (saved_stderr, "saved stderr"),
+                            (capture_stdout, "capture stdout"),
+                        ],
+                        &[&stdout_path],
+                    ));
                 }
             };
 
-            flush_all();
-            if let Err(err) = dup2_fd(capture_stdout, STDOUT_FD, "stdout") {
-                close_fd(saved_stdout);
-                close_fd(saved_stderr);
-                close_fd(capture_stdout);
-                close_fd(capture_stderr);
-                let _ = std::fs::remove_file(&stdout_path);
-                let _ = std::fs::remove_file(&stderr_path);
-                return Err(err);
-            }
-            if let Err(err) = dup2_fd(capture_stderr, STDERR_FD, "stderr") {
-                let _ = dup2_fd(saved_stdout, STDOUT_FD, "stdout");
-                close_fd(saved_stdout);
-                close_fd(saved_stderr);
-                close_fd(capture_stdout);
-                close_fd(capture_stderr);
-                let _ = std::fs::remove_file(&stdout_path);
-                let _ = std::fs::remove_file(&stderr_path);
-                return Err(err);
-            }
-            let saved_stdout_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-            let saved_stderr_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-            if let Err(err) = set_std_handle(STD_OUTPUT_HANDLE, capture_stdout, "stdout") {
-                let _ = dup2_fd(saved_stdout, STDOUT_FD, "stdout");
-                let _ = dup2_fd(saved_stderr, STDERR_FD, "stderr");
-                close_fd(saved_stdout);
-                close_fd(saved_stderr);
-                close_fd(capture_stdout);
-                close_fd(capture_stderr);
-                let _ = std::fs::remove_file(&stdout_path);
-                let _ = std::fs::remove_file(&stderr_path);
-                return Err(err);
-            }
-            if let Err(err) = set_std_handle(STD_ERROR_HANDLE, capture_stderr, "stderr") {
-                let _ = unsafe { SetStdHandle(STD_OUTPUT_HANDLE, saved_stdout_handle) };
-                let _ = dup2_fd(saved_stdout, STDOUT_FD, "stdout");
-                let _ = dup2_fd(saved_stderr, STDERR_FD, "stderr");
-                close_fd(saved_stdout);
-                close_fd(saved_stderr);
-                close_fd(capture_stdout);
-                close_fd(capture_stderr);
-                let _ = std::fs::remove_file(&stdout_path);
-                let _ = std::fs::remove_file(&stderr_path);
-                return Err(err);
-            }
-
-            Ok(Self {
+            let mut guard = Self {
                 saved_stdout,
                 saved_stderr,
-                saved_stdout_handle,
-                saved_stderr_handle,
+                saved_stdout_handle: unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
+                saved_stderr_handle: unsafe { GetStdHandle(STD_ERROR_HANDLE) },
                 capture_stdout,
                 capture_stderr,
                 stdout_path,
@@ -230,11 +273,45 @@ mod imp {
                 stdout_offset: 0,
                 stderr_offset: 0,
                 restored: false,
-            })
+                stdout_crt_redirected: false,
+                stderr_crt_redirected: false,
+                stdout_win32_redirected: false,
+                stderr_win32_redirected: false,
+                restore_result: None,
+                finish_result: None,
+            };
+            if let Err(mut error) = guard.install() {
+                if let Err(cleanup) = guard.finish() {
+                    error = error.merge_resource_cleanup(cleanup);
+                }
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(guard);
+                }
+                return Err(error);
+            }
+            Ok(guard)
+        }
+
+        fn install(&mut self) -> DeviceResult<()> {
+            flush_all()?;
+            self.stdout_crt_redirected = true;
+            dup2_fd(self.capture_stdout, STDOUT_FD, "stdout")?;
+            self.stderr_crt_redirected = true;
+            dup2_fd(self.capture_stderr, STDERR_FD, "stderr")?;
+            self.stdout_win32_redirected = true;
+            set_std_handle(STD_OUTPUT_HANDLE, self.capture_stdout, "stdout")?;
+            self.stderr_win32_redirected = true;
+            set_std_handle(STD_ERROR_HANDLE, self.capture_stderr, "stderr")
         }
 
         pub(super) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
-            flush_all();
+            flush_all().map_err(|error| {
+                resource_close_error(
+                    error,
+                    DeviceResourceKind::VendorStdio,
+                    DeviceResourceClosePhase::SnapshotFlush,
+                )
+            })?;
             let stdout = read_capture_fd(self.capture_stdout, &mut self.stdout_offset, "stdout")?;
             let stderr = read_capture_fd(self.capture_stderr, &mut self.stderr_offset, "stderr")?;
             Ok(VendorStdioCapture {
@@ -244,35 +321,180 @@ mod imp {
         }
 
         pub(super) fn finish(&mut self) -> DeviceResult<VendorStdioCapture> {
-            self.restore()?;
-            let captured = self.snapshot()?;
-            close_fd(self.capture_stdout);
-            close_fd(self.capture_stderr);
-            let _ = std::fs::remove_file(&self.stdout_path);
-            let _ = std::fs::remove_file(&self.stderr_path);
-            Ok(captured)
+            if let Some(result) = &self.finish_result {
+                return result.clone();
+            }
+            if let Err(error) = self.restore() {
+                self.finish_result = Some(Err(error.clone()));
+                return Err(error);
+            }
+            let mut failure = None;
+            let mut resources_confirmed = true;
+            let captured = match self.snapshot() {
+                Ok(captured) => Some(captured),
+                Err(error) => {
+                    merge_close_failure(&mut failure, error);
+                    None
+                }
+            };
+            for result in [
+                close_fd(self.capture_stdout, "capture stdout"),
+                close_fd(self.capture_stderr, "capture stderr"),
+            ] {
+                if let Err(error) = result {
+                    resources_confirmed = false;
+                    merge_close_failure(
+                        &mut failure,
+                        resource_close_error(
+                            error,
+                            DeviceResourceKind::FileDescriptor,
+                            DeviceResourceClosePhase::FileDescriptorClose,
+                        ),
+                    );
+                }
+            }
+            for path in [&self.stdout_path, &self.stderr_path] {
+                if let Err(error) = std::fs::remove_file(path) {
+                    resources_confirmed = false;
+                    merge_close_failure(
+                        &mut failure,
+                        resource_close_error(
+                            DeviceError::fatal(format!(
+                                "failed to remove vendor stdio capture path {}: {error}",
+                                path.display()
+                            )),
+                            DeviceResourceKind::TemporaryPath,
+                            DeviceResourceClosePhase::Unlink,
+                        ),
+                    );
+                }
+            }
+            let result = match (failure, captured) {
+                (Some(error), _) => Err(error.with_resource_summary(
+                    if resources_confirmed {
+                        DeviceResourceQuiescence::Confirmed
+                    } else {
+                        DeviceResourceQuiescence::Unconfirmed
+                    },
+                    6,
+                )),
+                (None, Some(captured)) => Ok(captured),
+                (None, None) => Err(DeviceError::fatal(
+                    "vendor stdio snapshot was unavailable without a close error",
+                )),
+            };
+            self.finish_result = Some(result.clone());
+            result
         }
 
         fn restore(&mut self) -> DeviceResult<()> {
-            if self.restored {
-                return Ok(());
+            if let Some(result) = &self.restore_result {
+                return result.clone();
             }
-            flush_all();
-            if unsafe { SetStdHandle(STD_OUTPUT_HANDLE, self.saved_stdout_handle) } == 0 {
-                return Err(DeviceError::fatal(
-                    "failed to restore vendor stdout Win32 handle",
-                ));
+            let mut failure = flush_all()
+                .map_err(|error| {
+                    resource_close_error(
+                        error,
+                        DeviceResourceKind::VendorStdio,
+                        DeviceResourceClosePhase::RestoreFlush,
+                    )
+                })
+                .err();
+            for (handle, name, redirected) in [
+                (
+                    self.saved_stdout_handle,
+                    "stdout",
+                    &mut self.stdout_win32_redirected,
+                ),
+                (
+                    self.saved_stderr_handle,
+                    "stderr",
+                    &mut self.stderr_win32_redirected,
+                ),
+            ] {
+                if !*redirected {
+                    continue;
+                }
+                if unsafe {
+                    SetStdHandle(
+                        if name == "stdout" {
+                            STD_OUTPUT_HANDLE
+                        } else {
+                            STD_ERROR_HANDLE
+                        },
+                        handle,
+                    )
+                } == 0
+                {
+                    merge_close_failure(
+                        &mut failure,
+                        resource_close_error(
+                            DeviceError::fatal(format!(
+                                "failed to restore vendor {name} Win32 handle"
+                            )),
+                            DeviceResourceKind::VendorStdio,
+                            DeviceResourceClosePhase::RestoreWin32,
+                        ),
+                    );
+                } else {
+                    *redirected = false;
+                }
             }
-            if unsafe { SetStdHandle(STD_ERROR_HANDLE, self.saved_stderr_handle) } == 0 {
-                return Err(DeviceError::fatal(
-                    "failed to restore vendor stderr Win32 handle",
-                ));
+            for (saved, target, name, redirected) in [
+                (
+                    self.saved_stdout,
+                    STDOUT_FD,
+                    "stdout",
+                    &mut self.stdout_crt_redirected,
+                ),
+                (
+                    self.saved_stderr,
+                    STDERR_FD,
+                    "stderr",
+                    &mut self.stderr_crt_redirected,
+                ),
+            ] {
+                if !*redirected {
+                    continue;
+                }
+                if let Err(error) = dup2_fd(saved, target, name) {
+                    merge_close_failure(
+                        &mut failure,
+                        resource_close_error(
+                            error,
+                            DeviceResourceKind::FileDescriptor,
+                            DeviceResourceClosePhase::RestoreCrt,
+                        ),
+                    );
+                } else {
+                    *redirected = false;
+                }
             }
-            dup2_fd(self.saved_stdout, STDOUT_FD, "stdout")?;
-            dup2_fd(self.saved_stderr, STDERR_FD, "stderr")?;
-            close_fd(self.saved_stdout);
-            close_fd(self.saved_stderr);
+            if let Some(error) = failure {
+                self.restore_result = Some(Err(error.clone()));
+                return Err(error);
+            }
+            for result in [
+                close_fd(self.saved_stdout, "saved stdout"),
+                close_fd(self.saved_stderr, "saved stderr"),
+            ] {
+                if let Err(error) = result {
+                    merge_close_failure(
+                        &mut failure,
+                        resource_close_error(
+                            error,
+                            DeviceResourceKind::FileDescriptor,
+                            DeviceResourceClosePhase::FileDescriptorClose,
+                        ),
+                    );
+                }
+            }
+            if let Some(error) = failure {
+                self.restore_result = Some(Err(error.clone()));
+                return Err(error);
+            }
             self.restored = true;
+            self.restore_result = Some(Ok(()));
             Ok(())
         }
     }
@@ -304,10 +526,13 @@ mod imp {
         Ok(())
     }
 
-    fn close_fd(fd: i32) {
-        if fd >= 0 {
-            let _ = unsafe { _close(fd) };
+    fn close_fd(fd: i32, name: &str) -> DeviceResult<()> {
+        if fd >= 0 && unsafe { _close(fd) } != 0 {
+            return Err(DeviceError::fatal(format!(
+                "failed to close vendor {name} fd"
+            )));
         }
+        Ok(())
     }
 
     fn set_std_handle(std_handle: u32, fd: i32, name: &str) -> DeviceResult<()> {
@@ -325,8 +550,75 @@ mod imp {
         Ok(())
     }
 
-    fn flush_all() {
-        let _ = unsafe { fflush(std::ptr::null_mut()) };
+    fn flush_all() -> DeviceResult<()> {
+        if unsafe { fflush(std::ptr::null_mut()) } != 0 {
+            return Err(DeviceError::fatal("failed to flush vendor stdio"));
+        }
+        Ok(())
+    }
+
+    fn resource_close_error(
+        error: DeviceError,
+        resource: DeviceResourceKind,
+        phase: DeviceResourceClosePhase,
+    ) -> DeviceError {
+        error.with_resource_close_cause(
+            resource,
+            phase,
+            "nemu_vendor_stdio",
+            None,
+            None,
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        )
+    }
+
+    fn merge_close_failure(failure: &mut Option<DeviceError>, error: DeviceError) {
+        *failure = Some(match failure.take() {
+            Some(primary) => primary.merge_resource_cleanup(error),
+            None => error,
+        });
+    }
+
+    fn merge_close_result(primary: &mut DeviceError, result: DeviceResult<()>) {
+        if let Err(cleanup) = result {
+            *primary = primary.clone().merge_resource_cleanup(cleanup);
+        }
+    }
+
+    fn cleanup_acquisition(
+        mut primary: DeviceError,
+        descriptors: &[(i32, &str)],
+        paths: &[&PathBuf],
+    ) -> DeviceError {
+        for (descriptor, name) in descriptors {
+            merge_close_result(
+                &mut primary,
+                close_fd(*descriptor, name).map_err(|error| {
+                    resource_close_error(
+                        error,
+                        DeviceResourceKind::FileDescriptor,
+                        DeviceResourceClosePhase::AcquisitionCleanup,
+                    )
+                }),
+            );
+        }
+        for path in paths {
+            merge_close_result(
+                &mut primary,
+                std::fs::remove_file(path).map_err(|error| {
+                    resource_close_error(
+                        DeviceError::fatal(format!(
+                            "failed to remove partial vendor stdio capture path {}: {error}",
+                            path.display()
+                        )),
+                        DeviceResourceKind::TemporaryPath,
+                        DeviceResourceClosePhase::AcquisitionCleanup,
+                    )
+                }),
+            );
+        }
+        primary
     }
 
     fn open_capture_file(path: &Path) -> DeviceResult<i32> {
