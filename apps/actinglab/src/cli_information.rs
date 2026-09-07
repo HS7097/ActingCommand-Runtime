@@ -33,6 +33,7 @@ pub(super) fn help_data() -> Value {
             "--version"
         ],
         "command_options": {
+            "lab watch": crate::runtime_debug::watch_options(),
             "resource restore": [
                 "--repo <new directory>", "--state-root <Runtime state>",
                 "--request-id <ID> (repeatable, 1–32 unique)", "--through-sequence <upper bound>",

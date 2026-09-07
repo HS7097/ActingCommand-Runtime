@@ -3,9 +3,9 @@
 use super::GlobalLedgerError;
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, EventId, EventPayload,
-    EventQuery, EventType, FrameId, InstanceId, LeaseId, PolicyPayload, ProjectedEvent,
-    ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
+    ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode, EventId,
+    EventPayload, EventQuery, EventType, FrameId, InstanceId, LeaseId, OriginModule, PolicyPayload,
+    ProjectedEvent, ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
     SchedulingOutcomeIdentity, SchedulingOutcomeProjection, TaskId, TaskOutcome, TaskPayload,
     TaskSemanticFact,
 };
@@ -15,6 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct EventIndexes {
     event_ids: BTreeMap<EventId, usize>,
     event_types: BTreeMap<usize, BTreeSet<usize>>,
+    origin_modules: BTreeMap<OriginModule, BTreeSet<usize>>,
+    diagnostic_codes: BTreeMap<DiagnosticCode, BTreeSet<usize>>,
     instance_ids: BTreeMap<InstanceId, BTreeSet<usize>>,
     request_ids: BTreeMap<RequestId, BTreeSet<usize>>,
     correlation_ids: BTreeMap<CorrelationId, BTreeSet<usize>>,
@@ -46,6 +48,15 @@ impl EventIndexes {
             .entry(event_type_index(event.event_type()))
             .or_default()
             .insert(position);
+        self.origin_modules
+            .entry(event.origin().module())
+            .or_default()
+            .insert(position);
+        insert_link(
+            &mut self.diagnostic_codes,
+            event.payload().diagnostic_code().as_ref(),
+            position,
+        );
         let links = event.links();
         insert_link(&mut self.instance_ids, links.instance_id(), position);
         insert_link(&mut self.request_ids, links.request_id(), position);
@@ -145,6 +156,8 @@ impl EventIndexes {
         let event_type = query.event_type.map(event_type_index);
         let candidates = [
             indexed_filter(&self.event_types, event_type.as_ref()),
+            indexed_filter(&self.origin_modules, query.origin_module.as_ref()),
+            indexed_filter(&self.diagnostic_codes, query.diagnostic_code.as_ref()),
             indexed_filter(&self.instance_ids, query.instance_id.as_ref()),
             indexed_filter(&self.request_ids, query.request_id.as_ref()),
             indexed_filter(&self.correlation_ids, query.correlation_id.as_ref()),
@@ -347,6 +360,12 @@ fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
         && query
             .source
             .is_none_or(|value| event.origin().source() == value)
+        && query
+            .origin_module
+            .is_none_or(|value| event.origin().module() == value)
+        && query
+            .diagnostic_code
+            .is_none_or(|value| event.payload().diagnostic_code() == Some(value))
         && link_matches(query.instance_id.as_ref(), links.instance_id())
         && link_matches(query.request_id.as_ref(), links.request_id())
         && link_matches(query.correlation_id.as_ref(), links.correlation_id())
