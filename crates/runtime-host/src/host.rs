@@ -4336,9 +4336,12 @@ impl HostShared {
     }
 
     fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
-        self.publish_facts(actingcommand_contract::FactObservation {
-            records: vec![record],
-        })
+        self.publish_facts(
+            actingcommand_contract::FactObservation {
+                records: vec![record],
+            },
+            None,
+        )
     }
 
     fn fact_scope_instances(
@@ -4352,7 +4355,6 @@ impl HostShared {
             .filter(|instance| match scope {
                 actingcommand_contract::FactScope::Instance { instance_id } => {
                     instance_id == &instance.instance_alias
-                        || instance_id == &instance.instance_id.to_string()
                 }
                 _ => inputs.as_ref().is_some_and(|inputs| {
                     inputs.facts().instances.iter().any(|context| {
@@ -4372,6 +4374,7 @@ impl HostShared {
     fn publish_facts(
         &self,
         observation: actingcommand_contract::FactObservation,
+        source_request: Option<&ValidatedRuntimeRequest<'_>>,
     ) -> RuntimeHostResult<EventId> {
         let result: RuntimeHostResult<EventId> = (|| {
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
@@ -4413,12 +4416,16 @@ impl HostShared {
                     .map_err(|_| {
                         policy_admission_request("fact_observation_invalid", "publish_facts")
                     })?;
+            let links = match source_request {
+                Some(request) => self.events.request_links(request, None, None, None),
+                None => self.events.system_links()?,
+            };
             let event = self.append_event_under_fact_gate(
                 EventSeverity::Info,
                 EventSource::Runtime,
                 OriginModule::FactStore,
                 EventActor::Runtime,
-                self.events.system_links()?,
+                links,
                 payload,
             )?;
             self.synchronize_fact_store_under_gate()?;
@@ -5847,13 +5854,20 @@ impl HostShared {
                 )
                 .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {
-                let event_id = self.publish_fact(record.clone()).map_err(|error| {
-                    if error.is_fatal() {
-                        RequestFailure::poison_without_terminal(error)
-                    } else {
-                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                    }
-                })?;
+                let event_id = self
+                    .publish_facts(
+                        actingcommand_contract::FactObservation {
+                            records: vec![record.clone()],
+                        },
+                        Some(validated),
+                    )
+                    .map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
                 Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
@@ -5861,13 +5875,15 @@ impl HostShared {
                 })
             }
             RuntimeOperation::PublishFacts { observation } => {
-                let event_id = self.publish_facts(observation.clone()).map_err(|error| {
-                    if error.is_fatal() {
-                        RequestFailure::poison_without_terminal(error)
-                    } else {
-                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                    }
-                })?;
+                let event_id = self
+                    .publish_facts(observation.clone(), Some(validated))
+                    .map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
                 Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,

@@ -16403,6 +16403,14 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
     );
     assert_eq!(first_events.len(), 1);
     assert_eq!(first_events[0].event_id, published_event_id);
+    assert_eq!(
+        first_events[0].links.request_id(),
+        Some(&first_request.request_id())
+    );
+    assert_eq!(
+        first_events[0].links.correlation_id(),
+        Some(&first_request.correlation_id())
+    );
 
     let duplicate = client.agent_request(RuntimeOperation::PublishFact {
         record: record.clone(),

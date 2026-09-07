@@ -15,6 +15,7 @@ replaces observation time. Complete related fields share scope, snapshot,
 observation/expiry times, TTL, detector, schema, bundle and invalidation policy.
 
 Runtime validates the entire observation before writing one FactPublished event.
+Adapter publications retain the originating request and correlation links.
 Its `record` and optional `related_records` carry the whole observation; scoped
 invalidation binds the existing registered native instances in `scope_instances`.
 Single PublishFact uses this same owner. Identical complete retries reuse the
