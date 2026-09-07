@@ -90,6 +90,24 @@ as an interrupted run recovered after restart, `task.terminal_committed` retains
 is inferred by counting ledger completion events, and original errors and
 committed effects remain unchanged.
 
+Task-error terminals retain the optional typed `timing` observation from the
+Kernel's original decision. `scope` identifies the task budget, page-recognition
+wait or postcondition wait; `stage` identifies the decision point. `elapsed_ms`
+and `limit_ms` use the owner's monotonic clock and milliseconds. A present
+`required_delay_ms` means the remaining task budget could not admit that wait;
+otherwise the measured limit had elapsed. An error page or another cause has no
+timing observation. The original error code/detail and retry/recovery decision
+remain authoritative. Older or unavailable timing remains absent, without a
+zero substitute. These observations do not identify a device or provider cause.
+
+An unfinished step's terminal retains its existing step action ID, linking the
+original StepStarted operation, phase and global index to its actual elapsed
+record. Pre-dispatch failures have no step action. Completed steps and stability
+terminals retain their existing step events and verified comparison references.
+Stability comparison artifacts include the declared `max_steps` alongside the
+threshold, counter transition, reason and exact frame pair. Read-side projection
+leaves `max_steps` null when an existing artifact has no such fact.
+
 Model blocks and labels are written in provider order. Business sorting and
 selection retain their original behavior. Template raw/normalized score,
 threshold and hit rectangle and color mean/expected/distance/max-distance come

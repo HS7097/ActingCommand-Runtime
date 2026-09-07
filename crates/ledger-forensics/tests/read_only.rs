@@ -924,6 +924,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     use actingcommand_contract::{
         OcrRegionEvidence, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader,
         TaskDiagnosticOcrData, TaskDiagnosticPayload, TaskDiagnosticRecord,
+        TaskDiagnosticTerminalData, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
     };
     use actingcommand_ledger_forensics::TaskRecordsRequest;
     let context = ArtifactWriteContext::new(
@@ -991,6 +992,29 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         serde_json::to_writer(&mut stream, &record).unwrap();
         stream.append(b"\n").unwrap();
     }
+    let timing = TaskTimingFailure {
+        scope: TaskTimingScope::Task,
+        stage: TaskTimingStage::PostInputDelay,
+        elapsed_ms: 7,
+        limit_ms: 20,
+        required_delay_ms: Some(50),
+    };
+    let terminal = TaskDiagnosticRecord {
+        index: 36,
+        frame_id: Some(*pre.transport()),
+        step_action_id: Some(*step.transport()),
+        physical_action_id: None,
+        parent_index: None,
+        payload: TaskDiagnosticPayload::Terminal(TaskDiagnosticTerminalData::TaskError {
+            code: "contained_task_timeout".to_owned(),
+            detail: None,
+            executed_steps: Some(1),
+            timing: Some(timing),
+        }),
+    };
+    stream.append(b",").unwrap();
+    serde_json::to_writer(&mut stream, &terminal).unwrap();
+    stream.append(b"\n").unwrap();
     let staging_tree = tree_bytes(state_root);
     assert!(evidence(0, None, 1024).diagnostics.is_empty());
     assert_eq!(tree_bytes(state_root), staging_tree);
@@ -1039,7 +1063,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             panic!("one exact artifact")
         };
         assert_eq!(page.state, "verified");
-        assert_eq!(page.total_records, Some(35));
+        assert_eq!(page.total_records, Some(36));
         assert_eq!(
             page.artifact.artifact_id,
             raw.reference().artifact_id().to_owned()
@@ -1048,6 +1072,10 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         for record in &page.records {
             indices.push(record.index);
             assert_eq!(record.frame_id, Some(*pre.transport()));
+            if record.index == 36 {
+                assert_eq!(record, &terminal, "full typed timing and source links");
+                continue;
+            }
             let TaskDiagnosticPayload::Ocr(ocr) = &record.payload else {
                 panic!("typed OCR record")
             };
@@ -1061,7 +1089,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             break;
         }
     }
-    assert_eq!(indices, (1..=35).collect::<Vec<_>>());
+    assert_eq!(indices, (1..=36).collect::<Vec<_>>());
     assert_eq!(tree_bytes(state_root), published_tree);
     let mut wrong_cursor = record_page(None).diagnostics[0]
         .next_cursor
@@ -1695,6 +1723,9 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
         "consecutive_unchanged_threshold": 2, "terminal_reason": "consecutive_unchanged_threshold_reached"
     });
     let mut cases = vec![("valid".to_owned(), fact.clone(), None)];
+    let mut bounded = fact.clone();
+    bounded["max_steps"] = 6.into();
+    cases.push(("bounded".to_owned(), bounded, None));
     let mut changed = fact.clone();
     changed["result"] = "changed".into();
     changed["new_consecutive_unchanged"] = 0.into();
@@ -1874,10 +1905,15 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
             assert!(report.failures.is_empty(), "{name}");
             assert_eq!(report.matched_count, 2);
             assert_eq!(report.rows.len(), 2);
+            let mut projected_expected = expected.clone();
+            projected_expected["max_steps"] = expected
+                .get("max_steps")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             for (offset, row) in report.rows.iter().enumerate() {
                 assert_eq!(
                     serde_json::to_value(&row.comparison).expect("comparison"),
-                    expected
+                    projected_expected
                 );
                 assert_eq!(row.event.sequence(), prefix.sequence() + offset as u64 + 1);
                 assert_eq!(row.artifact, stored.reference().project(true));
