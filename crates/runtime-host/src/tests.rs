@@ -10850,7 +10850,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .filter_map(|(event, artifact)| {
                 let bytes = read_projected_verified(root.path(), &artifact.project(true)).unwrap();
                 let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-                if value.get("schema_version").and_then(serde_json::Value::as_str)
+                if value
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_str)
                     != Some(actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA)
                 {
                     return None;
@@ -11191,7 +11193,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     &read_projected_verified(root.path(), &artifact.project(true)).unwrap(),
                 )
                 .unwrap();
-                (value.get("schema_version").and_then(serde_json::Value::as_str)
+                (value
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_str)
                     == Some(actingcommand_contract::EFFECTIVE_CONFIGURATION_SCHEMA))
                 .then(|| serde_json::from_value::<EffectiveConfigurationRecord>(value).unwrap())
             })
