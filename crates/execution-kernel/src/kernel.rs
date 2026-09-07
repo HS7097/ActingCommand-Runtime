@@ -84,6 +84,20 @@ impl ExecutionKernel {
         self.finish_session_operation(&session, result)
     }
 
+    /// Host keeps failed input resources until it admits close under the current lease.
+    pub fn input_prepared_retained_with_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        action: PreparedInputAction,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+        let session = self.session(instance_alias)?;
+        drop(registration_guard);
+        session
+            .input_prepared_retained(action)
+            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
+    }
+
     pub fn capture(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
         let session = self.session(instance_alias)?;
         let result = session.capture();

@@ -124,9 +124,9 @@ impl RuntimeHostError {
         let runtime_code = match error.code() {
             "input_backend_open_failed" => RuntimeErrorCode::BackendOpenFailed,
             "input_backend_operation_failed" => RuntimeErrorCode::BackendOperationFailed,
-            "capture_backend_open_failed" | "capture_backend_operation_failed" => {
-                RuntimeErrorCode::CaptureFailed
-            }
+            "capture_backend_open_failed"
+            | "capture_backend_operation_failed"
+            | "execution_session_close_pending" => RuntimeErrorCode::CaptureFailed,
             "monitor_observation_unavailable" | "monitor_observation_failed" => {
                 RuntimeErrorCode::RecognitionFailed
             }

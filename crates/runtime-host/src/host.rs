@@ -13129,6 +13129,7 @@ impl HostShared {
         let instance_alias = resolved.instance_alias.clone();
         let outcome_links = links.clone();
         let lifecycle_links = links.clone();
+        let close_links = links.clone();
         let failure_links = links;
         let action_for_worker = prepared_action;
         let result = execute_critical(
@@ -13159,20 +13160,33 @@ impl HostShared {
                         };
                     }
                 };
-                match self.execution.input_prepared_with_registration_guard(
-                    &instance_alias,
-                    action_for_worker,
-                    registration,
-                ) {
+                match self
+                    .execution
+                    .input_prepared_retained_with_registration_guard(
+                        &instance_alias,
+                        action_for_worker,
+                        registration,
+                    ) {
                     Ok(selection) => CriticalActionReport::Succeeded {
                         value: selection,
                         effect: success_effect,
                     },
                     Err(error) => CriticalActionReport::Failed {
-                        error: ActionFailure::backend(RuntimeHostError::execution(
-                            "execute_input_backend",
-                            &error,
-                        )),
+                        error: match self.finish_input_failure(
+                            error,
+                            token,
+                            connection_id,
+                            close_links,
+                        ) {
+                            Ok(error) => {
+                                let mut failure = ActionFailure::backend(
+                                    RuntimeHostError::execution("execute_input_backend", &error),
+                                );
+                                failure.destructive_started = false;
+                                failure
+                            }
+                            Err(error) => ActionFailure::poison(error),
+                        },
                         effect: backend_failure_effect,
                     },
                 }
@@ -13782,12 +13796,57 @@ impl HostShared {
         Ok(result)
     }
 
+    fn finish_input_failure(
+        &self,
+        primary: ExecutionKernelError,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<ExecutionKernelError> {
+        let close_result: RuntimeHostResult<Result<(), ExecutionKernelError>> = (|| {
+            let instance_guard = self
+                .instance_guard(token.instance_id())
+                .map_err(|failure| *failure.error)?;
+            let _admission = lock(&instance_guard, "lock_instance_admission")?;
+            self.finish_destructive_input(token, connection_id)
+                .map_err(|failure| *failure.error)?;
+            self.close_instance_resources_result(token, connection_id, links.clone())
+                .map_err(|failure| *failure.error)
+        })();
+        match close_result {
+            Ok(Ok(())) => Ok(primary),
+            Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
+            Err(cleanup) => {
+                let primary = RuntimeHostError::execution("execute_input_backend", &primary);
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&primary),
+                    links.clone(),
+                    None,
+                )?;
+                let cleanup = cleanup.into_fatal();
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    RuntimeLifecycleFailure::Host(&cleanup),
+                    links,
+                    None,
+                )?;
+                lock(&self.owner, "retain_unconfirmed_owner")?.retain_unconfirmed()?;
+                self.fatal.mark(cleanup.clone())?;
+                Err(cleanup)
+            }
+        }
+    }
+
     fn finish_capture_failure_while_guarded(
         &self,
         primary: ExecutionKernelError,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<ExecutionKernelError> {
+        if primary.code() == "execution_session_close_pending" {
+            return Ok(primary);
+        }
         let Some(instance_id) = primary.instance_id() else {
             return Ok(primary);
         };
