@@ -191,6 +191,7 @@ impl ProjectInterfaceProjection {
                     },
                     ProjectCurrentView {
                         observed_ledger_position: self.current_ledger_position,
+                        source: self.instances.source().cloned(),
                         owner_epoch: self.instances.owner_epoch(),
                         fatal: self.fatal,
                         instances: instances.clone(),
@@ -210,6 +211,7 @@ impl ProjectInterfaceProjection {
                         decision_page,
                         approvals: approvals.clone(),
                         runtime: ProjectRuntimeView {
+                            source: self.instances.source().cloned(),
                             owner_epoch: self.instances.owner_epoch(),
                             ledger_position: self.ledger_position,
                             fatal: self.fatal,

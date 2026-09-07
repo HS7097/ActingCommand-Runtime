@@ -2645,6 +2645,31 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
     assert_eq!(snapshot.catalog.as_ref().expect("catalog").goal_count, 1);
     let current = response.current().expect("current runtime view");
     assert_eq!(current.instances.len(), 1);
+    let current_source = current.source.as_ref().expect("committed current source");
+    assert_eq!(current_source.sequence, current.observed_ledger_position);
+    assert!(current_source.sequence > snapshot.ledger_position);
+    let observations = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(request.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        observations.len(),
+        1,
+        "one state observation for the explicit request"
+    );
+    assert_eq!(observations[0].event_id, current_source.event_id);
+    let ProjectionPayload::Full(payload) = &observations[0].payload else {
+        panic!("current source payload");
+    };
+    assert!(
+        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::Observed {
+        state: actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal }, ..
+    }) if status.owner_epoch() == current.owner_epoch && *fatal == current.fatal)
+    );
     assert_eq!(snapshot.facts.len(), 1);
     assert_eq!(snapshot.goals.len(), 1);
     assert_eq!(snapshot.decisions.len(), 1);
@@ -2800,6 +2825,9 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         let snapshot = response.snapshot().expect("current project snapshot");
         let current = response.current().expect("current runtime view");
         assert!(current.observed_ledger_position >= snapshot.ledger_position);
+        let source = current.source.as_ref().expect("paged current source");
+        assert_eq!(source.sequence, current.observed_ledger_position);
+        assert!(source.sequence > snapshot.ledger_position);
         let current_instance = current.instances.first().expect("project instance");
         if page_index == 0 {
             assert!(current_instance.lease_active);
@@ -8251,8 +8279,9 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     .expect("runtime host");
     let mut owner = TestClient::connect(&host);
 
+    let initial_request = owner.request(RuntimeOperation::Status);
     let initial = owner
-        .send_result(&owner.request(RuntimeOperation::Status))
+        .send_result(&initial_request)
         .expect("initial status receipt");
     let RuntimeResult::Status { status } = initial.result().expect("status result") else {
         panic!("expected runtime status");
@@ -8261,6 +8290,43 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     assert_eq!(status.instances().len(), 2);
     assert_eq!(status.instances()[0].instance_alias(), "node.a");
     assert_eq!(status.instances()[1].instance_alias(), "node.c");
+    let initial_source = status.source().expect("committed status source").clone();
+    let source_events = projected_events(
+        &mut owner,
+        EventQuery {
+            from_sequence: Some(initial_source.sequence),
+            to_sequence: Some(initial_source.sequence),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(source_events.len(), 1);
+    let source_event = &source_events[0];
+    assert_eq!(source_event.event_id, initial_source.event_id);
+    assert_eq!(
+        source_event.links.request_id(),
+        Some(&initial_request.request_id())
+    );
+    let ProjectionPayload::Full(payload) = &source_event.payload else {
+        panic!("full source fact");
+    };
+    let Some(actingcommand_contract::RuntimeStateFact::Observed {
+        state: actingcommand_contract::RuntimeObservedState::ControlPlane { status: recorded },
+        sampled_started_at_unix_ms,
+        sampled_completed_at_unix_ms,
+    }) = payload.runtime_state()
+    else {
+        panic!("typed control-plane source");
+    };
+    assert_eq!(recorded.instances(), status.instances());
+    assert_eq!(recorded.owner_epoch(), status.owner_epoch());
+    assert_eq!(
+        *sampled_started_at_unix_ms,
+        initial_source.sampled_started_at_unix_ms
+    );
+    assert_eq!(
+        *sampled_completed_at_unix_ms,
+        initial_source.sampled_completed_at_unix_ms
+    );
     assert!(
         status
             .instances()
@@ -8298,6 +8364,7 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
         panic!("expected live runtime status");
     };
     let active = &status.instances()[0];
+    assert!(status.source().unwrap().sequence > initial_source.sequence);
     assert!(active.lease_active());
     assert_eq!(active.queued_request_count(), 1);
     assert!(!active.takeover_cooldown_active());
@@ -8401,6 +8468,25 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         panic!("expected configured monitor");
     };
     assert_eq!(status.policy(), Some(&policy));
+    let configured_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(configure.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &configured_events[0].payload else {
+        panic!("monitor configuration fact");
+    };
+    let Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. }) =
+        payload.runtime_state()
+    else {
+        panic!("typed monitor configuration");
+    };
+    let configuration_version = change.configuration_version;
+    assert!(change.applied);
+    assert_eq!(&change.status, status);
     assert_eq!(
         event_types_for_request(
             &host,
@@ -8428,7 +8514,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         )
     });
     let journal = root.path().join(MONITOR_FILE_NAME);
-    let first_length = fs::metadata(&journal).expect("monitor metadata").len();
+    assert!(!journal.exists());
 
     let repeated = client.request(RuntimeOperation::ConfigureMonitor {
         instance_alias: "node.a".to_string(),
@@ -8438,9 +8524,21 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         client.send(&repeated).result(),
         Some(RuntimeResult::MonitorConfigured { .. })
     ));
-    assert_eq!(
-        fs::metadata(&journal).expect("monitor metadata").len(),
-        first_length
+    assert!(!journal.exists());
+    let repeated_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(repeated.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &repeated_events[0].payload else {
+        panic!("idempotent configuration fact");
+    };
+    assert!(
+        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. })
+        if !change.applied && change.configuration_version == configuration_version)
     );
     let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
     let RuntimeResult::MonitorStatus { status } = status.result().expect("monitor status") else {
@@ -8448,6 +8546,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     };
     assert_eq!(status.instances().len(), 1);
     assert_eq!(status.instances()[0].policy(), Some(&policy));
+    assert!(status.source().is_some());
     drop(client);
     host.close().expect("close host");
 
@@ -8475,7 +8574,24 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         client.send(&clear).result(),
         Some(RuntimeResult::MonitorCleared { status }) if status.policy().is_none()
     ));
-    let cleared_length = fs::metadata(&journal).expect("monitor metadata").len();
+    assert!(!journal.exists());
+    let cleared_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(clear.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &cleared_events[0].payload else {
+        panic!("monitor clear fact");
+    };
+    let Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. }) =
+        payload.runtime_state()
+    else {
+        panic!("typed clear");
+    };
+    let cleared_version = change.configuration_version;
     let repeated_clear = client.request(RuntimeOperation::ClearMonitor {
         instance_alias: "node.a".to_string(),
     });
@@ -8483,9 +8599,21 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         client.send(&repeated_clear).result(),
         Some(RuntimeResult::MonitorCleared { status }) if status.policy().is_none()
     ));
-    assert_eq!(
-        fs::metadata(&journal).expect("monitor metadata").len(),
-        cleared_length
+    assert!(!journal.exists());
+    let repeated_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(repeated_clear.request_id()),
+            event_type: Some(EventType::CommandValidated),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &repeated_events[0].payload else {
+        panic!("idempotent clear fact");
+    };
+    assert!(
+        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. })
+        if !change.applied && change.configuration_version == cleared_version)
     );
     drop(client);
     reopened.close().expect("close reopened host");
