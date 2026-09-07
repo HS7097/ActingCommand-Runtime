@@ -41,6 +41,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-ledger",
+ "actingcommand-ledger-forensics",
  "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
@@ -381,8 +382,8 @@ dependencies = [
 name = "actingcommand-vision-provider-check"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-ledger-forensics",
  "actingcommand-vision-ffi",
- "image",
  "serde",
  "serde_json",
  "sha2",

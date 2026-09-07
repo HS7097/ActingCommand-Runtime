@@ -18,8 +18,7 @@ use actingcommand_runtime_host::{
     RuntimeHostConfig, VisionFfiProvider, VisionModelIdentity,
 };
 use actingcommand_vision_ffi::{
-    FastDeployPpocrBackend, NnEngine, OcrEngine, OnnxRuntimeBackend,
-    VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
+    NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -29,6 +28,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -186,6 +187,7 @@ pub(super) struct PolicyBootstrap {
 }
 
 pub(super) struct ConfiguredExecutionBackendRegistry {
+    pending_vision: Option<(PathBuf, PathBuf)>,
     devices: Option<ExecutionBackendRegistry>,
     device_input_backends: BTreeMap<String, TouchBackendChoice>,
     device_capture_backends: BTreeMap<String, CaptureBackendChoice>,
@@ -276,12 +278,10 @@ impl ActingdConfigFile {
             .into_iter()
             .map(InstanceConfig::backend)
             .collect::<Result<Vec<_>, _>>()?;
-        let vision_provider = self
+        let mut registry = ConfiguredExecutionBackendRegistry::new(registrations, None)?;
+        registry.pending_vision = self
             .vision_provider_manifest
-            .as_ref()
-            .map(|path| assemble_vision_provider(&self.source_root, path))
-            .transpose()?;
-        let registry = ConfiguredExecutionBackendRegistry::new(registrations, vision_provider)?;
+            .map(|path| (self.source_root.clone(), path));
         let policy = self
             .policy
             .map(|policy| policy.assemble(&self.source_root))
@@ -813,6 +813,7 @@ impl ConfiguredExecutionBackendRegistry {
             result.expect("failed to write private diagnostic to stderr");
         });
         Ok(Self {
+            pending_vision: None,
             devices,
             device_input_backends,
             device_capture_backends,
@@ -1345,69 +1346,6 @@ impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
         self.vision_provider.clone()
     }
-}
-
-fn assemble_vision_provider(
-    source_root: &Path,
-    configured_path: &Path,
-) -> Result<Arc<dyn RecognitionVisionProvider>, &'static str> {
-    if configured_path.as_os_str().is_empty() {
-        return Err("vision_provider_manifest_invalid");
-    }
-    let manifest_path = if configured_path.is_absolute() {
-        configured_path.to_path_buf()
-    } else {
-        source_root.join(configured_path)
-    };
-    let manifest_path =
-        fs::canonicalize(manifest_path).map_err(|_| "vision_provider_manifest_unavailable")?;
-    let metadata =
-        fs::metadata(&manifest_path).map_err(|_| "vision_provider_manifest_unavailable")?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_VISION_MANIFEST_BYTES {
-        return Err("vision_provider_manifest_size_invalid");
-    }
-    let bytes = fs::read(&manifest_path).map_err(|_| "vision_provider_manifest_unavailable")?;
-    let mut manifest = VisionProviderArtifactManifest::from_json_slice(&bytes)
-        .map_err(|_| "vision_provider_manifest_invalid")?;
-    if manifest.schema_version != VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION {
-        return Err("vision_provider_manifest_invalid");
-    }
-    let artifact_root = manifest_path
-        .parent()
-        .ok_or("vision_provider_manifest_invalid")?;
-    resolve_vision_artifact_paths(&mut manifest, artifact_root);
-
-    let ocr = manifest
-        .fastdeploy_ppocr
-        .take()
-        .map(|artifacts| {
-            let (model_ref, model_sha256) = artifacts
-                .production_model_identity()
-                .map_err(|_| "vision_provider_manifest_invalid")?;
-            let identity = VisionModelIdentity::new(model_ref, model_sha256)
-                .map_err(|_| "vision_provider_manifest_invalid")?;
-            let engine = FastDeployPpocrBackend::from_artifacts(artifacts)
-                .map_err(|_| "vision_provider_unavailable")?;
-            Ok::<_, &'static str>((Box::new(engine) as Box<dyn OcrEngine + Send>, identity))
-        })
-        .transpose()?;
-    let nn = manifest
-        .onnxruntime
-        .take()
-        .map(|artifacts| {
-            let (model_ref, model_sha256) = artifacts
-                .production_model_identity()
-                .map_err(|_| "vision_provider_manifest_invalid")?;
-            let identity = VisionModelIdentity::new(model_ref, model_sha256)
-                .map_err(|_| "vision_provider_manifest_invalid")?;
-            let engine = OnnxRuntimeBackend::from_artifacts(artifacts)
-                .map_err(|_| "vision_provider_unavailable")?;
-            Ok::<_, &'static str>((Box::new(engine) as Box<dyn NnEngine + Send>, identity))
-        })
-        .transpose()?;
-    let provider =
-        VisionFfiProvider::new(ocr, nn).map_err(|_| "vision_provider_manifest_invalid")?;
-    Ok(Arc::new(provider))
 }
 
 fn resolve_vision_artifact_paths(
@@ -2651,16 +2589,60 @@ mod tests {
     }
 
     #[test]
-    fn configured_vision_provider_manifest_fails_closed_before_runtime_start() {
+    fn configured_vision_provider_failure_is_recorded_before_runtime_ready() {
+        use actingcommand_contract::{EventPayload, EventType, ProviderStartupObservation};
+        use actingcommand_ledger::{GlobalLedger, GlobalLedgerReadOnlyConfig};
+        use actingcommand_ledger_forensics::{
+            ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicReport,
+            ForensicRequest,
+        };
+        use actingcommand_runtime_host::RuntimeHost;
+
         let root = TempDir::new().expect("tempdir");
         let id = IdentifierIssuer::new()
             .expect("issuer")
             .mint_instance_id()
             .expect("instance id");
-        let config_value = |manifest: &str| {
-            json!({
+        fs::write(root.path().join("invalid.json"), b"{}").expect("invalid manifest fixture");
+        fs::write(
+            root.path().join("missing-backend.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION,
+                "onnxruntime": {
+                    "provider_library_path": "missing-provider.dll",
+                    "model_path": "model.onnx",
+                    "model_ref": "neutral.model",
+                "execution_provider": "cpu",
+                    "model_sha256": "a".repeat(64),
+                    "labels": ["neutral"],
+                    "default_timeout_ms": 1000
+                }
+            }))
+            .expect("manifest JSON"),
+        )
+        .expect("missing backend manifest");
+        for (index, manifest, expected) in [
+            (
+                0,
+                Some("missing.json"),
+                Some("vision_provider_manifest_unavailable"),
+            ),
+            (
+                1,
+                Some("invalid.json"),
+                Some("vision_provider_manifest_invalid"),
+            ),
+            (
+                2,
+                Some("missing-backend.json"),
+                Some("vision_provider_unavailable"),
+            ),
+            (3, None, None),
+        ] {
+            let state_root = root.path().join(format!("state-{index}"));
+            let mut config = serde_json::from_value::<ActingdConfigFile>(json!({
                 "schema_version": CONFIG_SCHEMA_VERSION,
-                "state_root": "state",
+                "state_root": state_root,
                 "bind_host": "127.0.0.1",
                 "secret_fingerprint_salt": "0123456789abcdef",
                 "vision_provider_manifest": manifest,
@@ -2672,27 +2654,104 @@ mod tests {
                         "max_inputs": 0
                     }
                 }]
-            })
-        };
-
-        let mut missing = serde_json::from_value::<ActingdConfigFile>(config_value("missing.json"))
+            }))
             .expect("typed config");
-        missing.source_root = root.path().to_path_buf();
-        assert_eq!(
-            missing.assemble().err(),
-            Some("vision_provider_manifest_unavailable")
-        );
-
-        fs::write(root.path().join("invalid.json"), b"{}").expect("invalid manifest fixture");
-        let mut invalid = serde_json::from_value::<ActingdConfigFile>(config_value("invalid.json"))
-            .expect("typed config");
-        invalid.source_root = root.path().to_path_buf();
-        assert_eq!(
-            invalid.assemble().err(),
-            Some("vision_provider_manifest_invalid")
-        );
+            config.source_root = root.path().to_path_buf();
+            let assembly = config
+                .assemble()
+                .expect("configuration does not assemble a provider");
+            assert!(!state_root.join("ledger").exists());
+            let started = RuntimeHost::start_with_provider(assembly.host, |startup| {
+                assembly.registry.assemble_provider(startup)
+            });
+            match (started, expected) {
+                (Err(error), Some(expected)) => assert_eq!(error.code(), expected),
+                (Ok(host), None) => host.close().expect("close host"),
+                (Ok(host), Some(_)) => {
+                    host.close().expect("close unexpected host");
+                    panic!("provider failure must prevent ready");
+                }
+                (Err(error), None) => panic!("fixture startup failed: {error}"),
+            }
+            assert!(
+                !state_root
+                    .join(actingcommand_contract::RUNTIME_INFO_FILE)
+                    .exists()
+            );
+            let snapshot = GlobalLedger::open_read_only(
+                GlobalLedgerReadOnlyConfig::new(state_root.join("ledger")),
+                |_| None,
+            )
+            .expect("startup ledger remains readable");
+            let observations = snapshot
+                .events()
+                .iter()
+                .filter_map(|event| {
+                    if let EventPayload::Provider(payload) = event.payload() {
+                        Some((event, &payload.record))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert!(!observations.is_empty());
+            let provider_terminal = observations.last().expect("provider terminal");
+            if expected.is_some() {
+                let ProviderStartupObservation::Failed { failure, .. } =
+                    &provider_terminal.1.observation
+                else {
+                    panic!("native failure missing")
+                };
+                assert!(!failure.module.is_empty());
+                assert!(!failure.code.is_empty());
+                assert!(!failure.message.is_empty());
+                let public =
+                    serde_json::to_string(&provider_terminal.0.payload().public_projection())
+                        .expect("public projection");
+                assert!(!public.contains(&failure.message));
+                assert!(!snapshot.events().iter().any(|event| matches!(
+                    event.event_type(),
+                    EventType::RuntimeStarted | EventType::RuntimeTakeover
+                )));
+            } else {
+                assert_eq!(
+                    provider_terminal.1.observation,
+                    ProviderStartupObservation::NotConfigured
+                );
+                let started = snapshot
+                    .events()
+                    .iter()
+                    .find(|event| event.event_type() == EventType::RuntimeStarted)
+                    .expect("daemon start");
+                assert!(provider_terminal.0.sequence() < started.sequence());
+            }
+            let through = snapshot.latest_sequence();
+            let request = ForensicEventsRequest::new(
+                ForensicEventFilter::new(Some("provider".into()), None, None, None)
+                    .expect("provider filter"),
+                0,
+                Some(through),
+                2,
+            )
+            .expect("bounded page");
+            let ForensicOutput::Machine(ForensicReport::Events(page)) =
+                actingcommand_ledger_forensics::run(ForensicRequest::events(&state_root, request))
+                    .expect("B read-only startup page")
+            else {
+                panic!("event page")
+            };
+            assert_eq!(page.through_sequence, through);
+            assert_eq!(
+                page.events,
+                observations
+                    .iter()
+                    .take(2)
+                    .map(|(event, _)| (*event).clone())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(page.next_after_sequence.is_some(), observations.len() > 2);
+        }
     }
-
     fn absolute_artifact_root(label: &str) -> PathBuf {
         #[cfg(windows)]
         {

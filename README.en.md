@@ -91,7 +91,7 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 | `actingctl` | Production user CLI (observe / status / monitor-* / stream / reset / task-run, with `--recovery-package` auto-repositioning); successful results are single-line JSON |
 | `actinglab` | Debug probe + resource authoring (record → draft → build → transactional publish → offline `package dry-run`); **not a production dependency** |
 | `device-test` | Device backend diagnostic tool |
-| `vision-provider-check` | Vision provider self-check (ABI check / artifact lock / OCR·NN smoke) |
+| `vision-provider-check` | Read Provider startup facts from a specified Runtime ledger; mechanical file hashes and PE exports |
 | `actingledger` (`apps/ledger-forensics`) | Read-only GlobalLedger forensics CLI |
 
 **Production kernel**
@@ -137,7 +137,7 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 - **Available (live-verified)**: template matching (NCC family) and color predicates; the OCR production chain — `PP-OCRv6_medium` (ONNX Runtime, CPU, strict no-fallback), per-invocation execution attestation (provider/model/device hashes each time), canonical/alias/tolerant dictionary comparison with bounded retry;
 - **Known boundary**: the provider currently has region single-line semantics (one block per target). Roster coverage still needs verification; whole-page multi-block detection (det → per-box rec) awaits implementation and verification, targeting "whole-page reads + overlap dedup";
 - **Pending live test**: CUDA execution (closure, Ready manifests, and device ordinal / stable-identity checks are implemented). One passing CPU run does not verify CUDA, whole-page recognition, or complete roster coverage;
-- **Not distributed with the repository**: ONNX Runtime native libraries and OCR/NN models; they are materialized per task-local cache by the pinned-source hash-verified official tool, with `apps/vision-provider-check` as the self-check entry.
+- **Not distributed with the repository**: ONNX Runtime native libraries and OCR/NN models; they are materialized per task-local cache by the pinned-source hash-verified official tool, with `apps/vision-provider-check --state-root <runtime-state>` reading startup stages, bindings and original failures through B from the same ledger. `--after`, `--through` and `--limit` preserve a bounded page cursor. Ready attests construction only; inference and lazy initialization remain unobserved. Manifest, artifact-lock and export-audit modes report mechanical file observations.
 
 ## 🧭 Design principles
 

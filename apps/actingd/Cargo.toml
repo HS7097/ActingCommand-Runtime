@@ -21,6 +21,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 actingcommand-artifact-store = { workspace = true }
 actingcommand-ledger = { workspace = true }
+actingcommand-ledger-forensics = { workspace = true }
 sha2 = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

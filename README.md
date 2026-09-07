@@ -91,7 +91,7 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 | `actingctl` | 生产用户 CLI(observe / status / monitor-* / stream / reset / task-run,支持 `--recovery-package` 自动回位);成功结果为单行 JSON |
 | `actinglab` | 调试探针 + 资源制作(录制→草稿→构包→事务化发布→`package dry-run` 离线预演);**非生产依赖** |
 | `device-test` | 设备后端诊断工具 |
-| `vision-provider-check` | 视觉 provider 自检(ABI 校验 / artifact 锁 / OCR·NN 冒烟) |
+| `vision-provider-check` | 读取指定 Runtime 的 Provider 启动账本；文件哈希与 PE 导出表机械观察 |
 | `actingledger` (`apps/ledger-forensics`) | GlobalLedger 只读取证 CLI |
 
 **生产内核**
@@ -137,7 +137,7 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 - **可用(实机验证)**:模板匹配(NCC 族)与颜色判据;OCR 生产链路——`PP-OCRv6_medium`(ONNX Runtime,CPU,严格无回退)、逐目标执行证明(provider/模型/设备逐次哈希证明)、字典规范/别名/容错比对与有界重试;
 - **已知边界**:provider 当前为区域单行识别语义(每目标一块);名单覆盖率仍需验证,整页多框检测(det→逐框 rec)待实现与验证,目标为"整页读+重叠去重";
 - **待实测**:CUDA 执行(闭包、Ready 清单、设备 ordinal/稳定身份校验机制已有实现);CPU 单次流程通过不代表 CUDA、整页识别或完整名单覆盖率通过;
-- **不随仓分发**:ONNX Runtime 原生库与 OCR/NN 模型均不在本仓;由钉源验哈希的官方物化工具按任务本地缓存获取,`apps/vision-provider-check` 提供自检入口。
+- **不随仓分发**:ONNX Runtime 原生库与 OCR/NN 模型均不在本仓;由钉源验哈希的官方物化工具按任务本地缓存获取,`apps/vision-provider-check --state-root <Runtime状态目录>` 经 B 只读显示同一账本中的启动阶段、绑定与原始失败；`--after`、`--through`、`--limit` 固定分页游标。启动 Ready 仅说明本次装配完成，推理和懒初始化仍未观察。文件 manifest、artifact-lock 和 export-audit 模式仅输出机械观察。
 
 ## 🧭 设计原则
 
