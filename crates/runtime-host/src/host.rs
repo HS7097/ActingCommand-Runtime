@@ -226,6 +226,37 @@ impl PolicyInputSnapshot {
     }
 }
 
+fn validate_static_fact_pool_authority(
+    catalog: &actingcommand_policy::CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    operation: &'static str,
+) -> RuntimeHostResult<()> {
+    for pool in &catalog.catalog().pools.pools {
+        if pool.value_source.is_static() {
+            continue;
+        }
+        let actingcommand_policy::ObservationRef::Fact { fact_key } = &pool.observation else {
+            return Err(policy_admission_request(
+                "policy_pool_binding_invalid",
+                operation,
+            ));
+        };
+        if resources.pools.iter().any(|value| value.pool_id == pool.id)
+            || facts
+                .facts
+                .iter()
+                .any(|fact| fact.scope == pool.scope && fact.fact_key == *fact_key)
+        {
+            return Err(policy_admission_request(
+                "policy_pool_authority_conflict",
+                operation,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn policy_crash_test_barrier(point: &str) {
     if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref() != Ok(point) {
@@ -4116,12 +4147,39 @@ impl HostShared {
                 observed_at_unix_ms: outcome.terminal_timestamp_unix_ms(),
             });
         }
-        let facts = lock(&self.facts, "project_policy_facts")?.overlay_policy_facts(
+        let fact_store = lock(&self.facts, "project_policy_facts")?;
+        let historical;
+        let fact_projection = if ledger_position == latest_ledger_position {
+            &*fact_store
+        } else {
+            historical = fact_store.at_position(&self.ledger, ledger_position)?;
+            &historical
+        };
+        let catalog = lock(&self.policy, "project_fact_pool_catalog")?.active_loaded();
+        if let Some(catalog) = &catalog {
+            validate_static_fact_pool_authority(
+                catalog.compiled(),
+                inputs.facts(),
+                inputs.resources(),
+                operation,
+            )?;
+        }
+        let facts = fact_projection.overlay_policy_facts(
             &base_facts,
             inputs.resources(),
             ledger_position,
         )?;
-        Ok((facts, inputs.resources().clone()))
+        let resources = if let Some(catalog) = catalog {
+            fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
+                self.fact_scope_instances(scope)
+            })?;
+            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, inputs.resources())
+        } else {
+            inputs.resources().clone()
+        };
+        let facts =
+            fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
+        Ok((facts, resources))
     }
 
     fn validate_policy_input_authority(
@@ -4177,14 +4235,17 @@ impl HostShared {
         seed: u64,
         config: ForwardProjectionConfig,
     ) -> RuntimeHostResult<ForwardProjection> {
-        let facts = {
+        let declared_facts = facts;
+        let (facts, fact_projection) = {
             let mut fact_projection = lock(&self.facts, "project_forward_facts")?.clone();
             fact_projection.synchronize(&self.ledger)?;
             let ledger_position = self
                 .ledger
                 .latest_sequence()
                 .map_err(|_| ledger_error("project_forward_fact_position"))?;
-            fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?
+            let facts =
+                fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?;
+            (facts, fact_projection)
         };
         let (catalog, workloads) = {
             let policy = lock(&self.policy, "project_forward_catalog")?;
@@ -4197,7 +4258,16 @@ impl HostShared {
             })?;
             (catalog, policy.active_performance_workloads()?)
         };
-        let mut resources = resources.clone();
+        validate_static_fact_pool_authority(
+            catalog.compiled(),
+            declared_facts,
+            resources,
+            "project_policy_forward",
+        )?;
+        fact_projection
+            .validate_pool_sources(catalog.compiled(), |scope| self.fact_scope_instances(scope))?;
+        let mut resources =
+            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, resources);
         lock(
             &self.performance_control,
             "apply_forward_performance_control",
@@ -4268,19 +4338,99 @@ impl HostShared {
     }
 
     fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
+        self.publish_facts(
+            actingcommand_contract::FactObservation {
+                records: vec![record],
+            },
+            None,
+        )
+    }
+
+    fn fact_scope_instances(
+        &self,
+        scope: &actingcommand_contract::FactScope,
+    ) -> RuntimeHostResult<Vec<InstanceId>> {
+        let inputs = lock(&self.policy_inputs, "bind_fact_scope")?;
+        let registered = lock(&self.registered_instances, "bind_fact_scope")?;
+        Ok(registered
+            .values()
+            .filter(|instance| match scope {
+                actingcommand_contract::FactScope::Instance { instance_id } => {
+                    instance_id == &instance.instance_alias
+                }
+                _ => inputs.as_ref().is_some_and(|inputs| {
+                    inputs.facts().instances.iter().any(|context| {
+                        context.instance_id == instance.instance_alias
+                            && scope.matches(&InstanceFactContext {
+                                instance_id: context.instance_id.clone(),
+                                server_id: context.server_id.clone(),
+                                game_id: context.game_id.clone(),
+                            })
+                    })
+                }),
+            })
+            .map(|instance| instance.instance_id)
+            .collect())
+    }
+
+    fn publish_facts(
+        &self,
+        observation: actingcommand_contract::FactObservation,
+        source_request: Option<&ValidatedRuntimeRequest<'_>>,
+    ) -> RuntimeHostResult<EventId> {
         let result: RuntimeHostResult<EventId> = (|| {
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
             self.synchronize_fact_store_under_gate()?;
-            if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_publish(&record)? {
+            if let Some(event_id) = lock(&self.facts, "publish_fact")?
+                .preview_observation(&observation, self.clock.sample()?.unix_ms)?
+            {
                 return Ok(event_id);
             }
+            let scope = &observation.records[0].scope;
+            let inputs = lock(&self.policy_inputs, "bind_fact_scope")?;
+            if inputs.as_ref().is_some_and(|inputs| {
+                observation.records.iter().any(|record| {
+                    inputs.facts().facts.iter().any(|fact| {
+                        fact.scope == crate::fact_store::policy_scope(&record.scope)
+                            && fact.fact_key == record.key
+                    })
+                })
+            }) {
+                return Err(policy_admission_request(
+                    "policy_fact_authority_conflict",
+                    "publish_facts",
+                ));
+            }
+            drop(inputs);
+            let scope_instances = self.fact_scope_instances(scope)?;
+            lock(&self.facts, "validate_fact_input_boundary")?
+                .validate_input_boundaries(&observation.records[0], &scope_instances)?;
+            if scope_instances.is_empty()
+                && observation.records[0].invalidate_on.iter().any(|event| {
+                    matches!(event, EventType::InputCommitted | EventType::InputFailed)
+                })
+            {
+                return Err(policy_admission_request(
+                    "fact_invalidation_scope_unbound",
+                    "publish_facts",
+                ));
+            }
+            let payload =
+                FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
+                    .map_err(|_| {
+                        policy_admission_request("fact_observation_invalid", "publish_facts")
+                    })?;
+            let links = match source_request {
+                Some(request) => self.events.request_links(request, None, None, None),
+                None => self.events.system_links()?,
+            };
             let event = self.append_event_under_fact_gate(
                 EventSeverity::Info,
                 EventSource::Runtime,
                 OriginModule::FactStore,
                 EventActor::Runtime,
-                self.events.system_links()?,
-                FactPayloadDraft::published(record.clone(), AuditInput::new()),
+                links,
+                payload,
             )?;
             self.synchronize_fact_store_under_gate()?;
             Ok(*event.event_id())
@@ -5708,13 +5858,36 @@ impl HostShared {
                 )
                 .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {
-                let event_id = self.publish_fact(record.clone()).map_err(|error| {
-                    if error.is_fatal() {
-                        RequestFailure::poison_without_terminal(error)
-                    } else {
-                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                    }
-                })?;
+                let event_id = self
+                    .publish_facts(
+                        actingcommand_contract::FactObservation {
+                            records: vec![record.clone()],
+                        },
+                        Some(validated),
+                    )
+                    .map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::FactPublished { event_id },
+                })
+            }
+            RuntimeOperation::PublishFacts { observation } => {
+                let event_id = self
+                    .publish_facts(observation.clone(), Some(validated))
+                    .map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
                 Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,

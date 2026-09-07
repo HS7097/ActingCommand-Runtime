@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -49,14 +49,33 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         instance,
         command,
     } = Invocation::parse(arguments)?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &state_root,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(ActingctlError::runtime)?;
+    let observation = if let Command::AgentPublishFacts { record_file } = &command {
+        let mut bytes = Vec::new();
+        std::fs::File::open(record_file)
+            .map_err(|_| ActingctlError::FactRecord)?
+            .take(actingcommand_contract::MAX_FACT_OBSERVATION_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ActingctlError::FactRecord)?;
+        if bytes.len() > actingcommand_contract::MAX_FACT_OBSERVATION_BYTES {
+            return Err(ActingctlError::FactRecord);
+        }
+        let observation: actingcommand_contract::FactObservation =
+            serde_json::from_slice(&bytes).map_err(|_| ActingctlError::FactRecord)?;
+        observation
+            .validate()
+            .map_err(|_| ActingctlError::FactRecord)?;
+        Some(observation)
+    } else {
+        None
+    };
+    let (actor, source) = command.origin();
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
+        .map_err(ActingctlError::runtime)?;
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
     let output = match command {
+        Command::AgentPublishFacts { .. } => Ok(serde_json::json!({
+            "event_id": client.publish_facts(observation.ok_or(ActingctlError::FactRecord)?).map_err(ActingctlError::runtime)?,
+        })),
         Command::RequestShutdown => Ok(serde_json::json!({
             "receipt": client.request_shutdown().map_err(ActingctlError::runtime)?,
         })),
@@ -152,6 +171,9 @@ struct Invocation {
 }
 
 enum Command {
+    AgentPublishFacts {
+        record_file: PathBuf,
+    },
     RequestShutdown,
     Observe,
     Reset,
@@ -187,10 +209,14 @@ impl Invocation {
         let mut recovery_package = None;
         let mut recovery_expected_sha256 = None;
         let mut recovery_enabled = false;
+        let mut record_file = None;
         let mut index = 1;
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
             match flag {
+                "--record-file" if command == "agent-publish-facts" && record_file.is_none() => {
+                    record_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
+                }
                 "--state-root" => {
                     state_root = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
@@ -226,6 +252,22 @@ impl Invocation {
         let state_root = state_root.ok_or(ActingctlError::Usage)?;
         let instance = instance.filter(|value: &String| !value.trim().is_empty());
         let command = match command {
+            "agent-publish-facts" => {
+                if arguments
+                    .iter()
+                    .skip(1)
+                    .filter_map(|argument| argument.to_str())
+                    .any(|argument| {
+                        argument.starts_with("--")
+                            && !matches!(argument, "--state-root" | "--record-file")
+                    })
+                {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::AgentPublishFacts {
+                    record_file: record_file.ok_or(ActingctlError::Usage)?,
+                }
+            }
             "request-shutdown" => Command::RequestShutdown,
             "reset" => Command::Reset,
             "observe" => Command::Observe,
@@ -272,10 +314,21 @@ impl Invocation {
 }
 
 impl Command {
+    const fn origin(&self) -> (EventActor, EventSource) {
+        if matches!(self, Self::AgentPublishFacts { .. }) {
+            (EventActor::Agent, EventSource::Adapter)
+        } else {
+            (EventActor::Cli, EventSource::Cli)
+        }
+    }
+
     const fn requires_instance(&self) -> bool {
         !matches!(
             self,
-            Self::Status | Self::MonitorStatus | Self::RequestShutdown
+            Self::Status
+                | Self::MonitorStatus
+                | Self::RequestShutdown
+                | Self::AgentPublishFacts { .. }
         )
     }
 }
@@ -308,6 +361,7 @@ enum ActingctlError {
     Usage,
     Runtime(actingcommand_runtime_client::RuntimeClientError),
     Package,
+    FactRecord,
     Output,
 }
 
@@ -324,6 +378,7 @@ impl fmt::Display for ActingctlError {
                 .write_str("usage: actingctl <observe|reset|status|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash> [--recovery-package <zip> --recovery-expected-sha256 <hash>]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
+            Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
             Self::Output => formatter.write_str("failed to write JSON output"),
         }
     }
@@ -340,6 +395,47 @@ mod tests {
             .map(OsString::from)
             .collect();
         assert!(Invocation::parse(args).is_ok());
+        // LIVE-FACT-POOL-v1 specification; no device or process execution.
+        let parsed = Invocation::parse(
+            [
+                "agent-publish-facts",
+                "--state-root",
+                "state",
+                "--record-file",
+                "observation.json",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.command.origin(),
+            (EventActor::Agent, EventSource::Adapter)
+        );
+        assert_eq!(
+            Command::Observe.origin(),
+            (EventActor::Cli, EventSource::Cli)
+        );
+        for flag in ["--actor", "--instance", "--serial"] {
+            assert!(
+                Invocation::parse(
+                    [
+                        "agent-publish-facts",
+                        "--state-root",
+                        "state",
+                        "--record-file",
+                        "observation.json",
+                        flag,
+                        "arbitrary"
+                    ]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect()
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
