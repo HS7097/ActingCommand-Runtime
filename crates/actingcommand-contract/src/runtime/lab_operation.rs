@@ -436,15 +436,17 @@ impl ContainedLabOperationResult {
             _ => return Err(invalid()),
         };
         condition.validate()?;
-        let last_projection = record.after_projection.as_ref().map(|projection| {
-            LabEvidenceReference {
-                artifact: projection.artifact.clone(),
-                verified: TerminalEvent {
-                    sequence: projection.projection_sequence,
-                    event_id: projection.projection_event_id,
-                },
-            }
-        });
+        let last_projection =
+            record
+                .after_projection
+                .as_ref()
+                .map(|projection| LabEvidenceReference {
+                    artifact: projection.artifact.clone(),
+                    verified: TerminalEvent {
+                        sequence: projection.projection_sequence,
+                        event_id: projection.projection_event_id,
+                    },
+                });
         if arrival.samples.len() > MAX_LAB_ARRIVAL_FRAMES
             || arrival.samples.last().map(|sample| &sample.frame) != record.after_frame.as_ref()
             || arrival

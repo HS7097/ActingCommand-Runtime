@@ -14,13 +14,16 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
             let timeout_ms = flags
                 .optional("--after-timeout-ms")
                 .map(|value| {
-                    value.parse::<u64>().map_err(|_| {
-                        CliError::usage("--after-timeout-ms requires an integer")
-                    })
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| CliError::usage("--after-timeout-ms requires an integer"))
                 })
                 .transpose()?
                 .unwrap_or(5_000);
-            Ok::<_, CliError>(LabArrivalCondition { page_id, timeout_ms })
+            Ok::<_, CliError>(LabArrivalCondition {
+                page_id,
+                timeout_ms,
+            })
         })
         .transpose()?;
     if after.is_none() && flags.optional("--after-timeout-ms").is_some() {

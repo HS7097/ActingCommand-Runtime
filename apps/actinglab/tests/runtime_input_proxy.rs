@@ -43,7 +43,8 @@ struct FakeState {
 fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records() {
     use actingcommand_contract::{
         ContainedLabOperationRequest, InputAction, LabArrivalCondition, LabArrivalStatus,
-        LabOperationEvidence, LabOperationSelection, LabProjectionHint, verify_lab_operation_evidence,
+        LabOperationEvidence, LabOperationSelection, LabProjectionHint,
+        verify_lab_operation_evidence,
     };
     let root = TempDir::new().unwrap();
     let runtime_root = root.path().join("runtime");
@@ -599,7 +600,10 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
         source_operation["provenance"]["after_condition"]["page_id"],
         "neutral/home"
     );
-    assert_eq!(source_operation["provenance"]["arrival"]["status"], "reached");
+    assert_eq!(
+        source_operation["provenance"]["arrival"]["status"],
+        "reached"
+    );
     assert!(
         task["operations"][0]["provenance"]["input_intent"]["sequence"]
             .as_u64()

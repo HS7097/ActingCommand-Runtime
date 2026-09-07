@@ -289,9 +289,8 @@ impl HostShared {
             if record.failure.is_none() {
                 let started = self.monotonic_ms()?;
                 let elapsed = |now: u64| {
-                    now.checked_sub(started).ok_or_else(|| {
-                        observation_integrity_failure("lab_arrival_clock_regressed")
-                    })
+                    now.checked_sub(started)
+                        .ok_or_else(|| observation_integrity_failure("lab_arrival_clock_regressed"))
                 };
                 let deadline = input
                     .after
@@ -318,7 +317,10 @@ impl HostShared {
                         }
                         // Re-fence the original token, including any safe-boundary transfer.
                         let (frame, fence) = self.capture_lab_operation_frame(
-                            request, held, connection_id, run_links,
+                            request,
+                            held,
+                            connection_id,
+                            run_links,
                         )?;
                         record.after_frame = Some(LabOperationFrame {
                             observation: frame.observation.clone(),
@@ -343,19 +345,24 @@ impl HostShared {
                             resolved.instance_id(),
                         )?);
                         if let Some(arrival) = &mut record.arrival {
-                            let projection = record.after_projection.as_ref().expect("evaluated frame");
-                            arrival.samples.last_mut().expect("captured sample").projection =
-                                Some(LabEvidenceReference {
-                                    artifact: projection.artifact.clone(),
-                                    verified: TerminalEvent {
-                                        sequence: projection.projection_sequence,
-                                        event_id: projection.projection_event_id,
-                                    },
-                                });
+                            let projection =
+                                record.after_projection.as_ref().expect("evaluated frame");
+                            arrival
+                                .samples
+                                .last_mut()
+                                .expect("captured sample")
+                                .projection = Some(LabEvidenceReference {
+                                artifact: projection.artifact.clone(),
+                                verified: TerminalEvent {
+                                    sequence: projection.projection_sequence,
+                                    event_id: projection.projection_event_id,
+                                },
+                            });
                         }
                         {
                             let instance_guard = self.instance_guard(held.instance_id())?;
-                            let _admission = lock(&instance_guard, "validate_lab_after_projection")?;
+                            let _admission =
+                                lock(&instance_guard, "validate_lab_after_projection")?;
                             self.validated_instance(request, held, connection_id)?;
                         }
                         let Some(deadline) = deadline else {
