@@ -257,6 +257,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "source_result": "detect_resolution@123",
         "task_request_id": "request_18c92f12756e42b00000000000000005",
         "response_deadline_monotonic_ms": 60071,
+        "lease_expires_at_monotonic_ms": 65071,
         "input_sha256": "0123456789abcdef",
         "message": "hash mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, actual ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "path": temp.path().join("result.json").display().to_string(),
@@ -281,6 +282,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["source_result"], "detect_resolution@<TIME>");
     assert_eq!(value["task_request_id"], "<REQUEST_ID>");
     assert_eq!(value["response_deadline_monotonic_ms"], "<TIME>");
+    assert_eq!(value["lease_expires_at_monotonic_ms"], "<TIME>");
     assert_eq!(value["input_sha256"], "<INPUT_SHA256>");
     assert_eq!(
         value["message"],
@@ -605,7 +607,11 @@ fn normalize_value(
         Value::String(text) => normalize_string(text, root, key),
         Value::Number(_)
             if key.is_some_and(|field| {
-                field.ends_with("_unix_ms") || field == "response_deadline_monotonic_ms"
+                field.ends_with("_unix_ms")
+                    || matches!(
+                        field,
+                        "response_deadline_monotonic_ms" | "lease_expires_at_monotonic_ms"
+                    )
             }) =>
         {
             *value = Value::String("<TIME>".to_string());

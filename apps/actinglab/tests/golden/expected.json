@@ -1120,7 +1120,8 @@
                         "package_sha256": "a2de00e91e4433aba1a79d4b03a6f8d6fd4505a1d49ff86ffa1269601da4a88c",
                         "response_deadline_monotonic_ms": "<TIME>",
                         "task_label": "task"
-                      }
+                      },
+                      "lease_expires_at_monotonic_ms": "<TIME>"
                     },
                     "kind": "semantic"
                   }
