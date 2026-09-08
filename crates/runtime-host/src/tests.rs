@@ -1735,6 +1735,12 @@ fn mapped_policy_sources_with_keys(version: u64, outcome_keys: &[&str]) -> Catal
     let mut sources = policy_sources(version);
     let mut tasks: serde_json::Value =
         serde_json::from_slice(&sources.tasks.bytes).expect("mapped policy tasks");
+    // SCHEDULING-ELIGIBILITY-v1: repeated mapped runs use their actual activity
+    // interval and task cooldown, with an explicitly recurrent source trigger.
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "clock",
+        "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 1, "anchor_ms": 0}
+    });
     let mut followup = tasks["tasks"][0].clone();
     followup["id"] = serde_json::json!("fixture.followup");
     followup["procedure_ref"] = serde_json::json!("procedure.observe-b");
@@ -4336,7 +4342,33 @@ fn evaluate_mapped_policy_after_outcome(
         evaluated.directive.kind,
         evaluated.directive.reason,
     );
-    evaluated
+    let activity_eligible = fixture
+        .second_context
+        .admission()
+        .activity
+        .next_eligible_unix_ms;
+    assert!(activity_eligible > next_policy_unix_ms);
+    assert!(
+        evaluated.pending_dispatch_intents.is_empty(),
+        "driver cooldown cannot bypass the real activity interval"
+    );
+    advance_manual_clock_to(clock, activity_eligible);
+    let at = clock.sample().expect("sample activity-eligible clock");
+    let available = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, at.unix_ms, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at.unix_ms,
+                monotonic_ms: at.monotonic_ms,
+            },
+            evaluation_seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate the exact recorded activity boundary");
+    assert_eq!(available.directive.kind, PolicyRecomputeKind::Incremental);
+    assert_eq!(available.directive.reason, PolicyRecomputeReason::Event);
+    available
 }
 
 fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) -> EvaluationFacts {
@@ -5648,6 +5680,10 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
         fs::write(&package_path, &package).expect("write mapped package");
         let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let shared_instance_id = instance_id();
+        let clock = Arc::new(ManualRuntimeClock::new(
+            POLICY_NOW_UNIX_MS,
+            POLICY_NOW_UNIX_MS,
+        ));
         let state = Arc::new(FakeState::default());
         if performs_effect {
             state
@@ -5660,6 +5696,7 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
         }
         let host = RuntimeHost::start(
             config(&root)
+                .with_runtime_clock(clock.clone())
                 .with_policy_inputs(PolicyInputSnapshot::new(
                     mapped_policy_facts(outcome_key, false),
                     policy_resources(),
@@ -5845,13 +5882,19 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
             fact.expires_at_unix_ms = Some(terminal_timestamp + 900_000);
         }
 
+        let followup_time = context
+            .admission()
+            .activity
+            .next_eligible_unix_ms
+            .max(terminal_timestamp + 1_000);
+        advance_manual_clock_to(&clock, followup_time);
         let followup = host
             .evaluate_policy_cycle_with_test_inputs(
                 &followup_facts,
                 &policy_resources(),
                 EvaluationTime {
-                    unix_ms: terminal_timestamp + 1,
-                    monotonic_ms: terminal_timestamp + 1,
+                    unix_ms: followup_time,
+                    monotonic_ms: followup_time,
                 },
                 9,
                 PolicyTrigger::FactsChanged,
@@ -5871,8 +5914,8 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
                 &mapped_policy_facts(outcome_key, true),
                 &policy_resources(),
                 EvaluationTime {
-                    unix_ms: terminal_timestamp + 2,
-                    monotonic_ms: terminal_timestamp + 2,
+                    unix_ms: followup_time + 1,
+                    monotonic_ms: followup_time + 1,
                 },
                 10,
                 PolicyTrigger::FactsChanged,
@@ -5894,6 +5937,7 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
 
         let restarted = RuntimeHost::start(
             config(&root)
+                .with_runtime_clock(clock.clone())
                 .with_policy_inputs(PolicyInputSnapshot::new(
                     mapped_policy_facts(outcome_key, false),
                     policy_resources(),
@@ -5917,8 +5961,8 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
                 &followup_facts,
                 &policy_resources(),
                 EvaluationTime {
-                    unix_ms: terminal_timestamp + 3,
-                    monotonic_ms: terminal_timestamp + 3,
+                    unix_ms: followup_time + 2,
+                    monotonic_ms: followup_time + 2,
                 },
                 11,
                 PolicyTrigger::Recovery,
@@ -5938,8 +5982,8 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
                 &followup_facts,
                 &policy_resources(),
                 EvaluationTime {
-                    unix_ms: terminal_timestamp + 3,
-                    monotonic_ms: terminal_timestamp + 3,
+                    unix_ms: followup_time + 2,
+                    monotonic_ms: followup_time + 2,
                 },
                 11,
                 PolicyTrigger::Recovery,

@@ -2069,6 +2069,8 @@ mod tests {
         followup["id"] = json!("fixture.followup");
         followup["procedure_ref"] = json!("procedure.followup");
         followup["priority"] = json!(200);
+        followup["loop_budget"]["daily_limit"] = json!(1);
+        followup["loop_budget"]["window_iteration_limit"] = json!(1);
         followup["trigger"] = json!({
             "kind": "any",
             "predicates": [
