@@ -11539,27 +11539,52 @@ impl HostShared {
             runtime.finish_diagnostic(&execution)
         };
         if let Err(mut failure) = diagnostic_result {
-            let prior_code = match &execution {
-                Err(ContainedTaskRunError::Task(error)) => Some(error.code()),
+            failure.error = Box::new(match &execution {
+                Err(ContainedTaskRunError::Task(error)) => {
+                    let primary = match &post_admission_ocr_failure_diagnostic {
+                        Err(prior) => prior
+                            .error
+                            .as_ref()
+                            .clone()
+                            .with_related_failure("diagnostic_cleanup", &failure.error),
+                        Ok(()) => failure.error.as_ref().clone(),
+                    };
+                    primary.with_related_failure(
+                        "prior_task",
+                        &RuntimeHostError::request(
+                            error.code(),
+                            "run_contained_task",
+                            RuntimeErrorCode::BackendOperationFailed,
+                        ),
+                    )
+                }
                 Err(
                     ContainedTaskRunError::Boundary(error)
                     | ContainedTaskRunError::NonfatalOperation(error),
-                ) => Some(error.error.code()),
-                Ok(_) => None,
-            };
-            if let Some(code) = prior_code {
+                ) if error.error.is_fatal() => error
+                    .error
+                    .as_ref()
+                    .clone()
+                    .with_related_failure("diagnostic_cleanup", &failure.error)
+                    .into_fatal(),
+                Err(
+                    ContainedTaskRunError::Boundary(error)
+                    | ContainedTaskRunError::NonfatalOperation(error),
+                ) => failure
+                    .error
+                    .as_ref()
+                    .clone()
+                    .with_related_failure("prior_task", &error.error),
+                Ok(_) => *failure.error,
+            });
+            if let Err(cleanup) = runtime.abort_diagnostic() {
                 failure.error = Box::new(
                     failure
                         .error
                         .as_ref()
                         .clone()
-                        .with_native_detail(format!("{}; prior_task_code={code}", failure.error)),
+                        .with_related_failure("diagnostic_cleanup", &cleanup.error),
                 );
-            }
-            if let Err(cleanup) = runtime.abort_diagnostic() {
-                failure.error = Box::new(failure.error.as_ref().clone().with_native_detail(
-                    format!("{}; diagnostic_cleanup={}", failure.error, cleanup.error),
-                ));
             }
             execution = Err(ContainedTaskRunError::Boundary(failure));
         }

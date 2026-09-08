@@ -10401,7 +10401,7 @@ fn capture_sequence_bounds_are_rejected_before_backend_open() {
 
 #[test]
 fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
-    // Workflow #269 ARTIFACT-PERSIST-v2: AL B8 / BA B7 persistence first reds.
+    // First red: Workflow #269, issuecomment-5576835769 (ARTIFACT-PERSIST-v2).
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, "node.a", Arc::clone(&state));
@@ -10457,6 +10457,62 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
         .expect("Host native I/O");
     assert!(native.text().contains(failure.primary.native_detail.text()));
     assert!(!format!("{fatal} {fatal:?}").contains(failure.primary.native_detail.text()));
+    let repeated = fatal
+        .clone()
+        .with_related_failure("diagnostic_cleanup", &fatal);
+    assert_eq!(
+        repeated.lifecycle.native_detail,
+        fatal.lifecycle.native_detail
+    );
+    let cleanup_dir = root.path().join("diagnostic-cleanup");
+    fs::create_dir(&cleanup_dir).expect("cleanup target");
+    let cleanup_io = fs::remove_file(&cleanup_dir).expect_err("native cleanup failure");
+    let cleanup =
+        RuntimeHostError::artifact(actingcommand_artifact_store::ArtifactStoreError::fatal(
+            "artifact_cleanup_failed",
+            "cleanup_artifact_temp",
+            cleanup_io.to_string(),
+        ));
+    let combined = fatal
+        .clone()
+        .with_related_failure("diagnostic_cleanup", &cleanup);
+    assert_eq!(combined.code(), fatal.code());
+    assert_eq!(combined.operation(), fatal.operation());
+    let combined_native = combined
+        .lifecycle
+        .native_detail
+        .as_ref()
+        .expect("both causes");
+    assert!(
+        combined_native
+            .text()
+            .contains(failure.primary.native_detail.text())
+    );
+    assert!(combined_native.text().contains(&cleanup_io.to_string()));
+    assert!(
+        combined_native
+            .text()
+            .contains("diagnostic_cleanup artifact_cleanup_failed during cleanup_artifact_temp")
+    );
+    host.record_lifecycle_failure(
+        RuntimeLifecycleFailureStage::OperationCleanup,
+        RuntimeLifecycleFailure::Host(&combined),
+    )
+    .expect("native merged failure record");
+    let recorded = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::RuntimeFailed),
+            ..EventQuery::default()
+        })
+        .expect("native lifecycle failures");
+    assert!(recorded.iter().any(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome)) if outcome.lifecycle_failure().and_then(|value| value.native_detail()) == Some(combined_native.as_ref()))));
+    for event in recorded {
+        assert!(event.artifacts().is_empty());
+        let public = serde_json::to_string(&event.payload().public_projection())
+            .expect("public merged failure");
+        assert!(!public.contains(failure.primary.native_detail.text()));
+        assert!(!public.contains(&cleanup_io.to_string()));
+    }
     drop(client);
     assert_eq!(
         host.close()

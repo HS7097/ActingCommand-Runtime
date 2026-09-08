@@ -1439,7 +1439,7 @@ mod tests {
 
     #[test]
     fn required_created_event_failure_preserves_published_file_and_returns_error() {
-        // Workflow #269 ARTIFACT-PERSIST-v2; first reds: AL B8 and BA B7.
+        // First red: Workflow #269, issuecomment-5576835769 (ARTIFACT-PERSIST-v2).
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
         let mut sink = RecordingSink {
@@ -1662,6 +1662,29 @@ mod tests {
                 .text()
                 .contains("secondary artifact_cleanup_failed during cleanup_artifact_temp")
         );
+
+        // A read-only temporary handle makes
+        // the next native write fail without exhausting or modifying a volume.
+        let request = request(b"stream failure context");
+        let mut stream = store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                request.context,
+                request.policy,
+            )
+            .expect("stream");
+        let path = stream.temp_path.clone();
+        stream.file = Some(File::open(&path).expect("read-only stream handle"));
+        let primary = stream
+            .append(b"unpublished")
+            .expect_err("native stream write failure");
+        assert_eq!(primary.code(), "artifact_write_failed");
+        assert_eq!(primary.operation(), "write_artifact_stream");
+        assert!(!primary.detail().is_empty());
+        assert!(!path.exists());
+        let aborted = stream.abort().expect_err("cached failure remains visible");
+        assert_eq!(aborted, primary);
+        assert_eq!(aborted.native_detail(), primary.native_detail());
     }
 
     #[test]
