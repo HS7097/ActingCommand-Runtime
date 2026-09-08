@@ -12,9 +12,13 @@
 
 # ActingCommand Runtime
 
-> 多游戏模拟器自动化框架的 **Rust 常驻运行时**:一个长驻 daemon 承载调度仲裁、设备控制与全局事件账本;游戏知识全部外置于声明式资源包,运行时内核**零游戏逻辑**。控制面为**净室 Rust 实现**——参照公开行为与协议重写,仓内无任何 C/C++ 源码。
+> **AI驱动，程序沉淀。**
 >
-> **设计立场:智能体在环外,运行时在环内。**智能体只做维护——规划、制作资源、处理例外;逐帧执行由运行时确定性完成,每一步入账、可审计。推理花在维护,不花在执行。
+> 让一次探索，成为下一次稳定执行的能力。AI 帮助理解变化、规划任务、制作资源、分析证据；程序把这些方法沉淀为可复用的声明、明确的执行边界和可追溯的结果。每次改进都能留下来，让下一轮从已有能力出发。
+>
+> ActingCommand 是面向多游戏模拟器自动化的 **Rust 常驻运行时**。外部 AI 与维护者通过客户端和资源工具提交请求与资源；Runtime 按声明确定执行，负责调度、识别、操作、恢复和收尾。GlobalLedger 与已验证制品保存实际发生的事实，供外部维护侧分析并改进下一版资源。
+>
+> 当前改进闭环由维护者协调，AI 辅助规划与制作。Runtime 已提供执行、取证和会话协议；自动启动外部 AI、自动探索与自主修复仍需后续实现。游戏知识全部放在声明式资源包中，内核保持**零游戏身份**。控制面为参照公开行为与协议重写的净室 Rust 实现。
 
 CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)(Windows:fmt / clippy `-D warnings` / test) · [精确 SHA Windows 构建产物](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · 本仓公开
 
@@ -36,9 +40,58 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 
 ## 🏛 系统形态
 
-![ActingCommand Runtime 组件所有权图](./docs/assets/runtime-architecture.png)
+```mermaid
+flowchart TB
+    A["外部 AI / 维护者<br/>规划 · 制作 · 分析；由维护侧协调<br/>客户端：actingctl / runtime-client / ActingLab<br/>资源工具：restore / convert / build / validate"]
 
-图中方框表示当前组件所有权与能力分工，调用顺序见上方流程图。生产客户端经 typed loopback IPC 请求 Runtime；Runtime 持有设备与原生 Provider，Scheduler 仲裁写效果。Lab/资源工具处于可拆卸的制作与调试层。术语与职责以 [CONTEXT.md](./CONTEXT.md) 为准。
+    subgraph R["Runtime：生产设备与生命周期所有权"]
+        H["Runtime Host<br/>owner epoch · typed IPC · 请求生命周期<br/>Policy + FactStore：目录、实时事实与预算<br/>RuntimeState：SQLite 状态与发布代次<br/>存储打开后装配 Provider，再 Ready"]
+        S["Scheduler<br/>准入 · lease · fencing"]
+        C["Pack Containment<br/>SHA-256 校验先于解压"]
+        K["Execution Kernel<br/>有界任务 · 阶段 · 恢复<br/>Recognition + Vision FFI：模板 / 颜色 / OCR / NN"]
+        D["DeviceProxy / Device Throat<br/>校验 fenced write / epoch-bound read"]
+        B["设备 / Provider 后端<br/>Runtime 持有原生句柄"]
+    end
+
+    L["GlobalLedger<br/>唯一事件与诊断事实源<br/>共享查询 · 签名目录与纯匹配"]
+    T["ArtifactStore<br/>帧与大体量原文<br/>哈希绑定的持久字节"]
+    F["只读取证<br/>actingledger / ledger-forensics<br/>冻结查询与签名回放 · verified 制品读取"]
+
+    A <-->|"typed 请求 / 回执与投影"| H
+    A -->|"正式资源包 + SHA-256"| C
+    C -->|"已验证资源"| K
+    H <-->|"准入 / 租约"| S
+    H <-->|"任务 / 回调"| K
+    K <-->|"采集 / 输入请求与结果"| D
+    D <-->|"受权 I/O"| B
+    R -->|"模块事实：脱敏后由唯一 writer 追加"| L
+    R -->|"持久化证据字节"| T
+    L -->|"读取事件"| F
+    T -->|"读取 verified 字节"| F
+    F -.->|"证据支持下一轮资源改进"| A
+
+    classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
+    classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
+    classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
+    class A external
+    class H,S,C,K,D,B runtime
+    class L,T,F evidence
+    linkStyle 0,4,9,10 stroke:#275fa5,stroke-width:2px
+    linkStyle 1,2 stroke:#b57712,stroke-width:2px
+    linkStyle 3,5,6 stroke:#28734d,stroke-width:2px
+    linkStyle 7,8 stroke:#c45b12,stroke-width:2px
+    linkStyle 11 stroke:#8045ac,stroke-width:2px
+```
+
+| 图例 | 含义 |
+|---|---|
+| 蓝色实线 | 请求、回执或只读数据；双向箭头分别表示请求与返回 |
+| 金色实线 | 外部资源包经过哈希收容后供 Kernel 消费 |
+| 绿色实线 | Scheduler 准入/租约，以及受权设备执行接口 |
+| 橙色实线 | Runtime 追加事件或保存制品字节，分别进入对应存储 |
+| 紫色虚线 | 外部维护侧消费证据并改进资源 |
+
+12 条主连线展示模块接口与数据/权限关系。Host 分别协调 Scheduler 和 Kernel；框内列出所属能力，实际生命周期顺序见上方流程图。模块事实经 Runtime 的唯一账本 writer 写入 GlobalLedger，制品字节保存到 ArtifactStore。只读取证结果由外部 AI 与维护者消费；反馈闭环当前由维护侧协调。Lab/资源工具可拆卸，术语与职责以 [CONTEXT.md](./CONTEXT.md) 为准。
 
 | 边界 | 当前行为与源码入口 |
 |---|---|

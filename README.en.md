@@ -12,9 +12,13 @@
 
 # ActingCommand Runtime
 
-> The **resident Rust runtime** of a multi-game emulator automation framework: one long-lived daemon carries scheduling arbitration, device control, and a global event ledger; all game knowledge lives outside the runtime in declarative resource packs — the kernel contains **zero game logic**. The control plane is a **clean-room Rust implementation**, rewritten against public behavior and protocols; the repository contains no C/C++ sources.
+> **AI drives discovery. The program turns it into lasting capability.**
 >
-> **Design stance: agents outside the loop, runtime inside the loop.** Agents only do maintenance — planning, resource authoring, exception handling; frame-by-frame execution is done deterministically by the runtime, every step ledgered and auditable. Reasoning is spent on maintenance, not on execution.
+> Turn one round of exploration into a repeatable capability for the next run. AI helps understand change, plan tasks, author resources, and analyze evidence. The program preserves those methods as reusable declarations, explicit execution boundaries, and traceable results. Each improvement becomes a foundation for the next.
+>
+> ActingCommand is a **resident Rust runtime** for multi-game emulator automation. External AI and maintainers submit requests and resources through clients and authoring tools. Runtime executes the declarations deterministically, owning scheduling, recognition, operations, recovery, and closeout. GlobalLedger and verified artifacts retain what actually happened so external maintenance can analyze it and improve the next resource revision.
+>
+> Today, maintainers coordinate this improvement loop with AI-assisted planning and authoring. Runtime provides execution, forensics, and session protocols; automatic external-agent launch, exploration, and autonomous repair still require further implementation. Game knowledge lives in declarative resource packs, keeping **zero game identity** in the kernel. The control plane is a clean-room Rust implementation based on public behavior and protocols.
 
 CI: [current main status](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain) (Windows: fmt / clippy `-D warnings` / test) · [Exact-SHA Windows build artifacts](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · License `AGPL-3.0-only` · This repository is public
 
@@ -36,9 +40,58 @@ Maintenance can recover resource drafts from ledger facts and verified artifacts
 
 ## 🏛 System shape
 
-![ActingCommand Runtime component ownership map](./docs/assets/runtime-architecture.png)
+```mermaid
+flowchart TB
+    A["External AI / maintainer<br/>Plan · author · analyze; externally coordinated<br/>Clients: actingctl / runtime-client / ActingLab<br/>Resource tools: restore / convert / build / validate"]
 
-The boxes show current ownership and capabilities; the execution diagram above shows lifecycle order. Production clients request Runtime work through typed loopback IPC. Runtime holds devices and native Providers, and Scheduler arbitrates write effects. Lab/resource tooling forms a detachable authoring and debugging layer. [CONTEXT.md](./CONTEXT.md) defines the terms and responsibilities.
+    subgraph R["Runtime: production device and lifecycle ownership"]
+        H["Runtime Host<br/>Owner epoch · typed IPC · request lifecycle<br/>Policy + FactStore: catalogs, live facts, budgets<br/>RuntimeState: SQLite state and release generations<br/>Open stores, assemble Provider, then Ready"]
+        S["Scheduler<br/>Admission · leases · fencing"]
+        C["Pack Containment<br/>SHA-256 verification before extraction"]
+        K["Execution Kernel<br/>Bounded tasks · phases · recovery<br/>Recognition + Vision FFI: templates / color / OCR / NN"]
+        D["DeviceProxy / Device Throat<br/>Validate fenced writes / epoch-bound reads"]
+        B["Device / Provider backends<br/>Runtime-owned native handles"]
+    end
+
+    L["GlobalLedger<br/>Sole event and diagnostic fact source<br/>Shared queries · signature catalog and pure matcher"]
+    T["ArtifactStore<br/>Frames and large raw payloads<br/>Hash-bound durable bytes"]
+    F["Read-only forensics<br/>actingledger / ledger-forensics<br/>Frozen queries and signature replay · verified artifacts"]
+
+    A <-->|"Typed requests / receipts and projections"| H
+    A -->|"Formal resource pack + SHA-256"| C
+    C -->|"Verified resources"| K
+    H <-->|"Admission / leases"| S
+    H <-->|"Tasks / callbacks"| K
+    K <-->|"Capture / input requests and results"| D
+    D <-->|"Authorized I/O"| B
+    R -->|"Module facts: sanitized append through the sole writer"| L
+    R -->|"Persist evidence bytes"| T
+    L -->|"Read events"| F
+    T -->|"Read verified bytes"| F
+    F -.->|"Evidence informs the next resource revision"| A
+
+    classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
+    classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
+    classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
+    class A external
+    class H,S,C,K,D,B runtime
+    class L,T,F evidence
+    linkStyle 0,4,9,10 stroke:#275fa5,stroke-width:2px
+    linkStyle 1,2 stroke:#b57712,stroke-width:2px
+    linkStyle 3,5,6 stroke:#28734d,stroke-width:2px
+    linkStyle 7,8 stroke:#c45b12,stroke-width:2px
+    linkStyle 11 stroke:#8045ac,stroke-width:2px
+```
+
+| Legend | Meaning |
+|---|---|
+| Solid blue | Requests, receipts, or read-only data; two-headed arrows represent requests and returns |
+| Solid gold | External packs pass hash containment before Kernel consumption |
+| Solid green | Scheduler admission/leases and authorized device execution interfaces |
+| Solid orange | Runtime event appends or artifact-byte persistence, each into its corresponding store |
+| Dashed purple | External maintenance consumes evidence and improves resources |
+
+The 12 main connections show module interfaces and data/authority relationships. Host coordinates Scheduler and Kernel separately. Boxes list their capabilities; the execution diagram above gives lifecycle order. Module facts enter GlobalLedger through Runtime's sole ledger writer, while artifact bytes persist in ArtifactStore. External AI and maintainers consume read-only evidence; the feedback loop is currently coordinated externally. Lab/resource tooling is detachable. [CONTEXT.md](./CONTEXT.md) defines the terms and responsibilities.
 
 | Boundary | Current behavior and source entry |
 |---|---|
