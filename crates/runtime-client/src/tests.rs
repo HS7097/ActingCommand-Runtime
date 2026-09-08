@@ -2468,19 +2468,9 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
 #[test]
 fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let root = TempDir::new().expect("tempdir");
-    // B14: the legal open and close each outlive the ordinary I/O wait.
-    let state = Arc::new(FakeState {
-        input_open_delay: Duration::from_millis(200),
-        input_close_delay: Duration::from_millis(200),
-        ..FakeState::default()
-    });
+    let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
-    let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_millis(240)),
-    )
-    .expect("runtime client");
+    let client = client(&root);
 
     assert_eq!(
         client.health().expect("health"),
@@ -2586,6 +2576,33 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+
+    // B14: keep the scaled input wait independent of monitor-control I/O.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState {
+        input_open_delay: Duration::from_millis(200),
+        input_close_delay: Duration::from_millis(200),
+        ..FakeState::default()
+    });
+    let host = self::host(&root, Arc::clone(&state), 1_000);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_millis(240)),
+    )
+    .expect("runtime client");
+    let token = client.acquire_lease("node.a").expect("lease");
+    client
+        .input(&token, InputAction::Tap { x: 10, y: 20 })
+        .expect("delayed direct input");
+    client
+        .release_lease(&token)
+        .expect("delayed direct release");
+    assert_eq!(state.opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.inputs.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close delayed input host");
 }
 
 #[test]
