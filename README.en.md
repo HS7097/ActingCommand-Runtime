@@ -40,58 +40,91 @@ Maintenance can recover resource drafts from ledger facts and verified artifacts
 
 ## 🏛 System shape
 
+**Execution and evidence feedback**
+
 ```mermaid
-flowchart TB
-    A["External AI / maintainer<br/>Plan / author / analyze<br/>Externally coordinated<br/>actingctl / runtime-client<br/>ActingLab / resource tools<br/>restore / convert<br/>build / validate"]
+flowchart LR
+    A["External AI / maintainer<br/>Plan / analyze<br/>Externally coordinated"]
+    U["Clients<br/>actingctl / runtime-client<br/>ActingLab"]
+    W["Authoring / formal packs<br/>ActingLab / resource tools<br/>restore / convert / build"]
+    H["Runtime Host<br/>Owner epoch / typed IPC<br/>Requests / store lifetime"]
+    S["Scheduler<br/>Admission / leases<br/>Fencing"]
+    C["Pack Containment<br/>SHA-256 verification<br/>Before extraction"]
+    K["Execution Kernel<br/>Tasks / phases / recovery"]
+    N["Recognition / Vision FFI<br/>Templates / color<br/>OCR / NN"]
+    D["DeviceProxy / Throat<br/>Fenced writes<br/>Epoch-bound reads"]
+    B["Device / Provider<br/>Runtime-owned handles"]
+    L["GlobalLedger<br/>Sole event / diagnostic<br/>fact source"]
+    T["ArtifactStore<br/>Frames / raw payloads<br/>Hash-bound bytes"]
+    F["Read-only forensics<br/>actingledger<br/>ledger-forensics"]
 
-    subgraph R["Runtime: production device and lifecycle ownership"]
-        H["Runtime Host<br/>Owner epoch / typed IPC<br/>Request lifecycle<br/>Policy + FactStore<br/>Catalogs / facts / budgets<br/>RuntimeState<br/>SQLite state / releases<br/>Open stores, then Provider<br/>assembly, then Ready"]
-        S["Scheduler<br/>Admission · leases · fencing"]
-        C["Pack Containment<br/>SHA-256 verification<br/>before extraction"]
-        K["Execution Kernel<br/>Tasks / phases / recovery<br/>Recognition + Vision FFI<br/>Templates / color<br/>OCR / NN"]
-        D["DeviceProxy<br/>Device Throat<br/>Validate fenced writes<br/>Epoch-bound reads"]
-        B["Device / Provider backends<br/>Runtime-owned native handles"]
-    end
-
-    L["GlobalLedger<br/>Sole event / diagnostic<br/>fact source<br/>Shared queries<br/>Signature catalog / matcher"]
-    T["ArtifactStore<br/>Frames / raw payloads<br/>Hash-bound durable bytes"]
-    F["Read-only forensics<br/>actingledger<br/>ledger-forensics<br/>Frozen queries / replay<br/>Verified artifact reads"]
-
-    A <-->|"Typed requests<br/>Receipts / projections"| H
-    A -->|"Pack + SHA-256"| C
+    A -->|"Use clients"| U
+    A -->|"Revise resources"| W
+    U <-->|"Requests<br/>Receipts / projections"| H
+    W -->|"Pack + SHA-256"| C
     C -->|"Verified resources"| K
     H <-->|"Admission / leases"| S
     H <-->|"Tasks / callbacks"| K
-    K <-->|"Capture / input<br/>Requests and results"| D
+    K -->|"Recognition work"| N
+    K <-->|"Capture / input"| D
     D <-->|"Authorized I/O"| B
-    R -->|"Sanitized module facts<br/>Sole writer append"| L
-    R -->|"Persist evidence bytes"| T
+    H -->|"Sanitized events"| L
+    H -->|"ArtifactStore.put<br/>Evidence bytes"| T
     L -->|"Read events"| F
     T -->|"Read verified bytes"| F
-    F -.->|"Evidence for the<br/>next resource revision"| A
+    F -.->|"Evidence informs<br/>the next revision"| A
 
     classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
     classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
     classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
-    class A external
-    class H,S,C,K,D,B runtime
-    class L,T,F evidence
-    linkStyle 0,4,9,10 stroke:#275fa5,stroke-width:2px
-    linkStyle 1,2 stroke:#b57712,stroke-width:2px
-    linkStyle 3,5,6 stroke:#28734d,stroke-width:2px
-    linkStyle 7,8 stroke:#c45b12,stroke-width:2px
-    linkStyle 11 stroke:#8045ac,stroke-width:2px
+    class A,U,W,F external
+    class H,S,C,K,N,D,B runtime
+    class L,T evidence
+    linkStyle 0,2,6,7,12,13 stroke:#275fa5,stroke-width:2px
+    linkStyle 1,3,4 stroke:#b57712,stroke-width:2px
+    linkStyle 5,8,9 stroke:#28734d,stroke-width:2px
+    linkStyle 10,11 stroke:#c45b12,stroke-width:2px
+    linkStyle 14 stroke:#8045ac,stroke-width:2px
+```
+
+**The same Host: assembly, policy, and state**
+
+```mermaid
+flowchart TB
+    H2["Same Runtime Host<br/>Assembly / policy / state"]
+    P["Provider assembly<br/>After stores open<br/>Before Ready"]
+    Q["PolicyHost / policy<br/>Catalogs / evaluation<br/>Dispatch / budgets"]
+    FS["FactStore<br/>Typed observations<br/>TTL / input watermarks"]
+    RS["RuntimeState<br/>SQLite state / releases"]
+    L2["Same GlobalLedger<br/>Host-granted writer"]
+
+    H2 <-->|"Startup call<br/>Provider result"| P
+    H2 <-->|"Catalog / evaluation"| Q
+    H2 <-->|"Publish / snapshot"| FS
+    H2 <-->|"State / releases"| RS
+    P -->|"Host startup authority<br/>Typed startup facts"| L2
+    L2 -->|"Rebuild facts"| FS
+
+    classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
+    classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
+    classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
+    class H2,P,Q,FS,RS runtime
+    class L2 evidence
+    linkStyle 0,1,2,3,5 stroke:#275fa5,stroke-width:2px
+    linkStyle 4 stroke:#c45b12,stroke-width:2px
 ```
 
 | Legend | Meaning |
 |---|---|
-| Solid blue | Requests, receipts, or read-only data; two-headed arrows represent requests and returns |
-| Solid gold | External packs pass hash containment before Kernel consumption |
-| Solid green | Scheduler admission/leases and authorized device execution interfaces |
-| Solid orange | Runtime event appends or artifact-byte persistence, each into its corresponding store |
-| Dashed purple | External maintenance consumes evidence and improves resources |
+| Purple boxes | External maintenance, clients, resource authoring, and read-only forensics |
+| Green boxes / blue boxes | Runtime modules / Runtime-owned stores |
+| Solid blue | Calls, results, and read data; two-headed arrows show both directions |
+| Solid gold | Resource authoring and verified pack consumption |
+| Solid green | Admission, leases, and authorized device execution |
+| Solid orange | Event or artifact-byte writes from the named Runtime owner |
+| Dashed purple | External evidence feedback for resource improvement |
 
-The 12 main connections show module interfaces and data/authority relationships. Host coordinates Scheduler and Kernel separately. Boxes list their capabilities; the execution diagram above gives lifecycle order. Module facts enter GlobalLedger through Runtime's sole ledger writer, while artifact bytes persist in ArtifactStore. External AI and maintainers consume read-only evidence; the feedback loop is currently coordinated externally. Lab/resource tooling is detachable. [CONTEXT.md](./CONTEXT.md) defines the terms and responsibilities.
+Both views describe the same Runtime. Host coordinates Scheduler and Kernel separately. HostShared owns GlobalLedger and ArtifactStore; their write edges originate at Host. Provider startup records use the same Host-granted ledger authority. Host exchanges snapshots with FactStore and supplies policy inputs; RuntimeState stores SQLite state and release generations reconciled with the ledger. External AI and maintainers consume read-only evidence and coordinate the next revision. These diagrams show module relationships; the execution PNG above gives lifecycle order. Lab/resource tooling is detachable. [CONTEXT.md](./CONTEXT.md) defines the terms.
 
 | Boundary | Current behavior and source entry |
 |---|---|

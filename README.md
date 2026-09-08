@@ -40,58 +40,91 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 
 ## 🏛 系统形态
 
+**执行与证据反馈**
+
 ```mermaid
-flowchart TB
-    A["外部 AI / 维护者<br/>规划 / 制作 / 分析<br/>维护侧协调<br/>actingctl / runtime-client<br/>ActingLab / 资源工具<br/>restore / convert<br/>build / validate"]
+flowchart LR
+    A["外部 AI / 维护者<br/>规划 / 分析<br/>维护侧协调"]
+    U["客户端<br/>actingctl / runtime-client<br/>ActingLab"]
+    W["资源制作 / 正式包<br/>ActingLab / 资源工具<br/>restore / convert / build"]
+    H["Runtime Host<br/>owner epoch / typed IPC<br/>请求与存储生命周期"]
+    S["Scheduler<br/>准入 / 租约<br/>fencing"]
+    C["Pack Containment<br/>SHA-256 校验<br/>先于解压"]
+    K["Execution Kernel<br/>任务 / 阶段 / 恢复"]
+    N["Recognition / Vision FFI<br/>模板 / 颜色<br/>OCR / NN"]
+    D["DeviceProxy / Throat<br/>fenced write<br/>epoch-bound read"]
+    B["设备 / Provider<br/>Runtime 持有原生句柄"]
+    L["GlobalLedger<br/>唯一事件 / 诊断事实源"]
+    T["ArtifactStore<br/>帧 / 大体量原文<br/>哈希绑定字节"]
+    F["只读取证<br/>actingledger<br/>ledger-forensics"]
 
-    subgraph R["Runtime：生产设备与生命周期所有权"]
-        H["Runtime Host<br/>owner epoch / typed IPC<br/>请求生命周期<br/>Policy + FactStore<br/>目录 / 实时事实 / 预算<br/>RuntimeState<br/>SQLite 状态 / 发布代次<br/>打开存储后装配 Provider<br/>随后 Ready"]
-        S["Scheduler<br/>准入 · lease · fencing"]
-        C["Pack Containment<br/>SHA-256 校验先于解压"]
-        K["Execution Kernel<br/>有界任务 / 阶段 / 恢复<br/>Recognition + Vision FFI<br/>模板 / 颜色 / OCR / NN"]
-        D["DeviceProxy<br/>Device Throat<br/>fenced write 校验<br/>epoch-bound read"]
-        B["设备 / Provider 后端<br/>Runtime 持有原生句柄"]
-    end
-
-    L["GlobalLedger<br/>唯一事件 / 诊断事实源<br/>共享查询<br/>签名目录 / 纯匹配"]
-    T["ArtifactStore<br/>帧与大体量原文<br/>哈希绑定的持久字节"]
-    F["只读取证<br/>actingledger<br/>ledger-forensics<br/>冻结查询 / 签名回放<br/>读取 verified 制品"]
-
-    A <-->|"typed 请求<br/>回执 / 投影"| H
-    A -->|"正式资源包 + SHA-256"| C
+    A -->|"使用客户端"| U
+    A -->|"改进资源"| W
+    U <-->|"请求<br/>回执 / 投影"| H
+    W -->|"资源包 + SHA-256"| C
     C -->|"已验证资源"| K
     H <-->|"准入 / 租约"| S
     H <-->|"任务 / 回调"| K
-    K <-->|"采集 / 输入<br/>请求与结果"| D
+    K -->|"识别工作"| N
+    K <-->|"采集 / 输入"| D
     D <-->|"受权 I/O"| B
-    R -->|"脱敏模块事实<br/>唯一 writer 追加"| L
-    R -->|"持久化证据字节"| T
+    H -->|"脱敏事件"| L
+    H -->|"ArtifactStore.put<br/>证据字节"| T
     L -->|"读取事件"| F
     T -->|"读取 verified 字节"| F
-    F -.->|"证据支持<br/>下一轮资源改进"| A
+    F -.->|"证据支持<br/>下一轮改进"| A
 
     classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
     classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
     classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
-    class A external
-    class H,S,C,K,D,B runtime
-    class L,T,F evidence
-    linkStyle 0,4,9,10 stroke:#275fa5,stroke-width:2px
-    linkStyle 1,2 stroke:#b57712,stroke-width:2px
-    linkStyle 3,5,6 stroke:#28734d,stroke-width:2px
-    linkStyle 7,8 stroke:#c45b12,stroke-width:2px
-    linkStyle 11 stroke:#8045ac,stroke-width:2px
+    class A,U,W,F external
+    class H,S,C,K,N,D,B runtime
+    class L,T evidence
+    linkStyle 0,2,6,7,12,13 stroke:#275fa5,stroke-width:2px
+    linkStyle 1,3,4 stroke:#b57712,stroke-width:2px
+    linkStyle 5,8,9 stroke:#28734d,stroke-width:2px
+    linkStyle 10,11 stroke:#c45b12,stroke-width:2px
+    linkStyle 14 stroke:#8045ac,stroke-width:2px
+```
+
+**同一 Host 的装配、策略与状态**
+
+```mermaid
+flowchart TB
+    H2["同一 Runtime Host<br/>装配 / 策略 / 状态"]
+    P["Provider 装配<br/>打开存储之后<br/>Ready 之前"]
+    Q["PolicyHost / policy<br/>目录 / 求值<br/>派发 / 预算"]
+    FS["FactStore<br/>类型化观察<br/>TTL / 输入水位"]
+    RS["RuntimeState<br/>SQLite 状态 / 发布代次"]
+    L2["同一 GlobalLedger<br/>Host 授权的唯一 writer"]
+
+    H2 <-->|"启动调用<br/>Provider 返回"| P
+    H2 <-->|"目录 / 求值"| Q
+    H2 <-->|"发布 / 快照"| FS
+    H2 <-->|"状态 / 发布代次"| RS
+    P -->|"Host 启动写权限<br/>类型化启动事实"| L2
+    L2 -->|"重建事实"| FS
+
+    classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
+    classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
+    classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
+    class H2,P,Q,FS,RS runtime
+    class L2 evidence
+    linkStyle 0,1,2,3,5 stroke:#275fa5,stroke-width:2px
+    linkStyle 4 stroke:#c45b12,stroke-width:2px
 ```
 
 | 图例 | 含义 |
 |---|---|
-| 蓝色实线 | 请求、回执或只读数据；双向箭头分别表示请求与返回 |
-| 金色实线 | 外部资源包经过哈希收容后供 Kernel 消费 |
-| 绿色实线 | Scheduler 准入/租约，以及受权设备执行接口 |
-| 橙色实线 | Runtime 追加事件或保存制品字节，分别进入对应存储 |
-| 紫色虚线 | 外部维护侧消费证据并改进资源 |
+| 紫色框 | 外部维护、客户端、资源制作与只读取证 |
+| 绿色框 / 蓝色框 | Runtime 模块 / Runtime 持有的存储 |
+| 蓝色实线 | 调用、返回与读取数据；双向箭头表示两个方向 |
+| 金色实线 | 资源制作与已验证资源包消费 |
+| 绿色实线 | 准入、租约与受权设备执行 |
+| 橙色实线 | 具名 Runtime owner 写入事件或制品字节 |
+| 紫色虚线 | 外部消费证据，支持下一轮资源改进 |
 
-12 条主连线展示模块接口与数据/权限关系。Host 分别协调 Scheduler 和 Kernel；框内列出所属能力，实际生命周期顺序见上方流程图。模块事实经 Runtime 的唯一账本 writer 写入 GlobalLedger，制品字节保存到 ArtifactStore。只读取证结果由外部 AI 与维护者消费；反馈闭环当前由维护侧协调。Lab/资源工具可拆卸，术语与职责以 [CONTEXT.md](./CONTEXT.md) 为准。
+两个视图描述同一 Runtime。Host 分别协调 Scheduler 和 Kernel。HostShared 持有 GlobalLedger 和 ArtifactStore，两条存储写入线从 Host 发出；Provider 启动记录使用同一 Host 授予的账本权限。Host 从 FactStore 取得快照并提供策略输入；RuntimeState 保存 SQLite 状态与发布代次，并与账本对账。只读取证结果由外部 AI 与维护者消费，由维护侧协调下一轮改进。图中表示模块关系，实际生命周期顺序见上方执行流程 PNG。Lab/资源工具可拆卸，术语以 [CONTEXT.md](./CONTEXT.md) 为准。
 
 | 边界 | 当前行为与源码入口 |
 |---|---|
