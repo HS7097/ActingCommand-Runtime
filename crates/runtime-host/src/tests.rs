@@ -13903,6 +13903,30 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
 // Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
 #[test]
 fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
+    // Workflow #269 NEMU-STDIO-FACTS-v1: failed metadata queries remain secondary
+    // typed facts through the existing Device -> Kernel -> Host ledger path.
+    let stdio_facts = Arc::new(actingcommand_device::VendorStdioFacts {
+        process_id: 41,
+        process_created_filetime: actingcommand_device::StdioFact::Unknown(
+            actingcommand_device::StdioUnknown::QueryFailed(
+                actingcommand_device::StdioNativeError::Win32 { code: 5 },
+            ),
+        ),
+        started_filetime: 10,
+        steps: vec![actingcommand_device::StdioStep {
+            phase: actingcommand_device::StdioPhase::Close,
+            api: actingcommand_device::StdioApi::Unlink,
+            target: actingcommand_device::StdioReference::CaptureStdout,
+            source: None,
+            completed_filetime: 11,
+            returned: -1,
+            error: Some(actingcommand_device::StdioNativeError::Io { code: Some(32) }),
+            before: None,
+            after: None,
+            related: None,
+        }],
+        dropped_count: 0,
+    });
     for close_error in [
         DeviceError::fatal("injected unconfirmed capture close"),
         DeviceError::transient("injected unconfirmed capture close"),
@@ -13919,18 +13943,29 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         state
             .transition_capture_after_input
             .store(true, Ordering::Release);
-        *state
-            .capture_close_error
-            .lock()
-            .expect("capture close error") = Some(close_error.with_resource_close_cause(
+        let close_error = close_error.with_resource_close_cause(
             actingcommand_device::DeviceResourceKind::CaptureBackend,
             actingcommand_device::DeviceResourceClosePhase::Close,
-            "fake_capture",
+            "nemu_vendor_stdio",
             None,
             None,
             actingcommand_device::DeviceResourceQuiescence::Unconfirmed,
             1,
+        );
+        let occurrence = Arc::clone(close_error.resource_close_causes()[0].occurrence());
+        let close_error = close_error.with_vendor_stdio_facts(Arc::clone(&stdio_facts));
+        assert!(Arc::ptr_eq(
+            &occurrence,
+            close_error.resource_close_causes()[0].occurrence()
         ));
+        assert_eq!(
+            close_error.resource_close_causes()[0].vendor_stdio(),
+            Some(stdio_facts.as_ref())
+        );
+        *state
+            .capture_close_error
+            .lock()
+            .expect("capture close error") = Some(close_error);
         let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
         let mut client = TestClient::connect(&host);
         let correlation = client.ids.mint_correlation_id().expect("correlation");
@@ -13983,6 +14018,47 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                 && serde_json::to_string(event.payload())
                     .expect("runtime failure JSON")
                     .contains("\"quiescence\":\"unconfirmed\"")
+        }));
+        let causes = events
+            .iter()
+            .filter_map(|event| {
+                let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome)) =
+                    event.payload()
+                else {
+                    return None;
+                };
+                outcome
+                    .lifecycle_failure()
+                    .and_then(|failure| failure.cause())
+                    .filter(|cause| cause.vendor_stdio().is_some())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(causes.len(), 1, "same close occurrence is published once");
+        let cause = causes[0];
+        assert_eq!(
+            cause.native_detail().expect("original failure").text(),
+            "injected unconfirmed capture close"
+        );
+        let facts = cause.vendor_stdio().expect("typed owner facts");
+        assert_eq!(facts.process_id, 41);
+        assert_eq!(
+            facts.process_created_filetime,
+            actingcommand_contract::StdioFact::Unknown(
+                actingcommand_contract::StdioUnknown::QueryFailed(
+                    actingcommand_contract::StdioNativeError::Win32 { code: 5 }
+                ),
+            )
+        );
+        assert_eq!(facts.steps[0].returned, -1);
+        assert_eq!(
+            facts.steps[0].error,
+            Some(actingcommand_contract::StdioNativeError::Io { code: Some(32) })
+        );
+        assert_eq!(facts.dropped_count, 0);
+        assert!(!events.iter().any(|event| {
+            serde_json::to_string(&event.payload().public_projection())
+                .expect("public projection")
+                .contains("vendor_stdio\":")
         }));
         assert!(!events.iter().any(|event| matches!(
             event.event_type(),

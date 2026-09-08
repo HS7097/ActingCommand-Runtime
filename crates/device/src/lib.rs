@@ -21,6 +21,7 @@ mod nemu_diagnostic;
 pub mod replay;
 pub mod touch;
 mod vendor_stdio;
+mod vendor_stdio_facts;
 
 pub use adb::*;
 pub use adb_bounds_diagnostic::*;
@@ -36,3 +37,4 @@ pub use nemu_diagnostic::*;
 pub use replay::*;
 pub use touch::*;
 pub use vendor_stdio::vendor_stdio_session_diagnostic;
+pub use vendor_stdio_facts::*;

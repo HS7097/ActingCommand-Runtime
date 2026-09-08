@@ -2,6 +2,8 @@
 
 mod signature;
 pub use signature::*;
+mod vendor_stdio;
+pub use vendor_stdio::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -986,6 +988,7 @@ impl LifecycleNativeDetail {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifecycleCauseDraft {
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
     phase: LifecycleFailurePhase,
     source: String,
     code: String,
@@ -1004,6 +1007,11 @@ pub struct LifecycleCauseDraft {
 }
 
 impl LifecycleCauseDraft {
+    pub fn with_vendor_stdio_facts(mut self, facts: Option<VendorStdioFacts>) -> Self {
+        self.vendor_stdio = facts.map(Box::new);
+        self
+    }
+
     pub fn new(
         phase: LifecycleFailurePhase,
         source: impl Into<String>,
@@ -1015,6 +1023,7 @@ impl LifecycleCauseDraft {
             source: source.into(),
             code: code.into(),
             severity,
+            vendor_stdio: None,
             detail: None,
             native_detail: None,
             last_native_detail: None,
@@ -1073,6 +1082,7 @@ impl LifecycleCauseDraft {
     }
     fn sanitize(self) -> Result<LifecycleCauseRecord, SanitizationError> {
         let record = LifecycleCauseRecord {
+            vendor_stdio: self.vendor_stdio,
             phase: self.phase,
             source: self.source,
             code: self.code,
@@ -1100,6 +1110,8 @@ impl LifecycleCauseDraft {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifecycleCauseRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
     phase: LifecycleFailurePhase,
     source: String,
     code: String,
@@ -1129,6 +1141,10 @@ pub struct LifecycleCauseRecord {
 }
 
 impl LifecycleCauseRecord {
+    pub fn vendor_stdio(&self) -> Option<&VendorStdioFacts> {
+        self.vendor_stdio.as_deref()
+    }
+
     pub const fn last_native_detail(&self) -> Option<&LifecycleNativeDetail> {
         self.last_native_detail.as_ref()
     }
@@ -1177,6 +1193,15 @@ impl LifecycleCauseRecord {
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_diagnostic_detail_token(&self.source, "lifecycle_source")?;
         validate_diagnostic_detail_token(&self.code, "lifecycle_code")?;
+        if let Some(facts) = &self.vendor_stdio {
+            facts.validate()?;
+            if self.phase != LifecycleFailurePhase::ResourceClose || self.resource.is_none() {
+                return Err(SanitizationError::new(
+                    "invalid_vendor_stdio_cause",
+                    "vendor_stdio",
+                ));
+            }
+        }
         if let Some(detail) = &self.detail {
             detail.validate()?;
         }
@@ -1379,6 +1404,14 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn sensitivity(&self) -> Sensitivity {
         let mut sensitivity = Sensitivity::Internal;
+        if self
+            .cause
+            .as_ref()
+            .and_then(LifecycleCauseRecord::vendor_stdio)
+            .is_some()
+        {
+            sensitivity = Sensitivity::Sensitive;
+        }
         if let Some(native) = &self.native_detail {
             sensitivity = sensitivity.max(native.declared_sensitivity);
         }
@@ -1415,6 +1448,7 @@ impl RuntimeLifecycleFailureRecord {
             cause.native_detail = None;
             cause.last_native_detail = None;
             cause.native_instance = None;
+            cause.vendor_stdio = None;
         }
         result
     }

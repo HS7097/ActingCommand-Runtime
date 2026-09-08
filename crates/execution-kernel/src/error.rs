@@ -12,6 +12,7 @@ use actingcommand_device::{
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
+mod vendor_stdio;
 
 pub type ExecutionKernelResult<T> = Result<T, ExecutionKernelError>;
 
@@ -127,7 +128,8 @@ impl ExecutionKernelError {
                     },
                     cause.observation_count(),
                     cause.dropped_count(),
-                ),
+                )
+                .with_vendor_stdio_facts(cause.vendor_stdio().map(vendor_stdio::convert)),
                 recorded_event: cause.occurrence().recorded_event::<EventId>(),
             }
         }));
