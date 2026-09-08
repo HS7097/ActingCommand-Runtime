@@ -214,21 +214,27 @@ fn execute_policy_cycle(
                 policy.registry_modes.get(&intent.instance_id).copied(),
             )?;
         }
-        let admission = match host.admit_policy_dispatch(
-            intent,
-            reason_chain,
-            &PolicyAdmissionContext {
-                fact_ledger_position: intent.input_ledger_position,
-                fact_snapshot_id: intent.fact_snapshot_id.clone(),
-                approval_fact_ids: intent
-                    .approval_refs
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>(),
-                fencing_owner_epoch: host.runtime_info().owner_epoch(),
-                now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
-            },
-        ) {
+        let admission_context = PolicyAdmissionContext {
+            fact_ledger_position: intent.input_ledger_position,
+            fact_snapshot_id: intent.fact_snapshot_id.clone(),
+            approval_fact_ids: intent
+                .approval_refs
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            fencing_owner_epoch: host.runtime_info().owner_epoch(),
+            now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
+        };
+        let admission = match scheduled_task {
+            Some(task) => host.admit_scheduled_policy_dispatch(
+                intent,
+                reason_chain,
+                &admission_context,
+                &task.request,
+            ),
+            None => host.admit_policy_dispatch(intent, reason_chain, &admission_context),
+        };
+        let admission = match admission {
             Ok(admission) => admission,
             Err(error) if !error.is_fatal() => {
                 eprintln!(
@@ -1614,7 +1620,9 @@ mod tests {
                         package_path.to_string_lossy().into_owned(),
                         &package_sha256,
                     )
-                    .expect("contained task request"),
+                    .expect("contained task request")
+                    .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+                    .expect("bounded scheduled request budget"),
                     mode: ScheduledExecutionMode::DeviceRegistry,
                 },
             )]),
@@ -1797,6 +1805,18 @@ mod tests {
         let events = client
             .query_events(EventQuery::default(), ProjectionProfile::Forensic)
             .expect("query formal-provider owner chain");
+        // Workflow #269 B16: the real driver must pass its request budget into admission.
+        assert!(events.iter().any(|event| matches!(
+            &event.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(payload.as_ref(), EventPayload::Task(actingcommand_contract::TaskPayload::Semantic(payload))
+                    if payload.lease_expires_at_monotonic_ms().is_some_and(|expiry|
+                        expiry > ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+                    && matches!(payload.fact(), actingcommand_contract::TaskSemanticFact::PackageAdmitted {
+                        response_deadline_monotonic_ms: Some(deadline),
+                        ..
+                    } if *deadline >= ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS))
+        )));
         for event_type in [
             EventType::PolicyDispatchIntent,
             EventType::PolicyDispatchAdmitted,

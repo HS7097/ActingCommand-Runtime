@@ -1048,7 +1048,19 @@ impl RuntimeHost {
         context: &PolicyAdmissionContext,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
         self.work_ref("admit_policy_dispatch")?
-            .admit_policy_dispatch(intent, reason_chain, context)
+            .admit_policy_dispatch(intent, reason_chain, context, None)
+    }
+
+    /// Admits a contained policy run using its bounded request budget for the lease.
+    pub fn admit_scheduled_policy_dispatch(
+        &self,
+        intent: &DispatchIntent,
+        reason_chain: &DecisionReasonChain,
+        context: &PolicyAdmissionContext,
+        task_request: &ContainedTaskRequest,
+    ) -> RuntimeHostResult<PolicyDispatchAdmission> {
+        self.work_ref("admit_policy_dispatch")?
+            .admit_policy_dispatch(intent, reason_chain, context, Some(task_request))
     }
 
     pub fn pinned_policy_catalog(
@@ -4500,6 +4512,7 @@ impl HostShared {
         intent: &DispatchIntent,
         reason_chain: &DecisionReasonChain,
         context: &PolicyAdmissionContext,
+        task_request: Option<&ContainedTaskRequest>,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
         {
             let policy = lock(&self.policy, "validate_policy_dispatch")?;
@@ -4763,6 +4776,45 @@ impl HostShared {
                         };
                     }
                 };
+                let lease_ttl_ms = task_request
+                    .map(|task_request| {
+                        task_request.validate().map_err(|_| {
+                            RequestFailure::request(
+                                policy_admission_request(
+                                    "policy_task_request_invalid",
+                                    "admit_policy_dispatch",
+                                ),
+                                RuntimeReceiptState::Denied,
+                                None,
+                            )
+                        })?;
+                        if intent
+                            .package_digest
+                            .as_deref()
+                            .and_then(|digest| digest.strip_prefix("sha256:"))
+                            != Some(task_request.expected_sha256())
+                        {
+                            return Err(RequestFailure::request(
+                                policy_admission_request(
+                                    "procedure_package_digest_mismatch",
+                                    "admit_policy_dispatch",
+                                ),
+                                RuntimeReceiptState::Denied,
+                                None,
+                            ));
+                        }
+                        self.contained_task_lease_ttl(task_request)
+                    })
+                    .transpose();
+                let lease_ttl_ms = match lease_ttl_ms {
+                    Ok(ttl) => ttl,
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
                 let admission = self.acquire_lease(RuntimeLeaseAcquisition {
                     request: &validated,
                     request_id: request.request_id(),
@@ -4770,7 +4822,7 @@ impl HostShared {
                     holder_id,
                     connection_id,
                     run_links: Some(run_links),
-                    lease_ttl_ms: None,
+                    lease_ttl_ms,
                 });
                 match admission {
                     Ok(success) => match success.result {
@@ -17204,13 +17256,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 self.append_task(
                     EventSeverity::Info,
                     self.links(),
-                    TaskPayloadDraft::semantic(
+                    TaskPayloadDraft::semantic_with_lease_expiry(
                         TaskSemanticFact::PackageAdmitted {
                             package_label,
                             task_label,
                             package_sha256,
                             response_deadline_monotonic_ms: Some(self.control.deadline()),
                         },
+                        self.token.expires_at_monotonic_ms(),
                         AuditInput::new(),
                     ),
                 )

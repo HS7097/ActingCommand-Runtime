@@ -3356,6 +3356,8 @@ pub struct TaskSemanticPayload {
     action: EventAction,
     fact: TaskSemanticFact,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease_expires_at_monotonic_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     sampling: Option<InputSamplingEvidence>,
     audit: SanitizedAudit,
 }
@@ -3367,6 +3369,10 @@ impl TaskSemanticPayload {
 
     pub const fn fact(&self) -> &TaskSemanticFact {
         &self.fact
+    }
+
+    pub const fn lease_expires_at_monotonic_ms(&self) -> Option<u64> {
+        self.lease_expires_at_monotonic_ms
     }
 
     pub const fn sampling(&self) -> Option<&InputSamplingEvidence> {
@@ -3385,6 +3391,20 @@ impl TaskSemanticPayload {
             ));
         }
         self.fact.validate()?;
+        if let Some(expires_at) = self.lease_expires_at_monotonic_ms
+            && !matches!(
+                &self.fact,
+                TaskSemanticFact::PackageAdmitted {
+                    response_deadline_monotonic_ms: Some(deadline),
+                    ..
+                } if *deadline < expires_at
+            )
+        {
+            return Err(SanitizationError::new(
+                "invalid_task_lease_deadline",
+                "lease_expires_at_monotonic_ms",
+            ));
+        }
         match (&self.fact, &self.sampling) {
             (TaskSemanticFact::EffectIntent { action, .. }, Some(sampling)) => {
                 sampling.validate(action)
@@ -5020,6 +5040,7 @@ struct AgentSessionDraft {
 
 struct TaskSemanticDraft {
     fact: TaskSemanticFact,
+    lease_expires_at_monotonic_ms: Option<u64>,
     sampling: Option<InputSamplingEvidence>,
     audit: AuditInput,
 }
@@ -5035,6 +5056,7 @@ impl TaskSemanticDraft {
         let payload = TaskSemanticPayload {
             action: EventAction::RuntimeTaskRun,
             fact,
+            lease_expires_at_monotonic_ms: self.lease_expires_at_monotonic_ms,
             sampling: self.sampling,
             audit: self.audit.sanitize(fingerprinter)?,
         };
@@ -7172,6 +7194,20 @@ impl TaskPayloadDraft {
     pub fn semantic(fact: TaskSemanticFact, audit: AuditInput) -> Self {
         Self(TaskDraftKind::Semantic(TaskSemanticDraft {
             fact,
+            lease_expires_at_monotonic_ms: None,
+            sampling: None,
+            audit,
+        }))
+    }
+
+    pub fn semantic_with_lease_expiry(
+        fact: TaskSemanticFact,
+        lease_expires_at_monotonic_ms: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(TaskDraftKind::Semantic(TaskSemanticDraft {
+            fact,
+            lease_expires_at_monotonic_ms: Some(lease_expires_at_monotonic_ms),
             sampling: None,
             audit,
         }))
@@ -7184,6 +7220,7 @@ impl TaskPayloadDraft {
     ) -> Self {
         Self(TaskDraftKind::Semantic(TaskSemanticDraft {
             fact,
+            lease_expires_at_monotonic_ms: None,
             sampling: Some(sampling),
             audit,
         }))

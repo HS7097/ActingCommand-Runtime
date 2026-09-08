@@ -4234,15 +4234,20 @@ fn admitted_physical_run_fixture(
         .expect("activate physical policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("physical package request");
     let PolicyDispatchAdmission::Granted { context } = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .admit_scheduled_policy_dispatch(
+            &intent,
+            &reasons,
+            &policy_context(&host, &intent),
+            &request,
+        )
         .expect("physical policy admission")
     else {
         panic!("expected physical policy context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("physical package request");
     (host, state, context, request, resolved)
 }
 
@@ -14844,6 +14849,123 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
 
 #[test]
 fn scheduled_contained_task_deadline_uses_existing_failure_settlement() {
+    // Defect regression: Workflow #269 SCHEDULED-LEASE-BUDGET-v1,
+    // B16 first red: issuecomment-5591140471. Reuse the existing task and clock.
+    {
+        let root = TempDir::new().expect("tempdir");
+        let budget_ms = 6_000;
+        let reserve_ms = 50;
+        let short_ttl_ms = 1_200;
+        let package = neutral_contained_task_package_with_execution_timeout(budget_ms);
+        let package_path = root.path().join("scheduled-task.zip");
+        fs::write(&package_path, &package).expect("write scheduled package");
+        let request = ContainedTaskRequest::new(
+            package_path.to_string_lossy().into_owned(),
+            format!("{:x}", Sha256::digest(&package)),
+        )
+        .expect("scheduled package request")
+        .with_response_deadline_ms(budget_ms)
+        .expect("bounded scheduled response budget");
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_runtime_clock(clock.clone())
+                .with_scheduler(SchedulerConfig {
+                    maximum_client_heartbeat_interval_ms: reserve_ms,
+                    takeover_cooldown_ms: 100,
+                    lease_ttl_ms: short_ttl_ms,
+                    ..SchedulerConfig::default()
+                })
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .expect("scheduled runtime host");
+        host.activate_policy_catalog(&policy_sources(1))
+            .expect("activate scheduled catalog");
+        let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+        record_policy_approval(&host, &intent);
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_scheduled_policy_dispatch(
+                &intent,
+                &reasons,
+                &policy_context(&host, &intent),
+                &request,
+            )
+            .expect("scheduled request-budget admission")
+        else {
+            panic!("expected scheduled context")
+        };
+        assert_eq!(
+            context.lease_token().expires_at_monotonic_ms(),
+            budget_ms + reserve_ms
+        );
+        clock.advance(short_ttl_ms + 1);
+        let receipt = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect("declared task remains runnable past the default lease TTL");
+        assert!(matches!(
+            receipt.result(),
+            Some(RuntimeResult::ContainedTaskCompleted {
+                outcome: TaskOutcome::Success,
+                response_deadline_monotonic_ms: Some(deadline),
+                ..
+            }) if *deadline == budget_ms
+        ));
+        let (outcome, _) = host
+            .complete_scheduled_policy_run(&context, &receipt)
+            .expect("settle the actual scheduled execution");
+        assert_eq!(
+            outcome.outcome,
+            PolicyExecutionOutcome::Succeeded {
+                runtime_ms: short_ttl_ms + 1
+            }
+        );
+        assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+        let events = host
+            .query_persisted_events_for_test(EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            })
+            .expect("scheduled lease and deadline evidence");
+        assert!(events.iter().any(|event| matches!(
+            event.payload(),
+            EventPayload::Task(TaskPayload::Semantic(payload))
+                if payload.lease_expires_at_monotonic_ms() == Some(budget_ms + reserve_ms)
+                    && matches!(payload.fact(), TaskSemanticFact::PackageAdmitted {
+                        response_deadline_monotonic_ms: Some(deadline),
+                        ..
+                    } if *deadline == budget_ms)
+                    && event.links().lease_id() == Some(&context.lease_token().lease_id())
+        )));
+        for event_type in [
+            EventType::LeaseGranted,
+            EventType::TaskCompleted,
+            EventType::LeaseReleased,
+            EventType::PolicyExecutionRecorded,
+            EventType::PolicyDispatchCompleted,
+        ] {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type() == event_type)
+                    .count(),
+                1,
+                "{event_type:?} must remain unique"
+            );
+        }
+        host.close().expect("close scheduled host");
+    }
     let root = TempDir::new().expect("tempdir");
     let (host, state, context, request, _) = admitted_physical_run_fixture(&root);
     state.capture_delay_ms.store(100, Ordering::Release);
