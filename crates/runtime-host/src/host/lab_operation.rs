@@ -709,7 +709,6 @@ impl HostShared {
             &instance.instance_alias,
             links,
             artifact_links,
-            true,
             &admission,
         )?;
         let fence = self

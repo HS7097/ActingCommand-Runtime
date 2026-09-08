@@ -1372,7 +1372,17 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(host.contains("fn monitor_probe_loop"));
     assert!(host.contains("fn run_monitor_probe"));
     assert!(host.contains("MonitorPayloadDraft::completed"));
-    assert!(host.contains("persist_monitor_observation"));
+    let monitor_probe = host
+        .split("fn run_monitor_probe(")
+        .nth(1)
+        .expect("monitor probe body")
+        .split("\n    fn ")
+        .next()
+        .expect("monitor probe boundary");
+    assert!(monitor_probe.contains("self.artifacts"));
+    assert!(monitor_probe.contains("ArtifactWriteRequest::new"));
+    assert!(monitor_probe.contains("ArtifactProducer::CaptureStore"));
+    assert!(monitor_probe.contains(".map_err(RuntimeHostError::artifact)"));
     assert!(host.contains("fn record_monitor_recovery_coordination"));
     assert!(host.contains("fn monitor_recovery_admission"));
     assert!(host.contains("MonitorPayloadDraft::recovery_admitted"));

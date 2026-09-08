@@ -10401,6 +10401,7 @@ fn capture_sequence_bounds_are_rejected_before_backend_open() {
 
 #[test]
 fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
+    // First red: Workflow #269, issuecomment-5576835769 (ARTIFACT-PERSIST-v2).
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, "node.a", Arc::clone(&state));
@@ -10423,14 +10424,101 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
             .expect("runtime fatal state")
             .expect("fatal error")
             .code(),
-        "artifact_store_failure"
+        "artifact_directory_failed"
     );
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("native failure facts");
+    let failures = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::ArtifactStoreFailed)
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].artifacts().is_empty());
+    let payload = failures[0].payload();
+    let failure = payload.artifact_failure().expect("typed persistence error");
+    assert_eq!(
+        failure.stage,
+        actingcommand_contract::ArtifactFailureStage::BeforePublication
+    );
+    assert_eq!(failure.primary.code, "artifact_directory_failed");
+    assert_eq!(failure.primary.operation, "store_artifact");
+    assert!(!failure.primary.native_detail.text().is_empty());
+    assert!(payload.sensitivity() >= Sensitivity::Sensitive);
+    let public = serde_json::to_string(&payload.public_projection()).expect("public failure");
+    assert!(!public.contains("native_detail"));
+    assert!(!public.contains(failure.primary.native_detail.text()));
+    let fatal = host.fatal_error().expect("health").expect("fatal");
+    assert_eq!(fatal.operation(), "store_artifact");
+    let native = fatal
+        .lifecycle
+        .native_detail
+        .as_ref()
+        .expect("Host native I/O");
+    assert!(native.text().contains(failure.primary.native_detail.text()));
+    assert!(!format!("{fatal} {fatal:?}").contains(failure.primary.native_detail.text()));
+    let repeated = fatal
+        .clone()
+        .with_related_failure("diagnostic_cleanup", &fatal);
+    assert_eq!(
+        repeated.lifecycle.native_detail,
+        fatal.lifecycle.native_detail
+    );
+    let cleanup_dir = root.path().join("diagnostic-cleanup");
+    fs::create_dir(&cleanup_dir).expect("cleanup target");
+    let cleanup_io = fs::remove_file(&cleanup_dir).expect_err("native cleanup failure");
+    let cleanup =
+        RuntimeHostError::artifact(actingcommand_artifact_store::ArtifactStoreError::fatal(
+            "artifact_cleanup_failed",
+            "cleanup_artifact_temp",
+            cleanup_io.to_string(),
+        ));
+    let combined = fatal
+        .clone()
+        .with_related_failure("diagnostic_cleanup", &cleanup);
+    assert_eq!(combined.code(), fatal.code());
+    assert_eq!(combined.operation(), fatal.operation());
+    let combined_native = combined
+        .lifecycle
+        .native_detail
+        .as_ref()
+        .expect("both causes");
+    assert!(
+        combined_native
+            .text()
+            .contains(failure.primary.native_detail.text())
+    );
+    assert!(combined_native.text().contains(&cleanup_io.to_string()));
+    assert!(
+        combined_native
+            .text()
+            .contains("diagnostic_cleanup artifact_cleanup_failed during cleanup_artifact_temp")
+    );
+    host.record_lifecycle_failure(
+        RuntimeLifecycleFailureStage::OperationCleanup,
+        RuntimeLifecycleFailure::Host(&combined),
+    )
+    .expect("native merged failure record");
+    let recorded = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::RuntimeFailed),
+            ..EventQuery::default()
+        })
+        .expect("native lifecycle failures");
+    assert!(recorded.iter().any(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome)) if outcome.lifecycle_failure().and_then(|value| value.native_detail()) == Some(combined_native.as_ref()))));
+    for event in recorded {
+        assert!(event.artifacts().is_empty());
+        let public = serde_json::to_string(&event.payload().public_projection())
+            .expect("public merged failure");
+        assert!(!public.contains(failure.primary.native_detail.text()));
+        assert!(!public.contains(&cleanup_io.to_string()));
+    }
     drop(client);
     assert_eq!(
         host.close()
             .expect_err("fatal host closes with failure")
             .code(),
-        "artifact_store_failure"
+        "artifact_directory_failed"
     );
 }
 
@@ -12816,6 +12904,11 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
 #[test]
 fn contained_task_stability_persistence_failures_are_fatal_without_later_input_or_artifact() {
     for failure_kind in ["artifact_write", "event_append"] {
+        let expected_code = if failure_kind == "event_append" {
+            "contained_task_stability_event_append_injected_failure"
+        } else {
+            "artifact_store_failure"
+        };
         let root = TempDir::new().expect("tempdir");
         let package = root
             .path()
@@ -12893,7 +12986,7 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
                 .expect("runtime fatal state")
                 .expect("fatal error")
                 .code(),
-            "artifact_store_failure",
+            expected_code,
             "{failure_kind}"
         );
         drop(client);
@@ -12901,7 +12994,7 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
             host.close()
                 .expect_err("fatal host closes with failure")
                 .code(),
-            "artifact_store_failure",
+            expected_code,
             "{failure_kind}"
         );
     }

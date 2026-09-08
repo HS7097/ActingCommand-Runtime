@@ -83,12 +83,8 @@ impl HostShared {
             )
         })?;
         self.append_scheduler_admitted(request, &resolved, None)?;
-        let completed = self.capture_readonly_observation(
-            request,
-            instance_alias,
-            resolved.instance_id(),
-            true,
-        )?;
+        let completed =
+            self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
         let png = read_projected_verified(self.artifacts.root(), completed.observation.artifact())
             .map_err(observation_artifact_failure)?;
         let recognition_id = self.events.issuer().mint_recognition_id().map_err(|_| {
@@ -327,14 +323,7 @@ pub(super) fn observation_integrity_failure(code: &'static str) -> RequestFailur
     ))
 }
 pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> RequestFailure {
-    RequestFailure::poison_without_terminal(
-        RuntimeHostError::fatal(
-            error.code(),
-            error.operation(),
-            RuntimeErrorCode::RuntimeFatal,
-        )
-        .with_native_detail(error.to_string()),
-    )
+    RequestFailure::poison_without_terminal(RuntimeHostError::artifact(error))
 }
 
 /// This request retains the sequence returned by its own native append.

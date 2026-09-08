@@ -324,7 +324,7 @@ impl EvidenceExporter {
                     "stored archive metadata does not match the published ZIP",
                 ),
             );
-            return Err(self.artifact_store.rollback_stored(&stored, error));
+            return Err(error);
         }
 
         let completed_artifact_count = artifact_count(&request.pipeline)?
@@ -349,7 +349,7 @@ impl EvidenceExporter {
             Some(&stored),
         ) {
             let error = cleanup_file(&output_path, "rollback_evidence_output", error);
-            return Err(self.artifact_store.rollback_stored(&stored, error));
+            return Err(error);
         }
 
         Ok(EvidenceExportReceipt {
@@ -1247,7 +1247,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_event_failure_rolls_back_output_and_archive_object() {
+    fn completed_event_failure_preserves_referenced_archive_object() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
         let identity = test_identity();
@@ -1277,7 +1277,7 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert!(!output.exists());
-        assert_eq!(all_files(&artifact_root).len(), source_files);
+        assert_eq!(all_files(&artifact_root).len(), source_files + 1);
         assert!(sink.event_types.contains(&EventType::ArtifactExportFailed));
         assert!(
             !sink

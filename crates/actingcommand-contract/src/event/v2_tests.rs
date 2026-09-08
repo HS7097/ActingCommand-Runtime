@@ -1513,6 +1513,44 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
         let debug = format!("{:?}", issued.reference());
         assert!(!json.contains(secret), "artifact metadata leaked {secret}");
         assert!(!debug.contains(secret), "artifact debug leaked {secret}");
+        // ARTIFACT-PERSIST-v2: native text belongs only to the sensitive failure fact.
+        let failure = ArtifactFailureRecord {
+            artifact_id: *issued.reference().artifact_id(),
+            stage: ArtifactFailureStage::BeforePublication,
+            primary: ArtifactFailureCause {
+                code: "artifact_write_failed".to_owned(),
+                operation: "write_artifact_temp".to_owned(),
+                native_detail: LifecycleNativeDetail::new(secret, false),
+            },
+            secondary: Vec::new(),
+            omitted_secondary_count: 0,
+        };
+        let payload = sanitize(
+            ArtifactPayloadDraft::persistence_failed(failure.clone(), AuditInput::new()).into(),
+            1,
+        );
+        assert_eq!(payload.payload().sensitivity(), Sensitivity::Sensitive);
+        let json = serde_json::to_value(payload.payload()).expect("private failure");
+        let roundtrip: EventPayload =
+            serde_json::from_value(json.clone()).expect("failure round trip");
+        roundtrip.validate().expect("valid typed failure");
+        assert_eq!(roundtrip.artifact_failure(), Some(&failure));
+        assert!(!format!("{roundtrip:?}").contains(secret));
+        assert!(
+            !serde_json::to_string(&roundtrip.public_projection())
+                .expect("public failure")
+                .contains(secret)
+        );
+
+        let mut wrong_owner = json;
+        wrong_owner["family"] = serde_json::json!("recognition");
+        wrong_owner["payload"]["kind"] = serde_json::json!("failed");
+        let wrong_owner: EventPayload =
+            serde_json::from_value(wrong_owner).expect("diagnostic wire shape");
+        assert_eq!(
+            wrong_owner.validate().expect_err("failure owner").code(),
+            "invalid_artifact_failure_owner"
+        );
     }
 }
 

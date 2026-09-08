@@ -156,13 +156,13 @@ impl RuntimeContainedTask<'_> {
                         ArtifactRedactionState::Pending,
                     ),
                 )
-                .map_err(failure)?,
+                .map_err(online_observation::observation_artifact_failure)?,
         );
         let stream = self.diagnostic_stream.as_mut().expect("created stream");
         stream
             .append(&bytes[..bytes.len() - 1])
             .and_then(|()| stream.append(b",\"records\":[\n"))
-            .map_err(failure)
+            .map_err(online_observation::observation_artifact_failure)
     }
 
     fn diagnostic_record(
@@ -194,12 +194,18 @@ impl RuntimeContainedTask<'_> {
             .as_mut()
             .ok_or_else(|| failure("task diagnostic stream missing"))?;
         if self.diagnostic_records != 0 {
-            stream.append(b",").map_err(failure)?;
+            stream
+                .append(b",")
+                .map_err(online_observation::observation_artifact_failure)?;
         }
         let mut writer = RecordWriter { bytes: Vec::new() };
         serde_json::to_writer(&mut writer, &record).map_err(failure)?;
-        stream.append(&writer.bytes).map_err(failure)?;
-        stream.append(b"\n").map_err(failure)?;
+        stream
+            .append(&writer.bytes)
+            .map_err(online_observation::observation_artifact_failure)?;
+        stream
+            .append(b"\n")
+            .map_err(online_observation::observation_artifact_failure)?;
         self.diagnostic_records = index;
         Ok(index)
     }
@@ -635,7 +641,7 @@ impl RuntimeContainedTask<'_> {
             .as_mut()
             .ok_or_else(|| failure("stream missing at seal"))?
             .append(b"]}\n")
-            .map_err(failure)?;
+            .map_err(online_observation::observation_artifact_failure)?;
         let stream = self.diagnostic_stream.take().expect("stream ready to seal");
         let mut sink = RuntimeArtifactEventSink {
             ledger: &self.host.ledger,
@@ -644,13 +650,15 @@ impl RuntimeContainedTask<'_> {
         self.host
             .artifacts
             .seal_stream(stream, &mut sink)
-            .map_err(failure)?;
+            .map_err(online_observation::observation_artifact_failure)?;
         Ok(())
     }
 
     pub(super) fn abort_diagnostic(&mut self) -> Result<(), RequestFailure> {
-        self.diagnostic_stream
-            .take()
-            .map_or(Ok(()), |stream| stream.abort().map_err(failure))
+        self.diagnostic_stream.take().map_or(Ok(()), |stream| {
+            stream
+                .abort()
+                .map_err(online_observation::observation_artifact_failure)
+        })
     }
 }

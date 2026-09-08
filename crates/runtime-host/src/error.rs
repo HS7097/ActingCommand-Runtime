@@ -48,6 +48,15 @@ impl PartialEq for RuntimeHostError {
 impl Eq for RuntimeHostError {}
 
 impl RuntimeHostError {
+    pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
+        let mut result = Self::fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::RuntimeFatal,
+        );
+        result.lifecycle.native_detail = Some(Box::new(error.native_detail()));
+        result
+    }
     pub const fn code(&self) -> &'static str {
         self.code
     }
@@ -178,6 +187,43 @@ impl RuntimeHostError {
         self.lifecycle.native_detail = Some(Box::new(
             actingcommand_contract::LifecycleNativeDetail::new(&detail[..end], end < detail.len()),
         ));
+        self
+    }
+
+    pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        if self.code == other.code
+            && self.operation == other.operation
+            && self.lifecycle.native_detail == other.lifecycle.native_detail
+        {
+            return self;
+        }
+        let mut text = format!(
+            "primary {} during {}; {relation} {} during {}",
+            self.code, self.operation, other.code, other.operation
+        );
+        let details = [
+            self.lifecycle.native_detail.as_deref(),
+            other.lifecycle.native_detail.as_deref(),
+        ];
+        let count = details.iter().flatten().count();
+        let budget = 1024usize.saturating_sub(text.len() + count * 3) / count.max(1);
+        let mut truncated = false;
+        for detail in details.into_iter().flatten() {
+            let mut end = detail.text().len().min(budget);
+            while !detail.text().is_char_boundary(end) {
+                end -= 1;
+            }
+            truncated |= detail.truncated() || end < detail.text().len();
+            text.push_str(" | ");
+            text.push_str(&detail.text()[..end]);
+        }
+        self = self.with_native_detail(text);
+        self.lifecycle.recorded_event = Arc::new(OnceLock::new());
+        if truncated && let Some(detail) = self.lifecycle.native_detail.as_deref() {
+            self.lifecycle.native_detail = Some(Box::new(
+                actingcommand_contract::LifecycleNativeDetail::new(detail.text(), true),
+            ));
+        }
         self
     }
 }
