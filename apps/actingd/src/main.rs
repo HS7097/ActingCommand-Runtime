@@ -1808,7 +1808,14 @@ mod tests {
             EventType::PolicyExecutionRecorded,
             EventType::PolicyDispatchCompleted,
         ] {
-            let expected = if event_type == EventType::PolicyDispatchIntent {
+            // PR346 CI34248791592: both selected dispatches pass real admission;
+            // only the primary has a scheduled resource execution in this fixture.
+            let expected = if matches!(
+                event_type,
+                EventType::PolicyDispatchIntent
+                    | EventType::PolicyDispatchAdmitted
+                    | EventType::LeaseGranted
+            ) {
                 2
             } else {
                 1
