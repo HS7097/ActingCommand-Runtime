@@ -71,6 +71,26 @@ The `env.*` namespace remains an ordinary fact-key family. Existing execution su
 
 ## Scope And Overrides
 
+Runtime evaluation replaces task runtime snapshots with its replayed admitted and
+completed dispatches at the input ledger position. The latest admitted dispatch
+supplies `last_dispatched_unix_ms`; a completed dispatch supplies its recorded
+execution success/failure. This is scheduling execution state, not a business
+effect or a catalog outcome key. No observed eligibility-start time is invented.
+
+Before assigning an instance winner, Runtime consults the existing control owner's
+read-only admission predicate for task/activity daily, window and runtime budgets,
+activity windows and sampled intervals. Unavailable candidates leave the instance
+and host capacity available to the next ranked task. The same predicate supplies
+the next possible admission time at bounded weekly window/cadence boundaries.
+Final admission still checks and commits the actual counters under the original lock.
+
+`policy.dispatch_rejected` retains its immutable ranking reasons and optionally
+carries `rejection`: the original Runtime error code, operation and fatal flag,
+the decisive budget dimension with used/requested/limit values when applicable,
+and the next eligible Unix time when one is available. These are bounded typed
+control facts; native text and secrets are not copied into ranking or rejection
+details. Existing events without rejection details remain unchanged.
+
 Every task, pool, activity profile, and timeline event declares `instance`, `server`, or `game` scope. `instance_overrides` is the only V1 task override layer. A null override field means inherit the catalog value; it does not mean zero, false, or an inferred default. Activity profiles scoped to an instance carry its importance and goals.
 
 The `instance_id` in instance scopes and overrides stores the exact registered

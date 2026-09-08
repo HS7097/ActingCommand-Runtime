@@ -1794,6 +1794,10 @@ fn budget_policy_sources(version: u64) -> CatalogSources {
         serde_json::from_slice(&sources.tasks.bytes).expect("budget task fixture");
     tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(60000);
     tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "clock",
+        "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 1, "anchor_ms": 0}
+    });
     tasks["tasks"][0]["loop_budget"] = serde_json::json!({
         "daily_limit": 4,
         "window_iteration_limit": 4,
@@ -6924,6 +6928,7 @@ fn mapped_consumer_projection_failures_are_typed_and_dispatch_nothing() {
 #[test]
 fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection() {
     // Workflow #269 B10 first red: issuecomment-5585703260; SCHEDULED-OUTCOMES-v1.
+    // B11 first red: issuecomment-5587376490; SCHEDULING-ELIGIBILITY-v1.
     let outcome_key = "unconsumed-result";
     let root = TempDir::new().expect("tempdir");
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
@@ -6934,11 +6939,36 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
         .transition_capture_after_input
         .store(true, Ordering::Release);
     let runtime_instance_id = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let mut sources = budget_policy_sources(1);
+    let mut tasks: serde_json::Value = serde_json::from_slice(&sources.tasks.bytes).unwrap();
+    tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(1);
+    tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(1);
+    let mut followup = tasks["tasks"][0].clone();
+    followup["id"] = serde_json::json!("fixture.followup");
+    followup["priority"] = serde_json::json!(50);
+    followup["trigger"] = serde_json::json!({
+        "kind": "dependency_completed", "task_id": "fixture.observe", "terminal_states": ["succeeded"]
+    });
+    let mut fallback = tasks["tasks"][0].clone();
+    fallback["id"] = serde_json::json!("fixture.fallback");
+    fallback["priority"] = serde_json::json!(1);
+    tasks["tasks"]
+        .as_array_mut()
+        .unwrap()
+        .extend([followup, fallback]);
+    sources.tasks.bytes = serde_json::to_vec(&tasks).unwrap();
+    let mut activity: serde_json::Value = serde_json::from_slice(&sources.activity.bytes).unwrap();
+    activity["profiles"][0]["minimum_interval_ms"] = serde_json::json!(60_000);
+    activity["profiles"][0]["maximum_interval_ms"] = serde_json::json!(60_000);
+    sources.activity.bytes = serde_json::to_vec(&activity).unwrap();
     let host = RuntimeHost::start(
-        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
-            &package,
-            vec!["after_observation".to_owned()],
-        )),
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
         Arc::new(
             FakeProvider::one(
                 POLICY_INSTANCE_ALIAS,
@@ -6949,7 +6979,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
         ),
     )
     .expect("runtime host");
-    host.activate_policy_catalog(&policy_sources(1))
+    host.activate_policy_catalog(&sources)
         .expect("activate catalog without outcome references");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
@@ -7014,10 +7044,45 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
         SchedulingEffectEvidence::DesignatedEffectCompleted { .. }
     ));
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    clock.advance(1_000);
+    let waiting = host
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect("actual activity interval defers all three tasks")
+        .evaluation
+        .unwrap();
+    assert!(waiting.dispatch_intents.is_empty());
+    assert_eq!(
+        waiting.next_wake_unix_ms,
+        Some(context.admission().activity.next_eligible_unix_ms)
+    );
+    assert!(waiting.decisions.iter().all(|decision| {
+        decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "policy_activity_interval_active")
+    }));
+    clock.advance(599_000);
+    let next = host
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect("completed execution is an authoritative task snapshot")
+        .evaluation
+        .expect("next evaluation");
+    assert_eq!(next.dispatch_intents.len(), 1);
+    assert_eq!(next.dispatch_intents[0].task_id, "fixture.followup");
+    assert!(
+        next.decisions
+            .iter()
+            .find(|decision| decision.task_id == "fixture.observe")
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "policy_budget_exhausted")
+    );
     host.close().expect("close scheduled host");
 
     let restarted = RuntimeHost::start(
         config(&root)
+            .with_runtime_clock(clock.clone())
             .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
             .with_procedure_manifest(procedure_manifest_with_primary(
                 &package,
@@ -7064,6 +7129,29 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
     assert_eq!(recovered_terminal.sequence(), terminal.sequence());
     assert_eq!(recovered_terminal.payload(), terminal.payload());
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let next = restarted
+        .evaluate_policy_cycle(PolicyTrigger::Recovery)
+        .expect("replay derives task state and budget from the same ledger")
+        .evaluation
+        .expect("recovered evaluation");
+    assert_eq!(next.dispatch_intents.len(), 1);
+    let next_intent = &next.dispatch_intents[0];
+    assert_eq!(next_intent.task_id, "fixture.followup");
+    let next_reasons = next
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == next_intent.reason_chain_id)
+        .unwrap();
+    assert!(matches!(
+        restarted
+            .admit_policy_dispatch(
+                next_intent,
+                next_reasons,
+                &policy_context(&restarted, next_intent)
+            )
+            .expect("next legal task passes the final admission lock"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
     restarted.close().expect("close recovered host");
 }
 
@@ -18913,6 +19001,89 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
 }
 
 #[test]
+fn policy_final_admission_records_the_actual_control_rejection() {
+    // Workflow #269 B11 first red: issuecomment-5587376490.
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = Arc::new(FakeState::default());
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            state.clone(),
+        )),
+    )
+    .expect("control rejection host");
+    let mut sources = policy_sources(1);
+    let mut activity: serde_json::Value = serde_json::from_slice(&sources.activity.bytes).unwrap();
+    let end_minute = (POLICY_NOW_UNIX_MS % 86_400_000) / 60_000 + 1;
+    activity["profiles"][0]["windows"][0]["start_minute_of_day"] = serde_json::json!(0);
+    activity["profiles"][0]["windows"][0]["end_minute_of_day"] = serde_json::json!(end_minute);
+    sources.activity.bytes = serde_json::to_vec(&activity).unwrap();
+    host.activate_policy_catalog(&sources)
+        .expect("activate closing window");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    clock.advance(60_000);
+    let failure = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("selection cannot bypass final locked window admission");
+    assert_eq!(failure.code(), "policy_activity_window_closed");
+    assert!(!failure.is_fatal());
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::PolicyDispatchRejected),
+            ..EventQuery::default()
+        })
+        .expect("actual rejected event");
+    assert_eq!(events.len(), 1);
+    let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = events[0].payload() else {
+        panic!("rejection payload")
+    };
+    let rejection = payload.rejection().expect("original RequestFailure facts");
+    assert_eq!(rejection, &failure.policy_rejection());
+    assert_eq!(rejection.operation, "reserve_policy_budget");
+    assert_eq!(
+        rejection.next_eligible_unix_ms,
+        Some((POLICY_NOW_UNIX_MS / 86_400_000 + 1) * 86_400_000)
+    );
+    assert!(rejection.budget.is_none());
+    assert_eq!(payload.reasons().len(), reasons.reasons.len());
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert!(
+        host.query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::PolicyDispatchAdmitted),
+            ..EventQuery::default()
+        })
+        .unwrap()
+        .is_empty()
+    );
+    let original = events[0].clone();
+    host.close().expect("close rejected host");
+    let restarted = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            state,
+        )),
+    )
+    .expect("replay rejection without changing ranking identity");
+    let replayed = restarted
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::PolicyDispatchRejected),
+            ..EventQuery::default()
+        })
+        .unwrap();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].payload(), original.payload());
+    assert_eq!(replayed[0].sequence(), original.sequence());
+    restarted.close().expect("close replayed host");
+}
+
+#[test]
 fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
     let root = TempDir::new().expect("tempdir");
     let registered_id = instance_id();
@@ -18967,16 +19138,35 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
         )),
     )
     .expect("reopen exhausted budget runtime");
-    let (_, intent, reasons) = evaluated_policy_dispatch_at(
-        &host,
-        PolicyTrigger::Recovery,
-        POLICY_NOW_UNIX_MS + 2_400_000,
-        104,
+    let evaluation = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 2_400_000,
+                monotonic_ms: 2_400_000,
+            },
+            104,
+            PolicyTrigger::Recovery,
+        )
+        .expect("recovered budget availability")
+        .evaluation
+        .unwrap();
+    assert!(
+        evaluation.dispatch_intents.is_empty(),
+        "fifth window dispatch cannot win after restart"
     );
-    let error = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-        .expect_err("fifth window admission must remain rejected after restart");
-    assert_eq!(error.code(), "policy_budget_exhausted");
+    assert!(
+        evaluation.decisions[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "policy_budget_exhausted")
+    );
+    assert!(
+        evaluation
+            .next_wake_unix_ms
+            .is_some_and(|next| next > POLICY_NOW_UNIX_MS + 2_400_000)
+    );
     host.close().expect("close exhausted budget runtime");
 }
 
@@ -19204,16 +19394,31 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
         )
         .expect("accelerated exhausted budget runtime");
         let final_hour = day * 24 + 23;
-        let (_, intent, reasons) = evaluated_policy_dispatch_at(
-            &host,
-            PolicyTrigger::Reconciliation,
-            start_unix_ms + final_hour * HOUR_MS,
-            209 + day * 10,
+        let unix_ms = start_unix_ms + final_hour * HOUR_MS;
+        let evaluation = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &policy_facts(),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms,
+                    monotonic_ms: unix_ms,
+                },
+                209 + day * 10,
+                PolicyTrigger::Reconciliation,
+            )
+            .expect("daily/window availability")
+            .evaluation
+            .unwrap();
+        assert!(
+            evaluation.dispatch_intents.is_empty(),
+            "fifth daily/window execution cannot win"
         );
-        let error = host
-            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-            .expect_err("fifth daily/window execution must exhaust the production budget");
-        assert_eq!(error.code(), "policy_budget_exhausted");
+        assert!(
+            evaluation.decisions[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "policy_budget_exhausted")
+        );
         host.close()
             .expect("close accelerated exhausted budget runtime");
     }

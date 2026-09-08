@@ -4,6 +4,7 @@
 
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
+    is_availability_denial,
 };
 use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
@@ -16,10 +17,11 @@ use actingcommand_contract::{
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
-    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog, DecisionReasonChain,
-    DispatchIntent, DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime,
-    InstanceSnapshot, MAX_EVALUATION_INSTANCES, PolicyEvaluation, ScopeSelector, compile_catalog,
-    evaluate,
+    ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
+    DecisionReason, DecisionReasonChain, DispatchIntent, DispatchPrerequisites, EvaluationFacts,
+    EvaluationResources, EvaluationTime, InstanceSnapshot, MAX_EVALUATION_INSTANCES,
+    PolicyEvaluation, ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState, compile_catalog,
+    evaluate_with_eligibility,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use serde::{Deserialize, Serialize};
@@ -855,6 +857,78 @@ impl PolicyHost {
             .collect()
     }
 
+    pub(crate) fn task_runtime_snapshots(
+        &self,
+        ledger_position: u64,
+    ) -> RuntimeHostResult<Vec<TaskRuntimeSnapshot>> {
+        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
+        for dispatch in self.seen_dispatches.values() {
+            if self.active.as_ref().is_none_or(|active| {
+                !active
+                    .compiled
+                    .catalog()
+                    .tasks
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == dispatch.data.task_id)
+            }) {
+                continue;
+            }
+            let Some(sequence) = dispatch
+                .admitted_sequence
+                .filter(|sequence| *sequence <= ledger_position)
+            else {
+                continue;
+            };
+            let key = (
+                dispatch.data.task_id.as_str(),
+                dispatch.data.instance_id.as_str(),
+            );
+            if latest
+                .get(&key)
+                .is_none_or(|(previous, _)| *previous < sequence)
+            {
+                latest.insert(key, (sequence, dispatch));
+            }
+        }
+        latest
+            .into_iter()
+            .map(|((task_id, instance_id), (_, dispatch))| {
+                let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                    fatal(
+                        "policy_dispatch_admission_missing",
+                        "project_policy_task_state",
+                    )
+                })?;
+                let terminal_state = if dispatch
+                    .completed_sequence
+                    .is_some_and(|sequence| sequence <= ledger_position)
+                {
+                    let execution = dispatch.execution.as_ref().ok_or_else(|| {
+                        fatal(
+                            "policy_execution_outcome_missing",
+                            "project_policy_task_state",
+                        )
+                    })?;
+                    Some(match execution.outcome {
+                        PolicyExecutionOutcome::Succeeded { .. } => TaskTerminalState::Succeeded,
+                        PolicyExecutionOutcome::Failed { .. } => TaskTerminalState::Failed,
+                    })
+                } else {
+                    None
+                };
+                Ok(TaskRuntimeSnapshot {
+                    task_id: task_id.to_owned(),
+                    instance_id: instance_id.to_owned(),
+                    last_dispatched_unix_ms: Some(admission.activity.admitted_at_unix_ms),
+                    // No ledger fact establishes the start of continuous eligibility.
+                    eligible_since_unix_ms: None,
+                    terminal_state,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
@@ -925,8 +999,33 @@ impl PolicyHost {
             .ok_or_else(|| request("policy_catalog_unavailable", "evaluate_policy_cycle"))?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
         let started = Instant::now();
-        let mut evaluation = evaluate(&active.compiled, facts, resources, time, seed)
-            .map_err(|_| request("policy_evaluation_rejected", "evaluate_policy_cycle"))?;
+        let mut evaluation = evaluate_with_eligibility::<RuntimeHostError>(
+            &active.compiled,
+            facts,
+            resources,
+            time,
+            seed,
+            |intent| match self
+                .control
+                .preview_admission(&active.compiled, intent, time.unix_ms)
+            {
+                Ok(_) => Ok(CandidateEligibility::Eligible),
+                Err(error) if is_availability_denial(&error) => {
+                    let rejection = error.policy_rejection();
+                    Ok(CandidateEligibility::Deferred {
+                        reason: DecisionReason {
+                            code: rejection.code,
+                            detail: format!(
+                                "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
+                                rejection.budget, rejection.next_eligible_unix_ms
+                            ),
+                        },
+                        next_wake_unix_ms: rejection.next_eligible_unix_ms,
+                    })
+                }
+                Err(error) => Err(error),
+            },
+        )?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
             fatal(

@@ -450,6 +450,30 @@ pub fn evaluate(
     time: EvaluationTime,
     seed: u64,
 ) -> PolicyEvaluationResult<PolicyEvaluation> {
+    evaluate_with_eligibility(catalog, facts, resources, time, seed, |_| {
+        Ok(CandidateEligibility::Eligible)
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateEligibility {
+    Eligible,
+    Deferred {
+        reason: DecisionReason,
+        next_wake_unix_ms: Option<u64>,
+    },
+}
+
+/// Consults the Runtime's read-only admission state before allocating an instance winner.
+/// Final admission remains the caller's fenced, locked operation.
+pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
 
     let catalog_bundle = catalog.catalog();
@@ -573,7 +597,7 @@ pub fn evaluate(
                 &timeline_events,
                 &mut task_work.reasons,
             )?;
-            next_wake = min_wake(next_wake, trigger.next_wake_unix_ms);
+            task_work.next_wake_unix_ms = trigger.next_wake_unix_ms;
             if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
                 consider_preload_hint(
                     &mut preload_hint,
@@ -618,7 +642,8 @@ pub fn evaluate(
                         &timeline_events,
                         &mut task_work.reasons,
                     )?;
-                    next_wake = min_wake(next_wake, stop.next_wake_unix_ms);
+                    task_work.next_wake_unix_ms =
+                        min_wake(task_work.next_wake_unix_ms, stop.next_wake_unix_ms);
                     match stop.truth {
                         PredicateTruth::True => {
                             task_work.eligibility = EligibilityState::False;
@@ -663,7 +688,8 @@ pub fn evaluate(
                                     "task_cooldown_active",
                                     "the task-specific dispatch cooldown has not elapsed",
                                 ));
-                                next_wake = min_wake(next_wake, cooldown_until);
+                                task_work.next_wake_unix_ms =
+                                    min_wake(task_work.next_wake_unix_ms, cooldown_until);
                             } else {
                                 match build_candidate(
                                     work.len(),
@@ -743,9 +769,6 @@ pub fn evaluate(
                 .push(reason(code, detail));
             continue;
         }
-        host.consume(candidate.load);
-        selected_instances.insert(candidate.instance_id.clone());
-
         let decision_id = deterministic_decision_id(
             catalog.catalog_hash(),
             &candidate.task_id,
@@ -770,12 +793,7 @@ pub fn evaluate(
                 format!("deterministic total score {}", candidate.rank.total_score),
             ),
         ]);
-        reason_chains.push(DecisionReasonChain {
-            id: reason_chain_id.clone(),
-            decision_id: decision_id.clone(),
-            reasons: reasons.clone(),
-        });
-        dispatch_intents.push(DispatchIntent {
+        let intent = DispatchIntent {
             decision_id,
             task_id: candidate.task_id.clone(),
             instance_id: candidate.instance_id.clone(),
@@ -802,7 +820,26 @@ pub fn evaluate(
                 max_runtime_ms: candidate.max_runtime_ms,
                 urgency_milli: candidate.rank.urgency_milli,
             },
+        };
+        if let CandidateEligibility::Deferred {
+            reason,
+            next_wake_unix_ms,
+        } = eligibility(&intent)?
+        {
+            let task_work = &mut work[candidate.work_index];
+            task_work.state = SchedulingDecisionState::Deferred;
+            task_work.reasons.push(reason);
+            task_work.next_wake_unix_ms = next_wake_unix_ms;
+            continue;
+        }
+        host.consume(candidate.load);
+        selected_instances.insert(candidate.instance_id.clone());
+        reason_chains.push(DecisionReasonChain {
+            id: intent.reason_chain_id.clone(),
+            decision_id: intent.decision_id.clone(),
+            reasons: reasons.clone(),
         });
+        dispatch_intents.push(intent);
         let task_work = &mut work[candidate.work_index];
         task_work.state = SchedulingDecisionState::Selected;
         task_work.rank = Some(candidate.rank);
@@ -816,6 +853,9 @@ pub fn evaluate(
         })
     });
 
+    for task_work in &work {
+        next_wake = min_wake(next_wake, task_work.next_wake_unix_ms);
+    }
     Ok(PolicyEvaluation {
         decisions: work.into_iter().map(TaskDecision::from).collect(),
         next_wake_unix_ms: next_wake,
@@ -834,6 +874,7 @@ struct TaskWork {
     rank: Option<TaskRank>,
     suggestions: Vec<DetectionSuggestion>,
     reasons: Vec<DecisionReason>,
+    next_wake_unix_ms: Option<u64>,
 }
 
 impl TaskWork {
@@ -846,6 +887,7 @@ impl TaskWork {
             rank: None,
             suggestions: Vec::new(),
             reasons: Vec::new(),
+            next_wake_unix_ms: None,
         }
     }
 
@@ -858,6 +900,7 @@ impl TaskWork {
             rank: None,
             suggestions: Vec::new(),
             reasons: vec![blocked_reason],
+            next_wake_unix_ms: None,
         }
     }
 }
