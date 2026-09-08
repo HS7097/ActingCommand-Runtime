@@ -42,33 +42,33 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 
 ```mermaid
 flowchart TB
-    A["外部 AI / 维护者<br/>规划 · 制作 · 分析；由维护侧协调<br/>客户端：actingctl / runtime-client / ActingLab<br/>资源工具：restore / convert / build / validate"]
+    A["外部 AI / 维护者<br/>规划 / 制作 / 分析<br/>维护侧协调<br/>actingctl / runtime-client<br/>ActingLab / 资源工具<br/>restore / convert<br/>build / validate"]
 
     subgraph R["Runtime：生产设备与生命周期所有权"]
-        H["Runtime Host<br/>owner epoch · typed IPC · 请求生命周期<br/>Policy + FactStore：目录、实时事实与预算<br/>RuntimeState：SQLite 状态与发布代次<br/>存储打开后装配 Provider，再 Ready"]
+        H["Runtime Host<br/>owner epoch / typed IPC<br/>请求生命周期<br/>Policy + FactStore<br/>目录 / 实时事实 / 预算<br/>RuntimeState<br/>SQLite 状态 / 发布代次<br/>打开存储后装配 Provider<br/>随后 Ready"]
         S["Scheduler<br/>准入 · lease · fencing"]
         C["Pack Containment<br/>SHA-256 校验先于解压"]
-        K["Execution Kernel<br/>有界任务 · 阶段 · 恢复<br/>Recognition + Vision FFI：模板 / 颜色 / OCR / NN"]
-        D["DeviceProxy / Device Throat<br/>校验 fenced write / epoch-bound read"]
+        K["Execution Kernel<br/>有界任务 / 阶段 / 恢复<br/>Recognition + Vision FFI<br/>模板 / 颜色 / OCR / NN"]
+        D["DeviceProxy<br/>Device Throat<br/>fenced write 校验<br/>epoch-bound read"]
         B["设备 / Provider 后端<br/>Runtime 持有原生句柄"]
     end
 
-    L["GlobalLedger<br/>唯一事件与诊断事实源<br/>共享查询 · 签名目录与纯匹配"]
+    L["GlobalLedger<br/>唯一事件 / 诊断事实源<br/>共享查询<br/>签名目录 / 纯匹配"]
     T["ArtifactStore<br/>帧与大体量原文<br/>哈希绑定的持久字节"]
-    F["只读取证<br/>actingledger / ledger-forensics<br/>冻结查询与签名回放 · verified 制品读取"]
+    F["只读取证<br/>actingledger<br/>ledger-forensics<br/>冻结查询 / 签名回放<br/>读取 verified 制品"]
 
-    A <-->|"typed 请求 / 回执与投影"| H
+    A <-->|"typed 请求<br/>回执 / 投影"| H
     A -->|"正式资源包 + SHA-256"| C
     C -->|"已验证资源"| K
     H <-->|"准入 / 租约"| S
     H <-->|"任务 / 回调"| K
-    K <-->|"采集 / 输入请求与结果"| D
+    K <-->|"采集 / 输入<br/>请求与结果"| D
     D <-->|"受权 I/O"| B
-    R -->|"模块事实：脱敏后由唯一 writer 追加"| L
+    R -->|"脱敏模块事实<br/>唯一 writer 追加"| L
     R -->|"持久化证据字节"| T
     L -->|"读取事件"| F
     T -->|"读取 verified 字节"| F
-    F -.->|"证据支持下一轮资源改进"| A
+    F -.->|"证据支持<br/>下一轮资源改进"| A
 
     classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
     classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921

@@ -42,33 +42,33 @@ Maintenance can recover resource drafts from ledger facts and verified artifacts
 
 ```mermaid
 flowchart TB
-    A["External AI / maintainer<br/>Plan · author · analyze; externally coordinated<br/>Clients: actingctl / runtime-client / ActingLab<br/>Resource tools: restore / convert / build / validate"]
+    A["External AI / maintainer<br/>Plan / author / analyze<br/>Externally coordinated<br/>actingctl / runtime-client<br/>ActingLab / resource tools<br/>restore / convert<br/>build / validate"]
 
     subgraph R["Runtime: production device and lifecycle ownership"]
-        H["Runtime Host<br/>Owner epoch · typed IPC · request lifecycle<br/>Policy + FactStore: catalogs, live facts, budgets<br/>RuntimeState: SQLite state and release generations<br/>Open stores, assemble Provider, then Ready"]
+        H["Runtime Host<br/>Owner epoch / typed IPC<br/>Request lifecycle<br/>Policy + FactStore<br/>Catalogs / facts / budgets<br/>RuntimeState<br/>SQLite state / releases<br/>Open stores, then Provider<br/>assembly, then Ready"]
         S["Scheduler<br/>Admission · leases · fencing"]
-        C["Pack Containment<br/>SHA-256 verification before extraction"]
-        K["Execution Kernel<br/>Bounded tasks · phases · recovery<br/>Recognition + Vision FFI: templates / color / OCR / NN"]
-        D["DeviceProxy / Device Throat<br/>Validate fenced writes / epoch-bound reads"]
+        C["Pack Containment<br/>SHA-256 verification<br/>before extraction"]
+        K["Execution Kernel<br/>Tasks / phases / recovery<br/>Recognition + Vision FFI<br/>Templates / color<br/>OCR / NN"]
+        D["DeviceProxy<br/>Device Throat<br/>Validate fenced writes<br/>Epoch-bound reads"]
         B["Device / Provider backends<br/>Runtime-owned native handles"]
     end
 
-    L["GlobalLedger<br/>Sole event and diagnostic fact source<br/>Shared queries · signature catalog and pure matcher"]
-    T["ArtifactStore<br/>Frames and large raw payloads<br/>Hash-bound durable bytes"]
-    F["Read-only forensics<br/>actingledger / ledger-forensics<br/>Frozen queries and signature replay · verified artifacts"]
+    L["GlobalLedger<br/>Sole event / diagnostic<br/>fact source<br/>Shared queries<br/>Signature catalog / matcher"]
+    T["ArtifactStore<br/>Frames / raw payloads<br/>Hash-bound durable bytes"]
+    F["Read-only forensics<br/>actingledger<br/>ledger-forensics<br/>Frozen queries / replay<br/>Verified artifact reads"]
 
-    A <-->|"Typed requests / receipts and projections"| H
-    A -->|"Formal resource pack + SHA-256"| C
+    A <-->|"Typed requests<br/>Receipts / projections"| H
+    A -->|"Pack + SHA-256"| C
     C -->|"Verified resources"| K
     H <-->|"Admission / leases"| S
     H <-->|"Tasks / callbacks"| K
-    K <-->|"Capture / input requests and results"| D
+    K <-->|"Capture / input<br/>Requests and results"| D
     D <-->|"Authorized I/O"| B
-    R -->|"Module facts: sanitized append through the sole writer"| L
+    R -->|"Sanitized module facts<br/>Sole writer append"| L
     R -->|"Persist evidence bytes"| T
     L -->|"Read events"| F
     T -->|"Read verified bytes"| F
-    F -.->|"Evidence informs the next resource revision"| A
+    F -.->|"Evidence for the<br/>next resource revision"| A
 
     classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
     classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
