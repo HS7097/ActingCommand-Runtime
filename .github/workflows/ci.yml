@@ -35,7 +35,7 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
       - name: Remove trybuild cache artifacts
         if: always()
         shell: pwsh
