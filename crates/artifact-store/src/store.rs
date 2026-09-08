@@ -2,11 +2,11 @@
 
 use crate::{ArtifactStoreError, ArtifactStoreResult};
 use actingcommand_contract::{
-    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactMaterial,
+    ArtifactFailureStage, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactMaterial,
     ArtifactMaterialAccumulator, ArtifactPayloadDraft, ArtifactReference, ArtifactStoreIssuer,
-    AuditInput, DiagnosticCode, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventSeverity, EventSource, IdentifierIssuer, OriginModule, ProjectedArtifactReference,
-    StoreIssuedArtifact, VerifiedArtifactReference,
+    AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
+    IdentifierIssuer, OriginModule, ProjectedArtifactReference, StoreIssuedArtifact,
+    VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -392,10 +392,7 @@ impl ArtifactStore {
                 sink,
                 &stream.context,
                 &issued,
-                ArtifactPayloadDraft::store_failed(
-                    DiagnosticCode::ArtifactWriteFailed,
-                    AuditInput::new(),
-                ),
+                ArtifactFailureStage::BeforePublication,
             ));
         }
         self.finish_publication(
@@ -473,10 +470,7 @@ impl ArtifactStore {
                 sink,
                 &prepared.context,
                 &prepared.issued,
-                ArtifactPayloadDraft::store_failed(
-                    DiagnosticCode::ArtifactWriteFailed,
-                    AuditInput::new(),
-                ),
+                ArtifactFailureStage::BeforePublication,
             ));
         }
 
@@ -488,27 +482,31 @@ impl ArtifactStore {
         prepared: PreparedArtifact,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<StoredArtifact> {
+        // Publication is the retention boundary: an append error can be reported
+        // after the ledger has already committed a reference to this object.
         if let Err(error) = self.append_event(
             sink,
             &prepared.context,
             EventSeverity::Info,
             ArtifactPayloadDraft::created(AuditInput::new()),
-            prepared.issued.clone(),
+            Some(prepared.issued.clone()),
         ) {
-            return Err(cleanup_published(&prepared.path, error));
-        }
-
-        if let Err(error) = verify_file(&prepared.path, prepared.issued.reference()) {
-            let error = cleanup_published(&prepared.path, error);
             return Err(self.report_failure(
                 error,
                 sink,
                 &prepared.context,
                 &prepared.issued,
-                ArtifactPayloadDraft::verification_failed(
-                    DiagnosticCode::ArtifactVerifyFailed,
-                    AuditInput::new(),
-                ),
+                ArtifactFailureStage::CreatedRecord,
+            ));
+        }
+
+        if let Err(error) = verify_file(&prepared.path, prepared.issued.reference()) {
+            return Err(self.report_failure(
+                error,
+                sink,
+                &prepared.context,
+                &prepared.issued,
+                ArtifactFailureStage::PublishedVerification,
             ));
         }
 
@@ -517,9 +515,15 @@ impl ArtifactStore {
             &prepared.context,
             EventSeverity::Info,
             ArtifactPayloadDraft::verified(AuditInput::new()),
-            prepared.issued.clone(),
+            Some(prepared.issued.clone()),
         ) {
-            return Err(cleanup_published(&prepared.path, error));
+            return Err(self.report_failure(
+                error,
+                sink,
+                &prepared.context,
+                &prepared.issued,
+                ArtifactFailureStage::VerifiedRecord,
+            ));
         }
 
         Ok(StoredArtifact {
@@ -587,15 +591,6 @@ impl ArtifactStore {
             })
     }
 
-    #[cfg(feature = "capture")]
-    pub(crate) fn rollback_stored(
-        &self,
-        stored: &StoredArtifact,
-        error: ArtifactStoreError,
-    ) -> ArtifactStoreError {
-        cleanup_published(stored.path(), error)
-    }
-
     fn write_and_verify(
         &self,
         bytes: &[u8],
@@ -640,7 +635,7 @@ impl ArtifactStore {
         context: &ArtifactWriteContext,
         severity: EventSeverity,
         payload: ArtifactPayloadDraft,
-        artifact: StoreIssuedArtifact,
+        artifact: Option<StoreIssuedArtifact>,
     ) -> ArtifactStoreResult<()> {
         let draft = EventDraft::new(
             self.events.mint_event_id().map_err(|error| {
@@ -660,7 +655,7 @@ impl ArtifactStore {
             context.event_links.clone(),
             payload.into(),
         )
-        .with_artifacts(vec![artifact]);
+        .with_artifacts(artifact.into_iter().collect());
         sink.append(draft)
     }
 
@@ -670,9 +665,13 @@ impl ArtifactStore {
         sink: &mut dyn ArtifactEventSink,
         context: &ArtifactWriteContext,
         issued: &StoreIssuedArtifact,
-        payload: ArtifactPayloadDraft,
+        stage: ArtifactFailureStage,
     ) -> ArtifactStoreError {
-        match self.append_event(sink, context, EventSeverity::Error, payload, issued.clone()) {
+        let payload = ArtifactPayloadDraft::persistence_failed(
+            error.failure_record(*issued.reference().artifact_id(), stage),
+            AuditInput::new(),
+        );
+        match self.append_event(sink, context, EventSeverity::Error, payload, None) {
             Ok(()) => error,
             Err(event_error) => error.with_secondary(&event_error),
         }
@@ -1074,10 +1073,6 @@ fn cleanup_temp(path: &Path, error: ArtifactStoreError) -> ArtifactStoreError {
     cleanup_path(path, "cleanup_artifact_temp", error)
 }
 
-fn cleanup_published(path: &Path, error: ArtifactStoreError) -> ArtifactStoreError {
-    cleanup_path(path, "cleanup_published_artifact", error)
-}
-
 fn cleanup_path(
     path: &Path,
     operation: &'static str,
@@ -1107,6 +1102,7 @@ mod tests {
     struct RecordingSink {
         event_types: Vec<EventType>,
         references: Vec<ArtifactReference>,
+        payloads: Vec<actingcommand_contract::EventPayload>,
         fail_at: Option<usize>,
     }
 
@@ -1128,6 +1124,7 @@ mod tests {
             })?;
             self.event_types.push(sanitized.event_type());
             self.references.extend_from_slice(sanitized.artifacts());
+            self.payloads.push(sanitized.payload().clone());
             Ok(())
         }
     }
@@ -1441,7 +1438,8 @@ mod tests {
     }
 
     #[test]
-    fn required_created_event_failure_removes_published_file_and_returns_error() {
+    fn required_created_event_failure_preserves_published_file_and_returns_error() {
+        // Workflow #269 ARTIFACT-PERSIST-v2; first reds: AL B8 and BA B7.
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
         let mut sink = RecordingSink {
@@ -1453,7 +1451,17 @@ mod tests {
             .expect_err("event failure");
 
         assert_eq!(error.code(), "injected_event_failure");
-        assert!(all_files(temp.path()).is_empty());
+        assert_eq!(all_files(temp.path()).len(), 1);
+        assert_eq!(
+            fs::read(&all_files(temp.path())[0]).expect("published bytes"),
+            b"must not become success"
+        );
+        assert!(
+            error
+                .native_detail()
+                .text()
+                .contains("secondary injected_event_failure during append_event")
+        );
 
         let request = request(b"stream context");
         let mut stream = store
@@ -1471,11 +1479,11 @@ mod tests {
         assert_eq!(error.code(), "injected_event_failure");
         assert!(error.is_fatal());
         assert!(sink.event_types.is_empty());
-        assert!(all_files(temp.path()).is_empty());
+        assert_eq!(all_files(temp.path()).len(), 2);
     }
 
     #[test]
-    fn required_verified_event_failure_removes_published_file_and_returns_error() {
+    fn required_verified_event_failure_preserves_published_file_and_returns_error() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
         let mut sink = RecordingSink {
@@ -1488,7 +1496,18 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert_eq!(sink.event_types, [EventType::ArtifactCreated]);
-        assert!(all_files(temp.path()).is_empty());
+        assert_eq!(all_files(temp.path()).len(), 1);
+        assert_eq!(
+            store
+                .read_verified(&sink.references[0])
+                .expect("created reference remains readable"),
+            b"verified bytes"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("secondary injected_event_failure during append_event")
+        );
 
         let request = request(b"stream context");
         let mut stream = store
@@ -1511,7 +1530,13 @@ mod tests {
         assert!(error.is_fatal());
         assert_eq!(stream_sink.event_types, [EventType::ArtifactCreated]);
         assert_eq!(stream_sink.references.len(), 1);
-        assert!(all_files(temp.path()).is_empty());
+        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(
+            store
+                .read_verified(&stream_sink.references[0])
+                .expect("stream reference remains readable"),
+            b"{\"result\":\"complete\"}"
+        );
     }
 
     #[test]
@@ -1535,6 +1560,32 @@ mod tests {
         fs::write(&path, b"different").expect("corrupt file");
         let error = verify_file(&path, issued.reference()).expect_err("mismatch");
         assert_eq!(error.code(), "artifact_hash_mismatch");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let prepared = store.prepare(request(b"expected")).expect("prepared");
+        store
+            .write_and_verify(b"expected", &prepared.path, prepared.reference())
+            .expect("publish");
+        let published = prepared.path.clone();
+        fs::write(&published, b"different").expect("media corruption");
+        let mut sink = RecordingSink::default();
+        let error = store
+            .finish_publication(prepared, &mut sink)
+            .expect_err("post-publication verification");
+        assert_eq!(error.code(), "artifact_hash_mismatch");
+        assert!(published.exists());
+        assert_eq!(
+            sink.event_types,
+            [
+                EventType::ArtifactCreated,
+                EventType::ArtifactVerificationFailed
+            ]
+        );
+        assert_eq!(sink.references.len(), 1);
+        let failure = sink.payloads[1]
+            .artifact_failure()
+            .expect("typed verification failure");
+        assert_eq!(failure.stage, ArtifactFailureStage::PublishedVerification);
+        assert_eq!(failure.primary.code, error.code());
     }
 
     #[test]
@@ -1564,6 +1615,53 @@ mod tests {
         let error = cleanup_temp(&path, error);
         assert_eq!(error.code(), "artifact_sync_failed");
         assert!(!path.exists());
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let prepared = store.prepare(request(b"partial")).expect("prepared");
+        let cleanup_block = temp.path().join("cleanup-block");
+        fs::create_dir(&cleanup_block).expect("cleanup failure target");
+        let error = cleanup_temp(&cleanup_block, error);
+        let mut sink = RecordingSink::default();
+        let error = store.report_failure(
+            error,
+            &mut sink,
+            &prepared.context,
+            &prepared.issued,
+            ArtifactFailureStage::BeforePublication,
+        );
+        assert_eq!(error.code(), "artifact_sync_failed");
+        assert!(sink.references.is_empty());
+        let failure = sink.payloads[0].artifact_failure().expect("typed failure");
+        assert_eq!(failure.artifact_id, *prepared.reference().artifact_id());
+        assert_eq!(failure.primary.operation, "sync_artifact_temp");
+        assert!(
+            failure
+                .primary
+                .native_detail
+                .text()
+                .contains("injected sync failure")
+        );
+        assert_eq!(failure.secondary.len(), 1);
+        assert_eq!(failure.secondary[0].code, "artifact_cleanup_failed");
+        assert_eq!(failure.secondary[0].operation, "cleanup_artifact_temp");
+        assert!(sink.payloads[0].sensitivity() >= actingcommand_contract::Sensitivity::Sensitive);
+        let public = format!("{:?}", sink.payloads[0].public_projection());
+        assert!(!public.contains("injected sync failure"));
+        assert!(!public.contains("native_detail"));
+
+        let large = ArtifactStoreError::fatal(
+            "artifact_sync_failed",
+            "sync_artifact_temp",
+            "界".repeat(1000),
+        )
+        .with_secondary(&error);
+        let native = large.native_detail();
+        assert!(native.truncated());
+        assert!(native.text().len() <= 1024);
+        assert!(
+            native
+                .text()
+                .contains("secondary artifact_cleanup_failed during cleanup_artifact_temp")
+        );
     }
 
     #[test]
@@ -1578,6 +1676,8 @@ mod tests {
         })
         .expect_err("rename failure");
         assert_eq!(error.code(), "artifact_publish_failed");
+        assert_eq!(error.operation(), "publish_artifact");
+        assert_eq!(error.detail(), "injected rename failure");
         assert!(pending.exists());
         assert!(!final_path.exists());
     }

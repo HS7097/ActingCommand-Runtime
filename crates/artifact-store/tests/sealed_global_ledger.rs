@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_artifact_store::{
-    ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
-    CapturePipeline, CapturePipelineConfig, CapturePipelineSummary, EvidenceExportDocuments,
-    EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument,
-    EvidencePackage, FrameStoreConfig, FrameStoreFrameInput, MemorySample, MemorySampleSource,
-    PackageVerification, RecognitionState, capture_summary_record, verify_evidence_archive,
-    verify_projected_read_only,
+    ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
+    ArtifactWriteContext, ArtifactWriteRequest, CapturePipeline, CapturePipelineConfig,
+    CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest,
+    EvidenceExporter, EvidenceJsonDocument, EvidencePackage, FrameStoreConfig,
+    FrameStoreFrameInput, MemorySample, MemorySampleSource, PackageVerification, RecognitionState,
+    capture_summary_record, verify_evidence_archive, verify_projected_read_only,
 };
 use actingcommand_contract::{
-    ArtifactKind, ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
-    CapturePolicyReason, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft,
-    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
-    EvidenceCompleteness, IdentifierIssuer, IssuedCorrelationId, IssuedFrameId, IssuedRunId,
-    OriginModule, PinnedFrameReason, ProjectedEvent, ProjectionProfile, RetentionClass,
-    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint, TaskOutcome,
-    TaskPayloadDraft,
+    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+    ArtifactRedactionState, AuditInput, CapturePayloadDraft, CapturePolicyReason, DiagnosticCode,
+    EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, IdentifierIssuer,
+    IssuedCorrelationId, IssuedFrameId, IssuedRunId, OriginModule, PinnedFrameReason,
+    ProjectedEvent, ProjectionProfile, RetentionClass, SanitizationError, SecretField,
+    SecretFingerprinter, Sha256Fingerprint, TaskOutcome, TaskPayloadDraft,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, GlobalLedgerReadOnlyConfig};
@@ -191,7 +191,7 @@ fn sealed_pipeline_round_trips_through_real_global_ledger_and_verified_export() 
 }
 
 #[test]
-fn required_global_ledger_failure_cannot_return_success_or_leave_archive() {
+fn required_global_ledger_failure_preserves_referenced_archive_without_success() {
     let temp = tempfile::tempdir().expect("tempdir");
     let ledger = open_ledger(temp.path(), "c2-sealed-event-failure");
     let identity = sealed_identity();
@@ -238,12 +238,76 @@ fn required_global_ledger_failure_cannot_return_success_or_leave_archive() {
         for artifact in &event.artifacts {
             if artifact.kind == ArtifactKind::EvidenceArchive {
                 let object_key = artifact.object_key.as_ref().expect("forensic object key");
-                assert!(!artifact_root.join(object_key).exists());
+                assert!(artifact_root.join(object_key).exists());
             }
         }
     }
 
+    let store = ArtifactStore::open(&artifact_root).expect("store");
+    // Reuse the native sink's single append failure at both publication records.
+    for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
+        sink.fail_next(event_type);
+        let error = store
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    b"published bytes",
+                    write_context(identity, None, 1_752_147_200_200),
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::ArtifactStore,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut sink,
+            )
+            .expect_err("required publication record failure");
+        assert_eq!(error.code(), "injected_global_ledger_failure");
+    }
+    // An ordinary directory I/O failure must not attach its issued, absent object.
+    let blocked = temp.path().join("blocked-store");
+    let blocked_store = ArtifactStore::open(&blocked).expect("store issuer");
+    fs::write(blocked.join("artifacts"), b"not a directory").expect("block object directory");
+    let error = blocked_store
+        .put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::DiagnosticJson,
+                b"unpublished bytes",
+                write_context(identity, None, 1_752_147_200_201),
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::ArtifactStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut sink,
+        )
+        .expect_err("native directory failure");
+    assert_eq!(error.code(), "artifact_directory_failed");
+    let expected = ledger.query(EventQuery::default()).expect("writer events");
+    let failures = expected
+        .iter()
+        .filter(|event| event.event_type() == EventType::ArtifactStoreFailed)
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 3);
+    assert!(failures.iter().all(|event| event.artifacts().is_empty()));
+    let failure = failures
+        .last()
+        .unwrap()
+        .payload()
+        .artifact_failure()
+        .expect("native failure");
+    assert_eq!(failure.primary.code, error.code());
+    assert_eq!(failure.primary.operation, error.operation());
+    assert_eq!(failure.primary.native_detail.text(), error.detail());
     ledger.close().expect("close ledger");
+    let snapshot = GlobalLedger::open_read_only(
+        GlobalLedgerReadOnlyConfig::new(temp.path().join("ledger")),
+        |reference| verify_projected_read_only(&artifact_root, reference).ok(),
+    )
+    .expect("native verified failure snapshot");
+    assert!(snapshot.corrupt_tail().is_none());
+    assert_eq!(snapshot.events(), expected);
 }
 
 #[test]

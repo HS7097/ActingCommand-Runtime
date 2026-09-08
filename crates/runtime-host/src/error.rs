@@ -48,6 +48,15 @@ impl PartialEq for RuntimeHostError {
 impl Eq for RuntimeHostError {}
 
 impl RuntimeHostError {
+    pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
+        let mut result = Self::fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::RuntimeFatal,
+        );
+        result.lifecycle.native_detail = Some(Box::new(error.native_detail()));
+        result
+    }
     pub const fn code(&self) -> &'static str {
         self.code
     }

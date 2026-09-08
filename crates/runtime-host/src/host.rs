@@ -520,8 +520,8 @@ impl RuntimeHost {
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler("start_runtime_host", &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
-        let artifacts = ArtifactStore::open(&config.state_root)
-            .map_err(|_| artifact_store_error("open_artifact_store"))?;
+        let artifacts =
+            ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?;
         let ledger = GlobalLedger::open_with_artifact_verifier(
             GlobalLedgerConfig::new(config.state_root.join("ledger"), ledger_owner),
             |reference| artifacts.verify_recovery_reference(reference).ok(),
@@ -7865,7 +7865,7 @@ impl HostShared {
         existing.sort_by(|left, right| left.0.cmp(&right.0));
         if let Some((_, reference)) = existing.into_iter().next() {
             let stored = read_projected_verified(self.artifacts.root(), &reference)
-                .map_err(|_| artifact_store_error("read_strategic_report"))?;
+                .map_err(RuntimeHostError::artifact)?;
             if stored != bytes {
                 return Err(RuntimeHostError::fatal(
                     "strategic_report_identity_conflict",
@@ -7892,7 +7892,7 @@ impl HostShared {
                     ArtifactRedactionState::Applied,
                 ),
             ))
-            .map_err(|_| artifact_store_error("prepare_strategic_report_artifact"))?;
+            .map_err(RuntimeHostError::artifact)?;
         Ok((prepared.reference().project(true), Some(prepared)))
     }
 
@@ -7909,7 +7909,7 @@ impl HostShared {
         let stored = self
             .artifacts
             .commit_prepared(prepared, bytes, &mut sink)
-            .map_err(|_| artifact_store_error("store_strategic_report"))?;
+            .map_err(RuntimeHostError::artifact)?;
         let actual = stored.reference().project(true);
         if &actual != expected {
             return Err(RuntimeHostError::fatal(
@@ -7947,7 +7947,7 @@ impl HostShared {
                 &mut sink,
             )
             .map(|stored| stored.reference().project(true))
-            .map_err(|_| artifact_store_error("store_test_report"))
+            .map_err(RuntimeHostError::artifact)
     }
 
     fn client_fact_replay(
@@ -8544,7 +8544,7 @@ impl HostShared {
                 ),
                 &mut sink,
             )
-            .map_err(|_| artifact_store_error("persist_monitor_observation"))?;
+            .map_err(RuntimeHostError::artifact)?;
         self.append_event_raw(
             EventSeverity::Info,
             EventSource::Device,
@@ -10453,12 +10453,8 @@ impl HostShared {
             None,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
-        let completed = self.capture_readonly_observation(
-            request,
-            instance_alias,
-            resolved.instance_id(),
-            false,
-        )?;
+        let completed =
+            self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&completed.terminal)),
@@ -10498,12 +10494,8 @@ impl HostShared {
         let mut observations = Vec::with_capacity(usize::from(spec.frame_count()));
         let mut last_terminal = None;
         for index in 0..spec.frame_count() {
-            let completed = self.capture_readonly_observation(
-                request,
-                instance_alias,
-                resolved.instance_id(),
-                false,
-            )?;
+            let completed =
+                self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
             observations.push(completed.observation);
             last_terminal = Some(completed.terminal);
             if index + 1 < spec.frame_count() && spec.interval_ms() > 0 {
@@ -10536,7 +10528,6 @@ impl HostShared {
         request: &ValidatedRuntimeRequest<'_>,
         instance_alias: &str,
         instance_id: InstanceId,
-        retain_native_artifact_error: bool,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.require_physical_instance_id(instance_id)?;
         let capability = self.issue_readonly_capability(instance_id)?;
@@ -10563,7 +10554,6 @@ impl HostShared {
             instance_alias,
             links,
             artifact_links,
-            retain_native_artifact_error,
             &admission,
         )
     }
@@ -10574,7 +10564,6 @@ impl HostShared {
         instance_alias: &str,
         links: EventLinksDraft,
         artifact_links: ArtifactLinksDraft,
-        retain_native_artifact_error: bool,
         admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         self.append_event(
@@ -10720,21 +10709,7 @@ impl HostShared {
                 ),
                 &mut sink,
             )
-            .map_err(|error| {
-                if retain_native_artifact_error {
-                    return RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            error.code(),
-                            error.operation(),
-                            RuntimeErrorCode::RuntimeFatal,
-                        )
-                        .with_native_detail(error.to_string()),
-                    );
-                }
-                RequestFailure::poison_without_terminal(artifact_store_error(
-                    "persist_readonly_observation",
-                ))
-            })?;
+            .map_err(online_observation::observation_artifact_failure)?;
         let observation = ReadonlyObservation::new(
             frame.width,
             frame.height,
@@ -16099,11 +16074,7 @@ impl RuntimeContainedTask<'_> {
                 ),
                 &mut sink,
             )
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(artifact_store_error(
-                    "persist_effective_configuration",
-                ))
-            })?;
+            .map_err(online_observation::observation_artifact_failure)?;
         self.configuration_records += 1;
         Ok(())
     }
@@ -16341,11 +16312,7 @@ impl RuntimeContainedTask<'_> {
                 &mut sink,
             )
             .map(|_| ())
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(artifact_store_error(
-                    "persist_contained_task_post_admission_ocr",
-                ))
-            })
+            .map_err(online_observation::observation_artifact_failure)
     }
 
     fn record_post_admission_ocr_failure(
@@ -16721,11 +16688,7 @@ impl RuntimeContainedTask<'_> {
             };
             self.host.artifacts.put(write_request, &mut sink)
         };
-        stored.map_err(|_| {
-            RequestFailure::poison_without_terminal(artifact_store_error(
-                "persist_contained_task_stability_comparison",
-            ))
-        })?;
+        stored.map_err(online_observation::observation_artifact_failure)?;
 
         let state = self.stability.as_mut().ok_or_else(|| {
             contained_task_stability_failure("contained_task_stability_state_missing")
@@ -16982,11 +16945,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         ),
                         &mut sink,
                     )
-                    .map_err(|_| {
-                        RequestFailure::poison_without_terminal(artifact_store_error(
-                            "persist_contained_task_frame",
-                        ))
-                    })?;
+                    .map_err(online_observation::observation_artifact_failure)?;
                 self.capture_evidence.persisted(frame_index, &stored)?;
                 self.last_frame_id = Some(frame_id);
                 self.last_capture_input_action_id = input_action_id;

@@ -1513,8 +1513,57 @@ pub struct DiagnosticOutcomePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact_failure: Option<Box<ArtifactFailureRecord>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactFailureStage {
+    BeforePublication,
+    CreatedRecord,
+    PublishedVerification,
+    VerifiedRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactFailureCause {
+    pub code: String,
+    pub operation: String,
+    pub native_detail: LifecycleNativeDetail,
+}
+
+pub const MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES: usize = 4;
+
+/// An attempted identity is diagnostic data, never a readable artifact attachment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactFailureRecord {
+    pub artifact_id: crate::ArtifactId,
+    pub stage: ArtifactFailureStage,
+    pub primary: ArtifactFailureCause,
+    pub secondary: Vec<ArtifactFailureCause>,
+    pub omitted_secondary_count: u64,
+}
+
+impl ArtifactFailureRecord {
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.secondary.len() > MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES {
+            return Err(SanitizationError::new(
+                "invalid_artifact_failure_causes",
+                "secondary",
+            ));
+        }
+        for cause in std::iter::once(&self.primary).chain(&self.secondary) {
+            validate_diagnostic_detail_token(&cause.code, "artifact_failure_code")?;
+            validate_diagnostic_detail_token(&cause.operation, "artifact_failure_operation")?;
+            cause.native_detail.validate()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3628,6 +3677,9 @@ pub struct RecoveryPayload {
 }
 
 trait PayloadDetail {
+    fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
+        None
+    }
     fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         None
     }
@@ -3908,6 +3960,9 @@ impl OutcomePayload {
 }
 
 impl DiagnosticOutcomePayload {
+    pub fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
+        self.artifact_failure.as_deref()
+    }
     pub fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
         self.lifecycle_failure.as_deref()
     }
@@ -4201,6 +4256,9 @@ impl PayloadDetail for OutcomePayload {
 }
 
 impl PayloadDetail for DiagnosticOutcomePayload {
+    fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
+        self.artifact_failure.as_deref()
+    }
     fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         self.runtime_state.as_deref()
     }
@@ -4625,6 +4683,7 @@ struct DiagnosticOutcomeDraft {
     detail: Option<DiagnosticDetailDraft>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureDraft>>,
+    artifact_failure: Option<Box<ArtifactFailureRecord>>,
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: AuditInput,
 }
@@ -6116,6 +6175,7 @@ impl DiagnosticOutcomeDraft {
             detail: None,
             cleanup_cause: None,
             lifecycle_failure: None,
+            artifact_failure: None,
             runtime_state: None,
             audit,
         }
@@ -6135,6 +6195,7 @@ impl DiagnosticOutcomeDraft {
             detail: Some(detail),
             cleanup_cause: None,
             lifecycle_failure: None,
+            artifact_failure: None,
             runtime_state: None,
             audit,
         }
@@ -6155,6 +6216,7 @@ impl DiagnosticOutcomeDraft {
             detail,
             cleanup_cause: cleanup_cause.map(Box::new),
             lifecycle_failure: None,
+            artifact_failure: None,
             runtime_state: None,
             audit,
         }
@@ -6169,6 +6231,7 @@ impl DiagnosticOutcomeDraft {
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
             runtime_state: self.runtime_state,
+            artifact_failure: self.artifact_failure,
             detail: self
                 .detail
                 .map(DiagnosticDetailDraft::sanitize)
@@ -7324,6 +7387,29 @@ enum ArtifactDraftKind {
 pub struct ArtifactPayloadDraft(ArtifactDraftKind);
 
 impl ArtifactPayloadDraft {
+    pub fn persistence_failed(record: ArtifactFailureRecord, audit: AuditInput) -> Self {
+        let verification = record.stage == ArtifactFailureStage::PublishedVerification;
+        let mut detail = DiagnosticOutcomeDraft::new(
+            if verification {
+                EventAction::ArtifactVerify
+            } else {
+                EventAction::ArtifactStore
+            },
+            if verification {
+                DiagnosticCode::ArtifactVerifyFailed
+            } else {
+                DiagnosticCode::ArtifactWriteFailed
+            },
+            EffectDisposition::Indeterminate,
+            audit,
+        );
+        detail.artifact_failure = Some(Box::new(record));
+        Self(if verification {
+            ArtifactDraftKind::VerificationFailed(detail)
+        } else {
+            ArtifactDraftKind::StoreFailed(detail)
+        })
+    }
     pub fn created(audit: AuditInput) -> Self {
         Self(ArtifactDraftKind::Created(OutcomeDraft::new(
             EventAction::ArtifactStore,
@@ -8909,6 +8995,9 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
+        if self.artifact_failure().is_some() {
+            sensitivity = sensitivity.max(Sensitivity::Sensitive);
+        }
         if matches!(self, Self::Provider(_)) {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -8980,8 +9069,32 @@ impl EventPayload {
         self.family_payload().detail().runtime_state()
     }
 
+    pub fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
+        self.family_payload().detail().artifact_failure()
+    }
+
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(failure) = self.artifact_failure() {
+            if !matches!(
+                self.event_type(),
+                EventType::ArtifactStoreFailed | EventType::ArtifactVerificationFailed
+            ) {
+                return Err(SanitizationError::new(
+                    "invalid_artifact_failure_owner",
+                    "artifact_failure",
+                ));
+            }
+            if (failure.stage == ArtifactFailureStage::PublishedVerification)
+                != (self.event_type() == EventType::ArtifactVerificationFailed)
+            {
+                return Err(SanitizationError::new(
+                    "invalid_artifact_failure_stage",
+                    "artifact_failure",
+                ));
+            }
+            failure.validate()?;
+        }
         if let Some(state) = detail.runtime_state() {
             state.validate()?;
             let expected_action = match state {
