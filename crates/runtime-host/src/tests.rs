@@ -6922,12 +6922,177 @@ fn mapped_consumer_projection_failures_are_typed_and_dispatch_nothing() {
 }
 
 #[test]
+fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection() {
+    // Workflow #269 B10 first red: issuecomment-5585703260; SCHEDULED-OUTCOMES-v1.
+    let outcome_key = "unconsumed-result";
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let runtime_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                runtime_instance_id,
+                Arc::clone(&state),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog without outcome references");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission")
+    else {
+        panic!("expected scheduled context")
+    };
+    let request = ContainedTaskRequest::new(
+        package_path.to_string_lossy().into_owned(),
+        format!("{:x}", Sha256::digest(&package)),
+    )
+    .expect("contained task request");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("valid package output without a catalog consumer");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    let completion = host
+        .complete_scheduled_policy_run(&context, &receipt)
+        .expect("complete unconsumed outcome");
+    assert!(completion.1.is_none());
+    assert_eq!(
+        host.complete_scheduled_policy_run(&context, &receipt)
+            .expect("replay completion"),
+        completion
+    );
+    assert!(
+        host.policy_outcome_key_snapshot_for_test()
+            .expect("completed-run snapshot")
+            .completed_runs
+            .is_empty()
+    );
+    let query = EventQuery {
+        run_id: Some(context.run_id()),
+        ..EventQuery::default()
+    };
+    let events = host
+        .query_persisted_events_for_test(query.clone())
+        .expect("scheduled run events");
+    let terminal = events
+        .iter()
+        .find(|event| event.event_type() == EventType::TaskCompleted)
+        .expect("actual terminal");
+    let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal.payload() else {
+        panic!("expected task semantic payload")
+    };
+    let TaskSemanticFact::TerminalCommitted {
+        outcome,
+        final_page,
+        scheduling_disposition: Some(disposition),
+        ..
+    } = payload.fact()
+    else {
+        panic!("expected actual scheduling disposition")
+    };
+    assert_eq!(*outcome, TaskOutcome::Success);
+    assert_eq!(final_page.as_deref(), Some("neutral/terminal"));
+    assert_eq!(disposition.outcome_key(), outcome_key);
+    assert!(matches!(
+        disposition.effect(),
+        SchedulingEffectEvidence::DesignatedEffectCompleted { .. }
+    ));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    host.close().expect("close scheduled host");
+
+    let restarted = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                runtime_instance_id,
+                Arc::clone(&state),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("recover completed task without outcome consumption");
+    assert!(
+        restarted
+            .policy_outcome_key_snapshot_for_test()
+            .expect("recovered completed-run snapshot")
+            .completed_runs
+            .is_empty()
+    );
+    let recovered = restarted
+        .query_persisted_events_for_test(query)
+        .expect("recovered run events");
+    for event_type in [
+        EventType::TaskCompleted,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            1,
+            "recovery must retain one {event_type:?}"
+        );
+    }
+    let recovered_terminal = recovered
+        .iter()
+        .find(|event| event.event_type() == EventType::TaskCompleted)
+        .expect("recovered terminal");
+    assert_eq!(recovered_terminal.sequence(), terminal.sequence());
+    assert_eq!(recovered_terminal.payload(), terminal.payload());
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    restarted.close().expect("close recovered host");
+}
+
+#[test]
 fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
-    for (case, package) in [
-        ("missing-declaration", neutral_contained_task_package()),
+    for (case, package, outcome_keys) in [
+        (
+            "missing-declaration",
+            neutral_contained_task_package(),
+            vec!["mapped-result", "mapped-result-alternate"],
+        ),
         (
             "misspelled-declaration-key",
             neutral_mapped_contained_task_package("mapped-reslut", "designated_effect_completed"),
+            vec!["mapped-result", "mapped-result-alternate"],
+        ),
+        (
+            "missing-declared-key",
+            neutral_mapped_contained_task_package("mapped-result", "designated_effect_completed"),
+            vec![
+                "mapped-result",
+                "mapped-result-alternate",
+                "required-result",
+            ],
+        ),
+        (
+            "extra-declared-key",
+            neutral_mapped_contained_task_package("mapped-result", "designated_effect_completed"),
+            vec!["mapped-result"],
         ),
     ] {
         let root = TempDir::new().expect("tempdir");
@@ -6954,7 +7119,7 @@ fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
             ),
         )
         .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
-        host.activate_policy_catalog(&mapped_policy_sources(1, "mapped-result"))
+        host.activate_policy_catalog(&mapped_policy_sources_with_keys(1, &outcome_keys))
             .unwrap_or_else(|error| panic!("{case}: activate mapped catalog: {error}"));
         let cycle = host
             .evaluate_policy_cycle_with_test_inputs(
