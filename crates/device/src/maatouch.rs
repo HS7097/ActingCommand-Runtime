@@ -805,7 +805,8 @@ pub fn combine_operation_and_close(
         (Err(operation), Ok(())) => Err(operation),
         (Ok(()), Err(close)) => Err(close),
         (Err(operation), Err(close)) => {
-            let message = format!("{operation}; additionally failed to close MaaTouch: {close}");
+            let message =
+                format!("{operation}; additionally failed to close input backend: {close}");
             Err(operation
                 .with_severity_and_message(DeviceErrorSeverity::Fatal, message)
                 .merge_resource_cleanup(close))
@@ -1283,11 +1284,61 @@ mod tests {
 
     #[test]
     fn validation_uses_backend_style_close_error_combination() {
-        let operation = Err(DeviceError::fatal("operation failed"));
-        let close = Err(DeviceError::fatal("close failed"));
-        let err = combine_operation_and_close(operation, close).expect_err("combined error");
+        // Workflow #284 B14: the shared close presenter also serves Runtime proxies.
+        let recovery = crate::AdbTargetRecovery {
+            endpoint: crate::AdbRecoveryText::new("127.0.0.1:5555"),
+            initial_error: crate::AdbRecoveryText::new("error: device offline"),
+            path: crate::AdbRecoveryPath::TargetDisconnectConnect,
+            budget_ms: 12_000,
+            steps: vec![crate::AdbRecoveryStep {
+                phase: crate::AdbRecoveryPhase::Verify,
+                attempt: 2,
+                elapsed_ms: 10_309,
+                command: None,
+                error: Some(crate::AdbRecoveryText::new("error: device offline")),
+            }],
+            final_state: crate::AdbTransportState::Offline,
+            recovered: false,
+            dropped_count: 0,
+        };
+        let operation = DeviceError::fatal("operation failed")
+            .with_diagnostic(DeviceErrorCategory::Native, "adb.ensure_device.get_state")
+            .with_diagnostic_context(
+                "adb_shell_input",
+                "ensure_device",
+                crate::DeviceErrorSensitivity::Secret,
+            )
+            .with_adb_recovery(recovery.clone());
+        let close = DeviceError::fatal("close failed").with_resource_close_cause(
+            crate::DeviceResourceKind::InputBackend,
+            crate::DeviceResourceClosePhase::Close,
+            "runtime_proxy",
+            None,
+            None,
+            crate::DeviceResourceQuiescence::Unconfirmed,
+            1,
+        );
+        let err = combine_operation_and_close(Err(operation.clone()), Err(close.clone()))
+            .expect_err("combined error");
         assert!(err.message().contains("operation failed"));
         assert!(err.message().contains("close failed"));
+        assert!(err.message().contains("failed to close input backend"));
+        assert!(!err.message().contains("MaaTouch"));
+        assert_eq!(err.severity(), crate::DeviceErrorSeverity::Fatal);
+        assert_eq!(err.diagnostic(), operation.diagnostic());
+        assert_eq!(err.diagnostic_context(), operation.diagnostic_context());
+        assert_eq!(err.adb_recovery(), Some(&recovery));
+        assert_eq!(err.resource_close_causes(), close.resource_close_causes());
+        assert_eq!(err.resource_quiescence(), close.resource_quiescence());
+        assert_eq!(
+            combine_operation_and_close(Err(operation.clone()), Ok(())),
+            Err(operation)
+        );
+        assert_eq!(
+            combine_operation_and_close(Ok(()), Err(close.clone())),
+            Err(close)
+        );
+        assert!(combine_operation_and_close(Ok(()), Ok(())).is_ok());
     }
 
     fn backend_with_handshake() -> MaaTouchBackend {
