@@ -12,7 +12,9 @@ use actingcommand_device::{
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
+mod adb_recovery;
 mod vendor_stdio;
+pub(crate) use adb_recovery::adb_recovery_record;
 
 pub type ExecutionKernelResult<T> = Result<T, ExecutionKernelError>;
 
@@ -35,6 +37,7 @@ pub struct ExecutionKernelError {
 
 #[derive(Clone, Default)]
 struct ExecutionFailureContext {
+    adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     recorded_event: Arc<OnceLock<EventId>>,
     native_detail: Option<Box<LifecycleNativeDetail>>,
     causes: Vec<ExecutionLifecycleCause>,
@@ -56,6 +59,9 @@ impl PartialEq for ExecutionKernelError {
 impl Eq for ExecutionKernelError {}
 
 impl ExecutionKernelError {
+    pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
+        self.lifecycle.adb_recovery.as_deref()
+    }
     pub(crate) fn fatal(code: &'static str) -> Self {
         Self {
             code,
@@ -140,6 +146,7 @@ impl ExecutionKernelError {
             diagnostic_detail: device_diagnostic_detail(error),
             cleanup_cause: None,
             lifecycle: Box::new(ExecutionFailureContext {
+                adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
                 causes,
                 resource_quiescence: error.resource_quiescence().map(runtime_quiescence),

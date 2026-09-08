@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
+    ExecutionBackendProvider, ExecutionInputOutcome, ExecutionKernelError, ExecutionKernelResult,
     ExecutionResourceCloseOutcome, ExecutionSession, PreparedInputAction,
     ResolvedExecutionInstance,
 };
@@ -67,7 +67,7 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         action: PreparedInputAction,
-    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         self.input_prepared_with_registration_guard(instance_alias, action, ())
     }
 
@@ -77,7 +77,7 @@ impl ExecutionKernel {
         instance_alias: &str,
         action: PreparedInputAction,
         registration_guard: G,
-    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         let result = session.input_prepared(action);
@@ -90,7 +90,7 @@ impl ExecutionKernel {
         instance_alias: &str,
         action: PreparedInputAction,
         registration_guard: G,
-    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         session

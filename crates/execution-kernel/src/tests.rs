@@ -501,7 +501,7 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     let selected = kernel
         .input_prepared("node.a", kernel.prepare_input(InputAction::Reset).unwrap())
         .expect("first input");
-    assert_eq!(selected, Some(input_selection));
+    assert_eq!(selected.selection, Some(input_selection));
     kernel
         .input("node.a", InputAction::Tap { x: 1, y: 2 })
         .expect("second input");

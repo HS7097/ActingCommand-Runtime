@@ -135,6 +135,10 @@ pub struct InputSelectionContext {
 }
 
 pub trait InputBackend {
+    fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
+        None
+    }
+
     fn selection_context(&self) -> Option<InputSelectionContext> {
         None
     }

@@ -352,6 +352,7 @@ enum StoredDiagnosticMessage {
 
 #[derive(Clone)]
 pub struct DeviceError {
+    adb: Option<Box<StoredAdbEvidence>>,
     occurrence: Arc<DeviceCloseOccurrence>,
     severity: DeviceErrorSeverity,
     message: String,
@@ -364,9 +365,33 @@ pub struct DeviceError {
     resource_count: u16,
 }
 
+#[derive(Clone, Default)]
+struct StoredAdbEvidence {
+    command: Option<crate::AdbCommandEvidence>,
+    recovery: Option<crate::AdbTargetRecovery>,
+}
+
 impl DeviceError {
+    pub fn adb_command(&self) -> Option<&crate::AdbCommandEvidence> {
+        self.adb.as_deref().and_then(|value| value.command.as_ref())
+    }
+    pub(crate) fn with_adb_command(mut self, evidence: crate::AdbCommandEvidence) -> Self {
+        self.adb.get_or_insert_with(Default::default).command = Some(evidence);
+        self
+    }
+    pub fn adb_recovery(&self) -> Option<&crate::AdbTargetRecovery> {
+        self.adb
+            .as_deref()
+            .and_then(|value| value.recovery.as_ref())
+    }
+    pub fn with_adb_recovery(mut self, report: crate::AdbTargetRecovery) -> Self {
+        self.adb.get_or_insert_with(Default::default).recovery = Some(report);
+        self
+    }
+
     pub fn transient(message: impl Into<String>) -> Self {
         Self {
+            adb: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity: DeviceErrorSeverity::Transient,
             message: message.into(),
@@ -382,6 +407,7 @@ impl DeviceError {
 
     pub fn fatal(message: impl Into<String>) -> Self {
         Self {
+            adb: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity: DeviceErrorSeverity::Fatal,
             message: message.into(),
@@ -397,6 +423,7 @@ impl DeviceError {
 
     pub fn with_severity(severity: DeviceErrorSeverity, message: impl Into<String>) -> Self {
         Self {
+            adb: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity,
             message: message.into(),

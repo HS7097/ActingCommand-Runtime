@@ -19,6 +19,12 @@ use std::thread::{self, JoinHandle};
 const SESSION_CHANNEL_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionInputOutcome {
+    pub selection: Option<actingcommand_device::InputSelectionContext>,
+    pub recovery: Option<actingcommand_contract::AdbTargetRecovery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreparedInputAction {
     Direct(InputAction),
     SegmentedSwipe(PreparedSegmentedSwipePlan),
@@ -71,8 +77,7 @@ impl TryFrom<InputAction> for PreparedInputAction {
 enum SessionCommand {
     Input {
         action: PreparedInputAction,
-        response:
-            SyncSender<ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>>>,
+        response: SyncSender<ExecutionKernelResult<ExecutionInputOutcome>>,
     },
     Capture {
         response: SyncSender<ExecutionKernelResult<Frame>>,
@@ -171,7 +176,7 @@ impl ExecutionSession {
     pub(crate) fn input_prepared(
         &self,
         action: PreparedInputAction,
-    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         match self.input_prepared_retained(action) {
             Ok(selection) => Ok(selection),
             Err(primary) => {
@@ -188,7 +193,7 @@ impl ExecutionSession {
     pub(crate) fn input_prepared_retained(
         &self,
         action: PreparedInputAction,
-    ) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
@@ -595,7 +600,7 @@ fn execute_input(
     instance_alias: &str,
     backend: &mut Option<Box<dyn InputBackend>>,
     action: PreparedInputAction,
-) -> ExecutionKernelResult<Option<actingcommand_device::InputSelectionContext>> {
+) -> ExecutionKernelResult<ExecutionInputOutcome> {
     if backend.is_none() {
         *backend =
             Some(provider.open_input(instance_alias).map_err(|error| {
@@ -605,9 +610,18 @@ fn execute_input(
     let backend = backend
         .as_mut()
         .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?;
-    execute_action(backend.as_mut(), &action)
-        .map_err(|error| ExecutionKernelError::device("input_backend_operation_failed", &error))?;
-    Ok(backend.selection_context())
+    let recovery = backend.take_adb_recovery();
+    execute_action(backend.as_mut(), &action).map_err(|error| {
+        let error = match &recovery {
+            Some(report) => error.with_adb_recovery(report.clone()),
+            None => error,
+        };
+        ExecutionKernelError::device("input_backend_operation_failed", &error)
+    })?;
+    Ok(ExecutionInputOutcome {
+        selection: backend.selection_context(),
+        recovery: recovery.as_ref().map(crate::error::adb_recovery_record),
+    })
 }
 
 fn execute_capture(

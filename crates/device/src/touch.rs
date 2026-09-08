@@ -401,6 +401,10 @@ impl SelectedTouchBackend {
 }
 
 impl InputBackend for SelectedTouchBackend {
+    fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
+        self.active.backend.take_adb_recovery()
+    }
+
     fn selection_context(&self) -> Option<crate::InputSelectionContext> {
         Some(crate::InputSelectionContext {
             backend: self.backend_name(),
@@ -507,6 +511,24 @@ pub fn create_touch_backend(config: TouchBackendConfig) -> DeviceResult<Selected
                 .collect(),
         ),
     }
+}
+
+/// Runtime calls this only inside its admitted, fenced input operation.
+/// Capture and backend probes use their existing factories.
+pub fn create_touch_backend_for_fenced_input(
+    config: TouchBackendConfig,
+) -> DeviceResult<SelectedTouchBackend> {
+    if config.requested != TouchBackendChoice::AdbShellInput {
+        return create_touch_backend(config);
+    }
+    select_fixed_priority(
+        config.requested,
+        vec![Box::new(AdbShellInputFactory {
+            adb_config: config.adb_config,
+            target: config.target,
+            recovery_allowed: true,
+        })],
+    )
 }
 
 pub fn touch_probe_report(config: TouchBackendConfig) -> TouchBackendDiagnostics {
@@ -789,6 +811,7 @@ fn default_touch_factories(config: TouchBackendConfig) -> Vec<Box<dyn TouchBacke
         Box::new(AdbShellInputFactory {
             adb_config: config.adb_config,
             target: config.target,
+            recovery_allowed: false,
         }),
     ]
 }
@@ -887,6 +910,7 @@ impl TouchBackendFactory for MinitouchFactory {
 struct AdbShellInputFactory {
     adb_config: AdbConfig,
     target: DeviceTarget,
+    recovery_allowed: bool,
 }
 
 impl TouchBackendFactory for AdbShellInputFactory {
@@ -896,7 +920,11 @@ impl TouchBackendFactory for AdbShellInputFactory {
 
     fn connect(&self) -> DeviceResult<ConnectedTouchBackend> {
         let mut backend = AdbShellInputBackend::new(self.adb_config.clone(), self.target.clone());
-        let device = backend.connect()?;
+        let device = if self.recovery_allowed {
+            backend.connect_for_fenced_input()?
+        } else {
+            backend.connect()?
+        };
         Ok(ConnectedTouchBackend {
             name: TouchBackendName::AdbShellInput,
             backend: Box::new(backend),
@@ -908,6 +936,7 @@ impl TouchBackendFactory for AdbShellInputFactory {
 
 #[derive(Debug, Clone)]
 pub struct AdbShellInputBackend {
+    recovery: Option<crate::AdbTargetRecovery>,
     adb_config: AdbConfig,
     target: DeviceTarget,
     serial: String,
@@ -921,6 +950,7 @@ impl AdbShellInputBackend {
     pub fn new(adb_config: AdbConfig, target: DeviceTarget) -> Self {
         let serial = target.resolved_serial();
         Self {
+            recovery: None,
             adb_config,
             target,
             serial,
@@ -940,6 +970,28 @@ impl AdbShellInputBackend {
             || adb.screen_size(&serial),
             || read_device_rotation(&adb, &serial),
         )
+    }
+
+    fn connect_for_fenced_input(&mut self) -> DeviceResult<DeviceInfo> {
+        let adb = Adb::new(self.adb_config.clone());
+        let serial = self.serial.clone();
+        let ready = adb.ensure_input_device(&serial, self.target.connect);
+        let recovery = ready.as_ref().ok().and_then(|ready| ready.recovery.clone());
+        let result = self.connect_with_steps(
+            || ready.map(|ready| ready.state),
+            || adb.screen_size(&serial),
+            || read_device_rotation(&adb, &serial),
+        );
+        match result {
+            Ok(info) => {
+                self.recovery = recovery;
+                Ok(info)
+            }
+            Err(error) => Err(match recovery {
+                Some(report) => error.with_adb_recovery(report),
+                None => error,
+            }),
+        }
     }
 
     fn connect_with_steps(
@@ -1112,6 +1164,10 @@ fn adb_shell_input_connect_error(
 }
 
 impl InputBackend for AdbShellInputBackend {
+    fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
+        self.recovery.take()
+    }
+
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         let adb_config = self.adb_config.clone();
         let serial = self.serial.clone();
