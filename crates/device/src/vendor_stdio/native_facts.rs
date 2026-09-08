@@ -222,11 +222,13 @@ pub(super) fn owned_handle(
         return value;
     }
     let mut flags = 0;
-    value.flags = if unsafe { GetHandleInformation(handle as *mut c_void, &mut flags) } == 0 {
-        StdioFact::Unknown(StdioUnknown::QueryFailed(win32_error()))
-    } else {
-        StdioFact::Known(flags)
-    };
+    if unsafe { GetHandleInformation(handle as *mut c_void, &mut flags) } == 0 {
+        let error = win32_error();
+        value.flags = StdioFact::Unknown(StdioUnknown::QueryFailed(error.clone()));
+        value.file_identity = StdioFact::Unknown(StdioUnknown::HandleUnavailable(error));
+        return value;
+    }
+    value.flags = StdioFact::Known(flags);
     let mut info = FileIdInfo::default();
     value.file_identity = if unsafe {
         GetFileInformationByHandleEx(
@@ -288,6 +290,7 @@ pub(super) fn table_value(
     };
     if let Some(owner) = owner
         && matches!(&owner.handle, StdioFact::Known(raw) if *raw == handle as u64)
+        && matches!(owner.flags, StdioFact::Known(_))
     {
         value.metadata_from = owner.metadata_from;
         value.flags = owner.flags.clone();

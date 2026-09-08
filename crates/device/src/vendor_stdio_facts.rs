@@ -54,6 +54,7 @@ pub enum StdioNativeError {
 pub enum StdioUnknown {
     Borrowed,
     Invalid,
+    HandleUnavailable(StdioNativeError),
     QueryFailed(StdioNativeError),
 }
 

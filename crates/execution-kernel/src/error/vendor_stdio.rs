@@ -34,6 +34,9 @@ fn fact<T, U>(value: &device::StdioFact<T>, convert: impl FnOnce(&T) -> U) -> le
         device::StdioFact::Unknown(reason) => ledger::StdioFact::Unknown(match reason {
             device::StdioUnknown::Borrowed => ledger::StdioUnknown::Borrowed,
             device::StdioUnknown::Invalid => ledger::StdioUnknown::Invalid,
+            device::StdioUnknown::HandleUnavailable(value) => {
+                ledger::StdioUnknown::HandleUnavailable(error(value))
+            }
             device::StdioUnknown::QueryFailed(value) => {
                 ledger::StdioUnknown::QueryFailed(error(value))
             }

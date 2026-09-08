@@ -44,6 +44,8 @@ Handle flags come from GetHandleInformation; file identity is the volume serial
 and 128-bit file ID returned by GetFileInformationByHandleEx(FileIdInfo). These
 queries use only currently held descriptors. Metadata unavailable on a console,
 pipe or invalid handle remains typed unknown with the original query error.
+An unsuccessful handle-information query stops metadata reads for that handle;
+file identity records HandleUnavailable with that query error.
 Borrowed Win32 table values have unknown metadata unless the same observation
 associates them with a currently held owner FD; metadata then names that FD as
 its source. Matching handle numbers alone is not file identity. File identity
