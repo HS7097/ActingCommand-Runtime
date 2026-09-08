@@ -3397,49 +3397,6 @@ mod tests {
         let instance_b = decision_for(&result, "fixture.observe", "fixture-instance-b");
         assert_eq!(instance_a.state, SchedulingDecisionState::Eligible);
         assert_eq!(instance_b.state, SchedulingDecisionState::Selected);
-        for alias in [
-            "Neutral.Instance".to_owned(),
-            format!(" {} ", "é".repeat(127)),
-            " ".to_owned(),
-        ] {
-            let mut aliased = facts.clone();
-            aliased.instances[1].instance_id = alias.clone();
-            aliased.outcomes[1].instance_id = alias.clone();
-            aliased.tasks.push(TaskRuntimeSnapshot {
-                task_id: "fixture.observe".to_owned(),
-                instance_id: alias.clone(),
-                last_dispatched_unix_ms: None,
-                eligible_since_unix_ms: None,
-                terminal_state: None,
-            });
-            let result = evaluate(
-                &catalog,
-                &aliased,
-                &base_resources(),
-                EvaluationTime {
-                    unix_ms: NOW,
-                    monotonic_ms: NOW,
-                },
-                9,
-            )
-            .expect("registered alias evaluation");
-            assert_eq!(result.dispatch_intents.len(), 1);
-            assert_eq!(result.dispatch_intents[0].instance_id, alias);
-            aliased.instances[1].instance_id.push('\n');
-            assert!(
-                evaluate(
-                    &catalog,
-                    &aliased,
-                    &base_resources(),
-                    EvaluationTime {
-                        unix_ms: NOW,
-                        monotonic_ms: NOW
-                    },
-                    9
-                )
-                .is_err()
-            );
-        }
     }
 
     #[test]
@@ -3571,6 +3528,49 @@ mod tests {
         assert_eq!(instance_a.state, SchedulingDecisionState::Blocked);
         assert_eq!(instance_b.eligibility, EligibilityState::True);
         assert_eq!(instance_b.state, SchedulingDecisionState::Selected);
+        for alias in [
+            "Neutral.Instance".to_owned(),
+            format!(" {} ", "é".repeat(127)),
+            " ".to_owned(),
+        ] {
+            let mut aliased = facts.clone();
+            aliased.instances[1].instance_id = alias.clone();
+            aliased.outcomes[1].instance_id = alias.clone();
+            aliased.tasks.push(TaskRuntimeSnapshot {
+                task_id: "fixture.observe".to_owned(),
+                instance_id: alias.clone(),
+                last_dispatched_unix_ms: None,
+                eligible_since_unix_ms: None,
+                terminal_state: None,
+            });
+            let result = evaluate(
+                &catalog,
+                &aliased,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                9,
+            )
+            .expect("registered alias evaluation");
+            assert_eq!(result.dispatch_intents.len(), 1);
+            assert_eq!(result.dispatch_intents[0].instance_id, alias);
+            aliased.instances[1].instance_id.push('\n');
+            assert!(
+                evaluate(
+                    &catalog,
+                    &aliased,
+                    &base_resources(),
+                    EvaluationTime {
+                        unix_ms: NOW,
+                        monotonic_ms: NOW
+                    },
+                    9
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
