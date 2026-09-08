@@ -2965,7 +2965,7 @@ fn project_interface_v1_rejects_decision_history_that_requires_pagination() {
 fn project_interface_pages_decision_history_without_duplicates_or_loss() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
-    host.activate_policy_catalog(&policy_sources(1))
+    host.activate_policy_catalog(&budget_policy_sources(1))
         .expect("activate catalog");
     host.publish_fact(stored_fact(
         FactScope::Instance {
@@ -3102,7 +3102,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
                 &host,
                 late_approval_intent.as_ref().expect("late approval intent"),
             );
-            host.activate_policy_catalog(&policy_sources(2))
+            host.activate_policy_catalog(&budget_policy_sources(2))
                 .expect("activate catalog after first page");
         }
         if !page.has_more() {
@@ -19833,7 +19833,7 @@ fn tightened_detection_quota_preserves_historical_usage_and_recovers() {
 fn approval_decision_is_authoritative_target_bound_and_revocable() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
-    host.activate_policy_catalog(&policy_sources(1))
+    host.activate_policy_catalog(&budget_policy_sources(1))
         .expect("activate catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     let forged = policy_context(&host, &intent);
@@ -24183,8 +24183,14 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
         .active_policy_catalog()
         .expect("active catalog")
         .expect("catalog");
-    let (cycle, _, _) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+    let cycle = host
+        .evaluate_policy_cycle(PolicyTrigger::Recovery)
+        .expect("evaluate the recovered policy at its Runtime clock");
     assert_eq!(cycle.directive.kind, PolicyRecomputeKind::Full);
+    assert!(
+        cycle.pending_dispatch_intents.is_empty(),
+        "recovery must not create another dispatch before the late outcome"
+    );
     let (intent, reason_chain): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
         &fs::read(root.path().join("admitted-before-crash.json"))
             .expect("admitted dispatch marker"),
