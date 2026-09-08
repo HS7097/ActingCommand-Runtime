@@ -958,6 +958,9 @@ struct FakeState {
     inputs: AtomicUsize,
     closes: AtomicUsize,
     fail_input: AtomicBool,
+    input_open_delay: Duration,
+    input_close_delay: Duration,
+    input_open_error: Option<DeviceError>,
     capture_opens: AtomicUsize,
     captures: AtomicUsize,
     capture_closes: AtomicUsize,
@@ -1098,6 +1101,7 @@ impl InputBackend for FakeBackend {
         let _observation_owner = enter_observation_owner(self.state.observation_owner);
         if !self.closed {
             self.closed = true;
+            thread::sleep(self.state.input_close_delay);
             self.state.closes.fetch_add(1, Ordering::AcqRel);
         }
         #[cfg(feature = "test-observation")]
@@ -1210,6 +1214,10 @@ impl ExecutionBackendProvider for FakeProvider {
         );
         assert_eq!(instance_alias, "node.a");
         self.state.opens.fetch_add(1, Ordering::AcqRel);
+        thread::sleep(self.state.input_open_delay);
+        if let Some(error) = &self.state.input_open_error {
+            return Err(error.clone());
+        }
         let backend: Box<dyn InputBackend> = Box::new(FakeBackend {
             state: Arc::clone(&self.state),
             closed: false,
@@ -2460,9 +2468,19 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
 #[test]
 fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
+    // B14: the legal open and close each outlive the ordinary I/O wait.
+    let state = Arc::new(FakeState {
+        input_open_delay: Duration::from_millis(200),
+        input_close_delay: Duration::from_millis(200),
+        ..FakeState::default()
+    });
     let host = host(&root, Arc::clone(&state), 1_000);
-    let client = client(&root);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_millis(240)),
+    )
+    .expect("runtime client");
 
     assert_eq!(
         client.health().expect("health"),
@@ -2796,9 +2814,18 @@ fn non_lab_client_cannot_open_authoring_session() {
 #[test]
 fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
+    let state = Arc::new(FakeState {
+        input_open_delay: Duration::from_millis(200),
+        input_close_delay: Duration::from_millis(200),
+        ..FakeState::default()
+    });
     let host = host(&root, Arc::clone(&state), 1_000);
-    let client = lab_client(&root);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_millis(240)),
+    )
+    .expect("Lab runtime client");
     let session = client.begin_debug_session().expect("debug session");
 
     let observation = session
@@ -3101,6 +3128,14 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
     let backend_open_timeout = Duration::from_secs(2);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let holder_id = *ids.mint_holder_id().expect("holder id").transport();
+    let token = actingcommand_contract::LeaseToken::new(
+        *ids.mint_owner_epoch().expect("epoch").transport(),
+        *ids.mint_lease_id().expect("lease").transport(),
+        *ids.mint_instance_id().expect("instance").transport(),
+        holder_id,
+        1_000,
+    )
+    .expect("lease token");
 
     assert_eq!(
         receipt_response_timeout(
@@ -3110,7 +3145,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
             io_timeout,
             backend_open_timeout,
         ),
-        backend_open_timeout
+        Ok(backend_open_timeout)
     );
     assert_eq!(
         receipt_response_timeout(
@@ -3121,7 +3156,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
             io_timeout,
             backend_open_timeout,
         ),
-        backend_open_timeout
+        Ok(backend_open_timeout)
     );
     assert_eq!(
         receipt_response_timeout(
@@ -3132,11 +3167,109 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
             io_timeout,
             backend_open_timeout,
         ),
-        backend_open_timeout
+        Ok(backend_open_timeout * 2 + io_timeout)
     );
     assert_eq!(
         receipt_response_timeout(&RuntimeOperation::Health, io_timeout, backend_open_timeout),
-        io_timeout
+        Ok(io_timeout)
+    );
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::ReleaseLease {
+                token: token.clone()
+            },
+            io_timeout,
+            backend_open_timeout,
+        ),
+        Ok(backend_open_timeout + io_timeout)
+    );
+    let drag = InputAction::SingleTouchDragWithVerticalBrakeV1 {
+        x1: 0,
+        y1: 0,
+        x2: 10,
+        y2: 0,
+        x3: 10,
+        y3: 10,
+        horizontal_duration_ms: 100,
+        corner_hold_ms: 50,
+        brake_distance_px: 10,
+        brake_duration_ms: 100,
+        slope_in: 1,
+        slope_out: 1,
+    };
+    for (action, duration_ms) in [
+        (InputAction::Tap { x: 10, y: 20 }, 0),
+        (
+            InputAction::LongTap {
+                x: 10,
+                y: 20,
+                duration_ms: 250,
+            },
+            250,
+        ),
+        (
+            InputAction::Swipe {
+                x1: 0,
+                y1: 0,
+                x2: 10,
+                y2: 20,
+                duration_ms: 250,
+            },
+            250,
+        ),
+        (drag.clone(), 250),
+        (InputAction::Key { key: "BACK".into() }, 0),
+        (
+            InputAction::Text {
+                text: "text".into(),
+            },
+            0,
+        ),
+        (InputAction::Reset, 0),
+    ] {
+        assert_eq!(
+            receipt_response_timeout(
+                &RuntimeOperation::Input {
+                    token: token.clone(),
+                    action
+                },
+                io_timeout,
+                backend_open_timeout,
+            ),
+            Ok(backend_open_timeout * 2 + io_timeout + Duration::from_millis(duration_ms))
+        );
+    }
+    for operation in [
+        RuntimeOperation::Input {
+            token: token.clone(),
+            action: InputAction::Reset,
+        },
+        RuntimeOperation::ReleaseLease {
+            token: token.clone(),
+        },
+    ] {
+        assert!(receipt_response_timeout(&operation, io_timeout, Duration::MAX).is_err());
+    }
+    let mut overflow = drag;
+    if let InputAction::SingleTouchDragWithVerticalBrakeV1 {
+        horizontal_duration_ms,
+        ..
+    } = &mut overflow
+    {
+        *horizontal_duration_ms = u64::MAX;
+    }
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::Input {
+                token,
+                action: overflow
+            },
+            io_timeout,
+            backend_open_timeout,
+        )
+        .expect_err("gesture sum overflow")
+        .code(),
+        "runtime_input_timeout_overflow"
     );
 }
 
@@ -3274,10 +3407,19 @@ fn safe_reset_uses_one_runtime_request_and_returns_ledger_projection() {
 #[test]
 fn safe_reset_backend_failure_is_visible_and_releases_authority() {
     let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
+    let state = Arc::new(FakeState {
+        input_open_delay: Duration::from_millis(200),
+        input_close_delay: Duration::from_millis(200),
+        ..FakeState::default()
+    });
     state.fail_input.store(true, Ordering::Release);
     let host = host(&root, Arc::clone(&state), 1_000);
-    let client = client(&root);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_millis(240)),
+    )
+    .expect("runtime client");
 
     let error = client
         .safe_reset("node.a")
@@ -3293,6 +3435,53 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close host");
+
+    // B14: direct and debug callers must receive the original delayed open failure.
+    for debug in [false, true] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState {
+            input_open_delay: Duration::from_millis(200),
+            input_open_error: Some(
+                DeviceError::fatal("injected input open failure").with_diagnostic(
+                    actingcommand_device::DeviceErrorCategory::Native,
+                    "adb.ensure_device.get_state",
+                ),
+            ),
+            ..FakeState::default()
+        });
+        let host = self::host(&root, Arc::clone(&state), 1_000);
+        let client = RuntimeClient::connect(
+            RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
+                .with_io_timeout(Duration::from_millis(100))
+                .with_backend_open_timeout(Duration::from_millis(240)),
+        )
+        .expect("runtime client");
+        let session = debug.then(|| client.begin_debug_session().expect("debug session"));
+        let token = match &session {
+            Some(session) => session.acquire_lease("node.a"),
+            None => client.acquire_lease("node.a"),
+        }
+        .expect("lease");
+        let input = || match &session {
+            Some(session) => session
+                .input(&token, InputAction::Tap { x: 10, y: 20 })
+                .map(|_| ()),
+            None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
+        };
+        let error = input().expect_err("typed open failure");
+        assert_eq!(error.code(), "runtime_request_rejected", "{error:#?}");
+        assert_eq!(
+            error.projection().expect("Host failure").code,
+            RuntimeErrorCode::BackendOpenFailed
+        );
+        assert!(error.is_fatal());
+        assert_eq!(input().expect_err("latched input must not be sent"), error);
+        assert_eq!(state.opens.load(Ordering::Acquire), 1);
+        assert_eq!(state.inputs.load(Ordering::Acquire), 0);
+        drop(session);
+        drop(client);
+        host.close().expect("close failed session");
+    }
 }
 
 #[test]
@@ -3412,6 +3601,50 @@ fn broken_ipc_connection_latches_without_reconnect() {
         .expect_err("terminal failure must be stable");
     assert_eq!(first, second);
     assert!(first.is_fatal());
+    drop(client);
+
+    for debug in [false, true] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState {
+            input_open_delay: Duration::from_millis(800),
+            ..FakeState::default()
+        });
+        let host = self::host(&root, Arc::clone(&state), 5_000);
+        let client = RuntimeClient::connect(
+            RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
+                .with_io_timeout(Duration::from_millis(100))
+                .with_backend_open_timeout(Duration::from_millis(240)),
+        )
+        .expect("runtime client");
+        let session = debug.then(|| client.begin_debug_session().expect("debug session"));
+        let token = match &session {
+            Some(session) => session.acquire_lease("node.a"),
+            None => client.acquire_lease("node.a"),
+        }
+        .expect("lease");
+        let input = || match &session {
+            Some(session) => session
+                .input(&token, InputAction::Tap { x: 10, y: 20 })
+                .map(|_| ()),
+            None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
+        };
+        let error = input().expect_err("the complete finite receipt budget must expire");
+        assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+        assert!(error.is_fatal());
+        assert_eq!(input().expect_err("no resend after timeout"), error);
+        assert_eq!(
+            client.release_lease(&token).expect_err("latched release"),
+            error
+        );
+        // The timeout is not evidence of non-performance: let the one accepted input finish.
+        thread::sleep(Duration::from_millis(400));
+        assert_eq!(state.opens.load(Ordering::Acquire), 1);
+        assert_eq!(state.inputs.load(Ordering::Acquire), 1);
+        drop(session);
+        drop(client);
+        host.close().expect("close timed-out session");
+        assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    }
 }
 
 #[test]
