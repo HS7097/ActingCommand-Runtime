@@ -35,3 +35,10 @@ latched transport and close-combination specifications include the Workflow
 an open or close can outlive I/O while its original terminal remains receivable.
 The exhaustion case preserves uncertainty about an already submitted input and
 checks that subsequent client calls do not submit it again. Validation is CI-only.
+
+The existing mapped-successor specification correlates one captured event set.
+It preserves exactly one source input and the unique outcome-driven successor.
+Every observed input belongs to one of those runs and has its prior policy
+admission, matching lease grant, Scheduler request admission and original action
+intent. The successor's own single-step input is distinct from an independent
+wake effect; the specification does not rely on a changing global input count.
