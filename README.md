@@ -12,62 +12,142 @@
 
 # ActingCommand Runtime
 
-> 多游戏模拟器自动化框架的 **Rust 常驻运行时**:一个长驻 daemon 承载调度仲裁、设备控制与全局事件账本;游戏知识全部外置于声明式资源包,运行时内核**零游戏逻辑**。控制面为**净室 Rust 实现**——参照公开行为与协议重写,仓内无任何 C/C++ 源码。
+> **AI驱动，程序沉淀。**
 >
-> **设计立场:智能体在环外,运行时在环内。**智能体只做维护——规划、制作资源、处理例外;逐帧执行由运行时确定性完成,每一步入账、可审计。推理花在维护,不花在执行。
+> 让一次探索，成为下一次稳定执行的能力。AI 帮助理解变化、规划任务、制作资源、分析证据；程序把这些方法沉淀为可复用的声明、明确的执行边界和可追溯的结果。每次改进都能留下来，让下一轮从已有能力出发。
+>
+> ActingCommand 是面向多游戏模拟器自动化的 **Rust 常驻运行时**。外部 AI 与维护者通过客户端和资源工具提交请求与资源；Runtime 按声明确定执行，负责调度、识别、操作、恢复和收尾。GlobalLedger 与已验证制品保存实际发生的事实，供外部维护侧分析并改进下一版资源。
+>
+> 当前改进闭环由维护者协调，AI 辅助规划与制作。Runtime 已提供执行、取证和会话协议；自动启动外部 AI、自动探索与自主修复仍需后续实现。游戏知识全部放在声明式资源包中，内核保持**零游戏身份**。控制面为参照公开行为与协议重写的净室 Rust 实现。
 
 CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)(Windows:fmt / clippy `-D warnings` / test) · [精确 SHA Windows 构建产物](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · 本仓公开
 
-**当前成熟度(2026-09-05)**:调度仲裁、设备咽喉、任务收容、声明式策略目录与预算派发已接入常驻运行时;实例事实、战略求值、报告与规划信号、提案生成及 Runtime Dispatcher 会话协议已有实现。GlobalLedger 是全局唯一事件事实源,正推进为覆盖各模块的权威调试工具。**OCR 识别链已完成一轮官方 CPU 实机全流程验证**:自动回 Home 恢复、模板导航、单触分段滑动翻页、逐帧 16 目标 OCR、字典规范化比对、terminal 锚页判终、`return_home` 收口,一条命令 219 秒无人工输入完成。真实调度时间语义、长期无人值守、OCR 覆盖率与 CUDA 仍需完成对应实证。
-
-早期的 Python mock 与 Go 历史契约、以及 Go/Python 基准工具已迁出本仓(归档于 ActingCommand-Legacy-Runtime,**暂未公开**);仓内保留 Rust 基准工具 `benchmarks/rust` 与历史基准报告。
+**当前实现（2026-09-08）**：常驻 Runtime 已接入类型化 IPC、资源收容、调度与预算、阶段任务、页面/OCR 投影和持久回执。GlobalLedger 承载唯一事件与诊断事实；共享查询、有限诊断签名的登记/匹配/退役及只读离线回放均有正式入口。本文描述当前主线源码；具体设备、模型、资源包与长期运行的验证范围须以相应运行事实为准。
 
 ---
 
-## 🔁 自维护闭环
+## 🔁 执行与收尾
 
-![ActingCommand 自维护闭环](./docs/assets/self-maintaining-loop.png)
+![ActingCommand 启动、请求执行与关闭流程](./docs/assets/self-maintaining-loop.png)
 
-这套架构存在的理由:让游戏自动化摆脱「游戏一更新,全世界等维护者发版」。目标闭环是——游戏版本更新(①)后,智能体试玩摸清变化(②),制作或修订声明式资源包(③);资源包经哈希收容进入运行时,由调度器准入(④)、确定性执行(⑤)、全程入账(⑥);失败时,智能体凭账本证据自诊断并修复资源(⑦),回到 ③。环内逐帧零推理——推理花在维护,不花在执行。
+图中三行分别是启动、单次请求和 Host 关闭的生命周期。启动先读取配置并取得 OwnerGuard，再打开 ArtifactStore 与 GlobalLedger，随后装配 Provider、记录启动事实，最后发布当前 owner 的就绪端点。Provider 的 construction-ready 表示本次装配完成；推理与懒初始化需要各自的实际观察。见 [daemon 入口](./apps/actingd/src/main.rs) 与 [Provider 启动契约](./contracts/provider-startup.md)。
 
-资源制作、执行与账本诊断已在实战中串联:2026-08 至 09 月初的 OCR 任务链上,资源包由智能体撰写、经账本证据诊断并修订后实机通过——含智能体辅助制作的 `return_home` 恢复包(实机验证后成为资源仓中的可复用基线)。Runtime 已具备唤醒记录、会话启动/恢复、响应与有界会话管理;外部智能体的实际自动启动、②(自动摸清)与完整自主维护闭环仍在规划中。
+请求由 Runtime Host 管理生命周期。资源包经过 SHA-256 校验再解压；Scheduler 管理准入和设备写租约，Execution Kernel 执行有界任务、阶段与恢复。只读观察使用绑定 owner epoch 的读取能力。设备效果受租约 fencing 约束，终态回执引用已持久化的结果事实。GlobalLedger 持续记录事件，ArtifactStore 保存帧与大体量原文；任务结局和证据完整性分别表达。
+
+Host 关闭先停止准入、排空工作并回收 policy driver，再经 Scheduler 授权关闭所持有的原生资源、记录 quiescence 与最终 M4 summary。只读观察留下的会话使用专用 resource-close-only 租约关闭。主错误和清理错误均保留；关闭未确认时保持 Unconfirmed 和 owner 保护。每次请求结束后 Host 继续常驻；图中关闭行是独立生命周期。见 [只读会话资源关闭](./contracts/read-session-resource-close.md) 与 [原生资源所有权](./contracts/nemu-owned-resource-close.md)。
+
+维护侧可从账本与已验证制品恢复资源草稿，经制作、构包与校验后提交执行。Runtime Dispatcher 已有 wake、会话启动/恢复、响应与有界管理；外部智能体自动启动、自动探索和完整自主维护仍需后续实现与验证。
 
 ## 🏛 系统形态
 
-![ActingCommand Runtime 架构图](./docs/assets/runtime-architecture.png)
+**执行与证据反馈**
 
-图中绿色/蓝色节点及实线表示已经合入 `main` 并接入相应入口的当前能力;橙色节点及虚线表示规划、推进或待验证的能力。GlobalLedger 是全局唯一事件事实源;已有只读取证与未来权威调试能力都从这一事件源读取。源码接入不等于对应实机场景已经验证。
+```mermaid
+flowchart LR
+    A["外部 AI / 维护者<br/>规划 / 分析<br/>维护侧协调"]
+    U["客户端<br/>actingctl / runtime-client<br/>ActingLab"]
+    W["资源制作 / 正式包<br/>ActingLab / 资源工具<br/>restore / convert / build"]
+    H["Runtime Host<br/>owner epoch / typed IPC<br/>请求与存储生命周期"]
+    S["Scheduler<br/>准入 / 租约<br/>fencing"]
+    C["Pack Containment<br/>SHA-256 校验<br/>先于解压"]
+    K["Execution Kernel<br/>任务 / 阶段 / 恢复"]
+    N["Recognition / Vision FFI<br/>模板 / 颜色<br/>OCR / NN"]
+    D["DeviceProxy / Throat<br/>fenced write<br/>epoch-bound read"]
+    B["设备 / Provider<br/>Runtime 持有原生句柄"]
+    L["GlobalLedger<br/>唯一事件 / 诊断事实源"]
+    T["ArtifactStore<br/>帧 / 大体量原文<br/>哈希绑定字节"]
+    F["只读取证<br/>actingledger<br/>ledger-forensics"]
 
-术语以仓内 [CONTEXT.md](./CONTEXT.md) 为准(Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy 等逐条定义)。
+    A -->|"使用客户端"| U
+    A -->|"改进资源"| W
+    U <-->|"请求<br/>回执 / 投影"| H
+    W -->|"资源包 + SHA-256"| C
+    C -->|"已验证资源"| K
+    H <-->|"准入 / 租约"| S
+    H <-->|"任务 / 回调"| K
+    K -->|"识别工作"| N
+    K <-->|"采集 / 输入"| D
+    D <-->|"受权 I/O"| B
+    H -->|"脱敏事件"| L
+    H -->|"ArtifactStore.put<br/>证据字节"| T
+    L -->|"读取事件"| F
+    T -->|"读取 verified 字节"| F
+    F -.->|"证据支持<br/>下一轮改进"| A
 
-**GlobalLedger 的诊断定位**:当前已有类型化事件、持久回执与重放,`actingledger` 提供只读取证入口。全模块探针覆盖、复发签名比对与回放考核正在推进,目标是把账本升格为权威调试工具:从同一个事件源定位正常结果、降级与失败原因,保持每条诊断与原始事实可追溯。完整诊断覆盖尚未完成。
+    classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
+    classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
+    classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
+    class A,U,W,F external
+    class H,S,C,K,N,D,B runtime
+    class L,T evidence
+    linkStyle 0,2,6,7,12,13 stroke:#275fa5,stroke-width:2px
+    linkStyle 1,3,4 stroke:#b57712,stroke-width:2px
+    linkStyle 5,8,9 stroke:#28734d,stroke-width:2px
+    linkStyle 10,11 stroke:#c45b12,stroke-width:2px
+    linkStyle 14 stroke:#8045ac,stroke-width:2px
+```
 
-## 📍 当前进度(2026-09-05)
+**同一 Host 的装配、策略与状态**
 
-| 里程碑 | 内容 |
+```mermaid
+flowchart TB
+    H2["同一 Runtime Host<br/>装配 / 策略 / 状态"]
+    P["Provider 装配<br/>打开存储之后<br/>Ready 之前"]
+    Q["PolicyHost / policy<br/>目录 / 求值<br/>派发 / 预算"]
+    FS["FactStore<br/>类型化观察<br/>TTL / 输入水位"]
+    RS["RuntimeState<br/>SQLite 状态 / 发布代次"]
+    L2["同一 GlobalLedger<br/>Host 授权的唯一 writer"]
+
+    H2 <-->|"启动调用<br/>Provider 返回"| P
+    H2 <-->|"目录 / 求值"| Q
+    H2 <-->|"发布 / 快照"| FS
+    H2 <-->|"状态 / 发布代次"| RS
+    P -->|"Host 启动写权限<br/>类型化启动事实"| L2
+    L2 -->|"重建事实"| FS
+
+    classDef external fill:#f5f0ff,stroke:#7040a0,color:#251440
+    classDef runtime fill:#eef8f2,stroke:#28734d,color:#123921
+    classDef evidence fill:#eef4ff,stroke:#315b9c,color:#16355c
+    class H2,P,Q,FS,RS runtime
+    class L2 evidence
+    linkStyle 0,1,2,3,5 stroke:#275fa5,stroke-width:2px
+    linkStyle 4 stroke:#c45b12,stroke-width:2px
+```
+
+| 图例 | 含义 |
 |---|---|
-| **2026-08-10** | 首次实机端到端闭环:哈希封印资源包 → 常驻运行时 → 模拟器实机页面识别 → 收容任务执行 → 类型化调度结局 → 全程入账;单次 3.4 秒,零人工输入。 |
-| **2026-08-20** | 日常+周常复合领取任务链实机完成(实弹领取分支验证)。 |
-| **2026-09-01** | **官方 CPU 实机 OCR 全流程 PASS**:开局非 Home 由运行时自主恢复(2 步回 Home 复验)→ 模板导航入干员页 → 41 帧单触分段滑动翻页(匀速拖动+垂直刹车,MaaTouch 点流)→ 每帧 16 目标 OCR(920 条映射记录零丢弃)→ 规范/别名/容错字典比对(294 唯一规范名,零越界)→ `operator_end` 锚页判终 → `return_home` 收口。219 秒,严格无回退,42 个投影工件逐一哈希绑定。 |
+| 紫色框 | 外部维护、客户端、资源制作与只读取证 |
+| 绿色框 / 蓝色框 | Runtime 模块 / Runtime 持有的存储 |
+| 蓝色实线 | 调用、返回与读取数据；双向箭头表示两个方向 |
+| 金色实线 | 资源制作与已验证资源包消费 |
+| 绿色实线 | 准入、租约与受权设备执行 |
+| 橙色实线 | 具名 Runtime owner 写入事件或制品字节 |
+| 紫色虚线 | 外部消费证据，支持下一轮资源改进 |
 
-| 维度 | 状态 |
+两个视图描述同一 Runtime。Host 分别协调 Scheduler 和 Kernel。HostShared 持有 GlobalLedger 和 ArtifactStore，两条存储写入线从 Host 发出；Provider 启动记录使用同一 Host 授予的账本权限。Host 从 FactStore 取得快照并提供策略输入；RuntimeState 保存 SQLite 状态与发布代次，并与账本对账。只读取证结果由外部 AI 与维护者消费，由维护侧协调下一轮改进。图中表示模块关系，实际生命周期顺序见上方执行流程 PNG。Lab/资源工具可拆卸，术语以 [CONTEXT.md](./CONTEXT.md) 为准。
+
+| 边界 | 当前行为与源码入口 |
 |---|---|
-| **执行与资源入口已接入 `main`** | 常驻 daemon、typed loopback IPC、调度准入与租约 fencing、收容任务执行(任务超时、终止锚页、独立 `max_steps`、恢复包自动回位)、资源包收容、工件存储与官方 OCR 投影(v2,分页)、设备后端(含 `SegmentedSwipe`、MaaTouch/Minitouch 点流、MuMu Nemu IPC 动态绑定)、NCC 模板匹配与颜色判据、OCR provider 生产接线及字典约束比对。ActingLab 已串起录制、草稿、构包、事务化发布与 `package dry-run` 离线预演。 |
-| **调度与维护接口已接入 `main`** | 四文档声明式策略目录、纯求值器、不可变目录版本、派发与预算已接入 `actingd`;实例事实 `PublishFact`、战略差额/容量/紧迫度求值、报告、规划信号与提案生成已有实现。Runtime Dispatcher 已有 wake/session/start/resume/response、恢复与有界配置。项目接口 v2 提供项目、实例、目录、事实、目标、决策、运行状态与诊断的只读投影及分页,可供后续 UI 查询。 |
-| **当前持久化与诊断** | GlobalLedger 使用分段持久化,是全局唯一事件事实源;RuntimeState 使用 SQLite 保存运行状态与不可变发布代次,并与 Ledger 对账。`ledger-forensics` / `actingledger` 提供只读取证入口。 |
-| **正在推进与待验证** | 全模块账本探针覆盖、签名匹配与回放考核;真实调度时间语义与长期无人值守实证;资源产线首批完整任务扩充;OCR 覆盖率、整页多框检测与 CUDA 实测;采集三后端矩阵(adb / droidcast_raw / nemu_ipc)覆盖。CPU OCR 已有上述单次全流程实机结果。 |
-| **后续规划** | 外部智能体自动启动与完整自主维护闭环;Rust 原生只读监控台;GlobalLedger SQLite 后端与统一 RuntimeDatabase。 |
+| **Host 与 Provider** | Host 管理 owner epoch、IPC、请求和关闭；Provider 在存储已打开后装配，启动结果先入账再 Ready。[启动契约](./contracts/provider-startup.md) |
+| **资源与执行** | Containment 校验包哈希；Scheduler 管理租约与 fencing；Kernel 消费收容资源并执行有界任务、阶段和恢复。[收容操作](./contracts/contained-lab-operation.md) |
+| **事件与制品** | GlobalLedger 持久化脱敏事件并提供唯一诊断事实；ArtifactStore 保存被引用字节、哈希与留存元数据，持久化失败显式传播。[事件查询](./contracts/global-ledger-query.md) |
+| **状态与策略** | RuntimeState 用 SQLite 保存状态及不可变发布代次，并与 GlobalLedger 对账；policy 复用唯一编译器、时钟与纯求值语义。[调度 v2](./contracts/scheduling/v2/README.md) |
+| **只读消费** | actingledger / ledger-forensics 读取账本与 ArtifactStore，保留损坏位置、缺口和冻结游标；输入材料保持只读。[有限签名](./contracts/diagnostic-signatures.md) |
+| **Lab 与资源制作** | 在线观察/操作通过 Runtime；离线制作、恢复、编译和包校验由可拆卸的 Lab/resource-tooling 承载。[资源恢复](./contracts/resource-restore.md) |
 
-## 🗺 路线图
+## 📍 当前能力与验证边界
 
-以下列出剩余能力与验证工作,不承诺日期:
+| 能力 | 当前实现 |
+|---|---|
+| **执行与识别** | typed IPC、资源哈希收容、任务超时/步数/终止锚页、阶段控制与总预算、恢复包；模板匹配、颜色判据、OCR 字典比对和官方页面投影。 |
+| **在线 Lab** | observe 获取 Runtime 当前页面投影；do 按当前元素投影解析操作，可在同一请求内有界等待目标页面。旧帧提示保留来源，实际输入使用当前解析结果。[页面投影](./contracts/page-projection.md)、[操作契约](./contracts/contained-lab-operation.md) |
+| **离线资源消费** | restore 从 GlobalLedger、verified ArtifactStore 引用和原包恢复有依据的操作草稿；convert → build-task → validate 复用现有资源产线。无法重建的字段/依赖显式列出 gaps，业务目标由作者声明。[资源恢复](./contracts/resource-restore.md) |
+| **日历与预算** | 四文档策略目录、v2 时间区间有效谓词、服务器时钟、纯编译/求值、不可变目录、派发与预算；Lab scheduling compile/timeline 提供正式离线入口。实例别名在配置注册后沿 policy 保留。[调度说明](./contracts/scheduling/README.md) |
+| **实时事实与池** | agent-publish-facts 经 Runtime 原子提交类型化事实；FactStore 保留原观察时间、TTL、来源与输入水位，ledger_fact 池从同一事实快照派生。过期、未知、低置信度或被输入作废的观察保持明确状态。[事实池](./docs/live-fact-pools.md) |
+| **状态与规划** | 实例事实、战略差额/容量/紧迫度、报告、规划信号、提案与 Dispatcher 会话协议；项目接口 v3 提供有界只读投影。Status/MonitorStatus 的采样先入账，返回值绑定对应事实。[状态观察](./contracts/runtime-state-observation.md) |
+| **查询与签名** | EventQuery 统一模块、诊断码与关联字段过滤；lab watch 和离线 events 复用同一谓词。Lab 显式 register/match/retire 由 Runtime 写入签名事实；actingledger 对冻结目录与输入作只读回放。缺字段、多个命中、证据不完整均明确表达。[查询](./contracts/global-ledger-query.md)、[签名](./contracts/diagnostic-signatures.md) |
 
-1. **权威账本调试**——扩充各模块类型化探针,完成签名匹配与回放考核,使正常结果、降级与失败原因都能从账本定位;
-2. **常驻运行实证**——在现有策略、预算、事实与战略报告能力上,完成真实时间语义、恢复与长期无人值守验证,对照实际结果评估规划信号;
-3. **资源与识别**——推进首批完整任务,验证名单覆盖率,完成 provider 整页多框检测(整页识别+重叠去重)、CUDA 与采集后端矩阵验证;
-4. **客户端与自主维护**——建设 Rust 原生只读监控台,接通外部智能体自动启动与现有 Dispatcher 会话接口,逐步完成自动摸清、资源修订与复验闭环;
-5. **后续存储演进**——规划 GlobalLedger SQLite 后端与统一 RuntimeDatabase,保持唯一事件事实源及可恢复的状态对账;
-6. **MAA / MaaFramework 兼容**——继续完善 MAA 资源种子导入与 MaaFramework 第二执行后端方向。
+签名匹配提供有限的已登记故障上下文分类；根因结论仍须追溯原始事实。当前探针、签名及回放范围有限，缺失的观察保留为缺口。真实日历派发、长期无人值守、设备/采集后端矩阵、OCR 覆盖率和 CUDA 的验证结论均需绑定相应运行与材料；源码接入本身仅证明能力存在。
 
 ## ⚖ 七条结构不变量(守卫 / 测试 / 编译期与真实进程反例执法)
 
@@ -75,11 +155,13 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 2. **Runtime 唯一设备持有**:生产客户端(actingctl / runtime-client / ActingLab)的依赖图与源码均不可触达设备后端,raw adb 只存在于 Runtime 之下的 `device` crate;客户端历史设备命令一律 fail-loud 墓碑。(例外:`apps/device-test` 是直连设备的诊断二进制,不在生产链路、不受该守卫约束);
 3. **GlobalLedger 唯一事实源**:唯一账本写入口是 `append(SanitizedEventDraft)`,脱敏先于持久化;终态为吸收态(重复/冲突提交被拒并留审计事实);客户端可经 `PublishFact` 提交类型化实例事实,由 Runtime 受控处理并入账,客户端不直接写账本;
 4. **收容为内核资源唯一入口**:哈希校验(常量时间比较)先于解压,并有压缩体积上界预检;`LoadedBundle` capability 按构造使"未校验包被使用"不可表示——由 trybuild 编译失败用例钉死;
-5. **任务不得唤起任务**:任务只产出纯数据的后继建议,自身绝不链式启动后继;生产路径遇到后继建议即 fail-loud 交还上层(`contained_task_requires_scheduler`)。由调度器裁决后继属规划中的下一步;
+5. **任务不得唤起任务**:任务只产出纯数据的后继建议,自身绝不链式启动后继;生产路径遇到后继建议即 fail-loud 交还上层(`contained_task_requires_scheduler`),由调度器裁决后继;
 6. **Lab 与资源工具链可拆**:由 `--all-features` 下的依赖图守卫证明——除 Lab / ActingLab / resource-tooling 自身外,任何工作区包都不存在通向它们的依赖路径(含特性门绕过的反例用例);资源工具链亦不得反向触达 Runtime 与设备层;
 7. **零游戏身份**:Runtime 自有代码、契约与默认值由架构守卫扫描,禁止出现已知项目身份词(游戏名、包名、区服后缀),该范围内测试代码一并执法;坐标与阈值只存在于资源包、不在运行时代码中——这是设计约定,不由守卫自动执法。框架只认"游戏形状"(资源池、页面、任务),不认"游戏身份"。比对**算法**在 Runtime,被比对的**值**(真值字典等)全部来自资源包,同属本不变量。
 
 另有九条**完成体验收不变量**(确定性重放、重放零副作用、循环有预算、时钟跳变全量重算、崩溃恢复重建同一待决集、合格工作不饿死、非法输入 fail-loud、unknown 不被静默当 false、每次派发有完整理由链)覆盖调度策略面,见 `docs/architecture/runtime-completion-invariants.md`。
+
+项目接口的默认请求由 [`ProjectInterfaceRequest::current()`](./crates/actingcommand-contract/src/project.rs) 构造：请求 schema 为 `request.v2`，接受契约按 v3、v2、v1 声明；Runtime 从双方支持集合选择最新版本，当前默认返回契约 v3 / `response.v3`。显式接受集合可协商 v2 或 v1，无共同版本时拒绝。`RuntimeProjectClient` 的默认快照入口复用该请求，见 [客户端实现](./crates/runtime-client/src/client.rs)。
 
 ## 📦 组件(workspace 成员)
 
@@ -88,8 +170,8 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 | 名称 | 职责 |
 |---|---|
 | `actingd` | 常驻 daemon 进程适配器,承载下列全部内核组件 |
-| `actingctl` | 生产用户 CLI(observe / status / monitor-* / stream / reset / task-run,支持 `--recovery-package` 自动回位);成功结果为单行 JSON |
-| `actinglab` | 调试探针 + 资源制作(录制→草稿→构包→事务化发布→`package dry-run` 离线预演);**非生产依赖** |
+| `actingctl` | 生产用户 CLI: observe / status / monitor-* / stream / reset / task-run / agent-publish-facts / request-shutdown;输出 JSON 回执与退出状态 |
+| `actinglab` | Runtime 在线观察/操作、查询与签名入口;离线资源恢复/制作/构包/校验、调度编译与 timeline;**非生产依赖** |
 | `device-test` | 设备后端诊断工具；独立 `ledger --state-root <runtime-state>` 通过 B 只读查询 Runtime 账本（[查询参数](contracts/global-ledger-query.md)） |
 | `vision-provider-check` | 读取指定 Runtime 的 Provider 启动账本；文件哈希与 PE 导出表机械观察 |
 | `actingledger` (`apps/ledger-forensics`) | GlobalLedger 只读取证 CLI |
@@ -99,9 +181,9 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 | 名称 | 职责 |
 |---|---|
 | `runtime-host` | 常驻所有权、本地 typed IPC、租约门控的 DeviceProxy、实例事实与策略/预算派发、战略报告及 Dispatcher 会话生命周期 |
-| `runtime-client` | 客户端 typed 本地 IPC及项目接口 v2 只读分页投影;不构造也不持有生产设备后端 |
+| `runtime-client` | 客户端 typed 本地 IPC及项目接口协商（当前 v3）与只读分页投影;不构造也不持有生产设备后端 |
 | `scheduler` | 每实例写准入、租约生命周期与 fencing 权威 |
-| `execution-kernel` | daemon 持有的执行会话 + 纯任务/探针决策规划;收容任务超时、步数与终止锚页语义 |
+| `execution-kernel` | daemon 持有的执行会话 + 纯任务/探针决策规划;收容任务超时、步数、阶段/总预算与终止锚页语义 |
 | `ledger` | 分段持久化的全局事件账本(唯一事件事实源与权威诊断来源) |
 | `artifact-store` | 工件字节、哈希、留存元数据、帧缓冲与证据归档导出 |
 | `runtime-state` | SQLite 承载的 Runtime 状态与不可变发布代次,与 GlobalLedger 对账 |
@@ -113,7 +195,7 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 | `actingcommand-contract` | Rust 主线契约定义(协议 / 设备 / 引擎边界词汇) |
 | `host-metrics` | 平台性能计数器的安全边界 |
 
-**识别 FFI 边界(已接入生产识别路径,CPU 实机验证)**
+**识别 FFI 边界(已接入生产识别路径)**
 
 | 名称 | 职责 |
 |---|---|
@@ -134,10 +216,10 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 
 ## 🔍 识别面现状
 
-- **可用(实机验证)**:模板匹配(NCC 族)与颜色判据;OCR 生产链路——`PP-OCRv6_medium`(ONNX Runtime,CPU,严格无回退)、逐目标执行证明(provider/模型/设备逐次哈希证明)、字典规范/别名/容错比对与有界重试;
-- **已知边界**:provider 当前为区域单行识别语义(每目标一块);名单覆盖率仍需验证,整页多框检测(det→逐框 rec)待实现与验证,目标为"整页读+重叠去重";
-- **待实测**:CUDA 执行(闭包、Ready 清单、设备 ordinal/稳定身份校验机制已有实现);CPU 单次流程通过不代表 CUDA、整页识别或完整名单覆盖率通过;
-- **不随仓分发**:ONNX Runtime 原生库与 OCR/NN 模型均不在本仓;由钉源验哈希的官方物化工具按任务本地缓存获取,`apps/vision-provider-check --state-root <Runtime状态目录>` 经 B 只读显示同一账本中的启动阶段、绑定与原始失败；`--after`、`--through`、`--limit` 固定分页游标。启动 Ready 仅说明本次装配完成，推理和懒初始化仍未观察。文件 manifest、artifact-lock 和 export-audit 模式仅输出机械观察。
+- **当前路径**：NCC 族模板匹配与颜色判据；PP-OCR ROI 单行识别、OCR/NN JSON ABI、字典规范/别名/容错比对、有界重试与逐次执行来源证明。模型、provider 和设备来源由本次事实表达。
+- **覆盖边界**：区域单行是当前 provider 语义；整页多框检测、完整名单覆盖率、CUDA 和不同采集后端组合仍需各自的实现或验证。已有 CPU 流程证据的适用范围由其原始记录限定。
+- **外部依赖**：ONNX Runtime 原生库与模型通过钉源、哈希校验的物化入口准备，见 [Windows 工具说明](./scripts/windows-tools/README.md)。它们不随本仓分发。
+- **启动诊断**：vision-provider-check 的 `--state-root` 入口通过只读取证层显示同一 Runtime 的 Provider 启动事实；`--after`、`--through`、`--limit` 提供有界游标。manifest、artifact-lock 与 export-audit 是文件机械观察。推理与懒初始化是否发生须查对应事实。
 
 ## 🧭 设计原则
 
@@ -152,7 +234,7 @@ CI:[主线当前状态](https://github.com/HS7097/ActingCommand-Runtime/actions/
 
 当前 CI 使用 Windows 与 Rust stable,默认 Windows 产物目标为 `x86_64-pc-windows-msvc`。本地构建需 Rust/Cargo、Git 与相应 MSVC 构建环境;也可获取上述精确 SHA 构建产物。外部工具与产物校验入口见 [Windows 工具说明](./scripts/windows-tools/README.md)。
 
-首次运行先准备 daemon 配置与至少一个实例。配置需声明 `schema_version`、`state_root`、loopback `bind_host`、16–1024 字节的 `secret_fingerprint_salt` 和非空 `instances`;设备实例需别名、`instance_id`、应用标识、ADB 寻址和显式截图/触控后端。完整字段与校验以 [配置定义](./apps/actingd/src/config.rs) 为准。设备任务另需可用的 ADB/所选后端及自备资源包;OCR 任务还需外部 provider、模型和原生库清单。策略目录说明与中性声明示例见 [调度契约](./contracts/scheduling/README.md),客户端查询契约见 [项目接口 v2](./contracts/runtime-project-interface.md)。
+首次运行先准备 daemon 配置与至少一个实例。配置需声明 `schema_version`、`state_root`、loopback `bind_host`、16–1024 字节的 `secret_fingerprint_salt` 和非空 `instances`;设备实例需别名、`instance_id`、应用标识、ADB 寻址和显式截图/触控后端。完整字段与校验以 [配置定义](./apps/actingd/src/config.rs) 为准。设备任务另需可用的 ADB/所选后端及自备资源包;OCR 任务还需外部 provider、模型和原生库清单。策略目录说明与中性声明示例见 [调度契约](./contracts/scheduling/README.md),客户端查询契约见 [项目查询边界](./contracts/runtime-project-interface.md)。
 
 ```bash
 # 构建需能读取 git 元数据;无 .git 时须显式设置 ACTINGCOMMAND_RUNTIME_HEAD=<40 位提交哈希>
@@ -172,7 +254,7 @@ actingcommand-actingd --config <actingd.json>
 # daemon 级状态(不接受 --instance)
 actingctl status --state-root <state-root>
 
-# 只读观察一帧(经调度器准入,事件与帧工件全部入账)
+# 只读观察一帧(使用绑定 owner epoch 的只读能力,事件与帧工件入账)
 actingctl observe --state-root <state-root> --instance <alias>
 
 # 执行一个收容任务包(哈希校验先于解压)
@@ -183,13 +265,14 @@ actingctl task-run --state-root <state-root> --instance <alias> \
   [--recovery-package <recovery.zip> --recovery-expected-sha256 <hash>]
 ```
 
-`actingctl` 成功时向 stdout 写单行 JSON(含适用的官方 OCR 投影);参数、连接等错误向 stderr 写文本并以非零状态退出。接入方需同时处理退出码和两个输出通道。两个 CLI 均为手写参数解析,**不提供 `--help` / `--version`**。
+`actingctl` 向 stdout 写单行 JSON(含适用的官方 OCR 投影)。失败回执也可包含 JSON,并以非零状态退出;参数、连接等错误向 stderr 写文本。接入方需同时处理退出码和两个输出通道。`actingcommand-actingd` 与 `actingctl` 使用手写参数解析,**不提供 `--help` / `--version`**;ActingLab 的命令与参数见 [CLI 入口](./apps/actinglab/src/main.rs)。
 
 所有 `actingctl` 命令均需 `--state-root`;当前各子命令实际使用的参数如下,以 [参数解析源码](./apps/actingctl/src/main.rs) 为准:
 
 | 子命令 | 实例参数与命令参数 |
 |---|---|
 | `status` / `monitor-status` / `request-shutdown` | 不接受 `--instance` |
+| `agent-publish-facts` | 必需 `--record-file`;提交对象自身携带事实作用域;不接受 `--instance` |
 | `observe` / `reset` / `monitor-clear` | 必需 `--instance` |
 | `monitor-set` | 必需 `--instance`;可选 `--interval-ms`(默认 30000)、`--expect`(默认 `home`)、`--recover` |
 | `stream` | 必需 `--instance`;可选 `--max-frames`(默认 1)、`--interval-ms`(默认 250) |
@@ -207,15 +290,11 @@ JSON 中 `shutdown_accepted` 与 `admitted` 只表示接纳；完成需分别核
 summary 和进程结果。回执丢失报告 `runtime_shutdown_receipt_unconfirmed` 并保留原错误，
 客户端不重投、不切换 owner。已有 fatal 与未确认资源保留边界继续适用。
 
-## 🎮 资源仓
+## 🎮 资源包与部署
 
-游戏数据(识别模板、导航图、操作与恢复声明)独立于运行时版本化。以下仓库**目前均为私有**,外部读者暂不可访问:
+游戏模板、导航、操作、恢复与日历声明由独立资源源版本化，经资源工具生成正式包后，以精确哈希交给 Runtime 收容。来源、许可与素材证据由资源作者维护；通用素材和具体部署任务分别组织，账号特定选择与配置留在私有部署中。
 
-- **ActingCommand-Resources-Arknights**——上游派生层源自 MAA;自有层现有:日常+周常复合领取任务链(实机验证)、干员名单 OCR 任务包(四修版,官方实机 PASS;声明任务超时、终止锚页、16 目标 OCR 与 422 名真值字典)、`return_home` 恢复基线(实机冻结入库,可复用)、公招与全入口导航/操作集、主题检测声明(hometheme 全套)、角色/材料图鉴、识别与恢复声明、调度声明(CN 区服);
-- **ActingCommand-Resources-AzurLane**——上游派生层源自 Alas;自有层现有:主界导航与全入口操作集、角色/装备全量图鉴模板(Git LFS)、识别与恢复声明;
-- **ActingCommand-Resources-BlueArchive**——上游派生层源自 BAAH / BAAS(坐标目录与校验区域);自有层现有:每日领取试点任务、全入口操作集、装备/材料图鉴、识别与恢复声明。
-
-各仓采用 `upstream-derived/`(第三方派生素材,含许可证与出处)+ `ours/`(自有声明数据)两层布局。
+[资源恢复](./contracts/resource-restore.md)说明如何从已有账本与原包形成草稿；[调度声明](./contracts/scheduling/README.md)说明任务、procedure、事实与预算的关联。复现具体任务需要相应资源、依赖和部署配置，包的生成/编译结果与实际执行结果分别记录。
 
 ## 🤝 协作方式
 
