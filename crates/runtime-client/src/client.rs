@@ -1337,24 +1337,18 @@ impl RuntimeClient {
             None,
             Some(token),
         );
-        let result = (|| {
-            let response_timeout = {
-                let connection = self.connection("runtime_input")?;
-                input_response_timeout(connection.io_timeout, &action)?
-            };
-            match self.execute_with_timeout(
-                "runtime_input",
-                RuntimeOperation::Input {
-                    token: token.clone(),
-                    action,
-                },
-                Some(response_timeout),
-            ) {
-                Ok(RuntimeResult::InputCommitted { .. }) => Ok(()),
-                Ok(_) => Err(self.unexpected_result("runtime_input")),
-                Err(error) => Err(error),
-            }
-        })();
+        let result = match self.execute_with_timeout(
+            "runtime_input",
+            RuntimeOperation::Input {
+                token: token.clone(),
+                action,
+            },
+            None,
+        ) {
+            Ok(RuntimeResult::InputCommitted { .. }) => Ok(()),
+            Ok(_) => Err(self.unexpected_result("runtime_input")),
+            Err(error) => Err(error),
+        };
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientInputResult,
@@ -2080,13 +2074,14 @@ impl RuntimeClient {
             if let Some(error) = &connection.terminal_error {
                 return Err(error.clone());
             }
-            let response_timeout = response_timeout.unwrap_or_else(|| {
-                receipt_response_timeout(
+            let response_timeout = match response_timeout {
+                Some(timeout) => timeout,
+                None => receipt_response_timeout(
                     &operation,
                     connection.io_timeout,
                     connection.backend_open_timeout,
-                )
-            });
+                )?,
+            };
             let maximum_frame_bytes = connection.maximum_frame_bytes;
             let receipt_deadline = match &operation {
                 RuntimeOperation::RunContainedTask { request, .. } => {
@@ -3825,10 +3820,6 @@ impl RuntimeDebugSession {
     }
 
     pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<ActionId> {
-        let response_timeout = {
-            let connection = self.client.connection("debug_runtime_input")?;
-            input_response_timeout(connection.io_timeout, &action)?
-        };
         let receipt = self.client.execute_receipt_with_correlation(
             "debug_runtime_input",
             RuntimeOperation::Input {
@@ -3836,7 +3827,7 @@ impl RuntimeDebugSession {
                 action,
             },
             self.correlation,
-            Some(response_timeout),
+            None,
         )?;
         match receipt.result() {
             Some(RuntimeResult::InputCommitted { action_id }) => Ok(*action_id),
@@ -4495,13 +4486,23 @@ pub(super) fn receipt_response_timeout(
     operation: &RuntimeOperation,
     io_timeout: Duration,
     backend_open_timeout: Duration,
-) -> Duration {
+) -> RuntimeClientResult<Duration> {
     match operation {
         RuntimeOperation::AcquireLease { .. }
         | RuntimeOperation::ObserveReadonly { .. }
-        | RuntimeOperation::ObserveContainedPage { .. }
-        | RuntimeOperation::SafeReset { .. } => backend_open_timeout,
-        _ => io_timeout,
+        | RuntimeOperation::ObserveContainedPage { .. } => Ok(backend_open_timeout),
+        RuntimeOperation::Input { action, .. } => {
+            input_response_timeout(io_timeout, backend_open_timeout, action)
+        }
+        RuntimeOperation::SafeReset { .. } => {
+            input_response_timeout(io_timeout, backend_open_timeout, &InputAction::Reset)
+        }
+        RuntimeOperation::ReleaseLease { .. } => {
+            backend_open_timeout.checked_add(io_timeout).ok_or_else(|| {
+                RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "release_lease")
+            })
+        }
+        _ => Ok(io_timeout),
     }
 }
 
@@ -4542,6 +4543,7 @@ fn contained_task_recovery_outcome(
 
 fn input_response_timeout(
     io_timeout: Duration,
+    backend_open_timeout: Duration,
     action: &InputAction,
 ) -> RuntimeClientResult<Duration> {
     let duration_ms = match action {
@@ -4561,8 +4563,12 @@ fn input_response_timeout(
             })?,
         _ => 0,
     };
-    io_timeout
-        .checked_add(Duration::from_millis(duration_ms))
+    // Opening and failure cleanup are sequential backend work before the receipt.
+    // These are client wait allowances; they grant no extra Host execution time.
+    backend_open_timeout
+        .checked_mul(2)
+        .and_then(|timeout| timeout.checked_add(Duration::from_millis(duration_ms)))
+        .and_then(|timeout| timeout.checked_add(io_timeout))
         .ok_or_else(|| RuntimeClientError::fatal("runtime_input_timeout_overflow", "runtime_input"))
 }
 

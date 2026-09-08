@@ -1345,16 +1345,8 @@ fn actingd_mapped_terminal_wakes_the_resident_driver_for_one_evaluator_successor
         thread::sleep(Duration::from_millis(20));
     };
 
-    let intent_events = client
-        .query_events(
-            EventQuery {
-                event_type: Some(EventType::PolicyDispatchIntent),
-                ..EventQuery::default()
-            },
-            ProjectionProfile::Forensic,
-        )
-        .expect("query mapped successor intents");
-    let intents = intent_events
+    // PR348 CI34267030141: correlate one captured event set while the successor runs.
+    let intents = events
         .iter()
         .filter_map(|event| match &event.payload {
             ProjectionPayload::Full(payload) => match payload.as_ref() {
@@ -1408,20 +1400,118 @@ fn actingd_mapped_terminal_wakes_the_resident_driver_for_one_evaluator_successor
             .count(),
         1
     );
-    assert_eq!(
-        client
-            .query_events(
-                EventQuery {
-                    event_type: Some(EventType::InputCommitted),
-                    ..EventQuery::default()
-                },
-                ProjectionProfile::Forensic,
-            )
-            .expect("query mapped successor inputs")
-            .len(),
-        1,
-        "the wake itself cannot perform input"
+    let source_intent = events
+        .iter()
+        .find(|event| event.sequence == source_sequence)
+        .expect("source intent");
+    let successor_intent = events
+        .iter()
+        .find(|event| event.sequence == successor_sequence)
+        .expect("successor intent");
+    let source_run = source_intent.links.run_id().copied().expect("source run");
+    let successor_run = successor_intent
+        .links
+        .run_id()
+        .copied()
+        .expect("successor run");
+    assert_ne!(
+        source_run, successor_run,
+        "the successor needs its own admitted run"
     );
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event.sequence == source_completion_sequence)
+            .expect("source completion")
+            .links
+            .run_id(),
+        Some(&source_run)
+    );
+    let inputs = events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputCommitted)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inputs
+            .iter()
+            .filter(|event| event.links.run_id() == Some(&source_run))
+            .count(),
+        1,
+        "the source run must perform its one input exactly once"
+    );
+    assert!(
+        inputs
+            .iter()
+            .filter(|event| event.links.run_id() == Some(&successor_run))
+            .count()
+            <= 1,
+        "the single-step successor cannot repeat its input"
+    );
+    for input in inputs {
+        let run_id = input.links.run_id().expect("input must belong to a run");
+        let intent = if *run_id == source_run {
+            source_intent
+        } else {
+            assert_eq!(
+                *run_id, successor_run,
+                "wake cannot create an independent input run"
+            );
+            successor_intent
+        };
+        assert_eq!(input.links.task_id(), intent.links.task_id());
+        assert_eq!(input.links.correlation_id(), intent.links.correlation_id());
+        let lease_id = input.links.lease_id().expect("input lease");
+        // Policy admission carries the run; the lease grant binds that run's lease.
+        for event_type in [EventType::PolicyDispatchAdmitted, EventType::LeaseGranted] {
+            let admissions = events
+                .iter()
+                .filter(|event| {
+                    event.event_type == event_type
+                        && event.sequence < input.sequence
+                        && event.links.run_id() == Some(run_id)
+                        && (event_type != EventType::LeaseGranted
+                            || event.links.lease_id() == Some(lease_id))
+                        && event.links.instance_id() == input.links.instance_id()
+                        && event.links.task_id() == input.links.task_id()
+                        && event.links.correlation_id() == input.links.correlation_id()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(admissions.len(), 1, "input needs one prior {event_type:?}");
+            assert!(intent.sequence < admissions[0].sequence);
+        }
+        let action_id = input.links.action_id().expect("input action");
+        let input_intents = events
+            .iter()
+            .filter(|event| {
+                event.event_type == EventType::InputIntent
+                    && event.sequence < input.sequence
+                    && event.links.run_id() == Some(run_id)
+                    && event.links.lease_id() == Some(lease_id)
+                    && event.links.action_id() == Some(action_id)
+                    && event.links.request_id() == input.links.request_id()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            input_intents.len(),
+            1,
+            "committed input needs its original action intent"
+        );
+        assert!(
+            events.iter().any(|event| {
+                event.event_type == EventType::SchedulerAdmitted
+                    && event.sequence < input_intents[0].sequence
+                    && intent.sequence < event.sequence
+                    && event.links.lease_id() == Some(lease_id)
+                    && event.links.instance_id() == input.links.instance_id()
+                    && event.links.request_id() == input.links.request_id()
+                    && event.links.correlation_id() == input.links.correlation_id()
+            }),
+            "input needs prior Scheduler admission for its request and lease"
+        );
+        if *run_id == source_run {
+            assert!(input.sequence < source_completion_sequence);
+        }
+    }
     assert_eq!(
         events
             .iter()
