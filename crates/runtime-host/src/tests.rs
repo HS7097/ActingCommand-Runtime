@@ -18557,7 +18557,7 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
             .into_bytes();
     }
     let mut tasks: serde_json::Value = serde_json::from_slice(&sources.tasks.bytes).unwrap();
-    tasks["tasks"][0]["trigger"] = serde_json::json!({"kind":"fact","scope":{"kind":"instance","instance_id":alias},"fact_key":"alias.ready","comparison":"eq","value":{"type":"boolean","value":true},"max_age_ms":60000});
+    tasks["tasks"][0]["trigger"] = serde_json::json!({"kind":"fact","scope":{"kind":"instance","instance_id":alias},"fact_key":"env.alias_ready","comparison":"eq","value":{"type":"boolean","value":true},"max_age_ms":60000});
     sources.tasks.bytes = serde_json::to_vec(&tasks).unwrap();
     host.activate_policy_catalog(&sources)
         .expect("compile exact alias");
@@ -18565,7 +18565,7 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         FactScope::Instance {
             instance_id: alias.to_owned(),
         },
-        "alias.ready",
+        "env.alias_ready",
         ContractFactValue::Boolean(true),
         "snapshot:alias-ready",
         Vec::new(),
