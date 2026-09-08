@@ -18,56 +18,50 @@
 
 CI: [current main status](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain) (Windows: fmt / clippy `-D warnings` / test) · [Exact-SHA Windows build artifacts](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · License `AGPL-3.0-only` · This repository is public
 
-**Current maturity (2026-09-05)**: scheduling arbitration, the device throat, task containment, declarative policy catalogs, and budgeted dispatch are wired into the resident runtime. Instance facts, strategic evaluation, reports and planning signals, proposal generation, and the Runtime Dispatcher session protocol are implemented. GlobalLedger is the sole global event fact source and is being extended into an authoritative debugging tool across modules. **The OCR recognition chain has passed one full official CPU live run**: autonomous return-to-Home recovery, template navigation, single-touch segmented-swipe paging, 16-target OCR per frame, dictionary-normalized comparison, terminal-anchor-page completion, and a `return_home` closeout, in one command, 219 seconds, zero manual input. Real scheduling time semantics, long unattended operation, OCR coverage, and CUDA still need their corresponding live evidence.
-
-The early Python mock, historical Go contracts, and Go/Python benchmark tools have been moved out of this repository (archived in ActingCommand-Legacy-Runtime, **not yet public**); the Rust benchmark tool `benchmarks/rust` and historical benchmark reports remain.
+**Current implementation (2026-09-08)**: the resident Runtime exposes typed IPC, resource containment, scheduling and budgets, phased tasks, page/OCR projections, and durable receipts. GlobalLedger carries the sole event and diagnostic facts. Shared queries, registration/matching/retirement of finite diagnostic signatures, and read-only offline replay have official entry points. This document describes current mainline source; device, model, resource-pack, and long-running verification claims depend on their corresponding execution facts.
 
 ---
 
-## 🔁 The self-maintaining loop
+## 🔁 Execution and closeout
 
-![ActingCommand self-maintaining loop](./docs/assets/self-maintaining-loop.png)
+![ActingCommand startup, request execution, and shutdown flow](./docs/assets/self-maintaining-loop.png)
 
-The reason this architecture exists: to free game automation from "the game updates, and the whole world waits for the maintainer to ship." The target loop — after a game update (①), agents play and map out the changes (②), then author or revise declarative resource packs (③); packs enter the runtime through hash containment, get admitted by the scheduler (④), executed deterministically (⑤), fully ledgered (⑥); on failure, agents self-diagnose from ledger evidence and repair the resources (⑦), returning to ③. Zero per-frame reasoning inside the loop — reasoning is spent on maintenance, not execution.
+The three rows describe separate startup, single-request, and Host-shutdown lifecycles. Startup reads configuration and acquires OwnerGuard, opens ArtifactStore and GlobalLedger, then assembles the Provider and records startup facts before publishing the current owner's ready endpoint. Provider construction-ready attests this assembly; inference and lazy initialization require their own observations. See the [daemon entry point](./apps/actingd/src/main.rs) and [Provider startup contract](./contracts/provider-startup.md).
 
-Resource authoring, execution, and ledger diagnosis have been connected in practice: on the Aug–Sep 2026 OCR task chain, the resource pack was agent-authored, diagnosed and revised using ledger evidence, and then passed live — including the agent-assisted `return_home` recovery pack, now a live-verified reusable baseline in the resource repository. Runtime implements wake records, session start/resume, responses, and bounded session management. Actual automatic launch of external agents, ② (automatic exploration), and the complete autonomous maintenance loop remain planned.
+Runtime Host owns the request lifecycle. Resource SHA-256 verification precedes extraction; Scheduler manages admission and device-write leases, while Execution Kernel runs bounded tasks, phases, and recovery. Read-only observation uses an owner-epoch-bound read capability. Lease fencing governs device effects, and terminal receipts reference durable outcome facts. GlobalLedger records events throughout; ArtifactStore retains frames and large raw payloads. Task outcome and evidence completeness are reported separately.
+
+Host shutdown stops admission, drains work, and reclaims the policy driver before Scheduler-authorized native-resource closure, quiescence, and the final M4 summary. Sessions retained by read-only observation use dedicated resource-close-only leases. Primary and cleanup errors are both preserved; unconfirmed closure retains Unconfirmed and owner protection. The Host remains resident after an individual request; the shutdown row is a separate lifecycle. See [read-session resource closure](./contracts/read-session-resource-close.md) and [native-resource ownership](./contracts/nemu-owned-resource-close.md).
+
+Maintenance can recover resource drafts from ledger facts and verified artifacts, then author, build, and validate them for execution. Runtime Dispatcher implements wake records, session start/resume, responses, and bounded management. Automatic external-agent launch, exploration, and the complete autonomous maintenance loop still require further implementation and verification.
 
 ## 🏛 System shape
 
-![ActingCommand Runtime architecture](./docs/assets/runtime-architecture.png)
+![ActingCommand Runtime component ownership map](./docs/assets/runtime-architecture.png)
 
-Green/blue nodes and solid lines represent current capabilities merged into `main` and wired into their corresponding entry points; orange nodes and dashed lines represent capabilities that are planned, in progress, or awaiting verification. GlobalLedger is the sole global event fact source; existing read-only forensics and future authoritative debugging both read from it. Source integration does not imply that every corresponding live scenario has been verified.
+The boxes show current ownership and capabilities; the execution diagram above shows lifecycle order. Production clients request Runtime work through typed loopback IPC. Runtime holds devices and native Providers, and Scheduler arbitrates write effects. Lab/resource tooling forms a detachable authoring and debugging layer. [CONTEXT.md](./CONTEXT.md) defines the terms and responsibilities.
 
-Terminology follows [CONTEXT.md](./CONTEXT.md) in the repository (Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy, each defined precisely).
-
-**GlobalLedger's diagnostic role**: typed events, durable receipts, and replay already exist, with `actingledger` providing read-only forensics. Module-wide probe coverage, recurrence signature matching, and replay assessment are in progress. The goal is to elevate the ledger into an authoritative debugging tool that locates normal results, degradation, and failure causes in the same event source, keeping every diagnosis traceable to its original facts. Complete diagnostic coverage is not yet available.
-
-## 📍 Current progress (2026-09-05)
-
-| Milestone | What happened |
+| Boundary | Current behavior and source entry |
 |---|---|
-| **2026-08-10** | First live end-to-end loop: hash-sealed resource pack → resident runtime → live emulator page recognition → contained task execution → typed scheduling outcome → fully ledgered; 3.4 seconds per run, zero manual input. |
-| **2026-08-20** | Composite daily + weekly reward-claim task chain completed live (real claim branch verified). |
-| **2026-09-01** | **Official CPU live OCR full run: PASS** — non-Home entry autonomously recovered by the runtime (2 steps back to Home, re-verified) → template navigation to the operator roster → 41 frames of single-touch segmented-swipe paging (uniform drag + vertical brake, MaaTouch point stream) → 16-target OCR per frame (920 mapping records, zero discarded) → canonical/alias/tolerant dictionary comparison (294 unique canonical names, zero out-of-dictionary) → `operator_end` anchor-page termination → `return_home` closeout. 219 seconds, strict no-fallback, all 42 projection artifacts hash-bound. |
+| **Host and Provider** | Host manages owner epoch, IPC, requests, and closure. Provider assembly follows store opening; startup results are ledgered before Ready. [Startup contract](./contracts/provider-startup.md) |
+| **Resources and execution** | Containment verifies pack hashes; Scheduler manages leases and fencing; Kernel consumes contained resources for bounded tasks, phases, and recovery. [Contained operations](./contracts/contained-lab-operation.md) |
+| **Events and artifacts** | GlobalLedger persists sanitized events as the sole diagnostic fact source. ArtifactStore retains referenced bytes, hashes, and retention metadata; persistence failures propagate explicitly. [Event query](./contracts/global-ledger-query.md) |
+| **State and policy** | RuntimeState uses SQLite for state and immutable release generations, reconciled with GlobalLedger. Policy reuses one compiler, clock, and pure evaluation semantics. [Scheduling v2](./contracts/scheduling/v2/README.md) |
+| **Read-only consumers** | actingledger / ledger-forensics read the ledger and ArtifactStore, preserving corruption locations, gaps, and frozen cursors. Input material stays read-only. [Finite signatures](./contracts/diagnostic-signatures.md) |
+| **Lab and resource authoring** | Online observation/operations use Runtime; detachable Lab/resource-tooling supplies offline authoring, restoration, compilation, and pack validation. [Resource restoration](./contracts/resource-restore.md) |
 
-| Dimension | State |
+## 📍 Current capabilities and verification boundaries
+
+| Capability | Current implementation |
 |---|---|
-| **Execution and resource entry points on `main`** | Resident daemon, typed loopback IPC, scheduling admission and lease fencing, contained task execution (task timeout, terminal anchors, independent `max_steps`, recovery-pack auto-repositioning), pack containment, artifact store and official OCR projection (v2, paginated), device backends (including `SegmentedSwipe`, MaaTouch/Minitouch point streams, dynamic MuMu Nemu IPC binding), NCC template matching and color predicates, production OCR provider wiring, and dictionary-constrained comparison. ActingLab connects recording, drafts, pack building, transactional publication, and offline `package dry-run` rehearsal. |
-| **Scheduling and maintenance interfaces on `main`** | Four-document declarative policy catalogs, the pure evaluator, immutable catalog versions, dispatch, and budgets are wired into `actingd`. Instance `PublishFact`, strategic deficit/capacity/urgency evaluation, reports, planning signals, and proposal generation are implemented. Runtime Dispatcher implements wake/session/start/resume/response, recovery, and bounded configuration. Project interface v2 provides paginated read-only projections of projects, instances, catalogs, facts, goals, decisions, runtime state, and diagnostics for future UI queries. |
-| **Current persistence and diagnosis** | GlobalLedger uses segmented persistence and is the sole global event fact source. RuntimeState uses SQLite for runtime state and immutable release generations, reconciled with the Ledger. `ledger-forensics` / `actingledger` provide read-only forensics. |
-| **In progress and awaiting verification** | Module-wide ledger probe coverage, signature matching and replay assessment; real scheduling time semantics and long unattended operation; expansion of the first complete resource task set; OCR coverage, whole-page multi-block detection, and CUDA live testing; coverage of the capture backend matrix (adb / droidcast_raw / nemu_ipc). CPU OCR has the single full live-run result recorded above. |
-| **Future work** | Automatic launch of external agents and the complete autonomous maintenance loop; a native Rust read-only monitoring console; a GlobalLedger SQLite backend and unified RuntimeDatabase. |
+| **Execution and recognition** | Typed IPC, hash containment, task timeout/step/terminal-anchor limits, phased control and total budgets, recovery packs, template matching, color predicates, OCR dictionary comparison, and official page projections. |
+| **Online Lab** | observe obtains Runtime's current page projection. do resolves an operation from current element projections and can wait for a target page within the same bounded request. Old-frame hints retain provenance; actual input uses current resolution. [Page projection](./contracts/page-projection.md), [operation contract](./contracts/contained-lab-operation.md) |
+| **Offline resource consumption** | restore uses GlobalLedger, verified ArtifactStore references, and the original pack to recover supported operation drafts. convert → build-task → validate reuses the existing resource pipeline. Unrecoverable fields/dependencies produce explicit gaps; authors declare the business goal. [Resource restoration](./contracts/resource-restore.md) |
+| **Calendars and budgets** | Four-document policy catalogs, v2 interval-validity predicates, server clocks, pure compilation/evaluation, immutable catalogs, dispatch, and budgets. Lab scheduling compile/timeline provides official offline entry points. Configuration-registered instance aliases remain intact through policy. [Scheduling guide](./contracts/scheduling/README.md) |
+| **Live facts and pools** | agent-publish-facts atomically submits typed facts through Runtime. FactStore retains original observation times, TTL, provenance, and input watermarks; ledger_fact pools derive from the same fact snapshot. Expired, unknown, low-confidence, and input-invalidated observations keep explicit states. [Live fact pools](./docs/live-fact-pools.md) |
+| **State and planning** | Instance facts, strategic deficit/capacity/urgency, reports, planning signals, proposals, and Dispatcher sessions; project interface v2 supplies bounded read-only projections. Status/MonitorStatus samples are ledgered before their fact-bound responses. [State observation](./contracts/runtime-state-observation.md) |
+| **Queries and signatures** | EventQuery shares module, diagnostic-code, and correlation filters with lab watch and offline events. Explicit Lab register/match/retire operations ask Runtime to record signature facts; actingledger replays frozen catalogs and inputs read-only. Missing fields, multiple matches, and incomplete evidence are explicit. [Queries](./contracts/global-ledger-query.md), [signatures](./contracts/diagnostic-signatures.md) |
 
-## 🗺 Roadmap
-
-Remaining capabilities and verification work, with no dates promised:
-
-1. **Authoritative ledger debugging** — extend typed probes across modules and complete signature matching and replay assessment so normal results, degradation, and failure causes can be located in the ledger;
-2. **Resident-operation evidence** — build on existing policy, budget, fact, and strategic-report capabilities to verify real time semantics, recovery, and long unattended operation, comparing planning signals with actual outcomes;
-3. **Resources and recognition** — extend the first complete task set, verify roster coverage, and complete provider whole-page multi-block detection (whole-page reads + overlap dedup), CUDA, and capture-backend matrix verification;
-4. **Clients and autonomous maintenance** — build a native Rust read-only monitoring console, connect external agent launch to the existing Dispatcher session interface, and progressively complete automatic exploration, resource revision, and re-verification;
-5. **Future storage evolution** — plan a GlobalLedger SQLite backend and unified RuntimeDatabase while preserving the sole event fact source and recoverable state reconciliation;
-6. **MAA / MaaFramework compatibility** — continue the MAA resource seed-import and MaaFramework second-execution-backend directions.
+Signature matching classifies a finite set of registered failure contexts; root-cause conclusions still require the original facts. Probe, signature, and replay coverage is bounded, with absent observations preserved as gaps. Real calendar dispatch, long unattended operation, device/capture-backend matrices, OCR coverage, and CUDA results must identify their execution and materials. Source integration establishes capability.
 
 ## ⚖ Seven structural invariants (enforced by guards / tests / compile-time and real-process counterexamples)
 
@@ -75,7 +69,7 @@ Remaining capabilities and verification work, with no dates promised:
 2. **The Runtime is the only device holder**: the dependency graphs and sources of production clients (actingctl / runtime-client / ActingLab) cannot reach device backends; raw adb exists only in the `device` crate beneath the Runtime; historical client device commands are fail-loud tombstones. (Exception: `apps/device-test` is a direct-device diagnostic binary outside the production chain.);
 3. **GlobalLedger is the only source of truth**: its only write entry is `append(SanitizedEventDraft)`; sanitization precedes persistence; terminal states are absorbing (duplicate/conflicting commits are rejected with an audit fact). Clients may submit typed instance facts through `PublishFact`; Runtime controls their processing and ledger persistence, and clients never write the ledger directly;
 4. **Containment is the only kernel entry for resources**: hash verification (constant-time comparison) precedes extraction, with a compressed-size upper-bound precheck; the `LoadedBundle` capability makes "using an unverified pack" unrepresentable by construction — pinned by trybuild compile-failure cases;
-5. **Tasks must not summon tasks**: a task only emits pure-data successor suggestions and never chain-starts them; the production path fail-louds a successor suggestion back to the caller (`contained_task_requires_scheduler`). Scheduler adjudication of successors is a planned next step;
+5. **Tasks must not summon tasks**: a task only emits pure-data successor suggestions and never chain-starts them; the production path fail-louds a successor suggestion back to the caller (`contained_task_requires_scheduler`), leaving successor adjudication to Scheduler;
 6. **Lab and resource tooling are detachable**: proven by a dependency-graph guard under `--all-features` — no workspace package outside Lab / ActingLab / resource-tooling has any dependency path into them (with feature-gate-bypass counterexamples); resource tooling likewise cannot reach back into the Runtime or the device layer;
 7. **Zero game identity**: Runtime-owned code, contracts, and defaults are scanned by an architecture guard banning known project identity terms (game names, package names, server suffixes), with tests in scope; coordinates and thresholds exist only in resource packs, not in runtime code — a design convention, not auto-enforced. The framework recognizes "game shape" (resource pools, pages, tasks), never "game identity". Comparison **algorithms** live in the Runtime; the compared **values** (truth dictionaries etc.) all come from packs — same invariant.
 
@@ -88,8 +82,8 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 | Name | Responsibility |
 |---|---|
 | `actingd` | Resident daemon process adapter hosting all kernel components below |
-| `actingctl` | Production user CLI (observe / status / monitor-* / stream / reset / task-run, with `--recovery-package` auto-repositioning); successful results are single-line JSON |
-| `actinglab` | Debug probe + resource authoring (record → draft → build → transactional publish → offline `package dry-run`); **not a production dependency** |
+| `actingctl` | Production user CLI: observe / status / monitor-* / stream / reset / task-run / agent-publish-facts / request-shutdown; JSON receipts and exit status |
+| `actinglab` | Online Runtime observation/operations, queries and signatures; offline resource restoration/authoring/build/validation, scheduling compilation and timeline; **not a production dependency** |
 | `device-test` | Device backend diagnostic tool; independent `ledger --state-root <runtime-state>` reads Runtime facts through B ([query options](contracts/global-ledger-query.md)) |
 | `vision-provider-check` | Read Provider startup facts from a specified Runtime ledger; mechanical file hashes and PE exports |
 | `actingledger` (`apps/ledger-forensics`) | Read-only GlobalLedger forensics CLI |
@@ -101,7 +95,7 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 | `runtime-host` | Resident ownership, local typed IPC, lease-gated DeviceProxy, instance facts and policy/budget dispatch, strategic reports, and Dispatcher session lifecycle |
 | `runtime-client` | Client-side typed local IPC and project interface v2 paginated read-only projections; neither constructs nor holds production device backends |
 | `scheduler` | Per-instance write admission, lease lifecycle and fencing authority |
-| `execution-kernel` | Daemon-held execution sessions + pure task/probe decision planning; contained-task timeout, step, and terminal-anchor semantics |
+| `execution-kernel` | Daemon-held execution sessions + pure task/probe decision planning; contained-task timeout, steps, phase/total budgets, and terminal-anchor semantics |
 | `ledger` | Segmented persistent global event ledger (sole event fact source and authoritative diagnostic source) |
 | `artifact-store` | Artifact bytes, hashes, retention metadata, frame buffers, evidence export |
 | `runtime-state` | SQLite-backed runtime state and immutable release generations, reconciled with GlobalLedger |
@@ -113,7 +107,7 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 | `actingcommand-contract` | Mainline Rust contract definitions (protocol / device / engine boundary vocabulary) |
 | `host-metrics` | Safe boundary for platform performance counters |
 
-**Recognition FFI boundary (wired into the production recognition path; live-verified on CPU)**
+**Recognition FFI boundary (wired into the production recognition path)**
 
 | Name | Responsibility |
 |---|---|
@@ -134,10 +128,10 @@ Nine further **completion acceptance invariants** (deterministic replay, zero-si
 
 ## 🔍 Recognition plane status
 
-- **Available (live-verified)**: template matching (NCC family) and color predicates; the OCR production chain — `PP-OCRv6_medium` (ONNX Runtime, CPU, strict no-fallback), per-invocation execution attestation (provider/model/device hashes each time), canonical/alias/tolerant dictionary comparison with bounded retry;
-- **Known boundary**: the provider currently has region single-line semantics (one block per target). Roster coverage still needs verification; whole-page multi-block detection (det → per-box rec) awaits implementation and verification, targeting "whole-page reads + overlap dedup";
-- **Pending live test**: CUDA execution (closure, Ready manifests, and device ordinal / stable-identity checks are implemented). One passing CPU run does not verify CUDA, whole-page recognition, or complete roster coverage;
-- **Not distributed with the repository**: ONNX Runtime native libraries and OCR/NN models; they are materialized per task-local cache by the pinned-source hash-verified official tool, with `apps/vision-provider-check --state-root <runtime-state>` reading startup stages, bindings and original failures through B from the same ledger. `--after`, `--through` and `--limit` preserve a bounded page cursor. Ready attests construction only; inference and lazy initialization remain unobserved. Manifest, artifact-lock and export-audit modes report mechanical file observations.
+- **Current path**: NCC-family template matching and color predicates; PP-OCR single-line ROI recognition, OCR/NN JSON ABIs, canonical/alias/tolerant dictionary comparison, bounded retries, and per-invocation execution provenance. Current facts identify the model, provider, and device.
+- **Coverage boundary**: the provider currently uses region single-line semantics. Whole-page multi-block detection, complete roster coverage, CUDA, and capture-backend combinations require their respective implementation or verification. Existing CPU-run evidence remains bounded by its original records.
+- **External dependencies**: ONNX Runtime native libraries and models use pinned-source, hash-verified materialization; see the [Windows tools guide](./scripts/windows-tools/README.md). They are not distributed with this repository.
+- **Startup diagnosis**: vision-provider-check with `--state-root` reads Provider startup facts from the same Runtime through the read-only forensics layer. `--after`, `--through`, and `--limit` provide bounded cursors. Manifest, artifact-lock, and export-audit modes are mechanical file observations. Inference and lazy initialization require corresponding facts.
 
 ## 🧭 Design principles
 
@@ -173,7 +167,7 @@ actingcommand-actingd --config <actingd.json>
 # Daemon-level status (does not accept --instance)
 actingctl status --state-root <state-root>
 
-# Read-only single-frame observation (scheduler-admitted; events and frame artifacts ledgered)
+# Read-only single-frame observation (owner-epoch-bound read capability; events and artifacts ledgered)
 actingctl observe --state-root <state-root> --instance <alias>
 
 # Execute a contained task pack (hash verification precedes extraction)
@@ -185,13 +179,14 @@ actingctl task-run --state-root <state-root> --instance <alias> \
   [--recovery-package <recovery.zip> --recovery-expected-sha256 <hash>]
 ```
 
-On success, `actingctl` writes single-line JSON to stdout, including the official OCR projection where applicable. Argument, connection, and other errors write text to stderr and exit nonzero. Integrations must handle both output streams and the exit code. Both CLIs use hand-written argument parsing and provide **no `--help` / `--version`**.
+`actingctl` writes single-line JSON to stdout, including the official OCR projection where applicable. Failed receipts can also include JSON and exit nonzero; argument, connection, and other errors write text to stderr. Integrations must handle both output streams and the exit code. `actingcommand-actingd` and `actingctl` use hand-written argument parsing and provide **no `--help` / `--version`**; see the [CLI entry point](./apps/actinglab/src/main.rs) for ActingLab commands and options.
 
 Every `actingctl` command requires `--state-root`. The parameters consumed by each subcommand are listed below; the [argument parser](./apps/actingctl/src/main.rs) defines current behavior:
 
 | Subcommand | Instance and command parameters |
 |---|---|
-| `status` / `monitor-status` | Do not accept `--instance` |
+| `status` / `monitor-status` / `request-shutdown` | Do not accept `--instance` |
+| `agent-publish-facts` | Requires `--record-file`; the submission carries its fact scopes; does not accept `--instance` |
 | `observe` / `reset` / `monitor-clear` | Require `--instance` |
 | `monitor-set` | Requires `--instance`; optional `--interval-ms` (default 30000), `--expect` (default `home`), `--recover` |
 | `stream` | Requires `--instance`; optional `--max-frames` (default 1), `--interval-ms` (default 250) |
@@ -199,15 +194,15 @@ Every `actingctl` command requires `--state-root`. The parameters consumed by ea
 
 Use only the parameters belonging to the selected subcommand; the current parser accepting a known parameter does not imply that the subcommand uses it.
 
-## 🎮 Resource repositories
+`actingctl request-shutdown --state-root <state-root>` is an ordinary local Cli/Cli maintenance entry point. The client freezes the discovered owner epoch, PID, and start time. Host checks that owner, active leases, queued work, and in-flight requests/native actions at its admission gate. A busy owner returns `RuntimeBusy` and continues serving; an owner mismatch returns `RuntimeOwnerMismatch`. This operation needs no governance secret; owner epoch is not authentication.
 
-Game data (recognition templates, navigation graphs, operation and recovery declarations) is versioned independently of the runtime. The following repositories are **currently private**:
+Acceptance first records the typed GlobalLedger target and decision, then stops admission. The daemon reclaims the policy driver and uses `RuntimeHost::close` to settle resources, the M4 summary, ledger, and owner. JSON `shutdown_accepted` and `admitted` mean acceptance only; completion requires actual closure facts, the final summary, and the process result. A lost receipt reports `runtime_shutdown_receipt_unconfirmed` with the original error. The client does not resubmit or switch owners. Existing fatal and unconfirmed-resource protection remains in force.
 
-- **ActingCommand-Resources-Arknights** — upstream-derived layer from MAA; own layer currently includes: the composite daily+weekly reward-claim chain (live-verified), the operator-roster OCR task pack (four-fix edition, official live PASS; declaring task timeout, terminal anchor page, 16 OCR targets, and a 422-name truth dictionary), the `return_home` recovery baseline (live-verified, frozen, reusable), recruitment and full-entry navigation/operation sets, home-theme detection declarations (full hometheme set), character/material catalogs, recognition and recovery declarations, scheduling declarations (CN server);
-- **ActingCommand-Resources-AzurLane** — upstream-derived layer from Alas; own layer: main-screen navigation and full-entry operation sets, full character/equipment catalog templates (Git LFS), recognition and recovery declarations;
-- **ActingCommand-Resources-BlueArchive** — upstream-derived layer from BAAH / BAAS (coordinate catalogs and check regions); own layer: daily-claim pilot task, full-entry operation sets, equipment/material catalogs, recognition and recovery declarations.
+## 🎮 Resource packs and deployment
 
-Each repository uses a two-layer layout: `upstream-derived/` (third-party derived material with licenses and provenance) + `ours/` (own declarative data).
+Game templates, navigation, operations, recovery, and calendar declarations are versioned in independent resource sources. Resource tooling produces formal packs for Runtime containment by exact hash. Authors maintain provenance, licenses, and material evidence. Reusable assets and deployment-specific tasks are organized separately, with account-specific selections and configuration kept in private deployments.
+
+[Resource restoration](./contracts/resource-restore.md) describes drafting from existing ledger facts and the original pack; [scheduling declarations](./contracts/scheduling/README.md) connect tasks, procedures, facts, and budgets. Reproducing a task requires its resources, dependencies, and deployment configuration. Pack generation/compilation and actual execution results are recorded separately.
 
 ## 🤝 How we collaborate
 
