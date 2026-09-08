@@ -4,15 +4,15 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyFailureRecord, RuntimeErrorCode,
+    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetDenial,
+    PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, RuntimeErrorCode,
 };
 use actingcommand_policy::{
     ActivityProfile, ActivityWindow, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec,
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MILLIS_PER_MINUTE: i128 = 60_000;
 const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
@@ -59,6 +59,24 @@ impl PolicyControlState {
         intent: &DispatchIntent,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
+        match self.preview_admission_at(catalog, intent, now_unix_ms) {
+            Err(mut error) if is_availability_denial(&error) => {
+                let mut rejection = error.policy_rejection();
+                rejection.next_eligible_unix_ms =
+                    self.next_admission_time(catalog, intent, now_unix_ms)?;
+                error.lifecycle.policy_rejection = Some(Box::new(rejection));
+                Err(error)
+            }
+            result => result,
+        }
+    }
+
+    fn preview_admission_at(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<PolicyAdmissionRecord> {
         let (task, profile) = task_and_profile(catalog, intent)?;
         let (local_day, window_id) = active_activity_window(profile, now_unix_ms)?;
         let cadence_key = (intent.instance_id.clone(), profile.id.clone());
@@ -100,11 +118,13 @@ impl PolicyControlState {
             task_daily_used: next_count(
                 self.task_daily.get(&task_daily_key).copied().unwrap_or(0),
                 task.loop_budget.daily_limit,
+                PolicyBudgetDimension::TaskDaily,
             )?,
             task_daily_limit: task.loop_budget.daily_limit,
             task_window_used: next_count(
                 self.task_window.get(&task_window_key).copied().unwrap_or(0),
                 task.loop_budget.window_iteration_limit,
+                PolicyBudgetDimension::TaskWindow,
             )?,
             task_window_limit: task.loop_budget.window_iteration_limit,
             task_runtime_reserved_ms: next_runtime(
@@ -114,6 +134,7 @@ impl PolicyControlState {
                     .unwrap_or(0),
                 intent.expected_duration_ms,
                 task.loop_budget.max_runtime_ms,
+                PolicyBudgetDimension::TaskRuntime,
             )?,
             task_runtime_limit_ms: task.loop_budget.max_runtime_ms,
             activity_daily_used: next_count(
@@ -122,6 +143,7 @@ impl PolicyControlState {
                     .copied()
                     .unwrap_or(0),
                 profile.daily_budget,
+                PolicyBudgetDimension::ActivityDaily,
             )?,
             activity_daily_limit: profile.daily_budget,
             activity_window_used: next_count(
@@ -130,6 +152,7 @@ impl PolicyControlState {
                     .copied()
                     .unwrap_or(0),
                 profile.max_window_iterations,
+                PolicyBudgetDimension::ActivityWindow,
             )?,
             activity_window_limit: profile.max_window_iterations,
             activity_runtime_reserved_ms: next_runtime(
@@ -139,6 +162,7 @@ impl PolicyControlState {
                     .unwrap_or(0),
                 intent.expected_duration_ms,
                 profile.session_max_ms,
+                PolicyBudgetDimension::ActivityRuntime,
             )?,
             activity_runtime_limit_ms: profile.session_max_ms,
         };
@@ -154,6 +178,49 @@ impl PolicyControlState {
             },
             budget,
         })
+    }
+
+    fn next_admission_time(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let (_, profile) = task_and_profile(catalog, intent)?;
+        let from = self
+            .next_activity_eligible
+            .get(&(intent.instance_id.clone(), profile.id.clone()))
+            .copied()
+            .unwrap_or(now_unix_ms)
+            .max(now_unix_ms);
+        let mut boundaries = BTreeSet::from([from]);
+        // Weekly windows repeat. Include one full week and the following day,
+        // including overnight ends and full-day resets; test every boundary with
+        // the very same admission predicate and counters used under the final lock.
+        for window in &profile.windows {
+            let offset = i128::from(window.utc_offset_minutes) * MILLIS_PER_MINUTE;
+            let local_day = (i128::from(from) + offset).div_euclid(MILLIS_PER_DAY);
+            for day in local_day..=local_day + 8 {
+                for minute in [0, window.start_minute_of_day, window.end_minute_of_day] {
+                    let boundary =
+                        day * MILLIS_PER_DAY + i128::from(minute) * MILLIS_PER_MINUTE - offset;
+                    if let Ok(boundary) = u64::try_from(boundary)
+                        && boundary > now_unix_ms
+                        && boundary >= from
+                    {
+                        boundaries.insert(boundary);
+                    }
+                }
+            }
+        }
+        for boundary in boundaries.into_iter().filter(|time| *time > now_unix_ms) {
+            match self.preview_admission_at(catalog, intent, boundary) {
+                Ok(_) => return Ok(Some(boundary)),
+                Err(error) if is_availability_denial(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn commit_admission(
@@ -512,22 +579,64 @@ fn sampled_interval(profile: &ActivityProfile, seed: u64) -> RuntimeHostResult<u
     Ok(profile.minimum_interval_ms + seed % width)
 }
 
-fn next_count(current: u32, limit: u32) -> RuntimeHostResult<u32> {
+pub(crate) fn is_availability_denial(error: &RuntimeHostError) -> bool {
+    !error.is_fatal()
+        && matches!(
+            error.code(),
+            "policy_budget_exhausted"
+                | "policy_activity_interval_active"
+                | "policy_activity_window_closed"
+        )
+}
+
+fn budget_exhausted(
+    dimension: PolicyBudgetDimension,
+    used: u64,
+    requested: u64,
+    limit: u64,
+) -> RuntimeHostError {
+    let mut error = request("policy_budget_exhausted", "reserve_policy_budget");
+    let mut rejection = error.policy_rejection();
+    rejection.budget = Some(PolicyBudgetDenial {
+        dimension,
+        used,
+        requested,
+        limit,
+    });
+    error.lifecycle.policy_rejection = Some(Box::new(rejection));
+    error
+}
+
+fn next_count(
+    current: u32,
+    limit: u32,
+    dimension: PolicyBudgetDimension,
+) -> RuntimeHostResult<u32> {
     let next = current
         .checked_add(1)
         .ok_or_else(|| fatal("policy_budget_counter_overflow", "reserve_policy_budget"))?;
     if next > limit {
-        return Err(request("policy_budget_exhausted", "reserve_policy_budget"));
+        return Err(budget_exhausted(
+            dimension,
+            u64::from(current),
+            1,
+            u64::from(limit),
+        ));
     }
     Ok(next)
 }
 
-fn next_runtime(current: u64, reservation: u64, limit: u64) -> RuntimeHostResult<u64> {
+fn next_runtime(
+    current: u64,
+    reservation: u64,
+    limit: u64,
+    dimension: PolicyBudgetDimension,
+) -> RuntimeHostResult<u64> {
     let next = current
         .checked_add(reservation)
         .ok_or_else(|| fatal("policy_budget_counter_overflow", "reserve_policy_budget"))?;
     if next > limit {
-        return Err(request("policy_budget_exhausted", "reserve_policy_budget"));
+        return Err(budget_exhausted(dimension, current, reservation, limit));
     }
     Ok(next)
 }
@@ -988,6 +1097,77 @@ mod tests {
             .preview_admission(&catalog, &intent(&catalog, 3), NOW + 1_200_000)
             .expect_err("third daily admission must fail");
         assert_eq!(error.code(), "policy_budget_exhausted");
+        let rejection = error.policy_rejection();
+        assert_eq!(
+            rejection.budget,
+            Some(PolicyBudgetDenial {
+                dimension: PolicyBudgetDimension::TaskDaily,
+                used: 2,
+                requested: 1,
+                limit: 2,
+            })
+        );
+        let next = rejection.next_eligible_unix_ms.expect("next daily window");
+        state
+            .preview_admission(&catalog, &intent(&catalog, 3), next)
+            .expect("same predicate permits the reported next time");
+
+        // B11 first red: Workflow #269 issuecomment-5587376490. The shared
+        // activity limits must be visible through the same read-only predicate.
+        for (field, dimension, limit) in [
+            ("daily_budget", PolicyBudgetDimension::ActivityDaily, 1),
+            (
+                "max_window_iterations",
+                PolicyBudgetDimension::ActivityWindow,
+                1,
+            ),
+            (
+                "session_max_ms",
+                PolicyBudgetDimension::ActivityRuntime,
+                60_000,
+            ),
+        ] {
+            let catalog = catalog_with(
+                |_| {},
+                |activity| {
+                    activity["profiles"][0][field] = serde_json::json!(limit);
+                },
+            );
+            let mut state = PolicyControlState::default();
+            let first = intent(&catalog, 1);
+            let admission = state.preview_admission(&catalog, &first, NOW).unwrap();
+            state
+                .commit_admission(&catalog, &first, &admission)
+                .unwrap();
+            let next_intent = intent(&catalog, 2);
+            let error = state
+                .preview_admission(&catalog, &next_intent, NOW + 600_000)
+                .expect_err("shared activity budget excludes the candidate");
+            let rejection = error.policy_rejection();
+            assert_eq!(
+                rejection.budget,
+                Some(PolicyBudgetDenial {
+                    dimension,
+                    used: limit,
+                    requested: limit,
+                    limit,
+                })
+            );
+            assert_eq!(
+                state
+                    .preview_admission(&catalog, &next_intent, NOW + 600_000)
+                    .unwrap_err(),
+                error,
+                "availability preview must not consume counters or change the sample"
+            );
+            state
+                .preview_admission(
+                    &catalog,
+                    &next_intent,
+                    rejection.next_eligible_unix_ms.unwrap(),
+                )
+                .expect("reported next activity window passes the same admission predicate");
+        }
     }
 
     #[test]
@@ -1024,6 +1204,15 @@ mod tests {
             )
             .expect_err("fifth window iteration must fail when the limit is four");
         assert_eq!(error.code(), "policy_budget_exhausted");
+        assert_eq!(
+            error.policy_rejection().budget,
+            Some(PolicyBudgetDenial {
+                dimension: PolicyBudgetDimension::TaskWindow,
+                used: 4,
+                requested: 1,
+                limit: 4,
+            })
+        );
 
         let runtime_catalog = catalog_with(
             |tasks| {
@@ -1073,6 +1262,15 @@ mod tests {
             )
             .expect_err("runtime reservation crossing 300000ms must fail");
         assert_eq!(error.code(), "policy_budget_exhausted");
+        assert_eq!(
+            error.policy_rejection().budget,
+            Some(PolicyBudgetDenial {
+                dimension: PolicyBudgetDimension::TaskRuntime,
+                used: 300_000,
+                requested: 60_000,
+                limit: 300_000,
+            })
+        );
     }
 
     #[test]
@@ -1141,5 +1339,16 @@ mod tests {
             .preview_admission(&catalog, &intent(&catalog, 2), NOW)
             .expect_err("cadence must block immediate resampling");
         assert_eq!(error.code(), "policy_activity_interval_active");
+        assert_eq!(
+            error.policy_rejection().next_eligible_unix_ms,
+            Some(first.activity.next_eligible_unix_ms)
+        );
+        state
+            .preview_admission(
+                &catalog,
+                &intent(&catalog, 2),
+                first.activity.next_eligible_unix_ms,
+            )
+            .expect("the sampled cadence boundary admits without resampling state");
     }
 }

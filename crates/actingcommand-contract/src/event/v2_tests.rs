@@ -509,9 +509,21 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
-        PolicyPayloadDraft::dispatch_rejected(
+        PolicyPayloadDraft::dispatch_rejected_with_reason(
             policy_data.clone(),
             EffectDisposition::NotPerformed,
+            PolicyDispatchRejection {
+                code: "policy_budget_exhausted".to_owned(),
+                operation: "reserve_policy_budget".to_owned(),
+                fatal: false,
+                budget: Some(PolicyBudgetDenial {
+                    dimension: PolicyBudgetDimension::TaskDaily,
+                    used: 1,
+                    requested: 1,
+                    limit: 1,
+                }),
+                next_eligible_unix_ms: Some(1_752_192_000_000),
+            },
             input(),
         )
         .into(),

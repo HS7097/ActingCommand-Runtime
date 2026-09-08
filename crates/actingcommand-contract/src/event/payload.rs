@@ -2514,10 +2514,56 @@ pub struct PolicyDispatchPayload {
     urgency_milli: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     admission: Option<Box<PolicyAdmissionRecord>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rejection: Option<Box<PolicyDispatchRejection>>,
     audit: SanitizedAudit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyBudgetDimension {
+    TaskDaily,
+    TaskWindow,
+    TaskRuntime,
+    ActivityDaily,
+    ActivityWindow,
+    ActivityRuntime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyBudgetDenial {
+    pub dimension: PolicyBudgetDimension,
+    pub used: u64,
+    pub requested: u64,
+    pub limit: u64,
+}
+
+/// Bounded Runtime failure facts, separate from the immutable ranking reason chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDispatchRejection {
+    pub code: String,
+    pub operation: String,
+    pub fatal: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<PolicyBudgetDenial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_eligible_unix_ms: Option<u64>,
+}
+
+impl PolicyDispatchRejection {
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_policy_token(&self.code, "rejection_code")?;
+        validate_policy_token(&self.operation, "rejection_operation")
+    }
+}
+
 impl PolicyDispatchPayload {
+    pub fn rejection(&self) -> Option<&PolicyDispatchRejection> {
+        self.rejection.as_deref()
+    }
+
     pub fn decision_id(&self) -> &str {
         &self.decision_id
     }
@@ -4872,6 +4918,7 @@ struct ResourceAuthoringDraft {
 struct PolicyDispatchDraft {
     data: PolicyDispatchEventData,
     admission: Option<Box<PolicyAdmissionRecord>>,
+    rejection: Option<Box<PolicyDispatchRejection>>,
     diagnostic_code: Option<DiagnosticCode>,
     effect_disposition: Option<EffectDisposition>,
     audit: AuditInput,
@@ -5027,6 +5074,9 @@ impl PolicyDispatchDraft {
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<PolicyDispatchPayload, SanitizationError> {
         validate_policy_dispatch_data(&self.data)?;
+        if let Some(rejection) = &self.rejection {
+            rejection.validate()?;
+        }
         Ok(PolicyDispatchPayload {
             action: EventAction::PolicyDispatch,
             diagnostic_code: self.diagnostic_code,
@@ -5046,6 +5096,7 @@ impl PolicyDispatchDraft {
             approval_fact_ids: self.data.approval_fact_ids,
             urgency_milli: self.data.urgency_milli,
             admission: self.admission,
+            rejection: self.rejection,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -5788,6 +5839,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         PolicyPayload::DispatchIntent(value)
             if value.action == EventAction::PolicyDispatch
                 && value.diagnostic_code.is_none()
+                && value.rejection.is_none()
                 && value.effect_disposition.is_none()
                 && value.admission.is_none() =>
         {
@@ -5796,6 +5848,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         PolicyPayload::DispatchAdmitted(value)
             if value.action == EventAction::PolicyDispatch
                 && value.diagnostic_code.is_none()
+                && value.rejection.is_none()
                 && value.effect_disposition == Some(EffectDisposition::Performed)
                 && value.admission.is_some() =>
         {
@@ -5815,6 +5868,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         PolicyPayload::DispatchCompleted(value)
             if value.action == EventAction::PolicyDispatch
                 && value.diagnostic_code.is_none()
+                && value.rejection.is_none()
                 && value.effect_disposition == Some(EffectDisposition::Performed)
                 && value.admission.is_some() =>
         {
@@ -5872,6 +5926,9 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
     })?;
     if let Some(admission) = &value.admission {
         validate_policy_admission(admission)?;
+    }
+    if let Some(rejection) = &value.rejection {
+        rejection.validate()?;
     }
     Ok(())
 }
@@ -7775,6 +7832,7 @@ impl PolicyPayloadDraft {
         Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
             data,
             admission: None,
+            rejection: None,
             diagnostic_code: None,
             effect_disposition: None,
             audit,
@@ -7789,6 +7847,7 @@ impl PolicyPayloadDraft {
         Self(PolicyDraftKind::Admitted(PolicyDispatchDraft {
             data,
             admission: Some(Box::new(admission)),
+            rejection: None,
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
             audit,
@@ -7803,6 +7862,7 @@ impl PolicyPayloadDraft {
         Self(PolicyDraftKind::Rejected(PolicyDispatchDraft {
             data,
             admission: None,
+            rejection: None,
             diagnostic_code: Some(DiagnosticCode::PolicyRejected),
             effect_disposition: Some(effect_disposition),
             audit,
@@ -7817,8 +7877,25 @@ impl PolicyPayloadDraft {
         Self(PolicyDraftKind::Completed(PolicyDispatchDraft {
             data,
             admission: Some(Box::new(admission)),
+            rejection: None,
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn dispatch_rejected_with_reason(
+        data: PolicyDispatchEventData,
+        effect_disposition: EffectDisposition,
+        rejection: PolicyDispatchRejection,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Rejected(PolicyDispatchDraft {
+            data,
+            admission: None,
+            rejection: Some(Box::new(rejection)),
+            diagnostic_code: Some(DiagnosticCode::PolicyRejected),
+            effect_disposition: Some(effect_disposition),
             audit,
         }))
     }

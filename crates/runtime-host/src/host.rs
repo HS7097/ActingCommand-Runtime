@@ -4068,6 +4068,14 @@ impl HostShared {
             ledger_position
         };
         let mut base_facts = inputs.facts().clone();
+        base_facts.tasks = lock(&self.policy, "project_policy_task_state")?
+            .task_runtime_snapshots(ledger_position)?;
+        base_facts.tasks.retain(|state| {
+            base_facts
+                .instances
+                .iter()
+                .any(|instance| instance.instance_id == state.instance_id)
+        });
         let authoritative_outcomes = lock(
             &self.authoritative_policy_outcomes,
             "project_policy_scheduling_outcomes",
@@ -4819,7 +4827,7 @@ impl HostShared {
                     )
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
-            |_, effect| {
+            |failure, effect| {
                 self.events
                     .draft(
                         EventSeverity::Error,
@@ -4827,9 +4835,10 @@ impl HostShared {
                         OriginModule::Policy,
                         EventActor::Scheduler,
                         failure_links,
-                        PolicyPayloadDraft::dispatch_rejected(
+                        PolicyPayloadDraft::dispatch_rejected_with_reason(
                             failure_data,
                             effect,
+                            failure.error.policy_rejection(),
                             AuditInput::new(),
                         ),
                     )

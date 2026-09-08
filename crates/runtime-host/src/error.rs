@@ -33,6 +33,7 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) instance_id: Option<InstanceId>,
     pub(crate) native_detail: Option<Box<actingcommand_contract::LifecycleNativeDetail>>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
+    pub(crate) policy_rejection: Option<Box<actingcommand_contract::PolicyDispatchRejection>>,
 }
 
 impl PartialEq for RuntimeHostError {
@@ -42,13 +43,41 @@ impl PartialEq for RuntimeHostError {
             && self.projection == other.projection
             && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
             && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
+            && self.lifecycle.policy_rejection == other.lifecycle.policy_rejection
             && self.lifecycle.incomplete_device_diagnostic_summary
                 == other.lifecycle.incomplete_device_diagnostic_summary
     }
 }
 impl Eq for RuntimeHostError {}
 
+impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
+    fn from(_: actingcommand_policy::PolicyEvaluationError) -> Self {
+        Self::request(
+            "policy_evaluation_rejected",
+            "evaluate_policy_cycle",
+            RuntimeErrorCode::InvalidRequest,
+        )
+    }
+}
+
 impl RuntimeHostError {
+    pub(crate) fn policy_rejection(&self) -> actingcommand_contract::PolicyDispatchRejection {
+        let mut rejection = self
+            .lifecycle
+            .policy_rejection
+            .as_deref()
+            .cloned()
+            .unwrap_or(actingcommand_contract::PolicyDispatchRejection {
+                code: self.code.to_owned(),
+                operation: self.operation.to_owned(),
+                fatal: self.is_fatal(),
+                budget: None,
+                next_eligible_unix_ms: None,
+            });
+        rejection.fatal = self.is_fatal();
+        rejection
+    }
+
     pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
         let mut result = Self::fatal(
             error.code(),
@@ -156,6 +185,7 @@ impl RuntimeHostError {
                 instance_id: error.instance_id(),
                 native_detail: error.native_detail().cloned().map(Box::new),
                 resource_quiescence: error.resource_quiescence(),
+                policy_rejection: None,
             }),
         };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {

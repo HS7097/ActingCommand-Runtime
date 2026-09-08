@@ -2840,6 +2840,10 @@ fn actingd_mapped_policy_sources(version: u64) -> CatalogSources {
         ]
     });
     followup["cooldown_ms"] = json!(1_000);
+    // PR346 CI34250240592: this resident scenario admits exactly one successor
+    // within its existing eight-second observation window.
+    followup["loop_budget"]["daily_limit"] = json!(1);
+    followup["loop_budget"]["window_iteration_limit"] = json!(1);
     followup["produces"] = json!([]);
     followup["instance_overrides"] = json!([]);
     tasks["tasks"]
@@ -2847,6 +2851,11 @@ fn actingd_mapped_policy_sources(version: u64) -> CatalogSources {
         .expect("mapped task array")
         .push(followup);
     sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("mapped actingd task bytes");
+    let mut activity: Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("mapped activity");
+    activity["profiles"][0]["minimum_interval_ms"] = json!(1);
+    activity["profiles"][0]["maximum_interval_ms"] = json!(1);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("mapped activity bytes");
     sources
 }
 

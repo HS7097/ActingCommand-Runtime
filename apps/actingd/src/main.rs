@@ -1808,7 +1808,14 @@ mod tests {
             EventType::PolicyExecutionRecorded,
             EventType::PolicyDispatchCompleted,
         ] {
-            let expected = if event_type == EventType::PolicyDispatchIntent {
+            // PR346 CI34248791592: both selected dispatches pass real admission;
+            // only the primary has a scheduled resource execution in this fixture.
+            let expected = if matches!(
+                event_type,
+                EventType::PolicyDispatchIntent
+                    | EventType::PolicyDispatchAdmitted
+                    | EventType::LeaseGranted
+            ) {
                 2
             } else {
                 1
@@ -2062,6 +2069,8 @@ mod tests {
         followup["id"] = json!("fixture.followup");
         followup["procedure_ref"] = json!("procedure.followup");
         followup["priority"] = json!(200);
+        followup["loop_budget"]["daily_limit"] = json!(1);
+        followup["loop_budget"]["window_iteration_limit"] = json!(1);
         followup["trigger"] = json!({
             "kind": "any",
             "predicates": [
@@ -2106,6 +2115,9 @@ mod tests {
             serde_json::from_slice(&sources.activity.bytes).expect("activity catalog JSON");
         activity["profiles"][0]["windows"][0]["start_minute_of_day"] = json!(0);
         activity["profiles"][0]["windows"][0]["end_minute_of_day"] = json!(0);
+        // PR346 CI34247423098: the successor assertion runs after driver cooldown.
+        activity["profiles"][0]["minimum_interval_ms"] = json!(1);
+        activity["profiles"][0]["maximum_interval_ms"] = json!(1);
         sources.activity.bytes =
             serde_json::to_vec_pretty(&activity).expect("activity catalog bytes");
         sources
