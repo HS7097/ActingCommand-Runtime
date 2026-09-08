@@ -58,7 +58,7 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 | **离线资源消费** | restore 从 GlobalLedger、verified ArtifactStore 引用和原包恢复有依据的操作草稿；convert → build-task → validate 复用现有资源产线。无法重建的字段/依赖显式列出 gaps，业务目标由作者声明。[资源恢复](./contracts/resource-restore.md) |
 | **日历与预算** | 四文档策略目录、v2 时间区间有效谓词、服务器时钟、纯编译/求值、不可变目录、派发与预算；Lab scheduling compile/timeline 提供正式离线入口。实例别名在配置注册后沿 policy 保留。[调度说明](./contracts/scheduling/README.md) |
 | **实时事实与池** | agent-publish-facts 经 Runtime 原子提交类型化事实；FactStore 保留原观察时间、TTL、来源与输入水位，ledger_fact 池从同一事实快照派生。过期、未知、低置信度或被输入作废的观察保持明确状态。[事实池](./docs/live-fact-pools.md) |
-| **状态与规划** | 实例事实、战略差额/容量/紧迫度、报告、规划信号、提案与 Dispatcher 会话协议；项目接口 v2 提供有界只读投影。Status/MonitorStatus 的采样先入账，返回值绑定对应事实。[状态观察](./contracts/runtime-state-observation.md) |
+| **状态与规划** | 实例事实、战略差额/容量/紧迫度、报告、规划信号、提案与 Dispatcher 会话协议；项目接口 v3 提供有界只读投影。Status/MonitorStatus 的采样先入账，返回值绑定对应事实。[状态观察](./contracts/runtime-state-observation.md) |
 | **查询与签名** | EventQuery 统一模块、诊断码与关联字段过滤；lab watch 和离线 events 复用同一谓词。Lab 显式 register/match/retire 由 Runtime 写入签名事实；actingledger 对冻结目录与输入作只读回放。缺字段、多个命中、证据不完整均明确表达。[查询](./contracts/global-ledger-query.md)、[签名](./contracts/diagnostic-signatures.md) |
 
 签名匹配提供有限的已登记故障上下文分类；根因结论仍须追溯原始事实。当前探针、签名及回放范围有限，缺失的观察保留为缺口。真实日历派发、长期无人值守、设备/采集后端矩阵、OCR 覆盖率和 CUDA 的验证结论均需绑定相应运行与材料；源码接入本身仅证明能力存在。
@@ -74,6 +74,8 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 7. **零游戏身份**:Runtime 自有代码、契约与默认值由架构守卫扫描,禁止出现已知项目身份词(游戏名、包名、区服后缀),该范围内测试代码一并执法;坐标与阈值只存在于资源包、不在运行时代码中——这是设计约定,不由守卫自动执法。框架只认"游戏形状"(资源池、页面、任务),不认"游戏身份"。比对**算法**在 Runtime,被比对的**值**(真值字典等)全部来自资源包,同属本不变量。
 
 另有九条**完成体验收不变量**(确定性重放、重放零副作用、循环有预算、时钟跳变全量重算、崩溃恢复重建同一待决集、合格工作不饿死、非法输入 fail-loud、unknown 不被静默当 false、每次派发有完整理由链)覆盖调度策略面,见 `docs/architecture/runtime-completion-invariants.md`。
+
+项目接口的默认请求由 [`ProjectInterfaceRequest::current()`](./crates/actingcommand-contract/src/project.rs) 构造：请求 schema 为 `request.v2`，接受契约按 v3、v2、v1 声明；Runtime 从双方支持集合选择最新版本，当前默认返回契约 v3 / `response.v3`。显式接受集合可协商 v2 或 v1，无共同版本时拒绝。`RuntimeProjectClient` 的默认快照入口复用该请求，见 [客户端实现](./crates/runtime-client/src/client.rs)。
 
 ## 📦 组件(workspace 成员)
 
@@ -93,7 +95,7 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 | 名称 | 职责 |
 |---|---|
 | `runtime-host` | 常驻所有权、本地 typed IPC、租约门控的 DeviceProxy、实例事实与策略/预算派发、战略报告及 Dispatcher 会话生命周期 |
-| `runtime-client` | 客户端 typed 本地 IPC及项目接口 v2 只读分页投影;不构造也不持有生产设备后端 |
+| `runtime-client` | 客户端 typed 本地 IPC及项目接口协商（当前 v3）与只读分页投影;不构造也不持有生产设备后端 |
 | `scheduler` | 每实例写准入、租约生命周期与 fencing 权威 |
 | `execution-kernel` | daemon 持有的执行会话 + 纯任务/探针决策规划;收容任务超时、步数、阶段/总预算与终止锚页语义 |
 | `ledger` | 分段持久化的全局事件账本(唯一事件事实源与权威诊断来源) |
@@ -146,7 +148,7 @@ Host 关闭先停止准入、排空工作并回收 policy driver，再经 Schedu
 
 当前 CI 使用 Windows 与 Rust stable,默认 Windows 产物目标为 `x86_64-pc-windows-msvc`。本地构建需 Rust/Cargo、Git 与相应 MSVC 构建环境;也可获取上述精确 SHA 构建产物。外部工具与产物校验入口见 [Windows 工具说明](./scripts/windows-tools/README.md)。
 
-首次运行先准备 daemon 配置与至少一个实例。配置需声明 `schema_version`、`state_root`、loopback `bind_host`、16–1024 字节的 `secret_fingerprint_salt` 和非空 `instances`;设备实例需别名、`instance_id`、应用标识、ADB 寻址和显式截图/触控后端。完整字段与校验以 [配置定义](./apps/actingd/src/config.rs) 为准。设备任务另需可用的 ADB/所选后端及自备资源包;OCR 任务还需外部 provider、模型和原生库清单。策略目录说明与中性声明示例见 [调度契约](./contracts/scheduling/README.md),客户端查询契约见 [项目接口 v2](./contracts/runtime-project-interface.md)。
+首次运行先准备 daemon 配置与至少一个实例。配置需声明 `schema_version`、`state_root`、loopback `bind_host`、16–1024 字节的 `secret_fingerprint_salt` 和非空 `instances`;设备实例需别名、`instance_id`、应用标识、ADB 寻址和显式截图/触控后端。完整字段与校验以 [配置定义](./apps/actingd/src/config.rs) 为准。设备任务另需可用的 ADB/所选后端及自备资源包;OCR 任务还需外部 provider、模型和原生库清单。策略目录说明与中性声明示例见 [调度契约](./contracts/scheduling/README.md),客户端查询契约见 [项目查询边界](./contracts/runtime-project-interface.md)。
 
 ```bash
 # 构建需能读取 git 元数据;无 .git 时须显式设置 ACTINGCOMMAND_RUNTIME_HEAD=<40 位提交哈希>
