@@ -116,6 +116,15 @@ V1 persistent scheduling state is single-host, local-filesystem state. Catalog g
 
 Cross-run decisions are reevaluated by the scheduler after each outcome. A bounded rule table may make mechanical choices inside one run, but it cannot call back into the scheduler for mutable external state. External state required by a run must be pinned into dispatch parameters and its reason chain before admission.
 
+For a scheduled contained task, an empty catalog outcome-reference set means
+there is no scheduling-result consumer. The package may declare and produce its
+own valid outcomes; its actual final page, designated effect and terminal
+`scheduling_disposition` remain in GlobalLedger. Completion and recovery create
+no policy outcome projection or completed-run consumption identity in this case.
+When the reference set is nonempty, it must exactly match the package's declared
+outcome keys. Package validity and execution evidence requirements apply in both
+cases.
+
 ## Forward Planning And Maintenance
 
 Forward planning is a bounded dry-run of the same pure evaluator used for live policy decisions. It projects at most 24 hours, performs no ledger write, lease operation, execution, or device action, and reports incomplete evidence instead of inventing resource effects. This is a projection facility, not another scheduler.

@@ -11387,7 +11387,7 @@ impl HostShared {
             .flat_map(|declaration| declaration.mappings())
             .map(|mapping| mapping.outcome_key().to_owned())
             .collect::<BTreeSet<_>>();
-        if expected_outcome_keys != declared_outcome_keys {
+        if !expected_outcome_keys.is_empty() && expected_outcome_keys != declared_outcome_keys {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     "policy_run_outcome_declaration_mismatch",
