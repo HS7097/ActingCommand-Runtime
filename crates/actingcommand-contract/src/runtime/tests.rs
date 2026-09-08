@@ -555,6 +555,34 @@ fn runtime_request_rejects_unknown_fields_schema_origin_and_alias() {
         bad_alias.expect_err("alias must fail").code(),
         "invalid_instance_alias"
     );
+    for (alias, valid) in [
+        ("Neutral.Instance".to_owned(), true),
+        (" Ω ".to_owned(), true),
+        (" ".to_owned(), true),
+        ("é".repeat(128), true),
+        ("é".repeat(129), false),
+        ("a".repeat(257), false),
+        ("".to_owned(), false),
+        ("x\0".to_owned(), false),
+        ("x\n".to_owned(), false),
+        ("x\u{85}".to_owned(), false),
+    ] {
+        assert_eq!(validate_instance_alias(&alias).is_ok(), valid);
+        let operation = RuntimeOperation::ObserveReadonly {
+            instance_alias: alias.clone(),
+        };
+        assert_eq!(operation.validate().is_ok(), valid);
+        let scope = crate::FactScope::Instance {
+            instance_id: alias.clone(),
+        };
+        assert_eq!(scope.validate().is_ok(), valid);
+        let context = crate::InstanceFactContext {
+            instance_id: alias,
+            server_id: "server.a".into(),
+            game_id: "game.a".into(),
+        };
+        assert_eq!(context.validate().is_ok(), valid);
+    }
 }
 
 #[test]

@@ -1815,6 +1815,49 @@ fn client_and_approval_public_projections_keep_values_private() {
 
 #[test]
 fn policy_failure_payload_rejects_impossible_retry_combinations() {
+    for (alias, valid) in [
+        (" Instance Ω ".to_owned(), true),
+        (" ".to_owned(), true),
+        ("é".repeat(128), true),
+        ("é".repeat(129), false),
+        ("node\n".to_owned(), false),
+    ] {
+        for payload in [
+            PolicyPayloadDraft::execution_recorded(
+                PolicyExecutionEventData {
+                    decision_id: "decision:fixture-a".to_owned(),
+                    task_id: "task:fixture-a".to_owned(),
+                    instance_id: alias.clone(),
+                    observed_at_unix_ms: 1_752_147_201_000,
+                    outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 1 },
+                },
+                AuditInput::new(),
+            ),
+            PolicyPayloadDraft::planning_signal_observed(
+                PolicyPlanningSignalEventData {
+                    signal_id: "signal:fixture-a".to_owned(),
+                    instance_id: alias.clone(),
+                    task_id: None,
+                    kind: PolicyPlanningSignalKind::GoalMissed,
+                    fact_code: "goal.fixture.missed".to_owned(),
+                    observed_at_unix_ms: 1_752_147_201_000,
+                    detection_budget: None,
+                },
+                AuditInput::new(),
+            ),
+        ] {
+            if valid {
+                let event = sanitize(payload.into(), 1);
+                let json = serde_json::to_value(event.payload()).unwrap();
+                assert_eq!(json["payload"]["data"]["instance_id"], alias);
+            } else {
+                assert_eq!(
+                    sanitize_error(payload.into()).code(),
+                    "invalid_policy_token"
+                );
+            }
+        }
+    }
     let base = PolicyFailureRecord {
         error_code: "transient.capture".to_owned(),
         reported_success: false,
@@ -1877,6 +1920,30 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
 
 #[test]
 fn performance_payload_rejects_fake_health_and_invalid_stutter() {
+    // Instance alias copied by the policy admission deadline gate.
+    let alias = format!(" {} ", "é".repeat(127));
+    let admitted_alias = sanitize(
+        PerformancePayloadDraft::balance_changed(
+            PerformanceControlEventData {
+                observed_at_unix_ms: 1_752_147_201_000,
+                instance_id: Some(alias.clone()),
+                previous_level: PerformanceControlLevel::DispatchPaused,
+                level: PerformanceControlLevel::DispatchPaused,
+                reason: PerformanceControlReason::DeadlineConflict,
+                host_responsiveness_basis_points: None,
+                third_party_pressure_basis_points: None,
+                recovery: false,
+                deadline_disposition: Some(PerformanceDeadlineDisposition::CapacityFailure),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    assert_eq!(
+        serde_json::to_value(admitted_alias.payload()).unwrap()["payload"]["data"]["instance_id"],
+        alias
+    );
     let fake_health: EventPayloadDraft = PerformancePayloadDraft::monitor_degraded(
         PerformanceMonitorStateEventData {
             observed_at_unix_ms: 1_752_147_201_000,

@@ -684,7 +684,7 @@ impl InstanceConfig {
             return Err("fixture_device_fields_forbidden");
         }
         let configured = self.fixture_backend.ok_or("fixture_backend_missing")?;
-        if self.alias.trim().is_empty()
+        if actingcommand_contract::validate_instance_alias(&self.alias).is_err()
             || configured.frames.is_empty()
             || configured.frames.len() > MAX_FIXTURE_FRAMES
             || configured.max_inputs > MAX_FIXTURE_INPUTS
@@ -2395,7 +2395,8 @@ mod tests {
                 }
             ]
         });
-        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        let config =
+            serde_json::from_value::<ActingdConfigFile>(value.clone()).expect("typed config");
         let assembly = config.assemble().expect("mixed registry assembly");
         assert_eq!(
             assembly.registry.mode_for_alias("neutral.device"),
@@ -2406,6 +2407,39 @@ mod tests {
             Some(ScheduledExecutionMode::FixtureSimulation)
         );
         assert_eq!(assembly.registry.instance_aliases().len(), 2);
+        for alias in [
+            "Neutral.Device".to_owned(),
+            " Device Ω ".to_owned(),
+            "é".repeat(128),
+            " ".to_owned(),
+        ] {
+            let mut changed = value.clone();
+            changed["instances"][0]["alias"] = json!(alias);
+            changed["instances"][1]["alias"] = json!(" Fixture Ω ");
+            let assembly = serde_json::from_value::<ActingdConfigFile>(changed)
+                .expect("alias config")
+                .assemble()
+                .expect("registered aliases");
+            assert_eq!(
+                assembly.registry.mode_for_alias(&alias),
+                Some(ScheduledExecutionMode::DeviceRegistry)
+            );
+            assert_eq!(
+                assembly.registry.resolve(&alias).unwrap().instance_id(),
+                *device_id.transport()
+            );
+            assert_eq!(
+                assembly.registry.mode_for_alias(" Fixture Ω "),
+                Some(ScheduledExecutionMode::FixtureSimulation)
+            );
+            assert!(assembly.registry.resolve(" fixture Ω ").is_none());
+            assert!(
+                assembly
+                    .registry
+                    .mode_for_alias("unknown.instance")
+                    .is_none()
+            );
+        }
     }
 
     #[test]

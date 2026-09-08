@@ -7,6 +7,12 @@ versions, mixed versions, unknown fields, duplicate keys, dangling event IDs and
 invalid ranges reject the complete catalog. The schemas in this directory define
 V2; the sibling V1 schemas retain their own contract and serialized identity.
 
+Instance scope and override `instance_id` fields use the exact registered alias,
+as in V1: 1–256 UTF-8 bytes without Unicode control characters. Case, permitted
+whitespace and Unicode are preserved. JSON Schema bounds character length and
+the shared contract/compiler enforces the UTF-8 byte bound. Other identifiers,
+references and the Runtime's typed `InstanceId` retain their existing rules.
+
 Every V2 timeline event requires `validity` with `from_unix_ms` and
 `until_unix_ms`. Both timestamps use Unix milliseconds; the lower bound is
 inclusive and the upper bound exclusive. An explicit null upper bound means

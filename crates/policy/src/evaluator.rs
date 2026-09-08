@@ -184,7 +184,7 @@ pub fn inspect_timeline(
     context: &TimelineQueryContext,
     event_ids: &[String],
 ) -> PolicyEvaluationResult<TimelineInspection> {
-    validate_id("instance id", &context.instance_id)?;
+    validate_instance_alias(&context.instance_id)?;
     validate_id("server id", &context.server_id)?;
     validate_id("game id", &context.game_id)?;
     validate_count("event ids", event_ids.len(), crate::MAX_TIMELINE_EVENTS)?;
@@ -2329,7 +2329,7 @@ fn validate_inputs(
 
     let mut instance_ids = BTreeSet::new();
     for instance in &facts.instances {
-        validate_id("instance id", &instance.instance_id)?;
+        validate_instance_alias(&instance.instance_id)?;
         validate_id("instance server id", &instance.server_id)?;
         validate_id("instance game id", &instance.game_id)?;
         validate_id("instance host id", &instance.host_id)?;
@@ -2386,7 +2386,7 @@ fn validate_inputs(
     let mut outcome_keys = BTreeSet::new();
     for outcome in &facts.outcomes {
         validate_id("outcome task id", &outcome.task_id)?;
-        validate_id("outcome instance id", &outcome.instance_id)?;
+        validate_instance_alias(&outcome.instance_id)?;
         validate_id("outcome key", &outcome.outcome_key)?;
         if !task_ids.contains(outcome.task_id.as_str()) {
             return Err(PolicyEvaluationError::invalid(format!(
@@ -2416,7 +2416,7 @@ fn validate_inputs(
     let mut state_ids = BTreeSet::new();
     for state in &facts.tasks {
         validate_id("task state id", &state.task_id)?;
-        validate_id("task state instance id", &state.instance_id)?;
+        validate_instance_alias(&state.instance_id)?;
         if !task_ids.contains(state.task_id.as_str()) {
             return Err(PolicyEvaluationError::invalid(format!(
                 "task state references unknown task '{}'",
@@ -2510,7 +2510,7 @@ fn validate_input_scope(
 ) -> PolicyEvaluationResult<()> {
     match scope {
         ScopeSelector::Instance { instance_id } => {
-            validate_id(&format!("{label} instance id"), instance_id)?;
+            validate_instance_alias(instance_id)?;
             if !instance_ids.contains(instance_id.as_str()) {
                 return Err(PolicyEvaluationError::invalid(format!(
                     "{label} scope references unknown instance '{instance_id}'"
@@ -2566,6 +2566,14 @@ fn validate_id(label: &str, value: &str) -> PolicyEvaluationResult<()> {
         )));
     }
     Ok(())
+}
+
+fn validate_instance_alias(value: &str) -> PolicyEvaluationResult<()> {
+    actingcommand_contract::validate_instance_alias(value).map_err(|_| {
+        PolicyEvaluationError::invalid(
+            "instance alias must contain 1 to 256 UTF-8 bytes without control characters",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -3389,6 +3397,49 @@ mod tests {
         let instance_b = decision_for(&result, "fixture.observe", "fixture-instance-b");
         assert_eq!(instance_a.state, SchedulingDecisionState::Eligible);
         assert_eq!(instance_b.state, SchedulingDecisionState::Selected);
+        for alias in [
+            "Neutral.Instance".to_owned(),
+            format!(" {} ", "é".repeat(127)),
+            " ".to_owned(),
+        ] {
+            let mut aliased = facts.clone();
+            aliased.instances[1].instance_id = alias.clone();
+            aliased.outcomes[1].instance_id = alias.clone();
+            aliased.tasks.push(TaskRuntimeSnapshot {
+                task_id: "fixture.observe".to_owned(),
+                instance_id: alias.clone(),
+                last_dispatched_unix_ms: None,
+                eligible_since_unix_ms: None,
+                terminal_state: None,
+            });
+            let result = evaluate(
+                &catalog,
+                &aliased,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                9,
+            )
+            .expect("registered alias evaluation");
+            assert_eq!(result.dispatch_intents.len(), 1);
+            assert_eq!(result.dispatch_intents[0].instance_id, alias);
+            aliased.instances[1].instance_id.push('\n');
+            assert!(
+                evaluate(
+                    &catalog,
+                    &aliased,
+                    &base_resources(),
+                    EvaluationTime {
+                        unix_ms: NOW,
+                        monotonic_ms: NOW
+                    },
+                    9
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

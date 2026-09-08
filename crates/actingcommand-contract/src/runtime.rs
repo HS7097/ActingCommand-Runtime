@@ -3812,8 +3812,15 @@ const fn terminal_event_type(outcome: TaskOutcome) -> EventType {
     }
 }
 
-fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
-    validate_bounded_text(value, MAX_INSTANCE_ALIAS_BYTES, "invalid_instance_alias")
+/// Validates a registered instance alias without changing its UTF-8 bytes.
+pub fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
+    if value.is_empty()
+        || value.len() > MAX_INSTANCE_ALIAS_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(RuntimeContractError::new("invalid_instance_alias"));
+    }
+    Ok(())
 }
 
 fn validate_bounded_text(

@@ -245,10 +245,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
 }
 
 fn validate_alias(alias: &str) -> RuntimeHostResult<()> {
-    if alias.is_empty()
-        || alias.len() > MAX_INSTANCE_ALIAS_BYTES
-        || alias.chars().any(char::is_control)
-    {
+    if actingcommand_contract::validate_instance_alias(alias).is_err() {
         return Err(RuntimeHostError::fatal(
             "invalid_instance_alias",
             "build_execution_backend_registry",
