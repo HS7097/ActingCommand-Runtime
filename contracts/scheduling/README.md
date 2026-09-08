@@ -136,6 +136,15 @@ V1 persistent scheduling state is single-host, local-filesystem state. Catalog g
 
 Cross-run decisions are reevaluated by the scheduler after each outcome. A bounded rule table may make mechanical choices inside one run, but it cannot call back into the scheduler for mutable external state. External state required by a run must be pinned into dispatch parameters and its reason chain before admission.
 
+Scheduled contained admission carries the validated, package-bound task request
+into the existing lease acquisition. Its TTL uses the request's response budget
+plus the same heartbeat/closure reserve as direct task execution, with the
+Scheduler's existing maximum and checked arithmetic. The declared task timeout,
+request deadline, lease boundary and execution permissions still constrain the
+run. Lease expiry and the effective task deadline retain their typed ledger
+records. Planning duration remains a reservation estimate; actual runtime usage
+is recorded by the existing completion/failure owner.
+
 For a scheduled contained task, an empty catalog outcome-reference set means
 there is no scheduling-result consumer. The package may declare and produce its
 own valid outcomes; its actual final page, designated effect and terminal
