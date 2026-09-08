@@ -13165,28 +13165,71 @@ impl HostShared {
                         action_for_worker,
                         registration,
                     ) {
-                    Ok(selection) => CriticalActionReport::Succeeded {
-                        value: selection,
-                        effect: success_effect,
-                    },
-                    Err(error) => CriticalActionReport::Failed {
-                        error: match self.finish_input_failure(
-                            error,
-                            token,
-                            connection_id,
-                            close_links,
-                        ) {
-                            Ok(error) => {
-                                let mut failure = ActionFailure::backend(
-                                    RuntimeHostError::execution("execute_input_backend", &error),
-                                );
-                                failure.destructive_started = false;
-                                failure
-                            }
-                            Err(error) => ActionFailure::poison(error),
-                        },
-                        effect: backend_failure_effect,
-                    },
+                    Ok(outcome) => {
+                        if let Some(recovery) = outcome.recovery
+                            && let Err(error) = self.append_event_raw(
+                                EventSeverity::Warning,
+                                EventSource::Runtime,
+                                OriginModule::Runtime,
+                                EventActor::Runtime,
+                                lifecycle_links.clone(),
+                                RuntimePayloadDraft::adb_target_recovery(
+                                    self.owner_epoch,
+                                    recovery,
+                                ),
+                            )
+                        {
+                            return CriticalActionReport::Failed {
+                                error: ActionFailure::poison(error),
+                                effect: backend_failure_effect,
+                            };
+                        }
+                        CriticalActionReport::Succeeded {
+                            value: outcome.selection,
+                            effect: success_effect,
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(recovery) =
+                            error.adb_recovery().filter(|report| report.recovered)
+                            && let Err(failure) = self.append_event_raw(
+                                EventSeverity::Warning,
+                                EventSource::Runtime,
+                                OriginModule::Runtime,
+                                EventActor::Runtime,
+                                lifecycle_links.clone(),
+                                RuntimePayloadDraft::adb_target_recovery(
+                                    self.owner_epoch,
+                                    recovery.clone(),
+                                ),
+                            )
+                        {
+                            return CriticalActionReport::Failed {
+                                error: ActionFailure::poison(failure),
+                                effect: backend_failure_effect,
+                            };
+                        }
+                        CriticalActionReport::Failed {
+                            error: match self.finish_input_failure(
+                                error,
+                                token,
+                                connection_id,
+                                close_links,
+                            ) {
+                                Ok(error) => {
+                                    let mut failure =
+                                        ActionFailure::backend(RuntimeHostError::execution(
+                                            "execute_input_backend",
+                                            &error,
+                                        ));
+                                    failure.destructive_started = false;
+                                    failure
+                                }
+                                Err(error) => ActionFailure::poison(error),
+                            },
+                            effect: backend_failure_effect,
+                        }
+                    }
                 }
             },
             |_, effect| {
@@ -15143,6 +15186,9 @@ impl HostShared {
             .with_entered_event_id(reference)
             .with_instance_id(host_error.and_then(|error| error.lifecycle.instance_id))
             .with_primary_detail(host_error.and_then(|error| error.diagnostic_detail().cloned()))
+            .with_adb_recovery(
+                host_error.and_then(|error| error.lifecycle.adb_recovery.as_deref().cloned()),
+            )
             .with_native_detail(
                 host_error.and_then(|error| error.lifecycle.native_detail.as_deref().cloned()),
             )

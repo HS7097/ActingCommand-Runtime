@@ -15,6 +15,11 @@ use std::process::ExitStatus;
 use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+mod recovery;
+pub use recovery::{
+    AdbCommandEvidence, AdbRecoveryPath, AdbRecoveryPhase, AdbRecoveryStep, AdbRecoveryText,
+    AdbTargetRecovery, AdbTransportState, MAX_ADB_RECOVERY_STEPS, MAX_ADB_RECOVERY_TEXT_BYTES,
+};
 
 pub const ACTINGCOMMAND_ADB_PATH_ENV: &str = "ACTINGCOMMAND_ADB_PATH";
 pub const ACTINGCOMMAND_NEMU_FOLDER_ENV: &str = "ACTINGCOMMAND_NEMU_FOLDER";
@@ -379,13 +384,24 @@ pub fn run_text_with_timeout(
             stderr_lossy_decode: stderr.lossy,
         });
     }
+    let evidence = recovery::command_evidence(
+        &CommandOutput {
+            stdout: stdout.text.clone(),
+            stderr: stderr.text.clone(),
+            stdout_lossy_decode: stdout.lossy,
+            stderr_lossy_decode: stderr.lossy,
+        },
+        false,
+        output.status.code(),
+    );
     Err(DeviceError::fatal(format!(
         "adb {} failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         args.join(" "),
         output.status,
         stdout = stdout.diagnostic_text(),
         stderr = stderr.diagnostic_text()
-    )))
+    ))
+    .with_adb_command(evidence))
 }
 
 pub fn run_binary_with_timeout(
@@ -851,6 +867,156 @@ mod tests {
         let diagnostic = error.diagnostic().expect("device state diagnostic");
         assert_eq!(diagnostic.category(), DeviceErrorCategory::Native);
         assert_eq!(diagnostic.stage(), "adb.ensure_device.get_state");
+
+        // Workflow #284 ADB-TARGET-RECOVERY-v1, B13 preserved native first red.
+        // Reuse the owner's command seam; no external process or device is used.
+        for mode in 0..12 {
+            let serial = "127.0.0.1:5555";
+            let mut calls = Vec::new();
+            let mut states = 0;
+            let mut connects = 0;
+            let result =
+                recovery::ensure_input_device_with_commands(
+                    serial,
+                    Duration::from_secs(12),
+                    |args, remaining| {
+                        assert!(remaining > Duration::ZERO && remaining <= Duration::from_secs(12));
+                        calls.push(
+                            args.iter()
+                                .map(|value| (*value).to_owned())
+                                .collect::<Vec<_>>(),
+                        );
+                        let output = |stdout: &str, stderr: &str| CommandOutput {
+                            stdout: stdout.to_owned(),
+                            stderr: stderr.to_owned(),
+                            stdout_lossy_decode: false,
+                            stderr_lossy_decode: false,
+                        };
+                        if args == ["connect", serial] {
+                            connects += 1;
+                            if (mode == 8 && connects == 2) || mode == 9 {
+                                return Err(DeviceError::fatal("preserved connect failure"));
+                            }
+                            return Ok(output("already connected to configured endpoint", ""));
+                        }
+                        if args == ["disconnect", serial] {
+                            if mode == 7 {
+                                return Err(DeviceError::fatal("preserved disconnect failure"));
+                            }
+                            return Ok(output("disconnected configured endpoint", ""));
+                        }
+                        assert_eq!(args, ["-s", serial, "get-state"]);
+                        states += 1;
+                        if mode == 0
+                            || (mode == 1 && states == 2)
+                            || (mode == 2 && states == 3)
+                            || (mode == 3 && states == 4)
+                            || (mode == 10 && states == 3)
+                        {
+                            return Ok(output("device\r\n", ""));
+                        }
+                        if mode == 6 || (mode == 10 && states == 1) {
+                            return Err(DeviceError::fatal("unknown command failure"));
+                        }
+                        let stderr = if mode == 5 || (mode == 11 && states == 1) {
+                            "error: device unauthorized.\nSee device authorization"
+                        } else {
+                            "error: device offline\r\n"
+                        };
+                        let response = output("", stderr);
+                        Err(DeviceError::fatal(stderr).with_adb_command(
+                            recovery::command_evidence(&response, false, Some(1)),
+                        ))
+                    },
+                );
+            let disconnects = calls
+                .iter()
+                .filter(|args| args.first().is_some_and(|arg| arg == "disconnect"))
+                .count();
+            assert_eq!(disconnects, usize::from(matches!(mode, 2..=4 | 7 | 8 | 10)));
+            assert!(calls.len() <= MAX_ADB_RECOVERY_STEPS);
+            assert_eq!(result.is_ok(), mode <= 3 || mode == 10);
+            if mode == 0 {
+                assert_eq!(calls.len(), 1);
+                assert!(result.unwrap().recovery.is_none());
+                continue;
+            }
+            let report = match result {
+                Ok(ready) => {
+                    assert_eq!(ready.state, "device");
+                    ready
+                        .recovery
+                        .expect("successful recovery must carry a warning")
+                }
+                Err(error) => {
+                    assert!(error.message().contains(if mode == 5 {
+                        "unauthorized"
+                    } else if mode == 6 {
+                        "unknown command failure"
+                    } else {
+                        "offline"
+                    }));
+                    error
+                        .adb_recovery()
+                        .expect("failed recovery context")
+                        .clone()
+                }
+            };
+            assert_eq!(report.endpoint.text, serial);
+            assert_eq!(report.steps.len(), calls.len());
+            assert_eq!(report.recovered, mode <= 3 || mode == 10);
+            assert!(!report.initial_error.text.is_empty());
+            assert_eq!(report.dropped_count, 0);
+            if mode != 9 {
+                assert!(
+                    report.steps[1]
+                        .command
+                        .as_ref()
+                        .unwrap()
+                        .stdout
+                        .text
+                        .contains("already connected")
+                );
+            }
+            if mode == 4 {
+                assert_eq!(report.final_state, AdbTransportState::Offline);
+                assert_eq!(states, 4);
+            }
+            if mode == 7 || mode == 8 {
+                assert_eq!(states, 2);
+            }
+        }
+        for serial in [
+            "emulator-5554",
+            "usb-device",
+            "",
+            ":5555",
+            "host:0",
+            "-host:5555",
+            "host:+5555",
+            "host:65536",
+        ] {
+            assert!(!recovery::is_tcp_endpoint(serial));
+        }
+        assert!(recovery::is_tcp_endpoint("127.0.0.1:5555"));
+        assert!(recovery::is_tcp_endpoint("[::1]:5555"));
+        let inert = Adb::new(AdbConfig::default());
+        for (serial, connect) in [("127.0.0.1:5555", false), ("usb-device", true)] {
+            let error = inert
+                .ensure_input_device(serial, connect)
+                .err()
+                .expect("inert config");
+            assert!(
+                error.adb_recovery().is_none(),
+                "generic connect does not enable target recovery"
+            );
+        }
+        let expired = recovery::ensure_input_device_with_commands(
+            "127.0.0.1:5555",
+            Duration::ZERO,
+            |_, _| panic!("expired deadline cannot execute a command"),
+        );
+        assert!(expired.is_err());
     }
 
     #[test]

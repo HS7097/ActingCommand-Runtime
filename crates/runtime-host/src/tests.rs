@@ -313,6 +313,7 @@ impl RuntimeClock for ManualRuntimeClock {
 
 #[derive(Default)]
 struct FakeState {
+    adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
     open_count: AtomicUsize,
@@ -565,6 +566,13 @@ impl FakeBackend {
 }
 
 impl InputBackend for FakeBackend {
+    fn take_adb_recovery(&mut self) -> Option<actingcommand_device::AdbTargetRecovery> {
+        self.state
+            .adb_recovery
+            .lock()
+            .expect("input recovery")
+            .take()
+    }
     fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
         self.state
             .input_selection
@@ -15382,8 +15390,36 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
 
 #[test]
 fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
+    use actingcommand_device::{
+        AdbRecoveryPath, AdbRecoveryPhase, AdbRecoveryStep, AdbRecoveryText, AdbTargetRecovery,
+        AdbTransportState,
+    };
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    // Workflow #284 ADB-TARGET-RECOVERY-v1: retain the open warning across the
+    // existing real RuntimeClient/Kernel/Host path, including cached requests.
+    *state.adb_recovery.lock().unwrap() = Some(AdbTargetRecovery {
+        endpoint: AdbRecoveryText {
+            text: "private-target:5555".into(),
+            truncated: false,
+        },
+        initial_error: AdbRecoveryText {
+            text: "original device offline".into(),
+            truncated: false,
+        },
+        path: AdbRecoveryPath::TargetDisconnectConnect,
+        budget_ms: 12000,
+        steps: vec![AdbRecoveryStep {
+            phase: AdbRecoveryPhase::Verify,
+            attempt: 1,
+            elapsed_ms: 1,
+            command: None,
+            error: None,
+        }],
+        final_state: AdbTransportState::Device,
+        recovered: true,
+        dropped_count: 0,
+    });
     let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let health = client.request(RuntimeOperation::Health);
@@ -15459,6 +15495,33 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let (text_request, text_receipt) = text_request.expect("text request");
     assert_eq!(client.send(&text_request), text_receipt);
     assert_eq!(state.input_count.load(Ordering::Acquire), 6);
+    let recovery_events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("native recovery facts");
+    let recovery_events = recovery_events.iter().filter(|event| {
+        matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(value))
+            if value.adb_recovery().is_some())
+    }).collect::<Vec<_>>();
+    assert_eq!(
+        recovery_events.len(),
+        1,
+        "one open warning, no repetition on later input or replay"
+    );
+    let warning = recovery_events[0];
+    assert_eq!(warning.severity(), EventSeverity::Warning);
+    assert_eq!(warning.sensitivity(), Sensitivity::Sensitive);
+    assert_eq!(
+        warning.links().instance_id().copied(),
+        Some(token.instance_id())
+    );
+    assert_eq!(warning.links().lease_id().copied(), Some(token.lease_id()));
+    let wire = serde_json::to_string(warning.payload()).expect("stored recovery");
+    assert!(wire.contains("original device offline"));
+    assert!(wire.contains("target_disconnect_connect"));
+    let public =
+        serde_json::to_string(&warning.payload().public_projection()).expect("public warning");
+    assert!(!public.contains("private-target"));
+    assert!(!public.contains("original device offline"));
 
     let query = client.request(RuntimeOperation::QueryEvents {
         query: EventQuery {
@@ -16980,7 +17043,35 @@ fn input_failure_persists_adb_bounds_context() {
 
 #[test]
 fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
+    use actingcommand_device::{
+        AdbRecoveryPath, AdbRecoveryPhase, AdbRecoveryStep, AdbRecoveryText, AdbTargetRecovery,
+        AdbTransportState,
+    };
+    // Workflow #284: transport recovery remains visible if the subsequent action fails.
+    let recovery = AdbTargetRecovery {
+        endpoint: AdbRecoveryText {
+            text: "private-recovery-target:5555".into(),
+            truncated: false,
+        },
+        initial_error: AdbRecoveryText {
+            text: "preserved original offline error".into(),
+            truncated: false,
+        },
+        path: AdbRecoveryPath::TargetDisconnectConnect,
+        budget_ms: 12000,
+        steps: vec![AdbRecoveryStep {
+            phase: AdbRecoveryPhase::Verify,
+            attempt: 1,
+            elapsed_ms: 1,
+            command: None,
+            error: None,
+        }],
+        final_state: AdbTransportState::Device,
+        recovered: true,
+        dropped_count: 0,
+    };
     let transport_state = Arc::new(FakeState::default());
+    *transport_state.adb_recovery.lock().unwrap() = Some(recovery.clone());
     transport_state.fail_input.store(true, Ordering::Release);
     let kernel = ExecutionKernel::new(Arc::new(FakeProvider::one(
         "node.a",
@@ -17000,6 +17091,11 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.message(), "injected backend failure");
     assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
     let runtime_error = RuntimeHostError::execution("execute_input_backend", &kernel_error);
+    assert!(kernel_error.adb_recovery().is_some());
+    assert_eq!(
+        runtime_error.lifecycle.adb_recovery.as_deref(),
+        kernel_error.adb_recovery()
+    );
     assert_eq!(runtime_error.diagnostic_detail(), Some(detail));
     assert!(
         !format!("{kernel_error:?} {kernel_error} {runtime_error:?} {runtime_error}")
@@ -17019,6 +17115,7 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_input.store(true, Ordering::Release);
+    *state.adb_recovery.lock().unwrap() = Some(recovery);
     let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let (_, token) = client.acquire("node.a");
@@ -17045,6 +17142,19 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     let public_receipt = serde_json::to_string(&receipt).expect("public receipt JSON");
     assert!(!public_receipt.contains("injected backend failure"));
     assert!(!format!("{receipt:?}").contains("injected backend failure"));
+    let native = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("native warning");
+    let warnings = native.iter().filter(|event| {
+        matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(value))
+            if value.adb_recovery().is_some())
+    }).collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].severity(), EventSeverity::Warning);
+    let full = serde_json::to_string(warnings[0].payload()).unwrap();
+    assert!(full.contains("preserved original offline error"));
+    let public = serde_json::to_string(&warnings[0].payload().public_projection()).unwrap();
+    assert!(!public.contains("private-recovery-target"));
     let events = projected_events(
         &mut client,
         EventQuery {

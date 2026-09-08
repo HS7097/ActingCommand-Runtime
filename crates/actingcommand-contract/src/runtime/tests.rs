@@ -162,6 +162,33 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     let epoch = *ids.mint_owner_epoch().expect("epoch").transport();
     let instance = *ids.mint_instance_id().expect("instance").transport();
     let entered = *ids.mint_event_id().expect("entered").transport();
+    let recovery = crate::AdbTargetRecovery {
+        endpoint: LifecycleNativeDetail::new("private-endpoint:5555", false),
+        initial_error: LifecycleNativeDetail::new("preserved device offline", false),
+        path: crate::AdbRecoveryPath::TargetDisconnectConnect,
+        budget_ms: 12000,
+        steps: vec![crate::AdbRecoveryStep {
+            phase: crate::AdbRecoveryPhase::Verify,
+            attempt: 2,
+            elapsed_ms: 200,
+            command: Some(crate::AdbCommandEvidence {
+                succeeded: false,
+                exit_code: Some(1),
+                stdout: None,
+                stderr: Some(LifecycleNativeDetail::new("error: device offline", false)),
+                stdout_lossy_decode: false,
+                stderr_lossy_decode: false,
+                state: crate::AdbTransportState::Offline,
+            }),
+            error: Some(LifecycleNativeDetail::new(
+                "original verification failure",
+                false,
+            )),
+        }],
+        final_state: crate::AdbTransportState::Offline,
+        recovered: false,
+        dropped_count: 0,
+    };
     let detail = DiagnosticDetailDraft::new(
         "native",
         "runtime.lifecycle.close",
@@ -180,6 +207,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
     .with_instance_id(Some(instance))
     .with_entered_event_id(Some(entered))
+    .with_adb_recovery(Some(recovery.clone()))
     .with_primary_detail(Some(detail.clone()))
     .with_cleanup_cause(Some(CleanupCauseDraft::new(
         "input_backend_close_failed",
@@ -237,6 +265,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         panic!("runtime failed");
     };
     let record = outcome.lifecycle_failure().expect("lifecycle metadata");
+    assert_eq!(record.adb_recovery(), Some(&recovery));
     assert_eq!(record.owner_epoch(), epoch);
     assert_eq!(record.instance_id(), Some(instance));
     assert_eq!(record.entered_event_id(), Some(entered));
@@ -251,6 +280,9 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     assert!(full.contains("original primary detail"));
     assert!(!public.contains("private"));
     assert!(!public.contains("original primary detail"));
+    assert!(full.contains("preserved device offline"));
+    assert!(!public.contains("preserved device offline"));
+    assert!(!public.contains("private-endpoint"));
     assert!(public.contains("reset"));
     assert!(public.contains("close_execution_kernel"));
     let forged = wire.replace(
@@ -259,6 +291,9 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     );
     let forged: EventPayload = serde_json::from_str(&forged).expect("syntactic forged record");
     assert!(forged.validate().is_err());
+    let mut overflow = recovery.clone();
+    overflow.steps.resize(8, recovery.steps[0].clone());
+    assert!(overflow.validate().is_err());
     for invalid in [
         "x".repeat(1025),
         "token=private".to_owned(),

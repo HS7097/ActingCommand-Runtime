@@ -7,7 +7,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
     DeviceResult, DeviceTarget, InputBackend, TouchBackendChoice, TouchBackendConfig,
-    create_capture_backend, create_touch_backend,
+    create_capture_backend, create_touch_backend_for_fenced_input,
 };
 pub use actingcommand_execution_kernel::{
     ExecutionBackendProvider, RecognitionVisionProvider, ResolvedExecutionInstance,
@@ -198,7 +198,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
-        create_touch_backend(entry.input.clone())
+        create_touch_backend_for_fenced_input(entry.input.clone())
             .map(|backend| Box::new(backend) as Box<dyn InputBackend>)
     }
 

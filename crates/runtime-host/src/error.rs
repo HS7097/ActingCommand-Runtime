@@ -24,6 +24,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
@@ -146,6 +147,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                adb_recovery: error.adb_recovery().cloned().map(Box::new),
                 incomplete_device_diagnostic_summary: None,
                 diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
                 cleanup_cause: error.cleanup_cause().cloned().map(Box::new),
