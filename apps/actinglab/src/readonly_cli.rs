@@ -14,6 +14,39 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+pub(super) fn run_recognize_artifact(args: &[String]) -> CliOutcome<Value> {
+    use actingcommand_contract::{EventActor, EventSource, SavedArtifactOcrRequest};
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+    use std::io::Read;
+    let flags = FlagArgs::parse(args)?;
+    let path = flags.required_path("--request")?;
+    let file = std::fs::File::open(&path)
+        .map_err(|error| CliError::usage(format!("cannot read recognition request: {error}")))?;
+    let mut bytes = Vec::new();
+    file.take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|error| CliError::usage(format!("cannot read recognition request: {error}")))?;
+    if bytes.len() > 65_536 {
+        return Err(CliError::usage("recognition request exceeds 65536 bytes"));
+    }
+    let request: SavedArtifactOcrRequest = serde_json::from_slice(&bytes)
+        .map_err(|error| CliError::usage(format!("invalid recognition request: {error}")))?;
+    request
+        .validate()
+        .map_err(|error| CliError::usage(error.to_string()))?;
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        super::runtime_state_root()?,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .map_err(|error| CliError::device(error.to_string()))?;
+    serialize_response(
+        client
+            .recognize_artifact(request)
+            .map_err(|error| CliError::device(error.to_string()))?,
+    )
+}
+
 pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;

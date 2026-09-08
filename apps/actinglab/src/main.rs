@@ -299,6 +299,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "detect" => env_detection::run_detect(&invocation.global, &invocation.args),
         [cmd] if cmd == "detect-page" => run_detect_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "recognize" => run_recognize(&invocation.global, &invocation.args),
+        [cmd] if cmd == "recognize-artifact" => {
+            readonly_cli::run_recognize_artifact(&invocation.args)
+        }
         [cmd] if cmd == "observe" => lab2_cli::run_observe(&invocation.global, &invocation.args),
         [cmd] if cmd == "do" => lab2_cli::run_do(&invocation.global, &invocation.args),
         [cmd] if cmd == "ensure" => lab2_cli::run_ensure(&invocation.global, &invocation.args),

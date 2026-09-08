@@ -19,17 +19,26 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct GlobalLedgerReadOnlyConfig {
     root: PathBuf,
+    budget: Option<(u64, usize, Instant)>,
 }
 
 impl GlobalLedgerReadOnlyConfig {
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
+            budget: None,
         }
+    }
+
+    /// Bounds an owner request without changing the ordinary forensic reader.
+    pub fn with_budget(mut self, bytes: u64, events: usize, deadline: Instant) -> Self {
+        self.budget = Some((bytes, events, deadline));
+        self
     }
 }
 
@@ -218,7 +227,8 @@ impl GlobalLedgerReadOnly {
 
         let segments = list_segments(&root.join("segments"))?;
         let listed_through_segment = segments.last().map(|(index, _)| *index);
-        let (segment_snapshots, mut storage_snapshot) = read_segment_snapshots(&segments)?;
+        let (segment_snapshots, mut storage_snapshot) =
+            read_segment_snapshots(&segments, config.budget)?;
         let writer_metadata = read_writer_metadata(&root)?;
         let repairs = RepairJournal::load(&root)?
             .snapshots()
@@ -240,12 +250,14 @@ impl GlobalLedgerReadOnly {
         let mut next_sequence = 1_u64;
         let mut corrupt_tail = None;
         for snapshot in &segment_snapshots {
+            check_read_budget(config.budget, storage_snapshot.read_bytes, events.len())?;
             if let Some(corruption) = scan_segment(
                 snapshot,
                 &mut next_sequence,
                 &mut event_ids,
                 &mut events,
                 &mut verify_artifact,
+                config.budget,
             )? {
                 storage_snapshot.verified_prefix_bytes = storage_snapshot
                     .verified_prefix_bytes
@@ -340,6 +352,7 @@ struct ReadOnlySegmentSnapshot {
 
 fn read_segment_snapshots(
     segments: &[(u64, PathBuf)],
+    budget: Option<(u64, usize, Instant)>,
 ) -> GlobalLedgerResult<(Vec<ReadOnlySegmentSnapshot>, GlobalLedgerStorageSnapshot)> {
     let mut snapshots = Vec::with_capacity(segments.len());
     let mut storage = GlobalLedgerStorageSnapshot {
@@ -360,6 +373,13 @@ fn read_segment_snapshots(
             .metadata()
             .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_read_only_segment", &error))?
             .len();
+        let total = storage
+            .observed_bytes
+            .checked_add(byte_count)
+            .ok_or_else(|| {
+                GlobalLedgerError::fatal("ledger_snapshot_overflow", "bound_read_only_snapshot")
+            })?;
+        check_read_budget(budget, total, 0)?;
         let capacity = usize::try_from(byte_count)
             .map_err(|_| GlobalLedgerError::fatal("corrupt_segment", "bound_read_only_segment"))?;
         let mut bytes = Vec::with_capacity(capacity);
@@ -390,6 +410,22 @@ fn read_segment_snapshots(
         });
     }
     Ok((snapshots, storage))
+}
+
+fn check_read_budget(
+    budget: Option<(u64, usize, Instant)>,
+    bytes: u64,
+    events: usize,
+) -> GlobalLedgerResult<()> {
+    if budget.is_some_and(|(max_bytes, max_events, deadline)| {
+        bytes > max_bytes || events > max_events || Instant::now() >= deadline
+    }) {
+        return Err(GlobalLedgerError::request(
+            "ledger_read_budget_exceeded",
+            "read_only_snapshot",
+        ));
+    }
+    Ok(())
 }
 
 fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<GlobalLedgerWriterMetadataObservation> {
@@ -473,6 +509,7 @@ fn scan_segment<F>(
     event_ids: &mut BTreeSet<EventId>,
     events: &mut Vec<PersistedEvent>,
     verify_artifact: &mut F,
+    budget: Option<(u64, usize, Instant)>,
 ) -> GlobalLedgerResult<Option<GlobalLedgerCorruptTail>>
 where
     F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
@@ -480,6 +517,7 @@ where
     let complete_len = complete_record_len(&snapshot.bytes);
     let mut record_start = 0_usize;
     while record_start < complete_len {
+        check_read_budget(budget, 0, events.len().saturating_add(1))?;
         let newline = snapshot.bytes[record_start..complete_len]
             .iter()
             .position(|byte| *byte == b'\n')

@@ -444,6 +444,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("env status", ["offline"], "available"),
         command_cap("detect-page", ["device"], "available"),
         command_cap("recognize", ["device"], "available"),
+        command_cap("recognize-artifact", ["running_runtime"], "available"),
         command_cap(
             "operation dry-run",
             ["running_runtime", "device"],

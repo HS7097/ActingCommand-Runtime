@@ -705,7 +705,7 @@ impl SceneEvaluation<'_> {
         target_id: &str,
     ) -> RecognitionPackResult<OcrObservationEvaluation> {
         self.evaluator
-            .evaluate_ocr_observation_in_scene(self, target_id)
+            .evaluate_ocr_observation_in_scene(self, target_id, None)
     }
 
     fn ocr_region(
@@ -1052,10 +1052,24 @@ impl RecognitionEvaluator {
             .evaluate_ocr_observation(target_id)
     }
 
+    pub fn evaluate_ocr_observation_with_timeout(
+        &self,
+        scene: &Scene,
+        target_id: &str,
+        timeout_ms: u64,
+    ) -> RecognitionPackResult<OcrObservationEvaluation> {
+        self.evaluate_ocr_observation_in_scene(
+            &self.scene_context(scene),
+            target_id,
+            Some(timeout_ms),
+        )
+    }
+
     fn evaluate_ocr_observation_in_scene(
         &self,
         context: &SceneEvaluation<'_>,
         target_id: &str,
+        timeout_ms: Option<u64>,
     ) -> RecognitionPackResult<OcrObservationEvaluation> {
         let scene = context.scene;
         self.validate_coordinate_space(scene)?;
@@ -1065,6 +1079,12 @@ impl RecognitionEvaluator {
             )));
         };
         let (region, region_evidence) = context.ocr_region(target)?;
+        let timeout_ms = timeout_ms
+            .unwrap_or(target.timeout_ms)
+            .min(target.timeout_ms);
+        if timeout_ms == 0 {
+            return Err(RecognitionPackError::fatal("OCR request budget exhausted"));
+        }
         (|| {
             let provider = self.vision_provider.as_ref().ok_or_else(|| {
                 RecognitionPackError::fatal_with_code(
@@ -1080,7 +1100,7 @@ impl RecognitionEvaluator {
                     frame: provider_frame(scene),
                     region,
                     languages: &target.languages,
-                    timeout_ms: target.timeout_ms,
+                    timeout_ms,
                     model_ref: &target.model_ref,
                     model_sha256: &target.model_sha256,
                 })

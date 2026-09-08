@@ -999,6 +999,8 @@ impl ExecutionBackendProvider for FakeProvider {
 #[derive(Debug, Default)]
 struct FakeVisionProvider {
     ocr_calls: AtomicU64,
+    ocr_started: AtomicBool,
+    block_ocr: AtomicBool,
     ocr_failure_detail: Option<&'static str>,
     raw_evidence: bool,
     nn_calls: AtomicU64,
@@ -1044,6 +1046,17 @@ impl VisionProvider for FakeVisionProvider {
         request: OcrProviderRequest<'_>,
     ) -> Result<OcrProviderResult, VisionProviderError> {
         self.ocr_calls.fetch_add(1, Ordering::AcqRel);
+        self.ocr_started.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.block_ocr.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                return Err(VisionProviderError::new(
+                    VisionProviderErrorCode::Timeout,
+                    "fixture OCR gate exceeded deadline",
+                ));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
         if let Some(detail) = self.ocr_failure_detail {
             return Err(VisionProviderError::new(
                 VisionProviderErrorCode::Internal,
@@ -11660,6 +11673,225 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         ) -> Result<NnProviderResult, VisionProviderError> {
             self.0.classify(request)
         }
+    }
+
+    // Specification criterion: Workflow #269 SAVED-ARTIFACT-OCR-v1.
+    // One historical frame passes the native source owner and the same fields provider seam.
+    {
+        use actingcommand_contract::{
+            SavedArtifactOcrRequest, SavedArtifactOcrSource, TerminalEvent,
+        };
+        let original = TempDir::new().unwrap();
+        let source_host = RuntimeHost::start(
+            config(&original),
+            Arc::new(FakeProvider::one(
+                "node.a",
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .unwrap();
+        let source_client = RuntimeClient::connect(RuntimeClientConfig::new(
+            original.path(),
+            EventActor::Lab,
+            EventSource::Lab,
+        ))
+        .unwrap();
+        let flow = source_client.observe_readonly("node.a").unwrap();
+        let locate = |kind| {
+            flow.events()
+                .iter()
+                .find(|event| {
+                    event.event_type == kind
+                        && (kind == EventType::CaptureCompleted
+                            || event
+                                .artifacts
+                                .iter()
+                                .any(|artifact| artifact.kind == ArtifactKind::CaptureFrame))
+                })
+                .unwrap()
+        };
+        let created = locate(EventType::ArtifactCreated);
+        let verified = locate(EventType::ArtifactVerified);
+        let captured = locate(EventType::CaptureCompleted);
+        let reference = created.artifacts[0].clone();
+        let binding = SavedArtifactOcrSource {
+            state_root: original.path().to_str().unwrap().into(),
+            through_sequence: captured.sequence,
+            frame_id: reference.frame_id.unwrap(),
+            artifact: reference,
+            created: TerminalEvent {
+                sequence: created.sequence,
+                event_id: created.event_id,
+            },
+            verified: TerminalEvent {
+                sequence: verified.sequence,
+                event_id: verified.event_id,
+            },
+            captured: TerminalEvent {
+                sequence: captured.sequence,
+                event_id: captured.event_id,
+            },
+        };
+        drop(source_client);
+        source_host.close().unwrap();
+        let original_ledger =
+            fs::read(original.path().join("ledger/segments/segment-000001.jsonl")).unwrap();
+        let original_image =
+            fs::read(original.path().join(binding.artifact.object_key().unwrap())).unwrap();
+        let package = neutral_post_admission_ocr_contained_task_package();
+        let package_path = original.path().join("saved-ocr.zip");
+        fs::write(&package_path, &package).unwrap();
+        for mode in 0..7 {
+            let target = TempDir::new().unwrap();
+            let state = Arc::new(FakeState::default());
+            let vision = Arc::new(FakeVisionProvider {
+                ocr_failure_detail: (mode == 3).then_some("private-saved-ocr-failure"),
+                ..FakeVisionProvider::default()
+            });
+            vision.block_ocr.store(mode == 4, Ordering::Release);
+            let host = RuntimeHost::start(
+                config(&target),
+                Arc::new(
+                    FakeProvider::one("node.a", instance_id(), state.clone()).with_vision_provider(
+                        Arc::new(FieldEvidenceProvider(vision.clone(), None)),
+                    ),
+                ),
+            )
+            .unwrap();
+            let client = RuntimeClient::connect(RuntimeClientConfig::new(
+                target.path(),
+                EventActor::Lab,
+                EventSource::Lab,
+            ))
+            .unwrap();
+            let mut request = SavedArtifactOcrRequest {
+                source: binding.clone(),
+                package_path: package_path.to_str().unwrap().into(),
+                expected_sha256: format!("{:x}", Sha256::digest(&package)),
+                target_id: "fixture/ocr".into(),
+            };
+            if mode == 1 {
+                request.source.captured.event_id = request.source.created.event_id;
+            }
+            if mode == 2 {
+                request.source.artifact.created_at_unix_ms += 1;
+            }
+            if mode == 5 {
+                request.source.state_root = target.path().to_str().unwrap().into();
+            }
+            if mode == 6 {
+                request.source.through_sequence += 100_000;
+            }
+            let encoded = serde_json::to_vec(&request).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<SavedArtifactOcrRequest>(&encoded).unwrap(),
+                request
+            );
+            let operation = thread::spawn(move || client.recognize_artifact(request));
+            if mode == 4 {
+                let wait_until = Instant::now() + Duration::from_secs(3);
+                while !vision.ocr_started.load(Ordering::Acquire) && Instant::now() < wait_until {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                assert!(vision.ocr_started.load(Ordering::Acquire));
+                let (closed, receive) = mpsc::channel();
+                let close = thread::spawn(move || {
+                    let result = host.close();
+                    closed.send(()).unwrap();
+                    result
+                });
+                assert!(
+                    receive.recv_timeout(Duration::from_millis(30)).is_err(),
+                    "close waits for in-flight OCR"
+                );
+                vision.block_ocr.store(false, Ordering::Release);
+                operation.join().unwrap().unwrap();
+                close.join().unwrap().unwrap();
+            } else {
+                let result = operation.join().unwrap();
+                if mode == 0 {
+                    let receipt = result.unwrap();
+                    receipt.validate().unwrap();
+                    let RuntimeResult::ArtifactRecognized { result } = receipt.result().unwrap()
+                    else {
+                        panic!("saved OCR result missing")
+                    };
+                    assert_eq!(result.source, binding);
+                    assert!(result.artifact.run_id.is_none() && result.artifact.frame_id.is_none());
+                    let stored: Value = serde_json::from_slice(
+                        &actingcommand_artifact_store::read_projected_verified(
+                            target.path(),
+                            &result.artifact,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(stored["observation"]["raw_text"], "home");
+                    assert_eq!(stored["observation"]["text"], "home");
+                    assert_eq!(
+                        stored["observation"]["confidence"].as_f64().unwrap() as f32,
+                        0.99_f32
+                    );
+                    assert_eq!(stored["observation"]["blocks"], json!([]));
+                    assert_eq!(
+                        stored["observation"]["execution"]["provider_implementation"],
+                        "fixture-ocr"
+                    );
+                    assert_eq!(
+                        stored["source"]["artifact"]["sha256"],
+                        binding.artifact.sha256
+                    );
+                } else {
+                    assert!(result.is_err(), "source/provider failure is visible");
+                }
+                host.close().unwrap();
+            }
+            assert_eq!(
+                vision.ocr_calls.load(Ordering::Acquire),
+                u64::from(matches!(mode, 0 | 3 | 4))
+            );
+            assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+            assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+            let ledger = GlobalLedger::open_read_only(
+                actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(target.path().join("ledger")),
+                |reference| {
+                    actingcommand_artifact_store::verify_projected_read_only(
+                        target.path(),
+                        reference,
+                    )
+                    .ok()
+                },
+            )
+            .unwrap();
+            assert!(ledger.corrupt_tail().is_none());
+            assert!(ledger.events().iter().all(|event| !matches!(
+                event.event_type(),
+                EventType::CaptureRequested
+                    | EventType::LeaseGranted
+                    | EventType::InputIntent
+                    | EventType::InputCommitted
+                    | EventType::FactPublished
+                    | EventType::TaskRequested
+            )));
+            assert_eq!(
+                ledger
+                    .events()
+                    .iter()
+                    .filter(|event| event.event_type() == EventType::ArtifactVerified)
+                    .count(),
+                usize::from(mode == 0 || mode == 4)
+            );
+        }
+        assert_eq!(
+            fs::read(original.path().join("ledger/segments/segment-000001.jsonl")).unwrap(),
+            original_ledger
+        );
+        assert_eq!(
+            fs::read(original.path().join(binding.artifact.object_key().unwrap())).unwrap(),
+            original_image
+        );
     }
 
     let mut source = zip::ZipArchive::new(Cursor::new(

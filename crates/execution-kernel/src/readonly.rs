@@ -15,6 +15,42 @@ use std::fmt;
 
 pub type ReadonlyRecognitionResult<T> = Result<T, ReadonlyRecognitionError>;
 
+/// Reuses the production evaluator for a source already proved by the ledger owner.
+pub fn evaluate_saved_artifact_ocr(
+    bundle: &crate::ExternallyVerifiedBundle,
+    png: &[u8],
+    dimensions: (u32, u32),
+    target: &str,
+    deadline: std::time::Instant,
+) -> ReadonlyRecognitionResult<actingcommand_recognition_pack::OcrObservationEvaluation> {
+    let actual = actingcommand_device::capture::parse_png_dimensions(png)
+        .map_err(|error| ReadonlyRecognitionError::new(error.to_string()))?;
+    if actual != dimensions
+        || u64::from(actual.0)
+            .checked_mul(u64::from(actual.1))
+            .is_none_or(|pixels| pixels > 16 * 1024 * 1024)
+    {
+        return Err(ReadonlyRecognitionError::new(
+            "saved frame dimensions invalid",
+        ));
+    }
+    let scene =
+        Scene::from_png(png).map_err(|error| ReadonlyRecognitionError::new(error.to_string()))?;
+    let evaluator = bundle
+        .loaded_bundle()
+        .evaluator()
+        .ok_or_else(|| ReadonlyRecognitionError::new("contained OCR evaluator missing"))?;
+    let timeout_ms = u64::try_from(
+        deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis(),
+    )
+    .map_err(|error| ReadonlyRecognitionError::new(error.to_string()))?;
+    evaluator
+        .evaluate_ocr_observation_with_timeout(&scene, target, timeout_ms)
+        .map_err(|error| ReadonlyRecognitionError::new(error.to_string()))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadonlyRecognitionError {
     message: String,

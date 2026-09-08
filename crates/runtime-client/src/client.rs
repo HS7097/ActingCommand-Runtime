@@ -1015,6 +1015,26 @@ impl RuntimeClient {
         result
     }
 
+    pub fn recognize_artifact(
+        &self,
+        request: actingcommand_contract::SavedArtifactOcrRequest,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        let receipt = self.execute_receipt(
+            "recognize_artifact",
+            RuntimeOperation::RecognizeArtifact {
+                request: Box::new(request),
+            },
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ArtifactRecognized { .. })
+        ) {
+            return Err(self.unexpected_result("recognize_artifact"));
+        }
+        Ok(receipt)
+    }
+
     pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
         let correlation = self.issue_correlation("observe_readonly")?;
         let correlation_id = *correlation.transport();
@@ -4488,6 +4508,16 @@ pub(super) fn receipt_response_timeout(
     backend_open_timeout: Duration,
 ) -> RuntimeClientResult<Duration> {
     match operation {
+        RuntimeOperation::RecognizeArtifact { .. } => {
+            Duration::from_millis(actingcommand_contract::SAVED_ARTIFACT_OCR_DEADLINE_MS)
+                .checked_add(io_timeout)
+                .ok_or_else(|| {
+                    RuntimeClientError::fatal(
+                        "runtime_receipt_timeout_overflow",
+                        "recognize_artifact",
+                    )
+                })
+        }
         RuntimeOperation::AcquireLease { .. }
         | RuntimeOperation::ObserveReadonly { .. }
         | RuntimeOperation::ObserveContainedPage { .. } => Ok(backend_open_timeout),

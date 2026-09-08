@@ -39,6 +39,8 @@ mod lab_operation;
 pub use lab_operation::*;
 mod lab_operation_evidence;
 pub use lab_operation_evidence::*;
+mod saved_artifact_ocr;
+pub use saved_artifact_ocr::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
@@ -2346,6 +2348,9 @@ pub enum RuntimeOperation {
     ObserveReadonly {
         instance_alias: String,
     },
+    RecognizeArtifact {
+        request: Box<SavedArtifactOcrRequest>,
+    },
     ObserveContainedPage {
         instance_alias: String,
         request: ContainedObservationRequest,
@@ -2591,6 +2596,7 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 policy.validate()
             }
+            Self::RecognizeArtifact { request } => request.validate(),
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::CaptureSequence {
                 instance_alias,
@@ -2684,6 +2690,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
             Self::ObserveReadonly { .. } => "RuntimeOperation::ObserveReadonly(<redacted>)",
+            Self::RecognizeArtifact { .. } => "RuntimeOperation::RecognizeArtifact(<redacted>)",
             Self::ObserveContainedPage { .. } => {
                 "RuntimeOperation::ObserveContainedPage(<contained-resource>)"
             }
@@ -2827,6 +2834,7 @@ impl RuntimeRequest {
             self.operation,
             RuntimeOperation::RecordDebugEvent { .. }
                 | RuntimeOperation::RunContainedLabOperation { .. }
+                | RuntimeOperation::RecognizeArtifact { .. }
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
@@ -2914,6 +2922,10 @@ pub struct ValidatedRuntimeRequest<'a> {
 }
 
 impl ValidatedRuntimeRequest<'_> {
+    pub const fn request_id(&self) -> RequestId {
+        self.request.request_id
+    }
+
     pub fn event_links(
         &self,
         instance_id: Option<InstanceId>,
@@ -3268,6 +3280,9 @@ pub enum RuntimeResult {
     ReadonlyObservationCompleted {
         observation: ReadonlyObservation,
     },
+    ArtifactRecognized {
+        result: Box<SavedArtifactOcrResult>,
+    },
     ContainedPageObserved {
         observation: Box<ContainedPageObservation>,
     },
@@ -3557,6 +3572,18 @@ impl RuntimeReceipt {
             Some(
                 RuntimeResult::LeaseQueued { status } | RuntimeResult::LeasePending { status },
             ) => status.validate()?,
+            Some(RuntimeResult::ArtifactRecognized { result }) => {
+                result.validate()?;
+                if self.state != RuntimeReceiptState::Completed
+                    || self.terminal.is_none()
+                    || result.artifact.correlation_id != Some(self.correlation_id)
+                    || self
+                        .terminal
+                        .is_some_and(|end| end.sequence <= result.verified.sequence)
+                {
+                    return Err(RuntimeContractError::new("invalid_artifact_ocr_receipt"));
+                }
+            }
             Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
                 observation.validate()?
             }

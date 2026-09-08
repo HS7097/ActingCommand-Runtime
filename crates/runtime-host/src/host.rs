@@ -151,6 +151,7 @@ const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 mod device_diagnostic;
 mod lab_operation;
 mod online_observation;
+mod saved_artifact_ocr;
 mod signatures;
 mod task_diagnostic;
 
@@ -5869,6 +5870,9 @@ impl HostShared {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.observe_readonly(request, validated, instance_alias)
             }
+            RuntimeOperation::RecognizeArtifact {
+                request: recognition,
+            } => self.recognize_artifact(validated, recognition),
             RuntimeOperation::ObserveContainedPage {
                 instance_alias,
                 request: observation,

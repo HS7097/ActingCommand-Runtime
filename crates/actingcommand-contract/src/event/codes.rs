@@ -87,6 +87,7 @@ closed_code!(EventAction {
     RuntimeQuery => "runtime.query",
     RuntimeReadonlyAdmit => "runtime.readonly_admit",
     RuntimeReadonlyObserve => "runtime.readonly_observe",
+    RuntimeRecognizeArtifact => "runtime.recognize_artifact",
     RuntimeCaptureSequence => "runtime.capture_sequence",
     RuntimeTaskRun => "runtime.task_run",
     RuntimeDebugPackage => "runtime.debug_package",
