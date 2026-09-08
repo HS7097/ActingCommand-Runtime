@@ -2,6 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://actingcommand.local/contracts/scheduling/common.schema.json",
   "$defs": {
+    "instanceAlias": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "description": "Exact registered alias; case, whitespace and Unicode are preserved. The compiler enforces the 256 UTF-8 byte limit in addition to this character limit."
+    },
     "identifier": {
       "type": "string",
       "minLength": 1,
@@ -36,7 +43,7 @@
           "required": ["kind", "instance_id"],
           "properties": {
             "kind": { "const": "instance" },
-            "instance_id": { "$ref": "#/$defs/identifier" }
+            "instance_id": { "$ref": "#/$defs/instanceAlias" }
           },
           "additionalProperties": false
         },

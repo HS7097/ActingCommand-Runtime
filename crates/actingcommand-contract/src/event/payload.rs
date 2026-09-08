@@ -3164,7 +3164,8 @@ impl SchedulingOutcomeIdentity {
         }
         validate_policy_token(&self.decision_id, "decision_id")?;
         validate_task_semantic_label(&self.catalog_task_id, "catalog_task_id")?;
-        validate_task_semantic_label(&self.instance_alias, "instance_alias")
+        crate::validate_instance_alias(&self.instance_alias)
+            .map_err(|_| SanitizationError::new("invalid_task_semantic_label", "instance_alias"))
     }
 }
 
@@ -5377,7 +5378,8 @@ fn validate_resource_authoring_token(
 fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), SanitizationError> {
     validate_policy_token(&data.decision_id, "decision_id")?;
     validate_policy_token(&data.task_id, "task_id")?;
-    validate_policy_token(&data.instance_id, "instance_id")?;
+    crate::validate_instance_alias(&data.instance_id)
+        .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
     validate_policy_token(&data.operation_id, "operation_id")?;
     validate_policy_digest(&data.package_digest, "package_digest")?;
     validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
@@ -5452,7 +5454,8 @@ fn validate_policy_execution_data(
 ) -> Result<(), SanitizationError> {
     validate_policy_token(&data.decision_id, "decision_id")?;
     validate_policy_token(&data.task_id, "task_id")?;
-    validate_policy_token(&data.instance_id, "instance_id")?;
+    crate::validate_instance_alias(&data.instance_id)
+        .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
     if data.observed_at_unix_ms == 0 {
         return Err(SanitizationError::new(
             "invalid_policy_execution_time",
@@ -5505,7 +5508,8 @@ fn validate_policy_planning_signal_data(
     data: &PolicyPlanningSignalEventData,
 ) -> Result<(), SanitizationError> {
     validate_policy_token(&data.signal_id, "signal_id")?;
-    validate_policy_token(&data.instance_id, "instance_id")?;
+    crate::validate_instance_alias(&data.instance_id)
+        .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
     if let Some(task_id) = &data.task_id {
         validate_policy_token(task_id, "task_id")?;
     }

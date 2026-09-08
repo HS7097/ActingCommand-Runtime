@@ -293,7 +293,10 @@ impl FactScope {
     /// Validates the selected scope identifier.
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let (value, field) = match self {
-            Self::Instance { instance_id } => (instance_id, "instance_id"),
+            Self::Instance { instance_id } => {
+                return crate::validate_instance_alias(instance_id)
+                    .map_err(|_| SanitizationError::new("invalid_fact_token", "instance_id"));
+            }
             Self::Server { server_id } => (server_id, "server_id"),
             Self::Game { game_id } => (game_id, "game_id"),
         };
@@ -364,7 +367,8 @@ impl FactValue {
 impl InstanceFactContext {
     /// Validates all three identifiers used to build a scoped projection.
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        validate_token(&self.instance_id, "instance_id")?;
+        crate::validate_instance_alias(&self.instance_id)
+            .map_err(|_| SanitizationError::new("invalid_fact_token", "instance_id"))?;
         validate_token(&self.server_id, "server_id")?;
         validate_token(&self.game_id, "game_id")
     }

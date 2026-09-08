@@ -407,7 +407,7 @@ fn validate_task(
     let mut instances = HashSet::new();
     for (index, override_spec) in task.instance_overrides.iter().enumerate() {
         let override_path = format!("{path}/instance_overrides/{index}");
-        validate_identifier(
+        validate_instance_alias(
             map,
             &format!("{override_path}/instance_id"),
             &override_spec.instance_id,
@@ -1425,7 +1425,16 @@ fn validate_scope(
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
     let (suffix, id) = match scope {
-        ScopeSelector::Instance { instance_id } => ("instance_id", instance_id),
+        ScopeSelector::Instance { instance_id } => {
+            validate_instance_alias(
+                map,
+                &format!("{path}/instance_id"),
+                instance_id,
+                descriptor,
+                diagnostics,
+            );
+            return;
+        }
         ScopeSelector::Server { server_id } => ("server_id", server_id),
         ScopeSelector::Game { game_id } => ("game_id", game_id),
     };
@@ -1479,6 +1488,23 @@ fn validate_identifier(
             CatalogDiagnosticCode::TypeMismatch,
             path,
             format!("`{value}` is not a valid bounded identifier"),
+            descriptor,
+        ));
+    }
+}
+
+fn validate_instance_alias(
+    map: &SourceMap,
+    path: &str,
+    value: &str,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if actingcommand_contract::validate_instance_alias(value).is_err() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            path,
+            "instance alias must contain 1 to 256 UTF-8 bytes without control characters",
             descriptor,
         ));
     }

@@ -568,7 +568,7 @@ pub(crate) fn validate_performance_control(
 }
 
 fn valid_control_instance_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+    crate::validate_instance_alias(value).is_ok()
 }
 
 pub(crate) fn validate_performance_monitor_state(

@@ -42,7 +42,8 @@ and inapplicable scopes are unknown. Arithmetic failures retain policy errors.
 Each source is limited to 1 MiB, and the compiler enforces the 4 MiB catalog bound.
 The reader uses at most one additional sentinel byte per document to preserve the
 compiler's size diagnostic. Paths use the existing 1024-byte source-text bound;
-context/event IDs use 128 bytes and selection is limited to 4096 events. CLI query
+server/game context and event IDs use 128 bytes; the instance context uses the
+registered 256-byte alias rule. Selection is limited to 4096 events. CLI query
 arguments are bounded to 8210 tokens and 1 MiB, enough for all events and nine
 single-value flags. Output payloads are limited to 16 MiB (four catalog budgets)
 to allow structured source locations and diagnostics. Exceeding a bound fails
@@ -71,6 +72,15 @@ The `env.*` namespace remains an ordinary fact-key family. Existing execution su
 ## Scope And Overrides
 
 Every task, pool, activity profile, and timeline event declares `instance`, `server`, or `game` scope. `instance_overrides` is the only V1 task override layer. A null override field means inherit the catalog value; it does not mean zero, false, or an inferred default. Activity profiles scoped to an instance carry its importance and goals.
+
+The `instance_id` in instance scopes and overrides stores the exact registered
+instance alias: 1–256 UTF-8 bytes, with Unicode control characters prohibited.
+Case, permitted whitespace (including all-space aliases), and Unicode bytes are
+preserved through compilation, facts, evaluation, admission and registry lookup.
+The Runtime's typed `InstanceId` continues to identify links and leases. Catalog,
+task, pool, server and game identifiers and references retain their own rules.
+JSON Schema bounds alias character length; the shared contract/compiler also
+enforces the UTF-8 byte limit.
 
 Activity sampling uses a ledger-derived seed and `same_round_stable`: the host records the seed once and must reuse the sampled value throughout the same scheduling round. Resampling within a round is invalid.
 
@@ -121,6 +131,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | One document | 1,048,576 bytes |
 | Four-document catalog | 4,194,304 bytes |
 | Identifier/reference | 128 bytes |
+| Registered instance alias | 256 UTF-8 bytes |
 | Diagnostic text, fact string, or source URI | 1,024 bytes |
 | Approval references | 64 |
 | Tasks | 4,096 |

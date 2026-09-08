@@ -59,7 +59,7 @@ use actingcommand_contract::{
     InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
     IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES,
+    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     OriginModule, OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest,
     PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PinnedFrameReason,
@@ -2202,9 +2202,7 @@ fn initial_registered_instances(
     let mut seen_aliases = BTreeSet::new();
     let mut instances = BTreeMap::new();
     for instance_alias in aliases {
-        if instance_alias.is_empty()
-            || instance_alias.len() > MAX_INSTANCE_ALIAS_BYTES
-            || instance_alias.chars().any(char::is_control)
+        if actingcommand_contract::validate_instance_alias(&instance_alias).is_err()
             || !seen_aliases.insert(instance_alias.clone())
         {
             return Err(RuntimeHostError::fatal(

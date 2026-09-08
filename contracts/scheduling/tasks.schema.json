@@ -76,7 +76,7 @@
       "type": "object",
       "required": ["instance_id", "enabled", "priority", "strategic_weight_milli", "load_profile"],
       "properties": {
-        "instance_id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "instance_id": { "$ref": "./common.schema.json#/$defs/instanceAlias" },
         "enabled": { "type": ["boolean", "null"] },
         "priority": { "type": ["integer", "null"], "minimum": -32768, "maximum": 32767 },
         "strategic_weight_milli": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },

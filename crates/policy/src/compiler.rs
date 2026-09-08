@@ -542,6 +542,80 @@ mod tests {
         assert_eq!(report["diagnostic_statistics"]["total"], 0);
         assert_eq!(report["diagnostic_statistics"]["errors"], 0);
         assert_eq!(report["diagnostic_statistics"]["warnings"], 0);
+        // SCHEDULING-INSTANCE-ALIAS-v1; first red: Workflow #269 comment 5578055809.
+        for version in [
+            crate::SCHEDULING_SCHEMA_VERSION,
+            crate::SCHEDULING_SCHEMA_VERSION_V2,
+        ] {
+            for (alias, valid) in [
+                ("Neutral.Instance".to_owned(), true),
+                (" Instance Ω ".to_owned(), true),
+                (" ".to_owned(), true),
+                ("é".repeat(128), true),
+                ("a".repeat(257), false),
+                ("é".repeat(129), false),
+                ("".to_owned(), false),
+                ("node\n".to_owned(), false),
+                ("node\u{85}".to_owned(), false),
+            ] {
+                let mut sources = example_sources();
+                let encoded = serde_json::to_string(&alias).expect("alias JSON");
+                for source in [
+                    &mut sources.tasks,
+                    &mut sources.pools,
+                    &mut sources.activity,
+                    &mut sources.timeline,
+                ] {
+                    let text = String::from_utf8(source.bytes.clone())
+                        .expect("source UTF-8")
+                        .replace("\"fixture-instance-a\"", &encoded)
+                        .replace("\"fixture-instance-b\"", &encoded);
+                    let mut doc: serde_json::Value =
+                        serde_json::from_str(&text).expect("source JSON");
+                    doc["schema_version"] = serde_json::json!(version);
+                    if version == crate::SCHEDULING_SCHEMA_VERSION_V2
+                        && let Some(events) = doc
+                            .get_mut("events")
+                            .and_then(serde_json::Value::as_array_mut)
+                    {
+                        for event in events {
+                            event["validity"] =
+                                serde_json::json!({"from_unix_ms":0,"until_unix_ms":null});
+                        }
+                    }
+                    source.bytes = serde_json::to_vec(&doc).expect("source bytes");
+                }
+                let compiled = compile_catalog(&sources);
+                if valid {
+                    let compiled = compiled.expect("registered alias compiles");
+                    assert_eq!(
+                        compiled.catalog().tasks.tasks[0].scope,
+                        crate::ScopeSelector::Instance {
+                            instance_id: alias.clone()
+                        }
+                    );
+                    assert_eq!(
+                        compiled.catalog().tasks.tasks[0].instance_overrides[0].instance_id,
+                        alias
+                    );
+                    assert_eq!(
+                        compiled.catalog_hash(),
+                        compile_catalog(&sources).unwrap().catalog_hash()
+                    );
+                    assert_ne!(compiled.catalog_hash(), first.catalog_hash());
+                } else {
+                    assert!(compiled.is_err(), "invalid alias {alias:?}");
+                }
+            }
+        }
+        for field in ["id", "procedure_ref"] {
+            assert!(
+                compile_catalog(&mutate_tasks(
+                    |doc| doc["tasks"][0][field] = serde_json::json!("Upper.Id")
+                ))
+                .is_err()
+            );
+        }
     }
 
     // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553

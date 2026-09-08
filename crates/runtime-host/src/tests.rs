@@ -18528,6 +18528,147 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         PolicyDispatchAdmission::ReplaySuppressed { .. }
     ));
     reopened.close().expect("close reopened host");
+
+    // SCHEDULING-INSTANCE-ALIAS-v1; first red: Workflow #269 comment 5578055809.
+    let alias = " Instance Ω ";
+    let root = TempDir::new().expect("alias state");
+    let state = Arc::new(FakeState::default());
+    let registered_id = instance_id();
+    let mut facts = policy_facts();
+    facts.instances[0].instance_id = alias.to_owned();
+    facts.outcomes[0].instance_id = alias.to_owned();
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources())),
+        Arc::new(FakeProvider::one(alias, registered_id, Arc::clone(&state))),
+    )
+    .expect("alias host");
+    let mut sources = policy_sources(1);
+    let encoded = serde_json::to_string(alias).expect("alias JSON");
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        source.bytes = String::from_utf8(source.bytes.clone())
+            .expect("source UTF-8")
+            .replace("\"fixture-instance-a\"", &encoded)
+            .into_bytes();
+    }
+    let mut tasks: serde_json::Value = serde_json::from_slice(&sources.tasks.bytes).unwrap();
+    tasks["tasks"][0]["trigger"] = serde_json::json!({"kind":"fact","scope":{"kind":"instance","instance_id":alias},"fact_key":"env.alias_ready","comparison":"eq","value":{"type":"boolean","value":true},"max_age_ms":60000});
+    sources.tasks.bytes = serde_json::to_vec(&tasks).unwrap();
+    host.activate_policy_catalog(&sources)
+        .expect("compile exact alias");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: alias.to_owned(),
+        },
+        "env.alias_ready",
+        ContractFactValue::Boolean(true),
+        "snapshot:alias-ready",
+        Vec::new(),
+    ))
+    .expect("publish exact alias fact");
+    let context = InstanceFactContext {
+        instance_id: alias.to_owned(),
+        server_id: "fixture-server-a".to_owned(),
+        game_id: "fixture-game-a".to_owned(),
+    };
+    assert_eq!(
+        host.instance_fact_snapshot(context.clone())
+            .expect("exact alias fact snapshot")
+            .context
+            .instance_id,
+        alias
+    );
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("alias evaluation");
+    let evaluation = cycle.evaluation.expect("evaluation");
+    let [intent] = evaluation.dispatch_intents.as_slice() else {
+        panic!("one alias intent: {evaluation:?}")
+    };
+    assert_eq!(intent.instance_id, alias);
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|reason| reason.id == intent.reason_chain_id)
+        .expect("reason chain");
+    record_policy_approval(&host, intent);
+    assert!(matches!(
+        host.admit_policy_dispatch(intent, reasons, &policy_context(&host, intent))
+            .expect("exact alias admission"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+    assert!(matches!(
+        host.admit_policy_dispatch(intent, reasons, &policy_context(&host, intent))
+            .expect("exact alias replay"),
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    let mut client = TestClient::connect(&host);
+    for unknown in [" instance Ω ", "unknown.instance"] {
+        let request = client.request(RuntimeOperation::ObserveReadonly {
+            instance_alias: unknown.to_owned(),
+        });
+        let denied = client.send(&request);
+        assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+        assert_eq!(
+            denied.error_projection().expect("unknown alias").code,
+            RuntimeErrorCode::InstanceUnknown
+        );
+    }
+    let events = projected_events(&mut client, EventQuery::default());
+    let admitted = events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+        .expect("native alias admission");
+    assert_eq!(admitted.links.instance_id(), Some(&registered_id));
+    let ProjectionPayload::Full(payload) = &admitted.payload else {
+        panic!("full policy payload")
+    };
+    let EventPayload::Policy(actingcommand_contract::PolicyPayload::DispatchAdmitted(data)) =
+        payload.as_ref()
+    else {
+        panic!("dispatch admission")
+    };
+    assert_eq!(data.instance_id(), alias);
+    host.complete_policy_dispatch(&intent.decision_id)
+        .expect("complete alias dispatch");
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close alias host");
+    let reopened = RuntimeHost::start(
+        config(&root).with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources())),
+        Arc::new(FakeProvider::one(alias, registered_id, state)),
+    )
+    .expect("reopen exact alias");
+    assert_eq!(
+        reopened
+            .instance_fact_snapshot(context)
+            .expect("recovered alias fact")
+            .context
+            .instance_id,
+        alias
+    );
+    assert!(matches!(
+        reopened
+            .admit_policy_dispatch(intent, reasons, &policy_context(&reopened, intent))
+            .expect("recovered replay"),
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    reopened.close().expect("close alias replay host");
 }
 
 #[test]

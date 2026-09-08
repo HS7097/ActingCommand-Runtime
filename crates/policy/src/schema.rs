@@ -173,9 +173,16 @@ impl CatalogBundle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScopeSelector {
-    Instance { instance_id: String },
-    Server { server_id: String },
-    Game { game_id: String },
+    /// Exact registered instance alias, preserved byte-for-byte.
+    Instance {
+        instance_id: String,
+    },
+    Server {
+        server_id: String,
+    },
+    Game {
+        game_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +212,7 @@ pub struct TaskSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceTaskOverride {
+    /// Exact registered instance alias.
     pub instance_id: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub enabled: RequiredNullable<bool>,

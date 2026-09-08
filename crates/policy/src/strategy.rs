@@ -1346,7 +1346,8 @@ fn validate_assessment(
     report_game_id: &str,
 ) -> StrategyResult<()> {
     validate_identifier(&assessment.goal_id, "assessment_goal_id")?;
-    validate_identifier(&assessment.instance_id, "assessment_instance_id")?;
+    actingcommand_contract::validate_instance_alias(&assessment.instance_id)
+        .map_err(|_| StrategyError::invalid("assessment_instance_id is invalid"))?;
     validate_identifier(&assessment.game_id, "assessment_game_id")?;
     validate_identifier(&assessment.fact_snapshot_id, "fact_snapshot_id")?;
     if assessment.game_id != report_game_id || assessment.deadline_unix_ms == 0 {
@@ -2322,6 +2323,10 @@ mod tests {
     #[test]
     fn report_identity_rejects_mutated_instance_state() {
         let catalog = catalog();
+        let alias = " Instance Ω ";
+        let aliased = report(&catalog, vec![assessment(alias, Some(50), Some(100))]);
+        aliased.validate().expect("registered assessment alias");
+        assert_eq!(aliased.assessments()[0].instance_id, alias);
         let report = report(
             &catalog,
             vec![assessment("instance-a", Some(50), Some(100))],
