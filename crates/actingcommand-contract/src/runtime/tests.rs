@@ -312,6 +312,38 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     let ids = issuer();
     let epoch = *ids.mint_owner_epoch().expect("epoch").transport();
     let instance = *ids.mint_instance_id().expect("instance").transport();
+    // Workflow #269 NEMU-STDIO-FACTS-v1: bounded facts retain unknowns privately.
+    let stdio = crate::VendorStdioFacts {
+        process_id: 71,
+        process_created_filetime: crate::StdioFact::Known(123),
+        started_filetime: 124,
+        steps: vec![crate::StdioStep {
+            phase: crate::StdioPhase::Close,
+            api: crate::StdioApi::Close,
+            target: crate::StdioReference::CaptureStdout,
+            source: None,
+            completed_filetime: 126,
+            returned: -1,
+            error: Some(crate::StdioNativeError::Crt {
+                errno: Ok(9),
+                dos_errno: Ok(6),
+            }),
+            before: Some(crate::StdioReferenceFact {
+                reference: crate::StdioReference::CaptureStdout,
+                observed_filetime: 125,
+                fd: Some(3),
+                handle: crate::StdioFact::Known(99),
+                metadata_from: Some(crate::StdioReference::CaptureStdout),
+                flags: crate::StdioFact::Known(1),
+                file_identity: crate::StdioFact::Unknown(crate::StdioUnknown::QueryFailed(
+                    crate::StdioNativeError::Win32 { code: 50 },
+                )),
+            }),
+            after: None,
+            related: None,
+        }],
+        dropped_count: 0,
+    };
     let lifecycle = RuntimeLifecycleFailureDraft::new(
         epoch,
         "runtime.lifecycle.resource_close",
@@ -344,7 +376,8 @@ fn resource_quiescence_causes_roundtrip_and_project() {
             OwnerResourceDisposition::Unconfirmed,
             3,
             0,
-        ),
+        )
+        .with_vendor_stdio_facts(Some(stdio.clone())),
     ));
     let draft = EventDraft::new(
         ids.mint_event_id().expect("event"),
@@ -402,6 +435,8 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     assert_eq!(cause.observation_count(), Some(3));
     assert_eq!(cause.dropped_count(), Some(0));
     assert!(cause.last_native_detail().is_some());
+    assert_eq!(cause.vendor_stdio(), Some(&stdio));
+    assert_eq!(draft.sensitivity(), Sensitivity::Sensitive);
 
     let full = serde_json::to_string(&ProjectionPayload::Full(Box::new(restored.clone())))
         .expect("full projection");
@@ -410,6 +445,9 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     assert!(!public.contains("native_instance"));
     assert!(full.contains("last close detail"));
     assert!(!public.contains("last close detail"));
+    assert!(full.contains("process_created_filetime"));
+    assert!(!public.contains("process_created_filetime"));
+    assert!(!public.contains("vendor_stdio"));
     for categorical in [
         "provider_connection",
         "disconnect_call",
@@ -419,6 +457,16 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     ] {
         assert!(public.contains(categorical), "missing {categorical}");
     }
+    let mut bounded = stdio.clone();
+    bounded
+        .steps
+        .resize(crate::MAX_VENDOR_STDIO_STEPS, stdio.steps[0].clone());
+    bounded.validate().expect("fixed maximum");
+    bounded.steps.push(stdio.steps[0].clone());
+    assert!(
+        bounded.validate().is_err(),
+        "overflow cannot be a valid ledger context"
+    );
 }
 
 impl SecretFingerprinter for RejectSecrets {

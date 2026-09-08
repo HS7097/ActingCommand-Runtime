@@ -137,6 +137,7 @@ impl DeviceResourceCloseOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceResourceCloseCause {
+    vendor_stdio: Option<Arc<crate::VendorStdioFacts>>,
     occurrence: Arc<DeviceCloseOccurrence>,
     resource: DeviceResourceKind,
     phase: DeviceResourceClosePhase,
@@ -153,6 +154,10 @@ pub struct DeviceResourceCloseCause {
 }
 
 impl DeviceResourceCloseCause {
+    pub fn vendor_stdio(&self) -> Option<&crate::VendorStdioFacts> {
+        self.vendor_stdio.as_deref()
+    }
+
     pub fn occurrence(&self) -> &Arc<DeviceCloseOccurrence> {
         &self.occurrence
     }
@@ -442,6 +447,7 @@ impl DeviceError {
             end -= 1;
         }
         let cause = DeviceResourceCloseCause {
+            vendor_stdio: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             resource,
             phase,
@@ -492,6 +498,16 @@ impl DeviceError {
         for cause in &mut self.resource_close_causes {
             if cause.candidate_index.is_none() {
                 cause.candidate_index = Some(candidate_index);
+            }
+        }
+        self
+    }
+
+    /// Attach owner observations without changing any close occurrence or outcome.
+    pub fn with_vendor_stdio_facts(mut self, facts: Arc<crate::VendorStdioFacts>) -> Self {
+        for cause in &mut self.resource_close_causes {
+            if cause.backend == "nemu_vendor_stdio" {
+                cause.vendor_stdio = Some(Arc::clone(&facts));
             }
         }
         self

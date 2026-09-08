@@ -6,6 +6,9 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(windows)]
+mod native_facts;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VendorStdioCapture {
     pub stdout: String,
@@ -75,7 +78,7 @@ impl VendorStdioSession {
             .finish()
             .map(|_| DeviceResourceCloseOutcome::confirmed(6))
             .map_err(|error| {
-                if error.resource_close_causes().is_empty() {
+                let error = if error.resource_close_causes().is_empty() {
                     error.with_resource_close_cause(
                         DeviceResourceKind::VendorStdio,
                         DeviceResourceClosePhase::Close,
@@ -87,7 +90,8 @@ impl VendorStdioSession {
                     )
                 } else {
                     error
-                }
+                };
+                error.with_vendor_stdio_facts(std::sync::Arc::new(guard.facts().clone()))
             });
         if result.as_ref().is_err_and(|error| {
             error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
@@ -159,10 +163,12 @@ fn stdio_lock() -> &'static std::sync::Mutex<()> {
 #[cfg(windows)]
 mod imp {
     use super::VendorStdioCapture;
+    use super::native_facts;
     use crate::{
         DeviceError, DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence,
         DeviceResult,
     };
+    use crate::{StdioApi, StdioPhase, StdioReference, VendorStdioFacts};
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
@@ -199,6 +205,7 @@ mod imp {
     }
 
     pub(super) struct RedirectGuard {
+        facts: VendorStdioFacts,
         saved_stdout: i32,
         saved_stderr: i32,
         saved_stdout_handle: *mut c_void,
@@ -219,53 +226,92 @@ mod imp {
     }
 
     impl RedirectGuard {
+        pub(super) fn facts(&self) -> &VendorStdioFacts {
+            &self.facts
+        }
+
         pub(super) fn new() -> DeviceResult<Self> {
-            let saved_stdout = dup_fd(STDOUT_FD, "stdout")?;
-            let saved_stderr = match dup_fd(STDERR_FD, "stderr") {
+            let mut facts = VendorStdioFacts::new();
+            let saved_stdout = dup_fd(
+                STDOUT_FD,
+                "stdout",
+                StdioReference::Stdout,
+                StdioReference::SavedStdout,
+                &mut facts,
+            )?;
+            let saved_stderr = match dup_fd(
+                STDERR_FD,
+                "stderr",
+                StdioReference::Stderr,
+                StdioReference::SavedStderr,
+                &mut facts,
+            ) {
                 Ok(fd) => fd,
                 Err(error) => {
                     return Err(cleanup_acquisition(
                         error,
-                        &[(saved_stdout, "saved stdout")],
+                        &[(saved_stdout, "saved stdout", StdioReference::SavedStdout)],
                         &[],
+                        &mut facts,
                     ));
                 }
             };
             let stdout_path = capture_path("stdout");
-            let capture_stdout = match open_capture_file(&stdout_path) {
-                Ok(fd) => fd,
-                Err(error) => {
-                    return Err(cleanup_acquisition(
-                        error,
-                        &[
-                            (saved_stdout, "saved stdout"),
-                            (saved_stderr, "saved stderr"),
-                        ],
-                        &[],
-                    ));
-                }
-            };
+            let capture_stdout =
+                match open_capture_file(&stdout_path, StdioReference::CaptureStdout, &mut facts) {
+                    Ok(fd) => fd,
+                    Err(error) => {
+                        return Err(cleanup_acquisition(
+                            error,
+                            &[
+                                (saved_stdout, "saved stdout", StdioReference::SavedStdout),
+                                (saved_stderr, "saved stderr", StdioReference::SavedStderr),
+                            ],
+                            &[],
+                            &mut facts,
+                        ));
+                    }
+                };
             let stderr_path = capture_path("stderr");
-            let capture_stderr = match open_capture_file(&stderr_path) {
-                Ok(fd) => fd,
-                Err(error) => {
-                    return Err(cleanup_acquisition(
-                        error,
-                        &[
-                            (saved_stdout, "saved stdout"),
-                            (saved_stderr, "saved stderr"),
-                            (capture_stdout, "capture stdout"),
-                        ],
-                        &[&stdout_path],
-                    ));
-                }
-            };
+            let capture_stderr =
+                match open_capture_file(&stderr_path, StdioReference::CaptureStderr, &mut facts) {
+                    Ok(fd) => fd,
+                    Err(error) => {
+                        return Err(cleanup_acquisition(
+                            error,
+                            &[
+                                (saved_stdout, "saved stdout", StdioReference::SavedStdout),
+                                (saved_stderr, "saved stderr", StdioReference::SavedStderr),
+                                (
+                                    capture_stdout,
+                                    "capture stdout",
+                                    StdioReference::CaptureStdout,
+                                ),
+                            ],
+                            &[(&stdout_path, StdioReference::CaptureStdout)],
+                            &mut facts,
+                        ));
+                    }
+                };
 
             let mut guard = Self {
                 saved_stdout,
                 saved_stderr,
-                saved_stdout_handle: unsafe { GetStdHandle(STD_OUTPUT_HANDLE) },
-                saved_stderr_handle: unsafe { GetStdHandle(STD_ERROR_HANDLE) },
+                saved_stdout_handle: get_std_handle(
+                    STD_OUTPUT_HANDLE,
+                    STDOUT_FD,
+                    StdioReference::Stdout,
+                    StdioReference::Win32Stdout,
+                    &mut facts,
+                ),
+                saved_stderr_handle: get_std_handle(
+                    STD_ERROR_HANDLE,
+                    STDERR_FD,
+                    StdioReference::Stderr,
+                    StdioReference::Win32Stderr,
+                    &mut facts,
+                ),
+                facts,
                 capture_stdout,
                 capture_stderr,
                 stdout_path,
@@ -284,6 +330,7 @@ mod imp {
                 if let Err(cleanup) = guard.finish() {
                     error = error.merge_resource_cleanup(cleanup);
                 }
+                error = error.with_vendor_stdio_facts(std::sync::Arc::new(guard.facts.clone()));
                 if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(guard);
                 }
@@ -293,15 +340,43 @@ mod imp {
         }
 
         fn install(&mut self) -> DeviceResult<()> {
-            flush_all()?;
+            flush_recorded(StdioPhase::Install, &mut self.facts)?;
             self.stdout_crt_redirected = true;
-            dup2_fd(self.capture_stdout, STDOUT_FD, "stdout")?;
+            dup2_fd(
+                self.capture_stdout,
+                STDOUT_FD,
+                "stdout",
+                StdioReference::CaptureStdout,
+                StdioReference::Stdout,
+                StdioPhase::Install,
+                &mut self.facts,
+            )?;
             self.stderr_crt_redirected = true;
-            dup2_fd(self.capture_stderr, STDERR_FD, "stderr")?;
+            dup2_fd(
+                self.capture_stderr,
+                STDERR_FD,
+                "stderr",
+                StdioReference::CaptureStderr,
+                StdioReference::Stderr,
+                StdioPhase::Install,
+                &mut self.facts,
+            )?;
             self.stdout_win32_redirected = true;
-            set_std_handle(STD_OUTPUT_HANDLE, self.capture_stdout, "stdout")?;
+            set_std_handle(
+                STD_OUTPUT_HANDLE,
+                self.capture_stdout,
+                "stdout",
+                StdioReference::CaptureStdout,
+                &mut self.facts,
+            )?;
             self.stderr_win32_redirected = true;
-            set_std_handle(STD_ERROR_HANDLE, self.capture_stderr, "stderr")
+            set_std_handle(
+                STD_ERROR_HANDLE,
+                self.capture_stderr,
+                "stderr",
+                StdioReference::CaptureStderr,
+                &mut self.facts,
+            )
         }
 
         pub(super) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
@@ -325,6 +400,7 @@ mod imp {
                 return result.clone();
             }
             if let Err(error) = self.restore() {
+                let error = error.with_vendor_stdio_facts(std::sync::Arc::new(self.facts.clone()));
                 self.finish_result = Some(Err(error.clone()));
                 return Err(error);
             }
@@ -338,8 +414,20 @@ mod imp {
                 }
             };
             for result in [
-                close_fd(self.capture_stdout, "capture stdout"),
-                close_fd(self.capture_stderr, "capture stderr"),
+                close_fd(
+                    self.capture_stdout,
+                    "capture stdout",
+                    StdioReference::CaptureStdout,
+                    StdioPhase::Close,
+                    &mut self.facts,
+                ),
+                close_fd(
+                    self.capture_stderr,
+                    "capture stderr",
+                    StdioReference::CaptureStderr,
+                    StdioPhase::Close,
+                    &mut self.facts,
+                ),
             ] {
                 if let Err(error) = result {
                     resources_confirmed = false;
@@ -353,8 +441,11 @@ mod imp {
                     );
                 }
             }
-            for path in [&self.stdout_path, &self.stderr_path] {
-                if let Err(error) = std::fs::remove_file(path) {
+            for (path, reference) in [
+                (&self.stdout_path, StdioReference::CaptureStdout),
+                (&self.stderr_path, StdioReference::CaptureStderr),
+            ] {
+                if let Err(error) = unlink(path, reference, StdioPhase::Close, &mut self.facts) {
                     resources_confirmed = false;
                     merge_close_failure(
                         &mut failure,
@@ -383,6 +474,9 @@ mod imp {
                     "vendor stdio snapshot was unavailable without a close error",
                 )),
             };
+            let result = result.map_err(|error| {
+                error.with_vendor_stdio_facts(std::sync::Arc::new(self.facts.clone()))
+            });
             self.finish_result = Some(result.clone());
             result
         }
@@ -391,7 +485,7 @@ mod imp {
             if let Some(result) = &self.restore_result {
                 return result.clone();
             }
-            let mut failure = flush_all()
+            let mut failure = flush_recorded(StdioPhase::Restore, &mut self.facts)
                 .map_err(|error| {
                     resource_close_error(
                         error,
@@ -415,17 +509,37 @@ mod imp {
                 if !*redirected {
                     continue;
                 }
-                if unsafe {
-                    SetStdHandle(
-                        if name == "stdout" {
-                            STD_OUTPUT_HANDLE
-                        } else {
-                            STD_ERROR_HANDLE
-                        },
-                        handle,
-                    )
-                } == 0
-                {
+                let which = if name == "stdout" {
+                    STD_OUTPUT_HANDLE
+                } else {
+                    STD_ERROR_HANDLE
+                };
+                let target = if name == "stdout" {
+                    StdioReference::Win32Stdout
+                } else {
+                    StdioReference::Win32Stderr
+                };
+                let (capture_fd, capture_reference) = if name == "stdout" {
+                    (self.capture_stdout, StdioReference::CaptureStdout)
+                } else {
+                    (self.capture_stderr, StdioReference::CaptureStderr)
+                };
+                let owner = native_facts::owned_fd(capture_fd, capture_reference);
+                let before = native_facts::table(which, target, Some(&owner));
+                let returned = unsafe { SetStdHandle(which, handle) };
+                let native_error = (returned == 0).then(native_facts::win32_error);
+                let mut observation = native_facts::step(
+                    StdioPhase::Restore,
+                    StdioApi::SetStdHandle,
+                    target,
+                    Some(target),
+                    i64::from(returned),
+                    native_error,
+                );
+                observation.before = Some(before);
+                observation.after = Some(native_facts::table(which, target, None));
+                self.facts.push(observation);
+                if returned == 0 {
                     merge_close_failure(
                         &mut failure,
                         resource_close_error(
@@ -457,7 +571,20 @@ mod imp {
                 if !*redirected {
                     continue;
                 }
-                if let Err(error) = dup2_fd(saved, target, name) {
+                let (source_reference, target_reference) = if target == STDOUT_FD {
+                    (StdioReference::SavedStdout, StdioReference::Stdout)
+                } else {
+                    (StdioReference::SavedStderr, StdioReference::Stderr)
+                };
+                if let Err(error) = dup2_fd(
+                    saved,
+                    target,
+                    name,
+                    source_reference,
+                    target_reference,
+                    StdioPhase::Restore,
+                    &mut self.facts,
+                ) {
                     merge_close_failure(
                         &mut failure,
                         resource_close_error(
@@ -475,8 +602,20 @@ mod imp {
                 return Err(error);
             }
             for result in [
-                close_fd(self.saved_stdout, "saved stdout"),
-                close_fd(self.saved_stderr, "saved stderr"),
+                close_fd(
+                    self.saved_stdout,
+                    "saved stdout",
+                    StdioReference::SavedStdout,
+                    StdioPhase::Restore,
+                    &mut self.facts,
+                ),
+                close_fd(
+                    self.saved_stderr,
+                    "saved stderr",
+                    StdioReference::SavedStderr,
+                    StdioPhase::Restore,
+                    &mut self.facts,
+                ),
             ] {
                 if let Err(error) = result {
                     merge_close_failure(
@@ -507,8 +646,29 @@ mod imp {
         }
     }
 
-    fn dup_fd(fd: i32, name: &str) -> DeviceResult<i32> {
+    fn dup_fd(
+        fd: i32,
+        name: &str,
+        source: StdioReference,
+        target: StdioReference,
+        facts: &mut VendorStdioFacts,
+    ) -> DeviceResult<i32> {
         let duplicated = unsafe { _dup(fd) };
+        let error = (duplicated < 0).then(native_facts::crt_error);
+        let mut observation = native_facts::step(
+            StdioPhase::Acquire,
+            StdioApi::Dup,
+            target,
+            Some(source),
+            i64::from(duplicated),
+            error,
+        );
+        if duplicated >= 0 {
+            observation.after = Some(native_facts::owned_fd(duplicated, target));
+            // A successful _dup establishes that the original descriptor was live.
+            observation.related = Some(native_facts::owned_fd(fd, source));
+        }
+        facts.push(observation);
         if duplicated < 0 {
             return Err(DeviceError::fatal(format!(
                 "failed to duplicate vendor {name} fd"
@@ -517,8 +677,37 @@ mod imp {
         Ok(duplicated)
     }
 
-    fn dup2_fd(source_fd: i32, target_fd: i32, name: &str) -> DeviceResult<()> {
-        if unsafe { _dup2(source_fd, target_fd) } != 0 {
+    fn dup2_fd(
+        source_fd: i32,
+        target_fd: i32,
+        name: &str,
+        source: StdioReference,
+        target: StdioReference,
+        phase: StdioPhase,
+        facts: &mut VendorStdioFacts,
+    ) -> DeviceResult<()> {
+        let returned = unsafe { _dup2(source_fd, target_fd) };
+        let error = (returned != 0).then(native_facts::crt_error);
+        let mut observation = native_facts::step(
+            phase,
+            StdioApi::Dup2,
+            target,
+            Some(source),
+            i64::from(returned),
+            error,
+        );
+        if returned == 0 {
+            let current = native_facts::owned_fd(target_fd, target);
+            let (which, reference) = if target_fd == STDOUT_FD {
+                (STD_OUTPUT_HANDLE, StdioReference::Win32Stdout)
+            } else {
+                (STD_ERROR_HANDLE, StdioReference::Win32Stderr)
+            };
+            observation.related = Some(native_facts::table(which, reference, Some(&current)));
+            observation.after = Some(current);
+        }
+        facts.push(observation);
+        if returned != 0 {
             return Err(DeviceError::fatal(format!(
                 "failed to redirect vendor {name} fd"
             )));
@@ -526,8 +715,40 @@ mod imp {
         Ok(())
     }
 
-    fn close_fd(fd: i32, name: &str) -> DeviceResult<()> {
-        if fd >= 0 && unsafe { _close(fd) } != 0 {
+    fn close_fd(
+        fd: i32,
+        name: &str,
+        reference: StdioReference,
+        phase: StdioPhase,
+        facts: &mut VendorStdioFacts,
+    ) -> DeviceResult<()> {
+        if fd < 0 {
+            return Ok(());
+        }
+        let before = native_facts::owned_fd(fd, reference);
+        let returned = unsafe { _close(fd) };
+        let error = (returned != 0).then(native_facts::crt_error);
+        let mut observation = native_facts::step(
+            phase,
+            StdioApi::Close,
+            reference,
+            None,
+            i64::from(returned),
+            error,
+        );
+        observation.before = Some(before);
+        // _close retires the CRT slot even on an OS close failure. No after-query.
+        let (which, table) = match reference {
+            StdioReference::SavedStdout | StdioReference::CaptureStdout => {
+                (STD_OUTPUT_HANDLE, StdioReference::Win32Stdout)
+            }
+            _ => (STD_ERROR_HANDLE, StdioReference::Win32Stderr),
+        };
+        // The borrowed table may still contain a retired handle number. Read only
+        // its value; do not query metadata through that number or through the FD.
+        observation.related = Some(native_facts::table(which, table, None));
+        facts.push(observation);
+        if returned != 0 {
             return Err(DeviceError::fatal(format!(
                 "failed to close vendor {name} fd"
             )));
@@ -535,14 +756,49 @@ mod imp {
         Ok(())
     }
 
-    fn set_std_handle(std_handle: u32, fd: i32, name: &str) -> DeviceResult<()> {
+    fn set_std_handle(
+        std_handle: u32,
+        fd: i32,
+        name: &str,
+        source: StdioReference,
+        facts: &mut VendorStdioFacts,
+    ) -> DeviceResult<()> {
         let handle = unsafe { _get_osfhandle(fd) };
+        let error = (handle == -1).then(native_facts::crt_error);
+        let mut observation = native_facts::step(
+            StdioPhase::Install,
+            StdioApi::GetOsfhandle,
+            source,
+            None,
+            handle as i64,
+            error.clone(),
+        );
+        let owner = native_facts::owned_handle(fd, source, handle, error);
+        observation.after = Some(owner.clone());
+        facts.push(observation);
         if handle == -1 {
             return Err(DeviceError::fatal(format!(
                 "failed to get vendor {name} OS handle"
             )));
         }
-        if unsafe { SetStdHandle(std_handle, handle as *mut c_void) } == 0 {
+        let returned = unsafe { SetStdHandle(std_handle, handle as *mut c_void) };
+        let error = (returned == 0).then(native_facts::win32_error);
+        let target = if std_handle == STD_OUTPUT_HANDLE {
+            StdioReference::Win32Stdout
+        } else {
+            StdioReference::Win32Stderr
+        };
+        let mut observation = native_facts::step(
+            StdioPhase::Install,
+            StdioApi::SetStdHandle,
+            target,
+            Some(source),
+            i64::from(returned),
+            error,
+        );
+        observation.after = Some(native_facts::table(std_handle, target, Some(&owner)));
+        facts.push(observation);
+        if returned == 0 {
             return Err(DeviceError::fatal(format!(
                 "failed to redirect vendor {name} Win32 handle"
             )));
@@ -555,6 +811,76 @@ mod imp {
             return Err(DeviceError::fatal("failed to flush vendor stdio"));
         }
         Ok(())
+    }
+
+    fn flush_recorded(phase: StdioPhase, facts: &mut VendorStdioFacts) -> DeviceResult<()> {
+        let returned = unsafe { fflush(std::ptr::null_mut()) };
+        let error = (returned != 0).then(native_facts::crt_error);
+        facts.push(native_facts::step(
+            phase,
+            StdioApi::Flush,
+            StdioReference::All,
+            None,
+            i64::from(returned),
+            error,
+        ));
+        if returned != 0 {
+            return Err(DeviceError::fatal("failed to flush vendor stdio"));
+        }
+        Ok(())
+    }
+
+    fn get_std_handle(
+        which: u32,
+        fd: i32,
+        owner: StdioReference,
+        target: StdioReference,
+        facts: &mut VendorStdioFacts,
+    ) -> *mut c_void {
+        let handle = unsafe { GetStdHandle(which) };
+        let error = (handle as isize == -1).then(native_facts::win32_error);
+        let mut observation = native_facts::step(
+            StdioPhase::Acquire,
+            StdioApi::GetStdHandle,
+            target,
+            None,
+            handle as i64,
+            error.clone(),
+        );
+        let owner = native_facts::owned_fd(fd, owner);
+        observation.after = Some(native_facts::table_value(
+            handle as isize,
+            error,
+            target,
+            Some(&owner),
+        ));
+        observation.related = Some(owner);
+        facts.push(observation);
+        handle
+    }
+
+    fn unlink(
+        path: &Path,
+        reference: StdioReference,
+        phase: StdioPhase,
+        facts: &mut VendorStdioFacts,
+    ) -> std::io::Result<()> {
+        let result = std::fs::remove_file(path);
+        let error = result
+            .as_ref()
+            .err()
+            .map(|error| crate::StdioNativeError::Io {
+                code: error.raw_os_error(),
+            });
+        facts.push(native_facts::step(
+            phase,
+            StdioApi::Unlink,
+            reference,
+            None,
+            if result.is_ok() { 0 } else { -1 },
+            error,
+        ));
+        result
     }
 
     fn resource_close_error(
@@ -588,13 +914,21 @@ mod imp {
 
     fn cleanup_acquisition(
         mut primary: DeviceError,
-        descriptors: &[(i32, &str)],
-        paths: &[&PathBuf],
+        descriptors: &[(i32, &str, StdioReference)],
+        paths: &[(&PathBuf, StdioReference)],
+        facts: &mut VendorStdioFacts,
     ) -> DeviceError {
-        for (descriptor, name) in descriptors {
+        for (descriptor, name, reference) in descriptors {
             merge_close_result(
                 &mut primary,
-                close_fd(*descriptor, name).map_err(|error| {
+                close_fd(
+                    *descriptor,
+                    name,
+                    *reference,
+                    StdioPhase::AcquisitionCleanup,
+                    facts,
+                )
+                .map_err(|error| {
                     resource_close_error(
                         error,
                         DeviceResourceKind::FileDescriptor,
@@ -603,10 +937,10 @@ mod imp {
                 }),
             );
         }
-        for path in paths {
+        for (path, reference) in paths {
             merge_close_result(
                 &mut primary,
-                std::fs::remove_file(path).map_err(|error| {
+                unlink(path, *reference, StdioPhase::AcquisitionCleanup, facts).map_err(|error| {
                     resource_close_error(
                         DeviceError::fatal(format!(
                             "failed to remove partial vendor stdio capture path {}: {error}",
@@ -618,10 +952,14 @@ mod imp {
                 }),
             );
         }
-        primary
+        primary.with_vendor_stdio_facts(std::sync::Arc::new(facts.clone()))
     }
 
-    fn open_capture_file(path: &Path) -> DeviceResult<i32> {
+    fn open_capture_file(
+        path: &Path,
+        reference: StdioReference,
+        facts: &mut VendorStdioFacts,
+    ) -> DeviceResult<i32> {
         let wide = wide_path(path);
         let fd = unsafe {
             _wopen(
@@ -630,6 +968,19 @@ mod imp {
                 S_IREAD | S_IWRITE,
             )
         };
+        let error = (fd < 0).then(native_facts::crt_error);
+        let mut observation = native_facts::step(
+            StdioPhase::Acquire,
+            StdioApi::Open,
+            reference,
+            None,
+            i64::from(fd),
+            error,
+        );
+        if fd >= 0 {
+            observation.after = Some(native_facts::owned_fd(fd, reference));
+        }
+        facts.push(observation);
         if fd < 0 {
             return Err(DeviceError::fatal(format!(
                 "failed to open vendor stdio capture file {}",
@@ -749,6 +1100,64 @@ mod tests {
         assert_eq!(value, 7);
         assert!(capture.stdout.contains("vendor stdout noise\n"));
         assert!(capture.stderr.contains("vendor stderr noise\n"));
+
+        // Workflow #269 NEMU-STDIO-FACTS-v1: existing owner operations supply facts.
+        let guard = session.guard.as_mut().expect("active owner");
+        guard.finish().expect("original close path");
+        let facts = guard.facts().clone();
+        assert_eq!(facts.process_id, std::process::id());
+        assert!(
+            matches!(facts.process_created_filetime, crate::StdioFact::Known(value) if value > 0)
+        );
+        assert_eq!(facts.steps.len(), 24);
+        assert_eq!(facts.dropped_count, 0);
+        for reference in [
+            crate::StdioReference::CaptureStdout,
+            crate::StdioReference::CaptureStderr,
+        ] {
+            let opened = facts
+                .steps
+                .iter()
+                .find(|step| step.api == crate::StdioApi::Open && step.target == reference)
+                .and_then(|step| step.after.as_ref())
+                .expect("opened capture FD");
+            assert!(matches!(opened.file_identity, crate::StdioFact::Known(_)));
+            assert!(matches!(opened.flags, crate::StdioFact::Known(flags) if flags & 1 == 1));
+            let redirected = facts
+                .steps
+                .iter()
+                .find(|step| step.api == crate::StdioApi::Dup2 && step.source == Some(reference))
+                .and_then(|step| step.after.as_ref())
+                .expect("actual standard FD duplicate");
+            assert_eq!(opened.file_identity, redirected.file_identity);
+        }
+        let closes = facts
+            .steps
+            .iter()
+            .filter(|step| step.api == crate::StdioApi::Close)
+            .collect::<Vec<_>>();
+        assert_eq!(closes.len(), 4);
+        for close in closes {
+            assert_eq!(close.returned, 0);
+            assert!(close.error.is_none());
+            assert!(
+                close
+                    .before
+                    .as_ref()
+                    .is_some_and(|value| value.fd.is_some())
+            );
+            assert!(close.after.is_none(), "a retired FD is never queried");
+            assert!(
+                close
+                    .related
+                    .as_ref()
+                    .is_some_and(|value| value.fd.is_none())
+            );
+        }
+        guard.finish().expect("cached guard finish");
+        assert_eq!(&facts, guard.facts());
+        let first = session.finish().expect("session finish");
+        assert_eq!(first, session.finish().expect("cached session finish"));
     }
 
     #[cfg(windows)]
