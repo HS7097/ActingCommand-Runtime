@@ -58,4 +58,10 @@ impl fmt::Display for RuntimeStateError {
 
 impl Error for RuntimeStateError {}
 
+impl From<actingcommand_runtime_database::RuntimeDatabaseError> for RuntimeStateError {
+    fn from(error: actingcommand_runtime_database::RuntimeDatabaseError) -> Self {
+        Self::fatal(error.code(), error.operation())
+    }
+}
+
 pub type RuntimeStateResult<T> = Result<T, RuntimeStateError>;

@@ -330,6 +330,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-runtime-database"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "sha2",
+]
+
+[[package]]
 name = "actingcommand-runtime-host"
 version = "0.1.0"
 dependencies = [
@@ -358,6 +366,7 @@ name = "actingcommand-runtime-state"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+ "actingcommand-runtime-database",
  "rusqlite",
  "serde_json",
  "sha2",
