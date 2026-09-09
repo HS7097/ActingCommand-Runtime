@@ -170,6 +170,7 @@ fn explicit_postcondition_budget_build_and_runtime_admission_agree() {
             env: PackageEnvOptions::default(),
         })?
         .build(&AuthoringEnvironmentSnapshot::default())
+        .map_err(Box::new)
     };
     let admit = |bytes: &[u8]| {
         PreparedContainedTask::load(

@@ -37,7 +37,7 @@ fn b3_storage_snapshot_keeps_physical_tail_and_unverified_segments() {
         .expect("third");
     ledger.close().expect("close writer");
     // Specification: Workflow #269 SAVED-ARTIFACT-OCR-v1 native-reader budgets.
-    let before_budget_reads = tree_bytes(&root);
+    let before_budget_reads = tree_bytes(root);
     for (bytes, events, deadline) in [
         (
             0,
@@ -52,7 +52,7 @@ fn b3_storage_snapshot_keeps_physical_tail_and_unverified_segments() {
         (1024 * 1024, 100, std::time::Instant::now()),
     ] {
         let result = GlobalLedger::open_read_only(
-            GlobalLedgerReadOnlyConfig::new(&root).with_budget(bytes, events, deadline),
+            GlobalLedgerReadOnlyConfig::new(root).with_budget(bytes, events, deadline),
             |_| None,
         );
         let error = match result {
@@ -61,7 +61,7 @@ fn b3_storage_snapshot_keeps_physical_tail_and_unverified_segments() {
         };
         assert_eq!(error.code(), "ledger_read_budget_exceeded");
     }
-    assert_eq!(tree_bytes(&root), before_budget_reads);
+    assert_eq!(tree_bytes(root), before_budget_reads);
     let paths = segment_paths(root);
     assert_eq!(paths.len(), 3);
     let valid_prefix_bytes = fs::metadata(&paths[0])
