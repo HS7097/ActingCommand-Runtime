@@ -789,6 +789,32 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                     } else {
                         PredicateEvaluation::known(false, None)
                     };
+                    if has_window_result {
+                        let result_expiry = facts
+                            .outcomes
+                            .iter()
+                            .filter(|outcome| {
+                                outcome.task_id == task.id
+                                    && outcome.instance_id == instance.instance_id
+                                    && referenced_outcome_keys.contains(&outcome.outcome_key)
+                                    && window.as_ref().is_some_and(|window| {
+                                        outcome.activity_window_id.as_deref()
+                                            == Some(window.window_id.as_str())
+                                            && window.contains(outcome.observed_at_unix_ms)
+                                    })
+                                    && outcome
+                                        .expires_at_unix_ms
+                                        .is_none_or(|expiry| expiry >= time.unix_ms)
+                            })
+                            .filter_map(|outcome| outcome.expires_at_unix_ms)
+                            .min();
+                        stop.fresh_until_unix_ms =
+                            min_wake(stop.fresh_until_unix_ms, result_expiry);
+                        stop.next_wake_unix_ms = min_wake(
+                            stop.next_wake_unix_ms,
+                            result_expiry.and_then(|expiry| expiry.checked_add(1)),
+                        );
+                    }
                     if let Some(window) = window {
                         stop.next_wake_unix_ms =
                             min_wake(stop.next_wake_unix_ms, Some(window.until_unix_ms));
@@ -4146,6 +4172,23 @@ mod tests {
                 .dispatch_intents
                 .len(),
             2
+        );
+        let mut profile = catalog.catalog().activity.profiles[0].clone();
+        profile.windows[0].weekdays = vec![4];
+        profile.windows[0].start_minute_of_day = 22 * 60;
+        profile.windows[0].end_minute_of_day = 2 * 60;
+        let before_midnight = activity_window_at(&profile, 23 * 3_600_000)
+            .unwrap()
+            .unwrap();
+        let after_midnight = activity_window_at(&profile, 25 * 3_600_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before_midnight, after_midnight);
+        assert_eq!(after_midnight.window_id, "fixture-activity-a:0:0");
+        assert!(
+            activity_window_at(&profile, 26 * 3_600_000)
+                .unwrap()
+                .is_none()
         );
     }
 
