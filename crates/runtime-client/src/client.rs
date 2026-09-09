@@ -4089,7 +4089,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "decision_id": intent.decision_id(),
             "operation_id": intent.operation_id(),
             "instance_id": intent.instance_id(),
-            "package_digest": intent.package_digest(),
+            "package_digest": intent.package_digest().prefixed_wire_value(),
             "procedure_binding_digest": intent.procedure_binding_digest(),
             "reason_chain": {
                 "id": intent.reason_chain_id(),
@@ -4175,7 +4175,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         "decision_id": intent.decision_id(),
         "operation_id": intent.operation_id(),
         "instance_id": intent.instance_id(),
-        "package_digest": intent.package_digest(),
+        "package_digest": intent.package_digest().prefixed_wire_value(),
         "procedure_binding_digest": intent.procedure_binding_digest(),
         "reason_chain": {
             "id": intent.reason_chain_id(),
@@ -4275,7 +4275,7 @@ fn is_policy_settlement_interrupted(execution: &PolicyExecutionOutcome) -> bool 
 fn validate_admitted_package(
     events: &[ProjectedEvent],
     request_id: &RequestId,
-    policy_package_digest: &str,
+    policy_package_digest: &actingcommand_contract::PackageRef,
 ) -> RuntimeClientResult<()> {
     let mut admitted_package_sha256 = Vec::new();
     for event in events
@@ -4294,7 +4294,7 @@ fn validate_admitted_package(
                 "summarize_run",
             ));
         }
-        admitted_package_sha256.push(package_sha256.as_str());
+        admitted_package_sha256.push(package_sha256);
     }
     let [admitted_package_sha256] = admitted_package_sha256.as_slice() else {
         return Err(RuntimeClientError::fatal(
@@ -4302,12 +4302,10 @@ fn validate_admitted_package(
             "summarize_run",
         ));
     };
-    let policy_package_sha256 = policy_package_digest
-        .strip_prefix("sha256:")
-        .ok_or_else(|| {
+    policy_package_digest.validate().map_err(|_| {
             RuntimeClientError::fatal("run_summary_package_digest_invalid", "summarize_run")
         })?;
-    if policy_package_sha256 != *admitted_package_sha256 {
+    if policy_package_digest != *admitted_package_sha256 {
         return Err(RuntimeClientError::fatal(
             "run_summary_package_digest_mismatch",
             "summarize_run",

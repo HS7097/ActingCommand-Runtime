@@ -1593,6 +1593,18 @@ enum PostAdmissionOcrExecution {
 }
 
 impl PreparedContainedTask {
+    pub fn load_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_path(instance_label, locator, expected, false, vision_provider, deadline)
+            .map_err(contained_task_admission_error)?;
+        Self::from_bundle(bundle)
+    }
+
     pub fn load(
         instance_label: &str,
         zip_bytes: &[u8],
@@ -1631,7 +1643,11 @@ impl PreparedContainedTask {
             None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected),
         }
         .map_err(contained_task_admission_error)?;
-        let package_sha256 = bundle.loaded_bundle().verified_hash().to_string();
+        Self::from_bundle(bundle)
+    }
+
+    fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
+        let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();

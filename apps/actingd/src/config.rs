@@ -94,7 +94,7 @@ struct PolicyCatalogConfigFile {
 #[serde(deny_unknown_fields)]
 struct ProcedureBindingConfigFile {
     procedure_ref: String,
-    #[serde(with = "actingcommand_contract::package::policy_reference")]
+    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
     package_digest: actingcommand_contract::PackageRef,
     operation_id: String,
     yield_points: Vec<String>,

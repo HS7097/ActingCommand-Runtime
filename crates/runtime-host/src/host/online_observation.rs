@@ -34,6 +34,12 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
+            if matches!(input.expected_sha256(), actingcommand_contract::PackageRef::GitSourceTree(_)) {
+                let deadline = Instant::now().checked_add(Duration::from_millis(ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS))
+                    .ok_or_else(|| observation_integrity_failure("observation_package_deadline_overflow"))?;
+                return PreparedPageObservation::load_path(instance_alias, path, input.expected_sha256(), input.targets(), self.execution.vision_provider(), deadline)
+                    .map_err(observation_kernel_error);
+            }
             let file = fs::File::open(path).map_err(|error| {
                 observation_admission_error(
                     "observation_package_open_failed",
@@ -59,7 +65,8 @@ impl HostShared {
                 ));
             }
             let expected =
-                ExternalExpectedSha256::parse_hex(input.expected_sha256()).map_err(|error| {
+                ExternalExpectedSha256::parse_hex(input.expected_sha256().legacy_sha256()
+                    .ok_or_else(|| observation_integrity_failure("observation_hash_invalid"))?).map_err(|error| {
                     observation_admission_error(
                         "observation_hash_invalid",
                         "admit_contained_observation",
@@ -129,7 +136,7 @@ impl HostShared {
             request_id: original.request_id(),
             correlation_id: request.correlation_id(),
             instance_id: resolved.instance_id(),
-            expected_package_sha256: input.expected_sha256().to_string(),
+            expected_package_sha256: input.expected_sha256().clone(),
             actual_package_sha256: prepared.package_sha256(),
             frame: completed.observation,
             rgb8_sha256: evaluated.rgb8_sha256,

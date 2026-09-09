@@ -155,6 +155,11 @@ impl HostShared {
         check_deadline(deadline)?;
         let image = read_projected_verified(&root, &input.source.artifact)
             .map_err(|error| source_error(error.code(), error))?;
+        let bundle = if matches!(&input.expected_sha256, actingcommand_contract::PackageRef::GitSourceTree(_)) {
+            let provider = self.execution.vision_provider().ok_or_else(|| source_error("saved_ocr_provider_unavailable", "Runtime OCR provider is not configured"))?;
+            ExternallyVerifiedBundle::load_path("saved_artifact_ocr", Path::new(&input.package_path), &input.expected_sha256, false, Some(provider), deadline)
+                .map_err(|error| source_error("saved_ocr_package_invalid", error))?
+        } else {
         let package = fs::File::open(&input.package_path)
             .map_err(|error| source_error("saved_ocr_package_open_failed", error))?;
         let mut bytes = Vec::new();
@@ -168,7 +173,7 @@ impl HostShared {
                 "compressed package limit exceeded",
             ));
         }
-        let expected = ExternalExpectedSha256::parse_hex(&input.expected_sha256)
+        let expected = ExternalExpectedSha256::parse_hex(input.expected_sha256.legacy_sha256().ok_or_else(|| source_error("saved_ocr_package_hash_invalid", "legacy package identity missing"))?)
             .map_err(|error| source_error("saved_ocr_package_hash_invalid", error))?;
         let provider = self.execution.vision_provider().ok_or_else(|| {
             source_error(
@@ -176,13 +181,14 @@ impl HostShared {
                 "Runtime OCR provider is not configured",
             )
         })?;
-        let bundle = ExternallyVerifiedBundle::load_with_vision_provider(
+        ExternallyVerifiedBundle::load_with_vision_provider(
             "saved_artifact_ocr",
             &bytes,
             expected,
             provider,
         )
-        .map_err(|error| source_error("saved_ocr_package_invalid", error))?;
+        .map_err(|error| source_error("saved_ocr_package_invalid", error))?
+        };
         check_deadline(deadline)?;
         let observation =
             evaluate_saved_artifact_ocr(&bundle, &image, dimensions, &input.target_id, deadline)

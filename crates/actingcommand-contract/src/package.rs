@@ -85,6 +85,14 @@ impl Default for PackageRef {
 }
 
 impl PackageRef {
+    pub fn prefixed_wire_value(&self) -> serde_json::Value {
+        match self {
+            Self::LegacyZipSha256(hash) if hash.is_empty() => serde_json::Value::String(String::new()),
+            Self::LegacyZipSha256(hash) => serde_json::Value::String(format!("sha256:{hash}")),
+            Self::GitSourceTree(reference) => serde_json::json!(reference),
+        }
+    }
+
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::LegacyZipSha256(value) => {
@@ -105,7 +113,7 @@ impl PackageRef {
     }
 
     pub fn parse_argument(value: &str) -> RuntimeContractResult<Self> {
-        let reference = if value.starts_with('{') {
+        let reference = if value.trim_start().starts_with('{') {
             serde_json::from_str(value)
                 .map(Self::GitSourceTree)
                 .map_err(|_| RuntimeContractError::new("invalid_source_tree_reference"))?
@@ -151,22 +159,20 @@ fn lower_hex(value: &str) -> bool {
     value.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-/// Policy's existing wire uses a prefixed ZIP digest. Its canonical bytes are
-/// retained while source-tree values carry the common versioned reference.
-pub mod policy_reference {
+/// Existing prefixed ZIP digest slots retain their canonical bytes while
+/// source-tree values carry the common versioned reference.
+pub mod prefixed_reference {
     use super::*;
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(value: &PackageRef, serializer: S) -> Result<S::Ok, S::Error> {
-        match value {
-            PackageRef::LegacyZipSha256(hash) => serializer.serialize_str(&format!("sha256:{hash}")),
-            PackageRef::GitSourceTree(_) => value.serialize(serializer),
-        }
+        value.prefixed_wire_value().serialize(serializer)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<PackageRef, D::Error> {
         let value = PackageRef::deserialize(deserializer)?;
         match value {
+            PackageRef::LegacyZipSha256(hash) if hash.is_empty() => Ok(PackageRef::LegacyZipSha256(hash)),
             PackageRef::LegacyZipSha256(hash) => {
                 let hash = hash.strip_prefix("sha256:").ok_or_else(|| serde::de::Error::custom("policy package digest requires sha256 prefix"))?;
                 Ok(hash.into())
@@ -176,20 +182,18 @@ pub mod policy_reference {
     }
 }
 
-pub mod optional_policy_reference {
+pub mod optional_prefixed_reference {
     use super::*;
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(value: &Option<PackageRef>, serializer: S) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(PackageRef::LegacyZipSha256(hash)) => serializer.serialize_some(&format!("sha256:{hash}")),
-            _ => value.serialize(serializer),
-        }
+        value.as_ref().map(PackageRef::prefixed_wire_value).serialize(serializer)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PackageRef>, D::Error> {
         let value = Option::<PackageRef>::deserialize(deserializer)?;
         match value {
+            Some(PackageRef::LegacyZipSha256(hash)) if hash.is_empty() => Ok(Some(PackageRef::LegacyZipSha256(hash))),
             Some(PackageRef::LegacyZipSha256(hash)) => {
                 let hash = hash.strip_prefix("sha256:").ok_or_else(|| serde::de::Error::custom("policy package digest requires sha256 prefix"))?;
                 Ok(Some(hash.into()))

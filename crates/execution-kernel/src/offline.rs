@@ -173,7 +173,7 @@ pub fn simulate_contained_task(
     };
 
     let package_id = task.package_label().to_string();
-    let package_sha256 = task.package_sha256().to_string();
+    let package_sha256 = task.package_sha256().clone();
     let task_id = task.task_label().to_string();
     let post_admission_ocr_declared = task.has_post_admission_ocr();
     let decision_fingerprint = fingerprint_decision(
@@ -207,7 +207,7 @@ pub fn simulate_contained_task(
 struct DecisionFingerprintProjection<'a> {
     schema_version: &'static str,
     package_id: &'a str,
-    package_sha256: &'a str,
+    package_sha256: &'a actingcommand_contract::PackageRef,
     task_id: &'a str,
     recognition: &'a [OfflineRecognitionResult],
     decision: &'a OfflineDecision,

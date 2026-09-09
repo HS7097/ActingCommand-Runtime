@@ -46,6 +46,12 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
+            let observer = if matches!(&input.expected_sha256, actingcommand_contract::PackageRef::GitSourceTree(_)) {
+                let deadline = Instant::now().checked_add(Duration::from_millis(ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS))
+                    .ok_or_else(|| observation_integrity_failure("lab_package_deadline_overflow"))?;
+                PreparedPageObservation::load_path(instance_alias, path, &input.expected_sha256, &[], self.execution.vision_provider(), deadline)
+                    .map_err(observation_kernel_error)?
+            } else {
             let file = fs::File::open(path).map_err(|error| {
                 observation_admission_error(
                     "observation_package_open_failed",
@@ -71,21 +77,22 @@ impl HostShared {
                 ));
             }
             let expected =
-                ExternalExpectedSha256::parse_hex(&input.expected_sha256).map_err(|error| {
+                ExternalExpectedSha256::parse_hex(input.expected_sha256.legacy_sha256().ok_or_else(|| observation_integrity_failure("observation_hash_invalid"))?).map_err(|error| {
                     observation_admission_error(
                         "observation_hash_invalid",
                         "admit_lab_operation",
                         error,
                     )
                 })?;
-            let observer = PreparedPageObservation::load(
+            PreparedPageObservation::load(
                 instance_alias,
                 &bytes,
                 expected,
                 &[],
                 self.execution.vision_provider(),
             )
-            .map_err(observation_kernel_error)?;
+            .map_err(observation_kernel_error)?
+            };
             if input
                 .after
                 .as_ref()

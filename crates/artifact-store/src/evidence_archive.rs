@@ -28,14 +28,15 @@ pub enum PackageVerification {
 #[serde(deny_unknown_fields)]
 pub struct EvidencePackage {
     file_name: String,
-    sha256: String,
+    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
+    sha256: actingcommand_contract::PackageRef,
     verification: PackageVerification,
 }
 
 impl EvidencePackage {
     pub fn new(
         file_name: impl Into<String>,
-        sha256: impl AsRef<str>,
+        sha256: impl Into<actingcommand_contract::PackageRef>,
         verification: PackageVerification,
     ) -> ArtifactStoreResult<Self> {
         let file_name = file_name.into();
@@ -52,9 +53,13 @@ impl EvidencePackage {
                 "package file name must be one safe file-name component",
             ));
         }
+        let sha256 = sha256.into();
+        sha256.validate().map_err(|_| ArtifactStoreError::fatal(
+            "evidence_package_invalid", "create_evidence_package", "package reference is invalid",
+        ))?;
         Ok(Self {
             file_name,
-            sha256: normalize_sha256(sha256.as_ref())?,
+            sha256,
             verification,
         })
     }
@@ -63,7 +68,7 @@ impl EvidencePackage {
         &self.file_name
     }
 
-    pub fn sha256(&self) -> &str {
+    pub fn sha256(&self) -> &actingcommand_contract::PackageRef {
         &self.sha256
     }
 

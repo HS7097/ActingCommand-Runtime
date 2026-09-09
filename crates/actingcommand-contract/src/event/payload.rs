@@ -2499,7 +2499,7 @@ pub struct PolicyDispatchPayload {
     task_id: String,
     instance_id: String,
     operation_id: String,
-    #[serde(default, with = "crate::package::policy_reference")]
+    #[serde(default, with = "crate::package::prefixed_reference")]
     package_digest: crate::PackageRef,
     #[serde(default)]
     procedure_binding_digest: String,
