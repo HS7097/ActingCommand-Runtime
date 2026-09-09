@@ -1553,16 +1553,42 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         2,
     );
 
-    let failed = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
-        .args(["--config", config_path.to_str().expect("config path")])
-        .output()
-        .expect("run failing scheduled actingd");
-    assert!(!failed.status.success());
-    assert!(
-        String::from_utf8_lossy(&failed.stderr).contains("page_confirmation_failed"),
-        "unexpected scheduled failure: {}",
-        String::from_utf8_lossy(&failed.stderr)
-    );
+    let mut resident = ChildGuard(start_actingd(&config_path));
+    wait_for_runtime_info(&mut resident.0, root.path());
+    let resident_client = wait_for_agent_client(&mut resident.0, root.path());
+    let started = Instant::now();
+    loop {
+        let completed = resident_client
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::PolicyDispatchCompleted),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("query resident failure completion");
+        assert!(
+            resident
+                .0
+                .try_wait()
+                .expect("resident process state")
+                .is_none(),
+            "a recoverable scheduled failure must keep the driver alive"
+        );
+        if !completed.is_empty() {
+            assert_eq!(completed.len(), 1, "failed decision settles exactly once");
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "resident failure settlement timed out"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(resident_client);
+    resident.0.kill().expect("stop resident before recovery");
+    let status = resident.0.wait().expect("wait resident before recovery");
+    assert!(!status.success());
 
     let mut recovery_config: Value =
         serde_json::from_slice(&fs::read(&config_path).expect("read recovery config"))

@@ -237,12 +237,7 @@ fn execute_policy_cycle(
         let admission = match admission {
             Ok(admission) => admission,
             Err(error) if !error.is_fatal() => {
-                eprintln!(
-                    "WARNING actingd policy admission refused decision={} code={} operation={}",
-                    intent.decision_id,
-                    error.code(),
-                    error.operation()
-                );
+                // Runtime admission preserves the typed rejection in GlobalLedger.
                 continue;
             }
             Err(error) => return Err(ActingdError::runtime(error)),
@@ -255,12 +250,19 @@ fn execute_policy_cycle(
                 task.mode,
                 policy.registry_modes.get(context.instance_alias()).copied(),
             )?;
-            let receipt = host
-                .run_scheduled_contained_task(&context, &task.request)
-                .map_err(ActingdError::runtime)?;
-            let (execution, projection) = host
-                .complete_scheduled_policy_run(&context, &receipt)
-                .map_err(ActingdError::runtime)?;
+            let receipt = match host.run_scheduled_contained_task(&context, &task.request) {
+                Ok(receipt) => receipt,
+                // Runtime owns the original failure and same-run settlement. A later
+                // candidate must pass its recovered failure disposition at admission.
+                Err(error) if !error.is_fatal() => continue,
+                Err(error) => return Err(ActingdError::runtime(error)),
+            };
+            let (execution, projection) =
+                match host.complete_scheduled_policy_run(&context, &receipt) {
+                    Ok(completed) => completed,
+                    Err(error) if !error.is_fatal() => continue,
+                    Err(error) => return Err(ActingdError::runtime(error)),
+                };
             if let Some(projection) = projection {
                 if recompute_wakes.len() >= MAX_TASKS {
                     return Err(ActingdError::process(
