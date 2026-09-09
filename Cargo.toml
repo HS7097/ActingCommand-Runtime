@@ -25,6 +25,7 @@ members = [
     "crates/recognition-pack",
     "crates/resource-tooling",
     "crates/runtime-client",
+    "crates/runtime-database",
     "crates/runtime-host",
     "crates/runtime-state",
     "crates/scheduler",
@@ -57,6 +58,7 @@ actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-resource-tooling = { path = "crates/resource-tooling" }
 actingcommand-runtime-client = { path = "crates/runtime-client" }
+actingcommand-runtime-database = { path = "crates/runtime-database" }
 actingcommand-runtime-host = { path = "crates/runtime-host" }
 actingcommand-runtime-state = { path = "crates/runtime-state" }
 actingcommand-scheduler = { path = "crates/scheduler" }

@@ -106,6 +106,36 @@ Activity sampling uses a ledger-derived seed and `same_round_stable`: the host r
 
 ## Runtime Enforcement
 
+Time validity is evaluated over the pinned input snapshot. Timeline invalidation
+matches an observation's key prefix and scope (the same scope or a containing
+server/game scope). Outcome keys are `outcome.<task_id>.<outcome_key>`; settled
+execution state without mapped outcomes uses `task.<task_id>.terminal_state`.
+Only schedule occurrences inside the event's V2 half-open validity interval
+invalidate observations. V1 occurrences are unbounded. Duration controls
+availability, including zero-duration resets, and does not undo invalidation.
+An observation at or before the last matching reset is Unknown until replaced
+by a newer observation. Equal timestamps are conservative because the input
+contains no ordering evidence within that millisecond.
+
+`ObservedOutcome.expires_at_unix_ms` is optional and uses the fact TTL convention:
+the expiry millisecond is valid and expiry + 1 wakes reevaluation. Matching future
+resets cap admission freshness at occurrence - 1 and wake at the occurrence.
+Ledger-derived pools consume the same effective fact projection.
+
+The first dispatch depends on `trigger`. `feedback_stop` is evaluated only after
+a valid result for the same task and instance in the current activity window.
+`ObservedOutcome.activity_window_id` comes from the settled run's admission;
+`TaskRuntimeSnapshot.completed_window` carries the settled window ID and completion
+timestamp for tasks with no mapped outcome consumer. Window identity follows the
+selected activity profile and its first active declared window, including its
+local start day for windows crossing midnight. A result must both name that
+window and have completed inside it. An enabled stop predicate retains Unknown
+when its required observation is unavailable. Missing historical window fields
+default to `None`, which supplies no evidence for feedback stop; a missing outcome
+expiry supplies no additional TTL. An enabled feedback stop's activity-window
+closure also bounds freshness and wakes reevaluation. These input projections add no ledger wire or stored
+transaction state.
+
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
 
 Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same error code and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.

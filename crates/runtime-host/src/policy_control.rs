@@ -9,7 +9,7 @@ use actingcommand_contract::{
     PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, RuntimeErrorCode,
 };
 use actingcommand_policy::{
-    ActivityProfile, ActivityWindow, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec,
+    ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -504,58 +504,10 @@ pub(crate) fn active_activity_window(
     profile: &ActivityProfile,
     now_unix_ms: u64,
 ) -> RuntimeHostResult<(i64, String)> {
-    for (index, window) in profile.windows.iter().enumerate() {
-        if let Some(local_day) = window_local_day(window, now_unix_ms)? {
-            return Ok((local_day, format!("{}:{local_day}:{index}", profile.id)));
-        }
-    }
-    Err(request(
-        "policy_activity_window_closed",
-        "reserve_policy_budget",
-    ))
-}
-
-fn window_local_day(window: &ActivityWindow, now_unix_ms: u64) -> RuntimeHostResult<Option<i64>> {
-    let local_ms = i128::from(now_unix_ms)
-        .checked_add(i128::from(window.utc_offset_minutes) * MILLIS_PER_MINUTE)
-        .ok_or_else(|| fatal("policy_activity_time_overflow", "resolve_activity_window"))?;
-    let local_day = local_ms.div_euclid(MILLIS_PER_DAY);
-    let minute_of_day = local_ms.rem_euclid(MILLIS_PER_DAY) / MILLIS_PER_MINUTE;
-    let minute_of_day = u16::try_from(minute_of_day)
-        .map_err(|_| fatal("policy_activity_time_invalid", "resolve_activity_window"))?;
-    let current_weekday = weekday(local_day);
-    let previous_day = local_day
-        .checked_sub(1)
-        .ok_or_else(|| fatal("policy_activity_day_overflow", "resolve_activity_window"))?;
-    let active_day = if window.start_minute_of_day == window.end_minute_of_day {
-        window
-            .weekdays
-            .contains(&current_weekday)
-            .then_some(local_day)
-    } else if window.start_minute_of_day < window.end_minute_of_day {
-        (window.weekdays.contains(&current_weekday)
-            && minute_of_day >= window.start_minute_of_day
-            && minute_of_day < window.end_minute_of_day)
-            .then_some(local_day)
-    } else if minute_of_day >= window.start_minute_of_day
-        && window.weekdays.contains(&current_weekday)
-    {
-        Some(local_day)
-    } else if minute_of_day < window.end_minute_of_day
-        && window.weekdays.contains(&weekday(previous_day))
-    {
-        Some(previous_day)
-    } else {
-        None
-    };
-    active_day
-        .map(i64::try_from)
-        .transpose()
-        .map_err(|_| fatal("policy_activity_day_overflow", "resolve_activity_window"))
-}
-
-fn weekday(local_day: i128) -> u8 {
-    ((local_day + 3).rem_euclid(7) + 1) as u8
+    activity_window_at(profile, now_unix_ms)
+        .map_err(|_| fatal("policy_activity_day_overflow", "resolve_activity_window"))?
+        .map(|window| (window.local_day, window.window_id))
+        .ok_or_else(|| request("policy_activity_window_closed", "reserve_policy_budget"))
 }
 
 fn activity_seed(decision_id: &str, profile_id: &str, window_id: &str) -> u64 {

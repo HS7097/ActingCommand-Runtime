@@ -18,10 +18,10 @@ use actingcommand_contract::{
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
     ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    DecisionReason, DecisionReasonChain, DispatchIntent, DispatchPrerequisites, EvaluationFacts,
-    EvaluationResources, EvaluationTime, InstanceSnapshot, MAX_EVALUATION_INSTANCES,
-    PolicyEvaluation, ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState, compile_catalog,
-    evaluate_with_eligibility,
+    CompletedActivityWindow, DecisionReason, DecisionReasonChain, DispatchIntent,
+    DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime, InstanceSnapshot,
+    MAX_EVALUATION_INSTANCES, PolicyEvaluation, ScopeSelector, TaskRuntimeSnapshot,
+    TaskTerminalState, compile_catalog, evaluate_with_eligibility,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use serde::{Deserialize, Serialize};
@@ -418,6 +418,7 @@ pub(crate) struct CompletedPolicyRunIdentity {
     pub(crate) lease_id: LeaseId,
     pub(crate) execution_outcome: PolicyExecutionOutcome,
     pub(crate) completion_sequence: u64,
+    pub(crate) activity_window_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -900,7 +901,7 @@ impl PolicyHost {
                         "project_policy_task_state",
                     )
                 })?;
-                let terminal_state = if dispatch
+                let (terminal_state, completed_window) = if dispatch
                     .completed_sequence
                     .is_some_and(|sequence| sequence <= ledger_position)
                 {
@@ -910,12 +911,19 @@ impl PolicyHost {
                             "project_policy_task_state",
                         )
                     })?;
-                    Some(match execution.outcome {
+                    let terminal_state = match execution.outcome {
                         PolicyExecutionOutcome::Succeeded { .. } => TaskTerminalState::Succeeded,
                         PolicyExecutionOutcome::Failed { .. } => TaskTerminalState::Failed,
-                    })
+                    };
+                    (
+                        Some(terminal_state),
+                        Some(CompletedActivityWindow {
+                            window_id: admission.activity.window_id.clone(),
+                            completed_at_unix_ms: execution.observed_at_unix_ms,
+                        }),
+                    )
                 } else {
-                    None
+                    (None, None)
                 };
                 Ok(TaskRuntimeSnapshot {
                     task_id: task_id.to_owned(),
@@ -924,6 +932,7 @@ impl PolicyHost {
                     // No ledger fact establishes the start of continuous eligibility.
                     eligible_since_unix_ms: None,
                     terminal_state,
+                    completed_window,
                 })
             })
             .collect()
@@ -2512,6 +2521,18 @@ fn completed_policy_run_identity(
     data: &PolicyDispatchEventData,
     execution: &PolicyExecutionEventData,
 ) -> RuntimeHostResult<CompletedPolicyRunIdentity> {
+    let EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) = event.payload() else {
+        return Err(fatal(
+            "policy_dispatch_completion_incomplete",
+            "recover_policy_dispatches",
+        ));
+    };
+    let admission = payload.admission().ok_or_else(|| {
+        fatal(
+            "policy_dispatch_admission_missing",
+            "recover_policy_dispatches",
+        )
+    })?;
     let links = event.links();
     let (
         Some(instance_id),
@@ -2546,6 +2567,7 @@ fn completed_policy_run_identity(
         lease_id: *lease_id,
         execution_outcome: execution.outcome.clone(),
         completion_sequence: event.sequence(),
+        activity_window_id: admission.activity.window_id.clone(),
     })
 }
 

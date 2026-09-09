@@ -46,6 +46,7 @@ const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
     "crates/recognition",
     "crates/recognition-pack",
     "crates/runtime-client",
+    "crates/runtime-database",
     "crates/runtime-host",
     "crates/runtime-state",
     "crates/scheduler",
@@ -188,6 +189,7 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
     for required_root in [
         "crates/host-metrics",
         "crates/policy",
+        "crates/runtime-database",
         "crates/runtime-state",
     ] {
         assert!(
@@ -333,7 +335,9 @@ fn c3b_client_device_authority_stays_behind_runtime() {
             let dependency_name = dependency["name"].as_str().expect("dependency name");
             if matches!(
                 dependency_name,
-                "actingcommand-device" | "actingcommand-recognition"
+                "actingcommand-device"
+                    | "actingcommand-recognition"
+                    | "actingcommand-runtime-database"
             ) {
                 violations.push(format!(
                     "{package_name}: production dependency reaches {dependency_name}"
@@ -1312,12 +1316,14 @@ fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
         .expect("read Runtime contract");
     let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
         .expect("read Runtime host");
+    let read_events = fs::read_to_string(root.join("crates/runtime-host/src/host/read_events.rs"))
+        .expect("read Runtime host read events");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
     let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
 
     assert!(contract.contains("RuntimeControlPlaneStatus"));
-    assert!(host.contains("fn control_plane_status"));
+    assert!(read_events.contains("fn control_plane_status"));
     assert!(host.contains("initial_registered_instances"));
     assert!(client.contains("pub fn status"));
     assert!(!lab.contains("RuntimeControlPlaneStatus"));
