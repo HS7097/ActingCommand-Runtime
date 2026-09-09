@@ -361,3 +361,33 @@ fn converted_offset_click_rejects_color_probe_guard() {
     assert!(err.message.contains("requires a template guard"));
     assert!(err.message.contains("must be a template target"));
 }
+
+#[test]
+fn schema_0_6_converter_rejects_deprecated_template_primitives_with_migration_diagnostics() {
+    let build = |source: Value| {
+        pack_target(
+            &source,
+            "fixture/target",
+            "operations/fixture/assets/TARGET.png",
+            Value::String("full_frame".to_string()),
+            json!(0.9),
+            None,
+            None,
+        )
+    };
+
+    for (source, expected) in [
+        (json!({"method":"RGBCount"}), "rgb_count"),
+        (json!({"method":"HSVCount"}), "hsv_count"),
+        (json!({"maskRange":[7,199]}), "template mask"),
+    ] {
+        let error = build(source).expect_err("deprecated primitive must not be emitted");
+        assert!(
+            error.message.contains(expected),
+            "expected {expected:?} in {:?}",
+            error.message
+        );
+        assert!(error.message.contains("schema 0.6"));
+        assert!(error.message.contains("migrate"));
+    }
+}
