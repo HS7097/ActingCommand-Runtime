@@ -54,9 +54,13 @@ impl EvidencePackage {
             ));
         }
         let sha256 = sha256.into();
-        sha256.validate().map_err(|_| ArtifactStoreError::fatal(
-            "evidence_package_invalid", "create_evidence_package", "package reference is invalid",
-        ))?;
+        sha256.validate().map_err(|_| {
+            ArtifactStoreError::fatal(
+                "evidence_package_invalid",
+                "create_evidence_package",
+                "package reference is invalid",
+            )
+        })?;
         Ok(Self {
             file_name,
             sha256,

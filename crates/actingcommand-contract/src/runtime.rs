@@ -1485,7 +1485,8 @@ impl PackageDebugRequest {
         {
             return Err(RuntimeContractError::new("invalid_debug_package_path"));
         }
-        self.expected_sha256.validate()
+        self.expected_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_debug_package_hash"))
     }
 
@@ -1537,7 +1538,8 @@ impl ContainedTaskRecoveryBinding {
                 "invalid_contained_task_recovery_path",
             ));
         }
-        self.expected_sha256.validate()
+        self.expected_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_contained_task_recovery_hash"))
     }
 
@@ -1600,7 +1602,8 @@ impl ContainedTaskRequest {
         {
             return Err(RuntimeContractError::new("invalid_contained_task_path"));
         }
-        self.expected_sha256.validate()
+        self.expected_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))?;
         if let Some(recovery) = &self.recovery {
             recovery.validate()?;
@@ -1936,7 +1939,8 @@ impl PackageDebugSummary {
         {
             return Err(RuntimeContractError::new("invalid_debug_package_summary"));
         }
-        self.verified_sha256.validate()
+        self.verified_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_debug_package_summary"))
     }
 

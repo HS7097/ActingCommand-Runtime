@@ -33,7 +33,9 @@ impl ProcedureBinding {
         let operation_id = operation_id.into();
         validate_token(&procedure_ref, "procedure_ref")?;
         validate_token(&operation_id, "operation_id")?;
-        package_digest.validate().map_err(|_| manifest_fatal("procedure_package_digest_invalid", "package_digest"))?;
+        package_digest
+            .validate()
+            .map_err(|_| manifest_fatal("procedure_package_digest_invalid", "package_digest"))?;
         for yield_point in &yield_points {
             validate_token(yield_point, "yield_point")?;
         }
@@ -237,13 +239,22 @@ fn binding_digest(
     yield_points: &[String],
 ) -> RuntimeHostResult<String> {
     let encoded = match package_digest {
-        actingcommand_contract::PackageRef::LegacyZipSha256(hash) =>
-            serde_json::to_vec(&(procedure_ref, format!("{SHA256_PREFIX}{hash}"), operation_id, yield_points)),
-        actingcommand_contract::PackageRef::GitSourceTree(_) =>
-            serde_json::to_vec(&("actingcommand.procedure-binding.v2", procedure_ref, package_digest, operation_id, yield_points)),
+        actingcommand_contract::PackageRef::LegacyZipSha256(hash) => serde_json::to_vec(&(
+            procedure_ref,
+            format!("{SHA256_PREFIX}{hash}"),
+            operation_id,
+            yield_points,
+        )),
+        actingcommand_contract::PackageRef::GitSourceTree(_) => serde_json::to_vec(&(
+            "actingcommand.procedure-binding.v2",
+            procedure_ref,
+            package_digest,
+            operation_id,
+            yield_points,
+        )),
     };
-    let bytes = encoded
-        .map_err(|_| manifest_fatal("procedure_binding_encode_failed", "bind_procedure"))?;
+    let bytes =
+        encoded.map_err(|_| manifest_fatal("procedure_binding_encode_failed", "bind_procedure"))?;
     Ok(format!("{SHA256_PREFIX}{:x}", Sha256::digest(bytes)))
 }
 

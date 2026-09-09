@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::PackageRef;
 use actingcommand_contract::page_projection::{
     ProjectionCatalog, ProjectionMetadata, VerifiedProjectionMetadata,
 };
-use actingcommand_contract::PackageRef;
 use actingcommand_page_detector::{
     PageDefinition, PageDetector, PageSet, load_page_set_from_json_str,
 };
@@ -24,8 +24,8 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 use zip::ZipArchive;
 
-pub mod source;
 mod git_source;
+pub mod source;
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
 
@@ -180,29 +180,52 @@ impl Containment {
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
-        expected.validate().map_err(|_| git_source::source_error("package_reference_invalid"))?;
+        expected
+            .validate()
+            .map_err(|_| git_source::source_error("package_reference_invalid"))?;
         match expected {
             PackageRef::LegacyZipSha256(hash) => {
-                let file = std::fs::File::open(locator).map_err(|_| git_source::source_error("package_open_failed"))?;
-                let metadata = file.metadata().map_err(|_| git_source::source_error("package_metadata_failed"))?;
+                let file = std::fs::File::open(locator)
+                    .map_err(|_| git_source::source_error("package_open_failed"))?;
+                let metadata = file
+                    .metadata()
+                    .map_err(|_| git_source::source_error("package_metadata_failed"))?;
                 if !metadata.is_file() || metadata.len() > self.limits.max_compressed_bytes {
                     return Err(git_source::source_error("package_size_invalid"));
                 }
                 let mut bytes = Vec::new();
-                file.take(self.limits.max_compressed_bytes.saturating_add(1)).read_to_end(&mut bytes)
+                file.take(self.limits.max_compressed_bytes.saturating_add(1))
+                    .read_to_end(&mut bytes)
                     .map_err(|_| git_source::source_error("package_read_failed"))?;
-                if std::time::Instant::now() >= deadline { return Err(git_source::source_error("package_deadline")); }
+                if std::time::Instant::now() >= deadline {
+                    return Err(git_source::source_error("package_deadline"));
+                }
                 self.load_for(instance, &bytes, &Sha256Hash::parse_hex(hash)?, observation)
             }
             PackageRef::GitSourceTree(reference) => {
                 let entries = git_source::snapshot(locator, reference, self.limits, deadline)?;
-                let package = git_source::compile(entries, self.limits)?;
-                if std::time::Instant::now() >= deadline { return Err(git_source::source_error("source_tree_deadline")); }
-                let bundle = LoadedBundle::from_memory_package(package, expected.clone(),
-                    self.vision_provider.as_ref().map(Arc::clone), observation)?;
-                let bench = self.benches.entry(instance.clone()).or_insert_with(|| Bench::new(instance.clone()));
+                let package = git_source::compile(entries, self.limits, deadline)?;
+                if std::time::Instant::now() >= deadline {
+                    return Err(git_source::source_error("source_tree_deadline"));
+                }
+                let bundle = LoadedBundle::from_memory_package(
+                    package,
+                    expected.clone(),
+                    self.vision_provider.as_ref().map(Arc::clone),
+                    observation,
+                )?;
+                if std::time::Instant::now() >= deadline {
+                    return Err(git_source::source_error("source_tree_deadline"));
+                }
+                let bench = self
+                    .benches
+                    .entry(instance.clone())
+                    .or_insert_with(|| Bench::new(instance.clone()));
                 bench.loaded = Some(bundle);
-                Ok(bench.loaded.as_ref().expect("bundle inserted before returning"))
+                Ok(bench
+                    .loaded
+                    .as_ref()
+                    .expect("bundle inserted before returning"))
             }
         }
     }
@@ -910,7 +933,9 @@ impl AssetResolver for MemoryAssetResolver {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainmentError {
-    SourceTree { message: String },
+    SourceTree {
+        code: &'static str,
+    },
     InvalidInstanceId,
     MissingTaskId,
     InvalidHash {
@@ -984,7 +1009,7 @@ pub enum ContainmentError {
 impl fmt::Display for ContainmentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SourceTree { message } => write!(f, "fatal containment error: {message}"),
+            Self::SourceTree { code } => write!(f, "fatal containment error: {code}"),
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
             Self::InvalidHash { value } => write!(
@@ -1946,7 +1971,10 @@ mod tests {
             .expect("bundle loaded");
 
         assert_eq!(bundle.task_id().as_str(), "task_a");
-        assert_eq!(bundle.verified_hash(), expected);
+        assert_eq!(
+            bundle.package_ref(),
+            &PackageRef::LegacyZipSha256(expected.to_string())
+        );
         let evaluator = bundle.evaluator().expect("evaluator");
         let scene = Scene::from_pixels(1, 1, &[255, 0, 0], ScenePixelFormat::Rgb8).expect("scene");
         let result = evaluator

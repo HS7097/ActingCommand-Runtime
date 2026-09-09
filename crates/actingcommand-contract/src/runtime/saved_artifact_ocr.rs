@@ -37,7 +37,12 @@ impl SavedArtifactOcrRequest {
             || !std::path::Path::new(&source.state_root).is_absolute()
             || self.target_id.trim().is_empty()
             || self.target_id.len() > 4096
-            || self.expected_sha256.validate().is_err()
+            || match &self.expected_sha256 {
+                crate::PackageRef::LegacyZipSha256(hash) => {
+                    hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }
+                source => source.validate().is_err(),
+            }
             || source.artifact.validate().is_err()
             || source.artifact.kind != ArtifactKind::CaptureFrame
             || source.artifact.frame_id != Some(source.frame_id)

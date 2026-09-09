@@ -798,8 +798,8 @@ fn procedure_alias_rebinding_reports_package_digest_mismatch_before_lease() {
         .expect("replacement intent");
     assert_ne!(replacement.decision_id, intent.decision_id);
     assert_ne!(
-        replacement.package_digest.as_deref(),
-        Some(original_package_digest.as_str())
+        replacement.package_digest.as_ref(),
+        Some(&original_package_digest)
     );
 
     let mut client = TestClient::connect(&host);

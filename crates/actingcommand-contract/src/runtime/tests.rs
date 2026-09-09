@@ -777,11 +777,84 @@ fn contained_task_recovery_binding_is_optional_typed_and_hash_bound() {
         .expect("request with recovery");
     let recovery = request.recovery().expect("typed recovery binding");
     assert_eq!(recovery.package_path(), "C:/sealed/return-home.zip");
-    assert_eq!(recovery.expected_sha256(), "1".repeat(64));
+    assert_eq!(recovery.expected_sha256(), &"1".repeat(64).into());
     assert!(
         ContainedTaskRecoveryBinding::new("C:/sealed/return-home.zip", "1".repeat(63)).is_err()
     );
     assert!(!format!("{request:?}").contains("return-home.zip"));
+
+    // Source-tree references use the same request/recovery identity contract.
+    let source_wire = serde_json::json!({
+        "schema_version": "actingcommand.package.git-source-tree.v1",
+        "repository": "https://example.org/team/resources",
+        "commit": {"algorithm": "sha1", "hex": "a".repeat(40)},
+        "bundle_path": "bundles/neutral",
+        "tree": {"algorithm": "sha1", "hex": "b".repeat(40)}
+    });
+    let source: crate::PackageRef =
+        serde_json::from_value(source_wire.clone()).expect("source reference");
+    source.validate().expect("complete source reference");
+    let request = ContainedTaskRequest::new("C:/sources/bundles/neutral", source.clone())
+        .expect("source request")
+        .with_recovery(
+            ContainedTaskRecoveryBinding::new("C:/sources/bundles/neutral", source.clone())
+                .expect("source recovery"),
+        )
+        .expect("source recovery request");
+    let wire = serde_json::to_value(&request).expect("source request encoding");
+    assert_eq!(wire["expected_sha256"], source_wire);
+    let decoded: ContainedTaskRequest =
+        serde_json::from_value(wire).expect("source request decoding");
+    assert_eq!(decoded.expected_sha256(), &source);
+    assert_eq!(
+        decoded
+            .recovery()
+            .expect("source recovery")
+            .expected_sha256(),
+        &source
+    );
+    for (field, replacement) in [
+        (
+            "repository",
+            serde_json::json!("https://example.org/team/alternate"),
+        ),
+        (
+            "commit",
+            serde_json::json!({"algorithm":"sha1","hex":"c".repeat(40)}),
+        ),
+        ("bundle_path", serde_json::json!("bundles/alternate")),
+        (
+            "tree",
+            serde_json::json!({"algorithm":"sha1","hex":"d".repeat(40)}),
+        ),
+    ] {
+        let mut changed = source_wire.clone();
+        changed[field] = replacement;
+        let changed: crate::PackageRef =
+            serde_json::from_value(changed).expect("changed source reference");
+        changed.validate().expect("valid alternate identity");
+        assert_ne!(source, changed, "{field} participates in package identity");
+    }
+    for (field, replacement) in [
+        (
+            "repository",
+            serde_json::json!("https://credential@example.org/team/resources"),
+        ),
+        ("bundle_path", serde_json::json!("../outside")),
+        (
+            "tree",
+            serde_json::json!({"algorithm":"sha256","hex":"b".repeat(64)}),
+        ),
+    ] {
+        let mut invalid = source_wire.clone();
+        invalid[field] = replacement;
+        let invalid: crate::PackageRef =
+            serde_json::from_value(invalid).expect("invalid source shape");
+        assert!(
+            invalid.validate().is_err(),
+            "{field} rejects ambiguous reference"
+        );
+    }
 }
 
 #[test]

@@ -2398,14 +2398,22 @@ fn detection_signal_id(kind: &str, components: &[&str]) -> String {
 fn event_data(
     payload: &actingcommand_contract::PolicyDispatchPayload,
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
-    payload.package_digest().validate().map_err(|_| fatal("procedure_binding_event_invalid", "recover_policy_dispatches"))?;
-    for digest in [payload.procedure_binding_digest()] {
-        let valid = digest.strip_prefix("sha256:").is_some_and(|value| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        });
+    payload.package_digest().validate().map_err(|_| {
+        fatal(
+            "procedure_binding_event_invalid",
+            "recover_policy_dispatches",
+        )
+    })?;
+    {
+        let valid = payload
+            .procedure_binding_digest()
+            .strip_prefix("sha256:")
+            .is_some_and(|value| {
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            });
         if !valid {
             return Err(fatal(
                 "procedure_binding_event_invalid",

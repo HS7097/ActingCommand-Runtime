@@ -85,8 +85,16 @@ impl PreparedPageObservation {
         provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, OnlineObservationError> {
-        let bundle = ExternallyVerifiedBundle::load_path(instance, locator, expected, true, provider, deadline)
-            .map_err(|error| OnlineObservationError::new("observation_containment_failed", "admit_contained_observation", error))?;
+        let bundle = ExternallyVerifiedBundle::load_path(
+            instance, locator, expected, true, provider, deadline,
+        )
+        .map_err(|error| {
+            OnlineObservationError::new(
+                "observation_containment_failed",
+                "admit_contained_observation",
+                error,
+            )
+        })?;
         Self::from_bundle(bundle, targets)
     }
 
@@ -109,7 +117,10 @@ impl PreparedPageObservation {
         Self::from_bundle(bundle, targets)
     }
 
-    fn from_bundle(bundle: ExternallyVerifiedBundle, targets: &[String]) -> Result<Self, OnlineObservationError> {
+    fn from_bundle(
+        bundle: ExternallyVerifiedBundle,
+        targets: &[String],
+    ) -> Result<Self, OnlineObservationError> {
         let loaded = bundle.loaded_bundle();
         let invalid = |cause: &str| {
             OnlineObservationError::new(

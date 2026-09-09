@@ -76,7 +76,9 @@ impl ExternallyVerifiedBundle {
             None => Containment::new(),
         };
         containment.load_path(&instance, locator, expected, observation, deadline)?;
-        let bundle = containment.take_loaded(&instance).ok_or(ExecutionBundleError::MissingLoadedBundle)?;
+        let bundle = containment
+            .take_loaded(&instance)
+            .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
         Ok(Self { bundle })
     }
 

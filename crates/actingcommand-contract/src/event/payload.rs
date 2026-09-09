@@ -3729,10 +3729,9 @@ fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), 
 }
 
 fn validate_task_package_sha256(value: &crate::PackageRef) -> Result<(), SanitizationError> {
-    value.validate().map_err(|_| SanitizationError::new(
-            "invalid_task_package_fingerprint",
-            "package_sha256",
-        ))
+    value
+        .validate()
+        .map_err(|_| SanitizationError::new("invalid_task_package_fingerprint", "package_sha256"))
 }
 
 fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), SanitizationError> {
@@ -5497,7 +5496,9 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     crate::validate_instance_alias(&data.instance_id)
         .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
     validate_policy_token(&data.operation_id, "operation_id")?;
-    data.package_digest.validate().map_err(|_| SanitizationError::new("invalid_policy_digest", "package_digest"))?;
+    data.package_digest
+        .validate()
+        .map_err(|_| SanitizationError::new("invalid_policy_digest", "package_digest"))?;
     validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;

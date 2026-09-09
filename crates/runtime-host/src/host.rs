@@ -4798,11 +4798,7 @@ impl HostShared {
                                 None,
                             )
                         })?;
-                        if intent
-                            .package_digest
-                            .as_ref()
-                            != Some(task_request.expected_sha256())
-                        {
+                        if intent.package_digest.as_ref() != Some(task_request.expected_sha256()) {
                             return Err(RequestFailure::request(
                                 policy_admission_request(
                                     "procedure_package_digest_mismatch",
@@ -10275,9 +10271,17 @@ impl HostShared {
         )
     }
 
-    fn package_material_deadline(&self, deadline_monotonic_ms: u64) -> Result<Instant, RequestFailure> {
-        let now = self.monotonic_ms().map_err(RequestFailure::poison_without_terminal)?;
-        Instant::now().checked_add(Duration::from_millis(deadline_monotonic_ms.saturating_sub(now)))
+    fn package_material_deadline(
+        &self,
+        deadline_monotonic_ms: u64,
+    ) -> Result<Instant, RequestFailure> {
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Instant::now()
+            .checked_add(Duration::from_millis(
+                deadline_monotonic_ms.saturating_sub(now),
+            ))
             .ok_or_else(|| contained_task_package_failure("contained_task_deadline_overflow"))
     }
 
@@ -10374,12 +10378,12 @@ impl HostShared {
             ));
         };
         context.package_digest().validate().map_err(|_| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "policy_run_package_digest_invalid",
-                    "run_scheduled_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "policy_run_package_digest_invalid",
+                "run_scheduled_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
         let expected_sha256 = context.package_digest();
         if context.correlation_id() != context.request().correlation_id()
             || context.instance_alias() != instance_alias
@@ -10445,7 +10449,16 @@ impl HostShared {
                 &error,
             ))
         })?;
-        let material_deadline = self.package_material_deadline(self.contained_task_deadline(task_request, token)?)?;
+        let source_deadline = matches!(
+            task_request.expected_sha256(),
+            actingcommand_contract::PackageRef::GitSourceTree(_)
+        )
+        .then(|| self.contained_task_deadline(task_request, token))
+        .transpose()?;
+        let material_deadline = source_deadline
+            .map(|deadline| self.package_material_deadline(deadline))
+            .transpose()?
+            .unwrap_or_else(Instant::now);
         let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
             Some(prepare_contained_task(
                 instance_alias,
@@ -10490,6 +10503,12 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+        if let Some(deadline) = source_deadline {
+            active_run
+                .control
+                .set_deadline(deadline)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         let prepared = match prepared {
             Some(prepared) => prepared,
             None => prepare_contained_task(
@@ -11071,7 +11090,8 @@ impl HostShared {
             instance_alias,
             &recovery_request,
             self.execution.vision_provider(),
-            self.package_material_deadline(runtime.control.deadline()).map_err(ContainedTaskRunError::Boundary)?,
+            self.package_material_deadline(runtime.control.deadline())
+                .map_err(ContainedTaskRunError::Boundary)?,
         ) {
             Ok(recovery) => recovery,
             Err(failure) => {
@@ -11268,11 +11288,7 @@ impl HostShared {
                     package_sha256,
                     response_deadline_monotonic_ms,
                     ..
-                } => Some((
-                    *event,
-                    package_sha256,
-                    *response_deadline_monotonic_ms,
-                )),
+                } => Some((*event, package_sha256, *response_deadline_monotonic_ms)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -17624,29 +17640,34 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
         .map_err(|_| debug_package_error("debug_package_instance_invalid"))?;
     let mut containment = Containment::new();
     let bundle = if let Some(hash) = request.expected_sha256().legacy_sha256() {
-    let file =
-        fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
-    if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
-        return Err(debug_package_error("debug_package_file_invalid"));
-    }
-    let mut bytes = Vec::new();
-    file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| debug_package_error("debug_package_read_failed"))?;
-    if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-        return Err(debug_package_error("debug_package_file_too_large"));
-    }
-    let expected = Sha256Hash::parse_hex(hash)
-        .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
-    containment.load(&instance, &bytes, &expected)
-        .map_err(|_| debug_package_error("debug_package_containment_failed"))?
+        let file =
+            fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
+        if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
+            return Err(debug_package_error("debug_package_file_invalid"));
+        }
+        let mut bytes = Vec::new();
+        file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| debug_package_error("debug_package_read_failed"))?;
+        if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
+            return Err(debug_package_error("debug_package_file_too_large"));
+        }
+        let expected = Sha256Hash::parse_hex(hash)
+            .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
+        containment
+            .load(&instance, &bytes, &expected)
+            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
     } else {
-        let deadline = Instant::now().checked_add(Duration::from_millis(ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS))
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(
+                ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+            ))
             .ok_or_else(|| debug_package_error("debug_package_deadline_overflow"))?;
-        containment.load_path(&instance, path, request.expected_sha256(), false, deadline)
+        containment
+            .load_path(&instance, path, request.expected_sha256(), false, deadline)
             .map_err(|_| debug_package_error("debug_package_containment_failed"))?
     };
     PackageDebugSummary::new(
@@ -17680,9 +17701,18 @@ fn prepare_contained_task(
             "contained_task_path_not_absolute",
         ));
     }
-    if matches!(request.expected_sha256(), actingcommand_contract::PackageRef::GitSourceTree(_)) {
-        return PreparedContainedTask::load_path(instance_alias, path, request.expected_sha256(), vision_provider, deadline)
-            .map_err(|error| contained_task_package_failure(error.code()));
+    if matches!(
+        request.expected_sha256(),
+        actingcommand_contract::PackageRef::GitSourceTree(_)
+    ) {
+        return PreparedContainedTask::load_path(
+            instance_alias,
+            path,
+            request.expected_sha256(),
+            vision_provider,
+            deadline,
+        )
+        .map_err(|error| contained_task_package_failure(error.code()));
     }
     let path = fs::canonicalize(path)
         .map_err(|_| contained_task_package_failure("contained_task_package_open_failed"))?;
@@ -17695,8 +17725,10 @@ fn prepare_contained_task(
     }
     let bytes = fs::read(&path)
         .map_err(|_| contained_task_package_failure("contained_task_package_read_failed"))?;
-    let expected = ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256()
-        .ok_or_else(|| contained_task_package_failure("contained_task_package_hash_invalid"))?)
+    let expected =
+        ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256().ok_or_else(
+            || contained_task_package_failure("contained_task_package_hash_invalid"),
+        )?)
         .map_err(|_| contained_task_package_failure("contained_task_package_hash_invalid"))?;
     match vision_provider {
         Some(provider) => PreparedContainedTask::load_with_vision_provider(

@@ -4303,8 +4303,8 @@ fn validate_admitted_package(
         ));
     };
     policy_package_digest.validate().map_err(|_| {
-            RuntimeClientError::fatal("run_summary_package_digest_invalid", "summarize_run")
-        })?;
+        RuntimeClientError::fatal("run_summary_package_digest_invalid", "summarize_run")
+    })?;
     if policy_package_digest != *admitted_package_sha256 {
         return Err(RuntimeClientError::fatal(
             "run_summary_package_digest_mismatch",
@@ -4639,10 +4639,10 @@ mod run_summary_package_tests {
         }
     }
 
-    fn digest(byte: char) -> (String, String) {
+    fn digest(byte: char) -> (String, actingcommand_contract::PackageRef) {
         let raw = byte.to_string().repeat(64);
         let canonical = format!("sha256:{raw}");
-        (raw, canonical)
+        (raw, canonical.into())
     }
 
     fn package_event(
@@ -4665,7 +4665,7 @@ mod run_summary_package_tests {
                 TaskSemanticFact::PackageAdmitted {
                     package_label: "package".to_string(),
                     task_label: "task".to_string(),
-                    package_sha256,
+                    package_sha256: package_sha256.into(),
                     response_deadline_monotonic_ms: Some(60_000),
                 },
                 AuditInput::new(),
@@ -4810,7 +4810,7 @@ mod run_summary_settlement_tests {
             task_id: "task:settlement".to_owned(),
             instance_id: "instance:settlement".to_owned(),
             operation_id: "operation:settlement".to_owned(),
-            package_digest: format!("sha256:{}", "a".repeat(64)),
+            package_digest: format!("sha256:{}", "a".repeat(64)).into(),
             procedure_binding_digest: format!("sha256:{}", "b".repeat(64)),
             reason_chain_id: "reason:settlement".to_owned(),
             reasons: vec![PolicyReasonRecord {

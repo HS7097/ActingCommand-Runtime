@@ -161,7 +161,9 @@ pub fn validate_lab_package_bytes(
 ) -> CliOutcome<LabContainedPackageValidationResponse> {
     let admitted = ExternallyVerifiedBundle::load(input_label, bytes, expected_input_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let sha256 = admitted.loaded_bundle().verified_hash().to_string();
+    let sha256 = admitted.loaded_bundle().package_ref().legacy_sha256()
+        .ok_or_else(|| CliError::package_invalid("ZIP admission requires a legacy package reference"))?
+        .to_owned();
     let task_count = admitted.loaded_bundle().task_count();
     let entries = admitted
         .loaded_bundle()
@@ -643,7 +645,9 @@ fn load_lab_package_for_run(
     let bytes = open_published_package(zip_path)?.read_all()?;
     let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected_input_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let sha256 = admitted.loaded_bundle().verified_hash().to_string();
+    let sha256 = admitted.loaded_bundle().package_ref().legacy_sha256()
+        .ok_or_else(|| CliError::package_invalid("ZIP admission requires a legacy package reference"))?
+        .to_owned();
     Ok(ContainedLabInput {
         sha256,
         hash_source: "externally_supplied",

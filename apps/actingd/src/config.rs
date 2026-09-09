@@ -508,7 +508,16 @@ fn contained_task_request(
     } else {
         source_root.join(package_path)
     };
-    let path = fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?;
+    // Preserve source locator components so containment can reject link ambiguity.
+    let path = match package_digest {
+        actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
+            fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?
+        }
+        actingcommand_contract::PackageRef::GitSourceTree(_) if path.is_absolute() => path,
+        actingcommand_contract::PackageRef::GitSourceTree(_) => std::env::current_dir()
+            .map_err(|_| "procedure_package_unavailable")?
+            .join(path),
+    };
     let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
     if match package_digest {
         actingcommand_contract::PackageRef::LegacyZipSha256(_) => !metadata.is_file(),
@@ -516,7 +525,9 @@ fn contained_task_request(
     } {
         return Err("procedure_package_not_regular");
     }
-    package_digest.validate().map_err(|_| "procedure_package_digest_invalid")?;
+    package_digest
+        .validate()
+        .map_err(|_| "procedure_package_digest_invalid")?;
     ContainedTaskRequest::new(path.to_string_lossy().into_owned(), package_digest.clone())
         .and_then(|request| {
             request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)

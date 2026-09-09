@@ -41,20 +41,15 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         content_sha256: flags.optional("--projection-hash"),
     };
     let instance = lab2_instance(global, flags);
-    let logical_path = super::super::contained_resources::explicit_path(flags, "--zip")?;
-    let expected = super::super::contained_resources::explicit_hash(flags)?;
-    let reader = actingcommand_resource_tooling::open_published_package(&logical_path)?;
+    let reader = super::super::contained_resources::PackageInput::open(flags)?;
     let result = (|| {
-        let path = reader
-            .path()
-            .canonicalize()
-            .map_err(|_| CliError::package_invalid("package path could not be resolved"))?;
+        let path = reader.path();
         let request = ContainedLabOperationRequest {
             package_path: path
                 .to_str()
                 .ok_or_else(|| CliError::package_invalid("package path is not UTF-8"))?
                 .to_string(),
-            expected_sha256: expected.hash().to_string(),
+            expected_sha256: reader.reference.clone(),
             selection,
             projection_hint,
             after,

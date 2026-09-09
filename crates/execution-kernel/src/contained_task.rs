@@ -1600,8 +1600,15 @@ impl PreparedContainedTask {
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
-        let bundle = ExternallyVerifiedBundle::load_path(instance_label, locator, expected, false, vision_provider, deadline)
-            .map_err(contained_task_admission_error)?;
+        let bundle = ExternallyVerifiedBundle::load_path(
+            instance_label,
+            locator,
+            expected,
+            false,
+            vision_provider,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
         Self::from_bundle(bundle)
     }
 
@@ -4963,6 +4970,7 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
 
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {
     let code = match &error {
+        ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
             code: RecognitionPackErrorCode::VisionProviderMissing,
             ..
@@ -7438,7 +7446,7 @@ mod post_admission_ocr_tests {
             scheduling_outcome,
             post_admission_ocr: Some(post_admission_ocr),
             post_admission_fields: None,
-            package_sha256: "fixture-sha256".to_string(),
+            package_sha256: "fixture-sha256".into(),
             entry_count: 6,
             task_count: 1,
         };
@@ -8107,7 +8115,7 @@ mod retry_wiring_tests {
             entry_page: None,
             scheduling_outcome: None,
             post_admission_ocr: None,
-            package_sha256: "fixture-sha256".to_string(),
+            package_sha256: "fixture-sha256".into(),
             post_admission_fields: None,
             entry_count: 5,
             task_count: 1,
