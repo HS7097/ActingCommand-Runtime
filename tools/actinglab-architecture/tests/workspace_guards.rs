@@ -571,9 +571,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
-        host.contains("ExternalExpectedSha256::parse_hex(request.expected_sha256())")
+        host.contains(
+            "ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256()"
+        ) && host.contains("PreparedContainedTask::load_path(")
+            && host.contains("request.expected_sha256(),")
             && host.contains("PreparedContainedTask::load(instance_alias, &bytes, expected)"),
-        "Runtime host must bind the client hash to contained package admission"
+        "Runtime host must bind the client package reference to contained package admission"
     );
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
@@ -582,10 +585,13 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        cli.contains("required_expected_sha256")
+        cli.contains("required_package_reference")
+            && cli.contains("PackageInput::open_declared(&flags, reference)")
+            && cli.contains("PackageInput::declared_reference(flags)")
+            && cli.contains("package_reader.reference.clone()")
             && cli.contains("ContainedTaskRequest::new")
             && cli.contains("run_contained_task(&instance, request)"),
-        "ActingLab production run CLI does not require an external expected hash"
+        "ActingLab production run CLI does not require an external package reference"
     );
 }
 
@@ -2474,7 +2480,7 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
         .and_then(|(_, tail)| tail.split_once("}\n\nimpl ContainedTaskRequest"))
         .map(|(body, _)| body)
         .expect("locate ContainedTaskRequest fields");
-    for required in ["package_path: String", "expected_sha256: String"] {
+    for required in ["package_path: String", "expected_sha256: crate::PackageRef"] {
         assert!(
             request.contains(required),
             "contained task request lost {required}"
