@@ -15,7 +15,7 @@ const SHA256_PREFIX: &str = "sha256:";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcedureBinding {
     procedure_ref: String,
-    package_digest: String,
+    package_digest: actingcommand_contract::PackageRef,
     operation_id: String,
     yield_points: Vec<String>,
     binding_digest: String,
@@ -24,7 +24,7 @@ pub struct ProcedureBinding {
 impl ProcedureBinding {
     pub fn new(
         procedure_ref: impl Into<String>,
-        package_digest: impl Into<String>,
+        package_digest: impl Into<actingcommand_contract::PackageRef>,
         operation_id: impl Into<String>,
         yield_points: Vec<String>,
     ) -> RuntimeHostResult<Self> {
@@ -33,7 +33,9 @@ impl ProcedureBinding {
         let operation_id = operation_id.into();
         validate_token(&procedure_ref, "procedure_ref")?;
         validate_token(&operation_id, "operation_id")?;
-        validate_sha256(&package_digest, "package_digest")?;
+        package_digest
+            .validate()
+            .map_err(|_| manifest_fatal("procedure_package_digest_invalid", "package_digest"))?;
         for yield_point in &yield_points {
             validate_token(yield_point, "yield_point")?;
         }
@@ -56,7 +58,7 @@ impl ProcedureBinding {
         &self.procedure_ref
     }
 
-    pub fn package_digest(&self) -> &str {
+    pub fn package_digest(&self) -> &actingcommand_contract::PackageRef {
         &self.package_digest
     }
 
@@ -185,7 +187,7 @@ impl ProcedureManifest {
     ) -> RuntimeHostResult<()> {
         let binding = self.resolve(&intent.procedure_ref, operation)?;
         binding.validate_descriptor(intent, operation)?;
-        if intent.package_digest.as_deref() != Some(binding.package_digest()) {
+        if intent.package_digest.as_ref() != Some(binding.package_digest()) {
             return Err(manifest_request(
                 "procedure_package_digest_mismatch",
                 operation,
@@ -232,12 +234,27 @@ impl ProcedureBinding {
 
 fn binding_digest(
     procedure_ref: &str,
-    package_digest: &str,
+    package_digest: &actingcommand_contract::PackageRef,
     operation_id: &str,
     yield_points: &[String],
 ) -> RuntimeHostResult<String> {
-    let bytes = serde_json::to_vec(&(procedure_ref, package_digest, operation_id, yield_points))
-        .map_err(|_| manifest_fatal("procedure_binding_encode_failed", "bind_procedure"))?;
+    let encoded = match package_digest {
+        actingcommand_contract::PackageRef::LegacyZipSha256(hash) => serde_json::to_vec(&(
+            procedure_ref,
+            format!("{SHA256_PREFIX}{hash}"),
+            operation_id,
+            yield_points,
+        )),
+        actingcommand_contract::PackageRef::GitSourceTree(_) => serde_json::to_vec(&(
+            "actingcommand.procedure-binding.v2",
+            procedure_ref,
+            package_digest,
+            operation_id,
+            yield_points,
+        )),
+    };
+    let bytes =
+        encoded.map_err(|_| manifest_fatal("procedure_binding_encode_failed", "bind_procedure"))?;
     Ok(format!("{SHA256_PREFIX}{:x}", Sha256::digest(bytes)))
 }
 
@@ -259,20 +276,6 @@ fn validate_token(value: &str, field: &'static str) -> RuntimeHostResult<()> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
         return Err(manifest_fatal("procedure_manifest_token_invalid", field));
-    }
-    Ok(())
-}
-
-fn validate_sha256(value: &str, field: &'static str) -> RuntimeHostResult<()> {
-    let Some(hex) = value.strip_prefix(SHA256_PREFIX) else {
-        return Err(manifest_fatal("procedure_package_digest_invalid", field));
-    };
-    if hex.len() != 64
-        || !hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(manifest_fatal("procedure_package_digest_invalid", field));
     }
     Ok(())
 }

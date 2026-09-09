@@ -1388,7 +1388,7 @@ pub enum ContainedTaskTrace {
     PackageAdmitted {
         task_label: String,
         package_label: String,
-        package_sha256: String,
+        package_sha256: actingcommand_contract::PackageRef,
     },
     RunStarted,
     EntryRecognition {
@@ -1558,7 +1558,7 @@ pub struct PreparedContainedTask {
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     post_admission_fields: Option<PreparedOcrFields>,
-    package_sha256: String,
+    package_sha256: actingcommand_contract::PackageRef,
     entry_count: usize,
     task_count: usize,
 }
@@ -1593,6 +1593,25 @@ enum PostAdmissionOcrExecution {
 }
 
 impl PreparedContainedTask {
+    pub fn load_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_path(
+            instance_label,
+            locator,
+            expected,
+            false,
+            vision_provider,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        Self::from_bundle(bundle)
+    }
+
     pub fn load(
         instance_label: &str,
         zip_bytes: &[u8],
@@ -1631,7 +1650,11 @@ impl PreparedContainedTask {
             None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected),
         }
         .map_err(contained_task_admission_error)?;
-        let package_sha256 = bundle.loaded_bundle().verified_hash().to_string();
+        Self::from_bundle(bundle)
+    }
+
+    fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
+        let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();
@@ -1685,7 +1708,7 @@ impl PreparedContainedTask {
         &self.control.package_id
     }
 
-    pub fn package_sha256(&self) -> &str {
+    pub fn package_sha256(&self) -> &actingcommand_contract::PackageRef {
         &self.package_sha256
     }
 
@@ -4947,6 +4970,7 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
 
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {
     let code = match &error {
+        ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
             code: RecognitionPackErrorCode::VisionProviderMissing,
             ..
@@ -7422,7 +7446,7 @@ mod post_admission_ocr_tests {
             scheduling_outcome,
             post_admission_ocr: Some(post_admission_ocr),
             post_admission_fields: None,
-            package_sha256: "fixture-sha256".to_string(),
+            package_sha256: "fixture-sha256".into(),
             entry_count: 6,
             task_count: 1,
         };
@@ -8091,7 +8115,7 @@ mod retry_wiring_tests {
             entry_page: None,
             scheduling_outcome: None,
             post_admission_ocr: None,
-            package_sha256: "fixture-sha256".to_string(),
+            package_sha256: "fixture-sha256".into(),
             post_admission_fields: None,
             entry_count: 5,
             task_count: 1,

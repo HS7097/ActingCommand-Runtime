@@ -46,46 +46,73 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
-            let file = fs::File::open(path).map_err(|error| {
-                observation_admission_error(
-                    "observation_package_open_failed",
-                    "open_lab_operation_package",
-                    error,
+            let observer = if matches!(
+                &input.expected_sha256,
+                actingcommand_contract::PackageRef::GitSourceTree(_)
+            ) {
+                let deadline = Instant::now()
+                    .checked_add(Duration::from_millis(
+                        ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+                    ))
+                    .ok_or_else(|| {
+                        observation_integrity_failure("lab_package_deadline_overflow")
+                    })?;
+                PreparedPageObservation::load_path(
+                    instance_alias,
+                    path,
+                    &input.expected_sha256,
+                    &[],
+                    self.execution.vision_provider(),
+                    deadline,
                 )
-            })?;
-            let mut bytes = Vec::new();
-            file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| {
+                .map_err(observation_kernel_error)?
+            } else {
+                let file = fs::File::open(path).map_err(|error| {
                     observation_admission_error(
-                        "observation_package_read_failed",
-                        "read_lab_operation_package",
+                        "observation_package_open_failed",
+                        "open_lab_operation_package",
                         error,
                     )
                 })?;
-            if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-                return Err(observation_admission_error(
-                    "observation_package_limit_exceeded",
-                    "read_lab_operation_package",
-                    "compressed package limit exceeded",
-                ));
-            }
-            let expected =
-                ExternalExpectedSha256::parse_hex(&input.expected_sha256).map_err(|error| {
+                let mut bytes = Vec::new();
+                file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| {
+                        observation_admission_error(
+                            "observation_package_read_failed",
+                            "read_lab_operation_package",
+                            error,
+                        )
+                    })?;
+                if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
+                    return Err(observation_admission_error(
+                        "observation_package_limit_exceeded",
+                        "read_lab_operation_package",
+                        "compressed package limit exceeded",
+                    ));
+                }
+                let expected = ExternalExpectedSha256::parse_hex(
+                    input
+                        .expected_sha256
+                        .legacy_sha256()
+                        .ok_or_else(|| observation_integrity_failure("observation_hash_invalid"))?,
+                )
+                .map_err(|error| {
                     observation_admission_error(
                         "observation_hash_invalid",
                         "admit_lab_operation",
                         error,
                     )
                 })?;
-            let observer = PreparedPageObservation::load(
-                instance_alias,
-                &bytes,
-                expected,
-                &[],
-                self.execution.vision_provider(),
-            )
-            .map_err(observation_kernel_error)?;
+                PreparedPageObservation::load(
+                    instance_alias,
+                    &bytes,
+                    expected,
+                    &[],
+                    self.execution.vision_provider(),
+                )
+                .map_err(observation_kernel_error)?
+            };
             if input
                 .after
                 .as_ref()

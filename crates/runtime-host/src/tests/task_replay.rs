@@ -45,7 +45,7 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
         TaskSemanticFact::PackageAdmitted {
             package_label: "neutral.semantic.task".to_owned(),
             task_label: "task".to_owned(),
-            package_sha256: expected,
+            package_sha256: expected.into(),
             response_deadline_monotonic_ms: None,
         },
     )

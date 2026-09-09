@@ -94,7 +94,8 @@ struct PolicyCatalogConfigFile {
 #[serde(deny_unknown_fields)]
 struct ProcedureBindingConfigFile {
     procedure_ref: String,
-    package_digest: String,
+    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
+    package_digest: actingcommand_contract::PackageRef,
     operation_id: String,
     yield_points: Vec<String>,
     #[serde(default)]
@@ -498,7 +499,7 @@ impl ProcedureBindingConfigFile {
 
 fn contained_task_request(
     source_root: &Path,
-    package_digest: &str,
+    package_digest: &actingcommand_contract::PackageRef,
     package_path: Option<PathBuf>,
 ) -> Result<ContainedTaskRequest, &'static str> {
     let package_path = package_path.ok_or("procedure_package_path_missing")?;
@@ -507,15 +508,27 @@ fn contained_task_request(
     } else {
         source_root.join(package_path)
     };
-    let path = fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?;
+    // Preserve source locator components so containment can reject link ambiguity.
+    let path = match package_digest {
+        actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
+            fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?
+        }
+        actingcommand_contract::PackageRef::GitSourceTree(_) if path.is_absolute() => path,
+        actingcommand_contract::PackageRef::GitSourceTree(_) => std::env::current_dir()
+            .map_err(|_| "procedure_package_unavailable")?
+            .join(path),
+    };
     let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
-    if !metadata.is_file() {
+    if match package_digest {
+        actingcommand_contract::PackageRef::LegacyZipSha256(_) => !metadata.is_file(),
+        actingcommand_contract::PackageRef::GitSourceTree(_) => !metadata.is_dir(),
+    } {
         return Err("procedure_package_not_regular");
     }
-    let expected_sha256 = package_digest
-        .strip_prefix("sha256:")
-        .ok_or("procedure_package_digest_invalid")?;
-    ContainedTaskRequest::new(path.to_string_lossy().into_owned(), expected_sha256)
+    package_digest
+        .validate()
+        .map_err(|_| "procedure_package_digest_invalid")?;
+    ContainedTaskRequest::new(path.to_string_lossy().into_owned(), package_digest.clone())
         .and_then(|request| {
             request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
         })

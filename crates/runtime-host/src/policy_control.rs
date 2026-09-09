@@ -782,7 +782,7 @@ mod tests {
             instance_id: "fixture-instance-a".to_owned(),
             operation_id: task.entrypoint.operation_id.clone(),
             procedure_ref: task.procedure_ref.clone(),
-            package_digest: Some(format!("sha256:{}", "a".repeat(64))),
+            package_digest: Some(format!("sha256:{}", "a".repeat(64)).into()),
             procedure_binding_digest: Some(format!("sha256:{}", "b".repeat(64))),
             catalog_hash: catalog.catalog_hash().to_owned(),
             catalog_version: catalog.catalog().tasks.catalog.catalog_version,

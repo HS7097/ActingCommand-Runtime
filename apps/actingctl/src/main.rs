@@ -144,11 +144,16 @@ fn task_run_request(
     expected_sha256: String,
     recovery: Option<(String, String)>,
 ) -> Result<ContainedTaskRequest, ActingctlError> {
-    ContainedTaskRequest::new(package_path, expected_sha256)
+    let expected = actingcommand_contract::PackageRef::parse_argument(&expected_sha256)
+        .map_err(|_| ActingctlError::Usage)?;
+    ContainedTaskRequest::new(package_path, expected)
         .and_then(|request| match recovery {
-            Some((package_path, expected_sha256)) => request.with_recovery(
-                ContainedTaskRecoveryBinding::new(package_path, expected_sha256)?,
-            ),
+            Some((package_path, expected_sha256)) => {
+                request.with_recovery(ContainedTaskRecoveryBinding::new(
+                    package_path,
+                    actingcommand_contract::PackageRef::parse_argument(&expected_sha256)?,
+                )?)
+            }
             None => Ok(request),
         })
         .and_then(|request| {
@@ -235,13 +240,19 @@ impl Invocation {
                 "--package" => {
                     package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                "--expected-sha256" => {
+                "--expected-sha256" | "--package-ref" => {
+                    if expected_sha256.is_some() {
+                        return Err(ActingctlError::Usage);
+                    }
                     expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recovery-package" => {
                     recovery_package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                "--recovery-expected-sha256" => {
+                "--recovery-expected-sha256" | "--recovery-package-ref" => {
+                    if recovery_expected_sha256.is_some() {
+                        return Err(ActingctlError::Usage);
+                    }
                     recovery_expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
@@ -375,7 +386,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash> [--recovery-package <zip> --recovery-expected-sha256 <hash>]]"),
+                .write_str("usage: actingctl <observe|reset|status|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
@@ -605,6 +616,6 @@ mod tests {
         let recovery = request.recovery().expect("typed recovery binding");
 
         assert_eq!(recovery.package_path(), "return-home.zip");
-        assert_eq!(recovery.expected_sha256(), "1".repeat(64));
+        assert_eq!(recovery.expected_sha256(), &"1".repeat(64).into());
     }
 }

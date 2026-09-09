@@ -1462,13 +1462,13 @@ impl ReadonlyObservationOutcome {
 #[serde(deny_unknown_fields)]
 pub struct PackageDebugRequest {
     package_path: String,
-    expected_sha256: String,
+    expected_sha256: crate::PackageRef,
 }
 
 impl PackageDebugRequest {
     pub fn new(
         package_path: impl Into<String>,
-        expected_sha256: impl Into<String>,
+        expected_sha256: impl Into<crate::PackageRef>,
     ) -> RuntimeContractResult<Self> {
         let request = Self {
             package_path: package_path.into(),
@@ -1485,7 +1485,8 @@ impl PackageDebugRequest {
         {
             return Err(RuntimeContractError::new("invalid_debug_package_path"));
         }
-        validate_sha256_hex(&self.expected_sha256)
+        self.expected_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_debug_package_hash"))
     }
 
@@ -1493,7 +1494,7 @@ impl PackageDebugRequest {
         &self.package_path
     }
 
-    pub fn expected_sha256(&self) -> &str {
+    pub fn expected_sha256(&self) -> &crate::PackageRef {
         &self.expected_sha256
     }
 }
@@ -1512,13 +1513,13 @@ impl fmt::Debug for PackageDebugRequest {
 #[serde(deny_unknown_fields)]
 pub struct ContainedTaskRecoveryBinding {
     package_path: String,
-    expected_sha256: String,
+    expected_sha256: crate::PackageRef,
 }
 
 impl ContainedTaskRecoveryBinding {
     pub fn new(
         package_path: impl Into<String>,
-        expected_sha256: impl Into<String>,
+        expected_sha256: impl Into<crate::PackageRef>,
     ) -> RuntimeContractResult<Self> {
         let binding = Self {
             package_path: package_path.into(),
@@ -1537,7 +1538,8 @@ impl ContainedTaskRecoveryBinding {
                 "invalid_contained_task_recovery_path",
             ));
         }
-        validate_sha256_hex(&self.expected_sha256)
+        self.expected_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_contained_task_recovery_hash"))
     }
 
@@ -1545,7 +1547,7 @@ impl ContainedTaskRecoveryBinding {
         &self.package_path
     }
 
-    pub fn expected_sha256(&self) -> &str {
+    pub fn expected_sha256(&self) -> &crate::PackageRef {
         &self.expected_sha256
     }
 }
@@ -1564,7 +1566,7 @@ impl fmt::Debug for ContainedTaskRecoveryBinding {
 #[serde(deny_unknown_fields)]
 pub struct ContainedTaskRequest {
     package_path: String,
-    expected_sha256: String,
+    expected_sha256: crate::PackageRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recovery: Option<ContainedTaskRecoveryBinding>,
     #[serde(default = "default_contained_task_response_deadline_ms")]
@@ -1581,7 +1583,7 @@ impl ContainedTaskRequest {
 
     pub fn new(
         package_path: impl Into<String>,
-        expected_sha256: impl Into<String>,
+        expected_sha256: impl Into<crate::PackageRef>,
     ) -> RuntimeContractResult<Self> {
         let request = Self {
             package_path: package_path.into(),
@@ -1600,7 +1602,8 @@ impl ContainedTaskRequest {
         {
             return Err(RuntimeContractError::new("invalid_contained_task_path"));
         }
-        validate_sha256_hex(&self.expected_sha256)
+        self.expected_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))?;
         if let Some(recovery) = &self.recovery {
             recovery.validate()?;
@@ -1617,7 +1620,7 @@ impl ContainedTaskRequest {
         &self.package_path
     }
 
-    pub fn expected_sha256(&self) -> &str {
+    pub fn expected_sha256(&self) -> &crate::PackageRef {
         &self.expected_sha256
     }
 
@@ -1889,7 +1892,7 @@ pub enum PackageDebugLayout {
 #[serde(deny_unknown_fields)]
 pub struct PackageDebugSummary {
     task_id: String,
-    verified_sha256: String,
+    verified_sha256: crate::PackageRef,
     layout: PackageDebugLayout,
     entry_count: u32,
     resident_bytes: u64,
@@ -1903,7 +1906,7 @@ impl PackageDebugSummary {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         task_id: impl Into<String>,
-        verified_sha256: impl Into<String>,
+        verified_sha256: impl Into<crate::PackageRef>,
         layout: PackageDebugLayout,
         entry_count: u32,
         resident_bytes: u64,
@@ -1936,7 +1939,8 @@ impl PackageDebugSummary {
         {
             return Err(RuntimeContractError::new("invalid_debug_package_summary"));
         }
-        validate_sha256_hex(&self.verified_sha256)
+        self.verified_sha256
+            .validate()
             .map_err(|_| RuntimeContractError::new("invalid_debug_package_summary"))
     }
 
@@ -1944,7 +1948,7 @@ impl PackageDebugSummary {
         &self.task_id
     }
 
-    pub fn verified_sha256(&self) -> &str {
+    pub fn verified_sha256(&self) -> &crate::PackageRef {
         &self.verified_sha256
     }
 

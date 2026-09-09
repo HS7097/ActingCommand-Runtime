@@ -486,7 +486,7 @@ pub fn restore_authoring_draft(
         "server_scope":[server],"locale":locale,"coordinate_space":coordinate_space,"defaults":defaults,
         "anchors":anchors.values().collect::<Vec<_>>(),"color_probes":colors.values().collect::<Vec<_>>(),
         "verify_templates":templates.values().collect::<Vec<_>>(),"page_rules":page_rules,"operations":operations,
-        "provenance":{"source":"global_ledger","package_sha256":package.verified_hash().to_string(),
+        "provenance":{"source":"global_ledger","package_sha256":package.package_ref(),
             "through_sequence":request.through_sequence,"records":provenance,"gaps":gaps,
             "author_inputs":{"entry_page":request.entry_page,"target_pages":request.target_pages,"goal":request.goal},
             "source_entries":source_entries.iter().map(|(path,sha256)| json!({"path":path,"sha256":sha256})).collect::<Vec<_>>()}});
@@ -542,7 +542,7 @@ pub fn restore_authoring_draft(
     }
     let report = json!({"status":"draft_generated","record_count":records.len()+missing_records.len(),
         "operation_count":operations.len(),"gaps":gaps,"awaiting_author_input":awaiting,
-        "package_sha256":package.verified_hash().to_string(),"through_sequence":request.through_sequence,
+        "package_sha256":package.package_ref(),"through_sequence":request.through_sequence,
         "task_id":request.task_id});
     let draft = AuthoringDraft::new(
         format!("ledger-through-{}", request.through_sequence),
