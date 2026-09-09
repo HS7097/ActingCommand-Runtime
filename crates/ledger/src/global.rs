@@ -5,6 +5,7 @@
 mod projection;
 mod read_only;
 mod storage;
+mod store;
 
 pub(crate) use projection::query_matches;
 
@@ -40,6 +41,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use storage::SegmentStore;
+use store::LedgerStore;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SEGMENT_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -688,9 +690,10 @@ impl GlobalLedger {
         })
     }
 
-    fn open_with_store<F>(config: GlobalLedgerConfig, open_store: F) -> GlobalLedgerResult<Self>
+    fn open_with_store<S, F>(config: GlobalLedgerConfig, open_store: F) -> GlobalLedgerResult<Self>
     where
-        F: FnOnce(GlobalLedgerConfig) -> GlobalLedgerResult<SegmentStore>,
+        S: LedgerStore,
+        F: FnOnce(GlobalLedgerConfig) -> GlobalLedgerResult<S>,
     {
         config.validate()?;
         let capacity = config.ingress_capacity;
@@ -718,7 +721,7 @@ impl GlobalLedger {
                 return Err(store_error);
             }
         };
-        let commit_statistics = Arc::clone(&store.commit_statistics);
+        let commit_statistics = store.commit_statistics();
         match store_sender.send(store) {
             Ok(()) => Ok(Self {
                 sender: Some(sender),
@@ -1004,8 +1007,8 @@ impl Drop for GlobalLedger {
     }
 }
 
-fn writer_loop(
-    mut store: SegmentStore,
+fn writer_loop<S: LedgerStore>(
+    mut store: S,
     receiver: Receiver<WriterCommand>,
     subscription_capacity: usize,
 ) -> GlobalLedgerResult<()> {
