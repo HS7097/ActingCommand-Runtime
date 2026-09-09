@@ -326,7 +326,7 @@ fn source_drag_rejects_canonical_or_mixed_endpoint_spelling() {
 #[test]
 fn converted_offset_click_rejects_color_probe_guard() {
     let pack = json!({
-        "game": "arknights",
+        "game": "fixture",
         "targets": [{
             "type": "color",
             "id": "target/button"
@@ -334,7 +334,7 @@ fn converted_offset_click_rejects_color_probe_guard() {
     });
     let pages = json!({
         "pages": [{
-            "id": "arknights/home"
+            "id": "fixture/home"
         }]
     });
     let primitives = json!({
@@ -347,7 +347,7 @@ fn converted_offset_click_rejects_color_probe_guard() {
                 "offset": {"x": 1, "y": 2, "width": 3, "height": 4}
             },
             "guard": {
-                "page_id": "arknights/home",
+                "page_id": "fixture/home",
                 "target_id": "target/button",
                 "expected_rect": {"x": 10, "y": 20, "width": 30, "height": 40},
                 "color_probe": "target/button"
