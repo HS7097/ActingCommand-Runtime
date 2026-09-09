@@ -82,6 +82,12 @@ pub struct TemplateMatch {
     pub score: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TemplateMatchSelection {
+    pub best_template: TemplateMatch,
+    pub accepted: Option<TemplateMatch>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchMetric {
     CrossCorrelationNormalized,
@@ -178,6 +184,113 @@ impl Scene {
         region: Option<Rect>,
         metric: MatchMetric,
     ) -> RecognitionResult<TemplateMatch> {
+        let (search, template, offset_x, offset_y) =
+            self.prepare_template_match(template_png, region)?;
+        let use_fast_path = should_use_fast_path(&search, &template);
+        let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
+
+        match metric {
+            MatchMetric::CrossCorrelationNormalized => {
+                if use_fast_path {
+                    full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
+                } else {
+                    // The bounded ccorr path preserves the existing imageproc semantics.
+                    let response = match_template_map(
+                        &search,
+                        &template,
+                        MatchTemplateMethod::CrossCorrelationNormalized,
+                    );
+                    deadline.check("ccorr_normed template match")?;
+                    let extremes = find_extremes(&response);
+                    template_match_from_candidate(
+                        MatchCandidate {
+                            x: extremes.max_value_location.0,
+                            y: extremes.max_value_location.1,
+                            raw_score: extremes.max_value,
+                        },
+                        &template,
+                        offset_x,
+                        offset_y,
+                    )
+                }
+            }
+            MatchMetric::CorrelationCoefficientNormalized => {
+                if use_fast_path {
+                    full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
+                } else {
+                    exact_metric_match(
+                        &search,
+                        &template,
+                        metric,
+                        offset_x,
+                        offset_y,
+                        SearchWindow::full(&search, &template),
+                        &deadline,
+                    )
+                }
+            }
+        }
+    }
+
+    /// Select the highest scoring candidate that also satisfies the same-frame predicate.
+    /// Ties retain the first (y, x) position. An incomplete search returns an error.
+    pub fn match_template_with_filter(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+        metric: MatchMetric,
+        threshold: f32,
+        mut accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
+    ) -> RecognitionResult<TemplateMatchSelection> {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(RecognitionError::fatal(
+                "template threshold must be in 0..=1",
+            ));
+        }
+        let (search, template, offset_x, offset_y) =
+            self.prepare_template_match(template_png, region)?;
+        let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
+        let stats = TemplateStats::new(&template, metric)?;
+        let integrals = IntegralImages::new(&search);
+        let window = SearchWindow::full(&search, &template);
+        let mut best: Option<TemplateMatch> = None;
+        let mut accepted: Option<TemplateMatch> = None;
+        // Evaluate the full declared ROI within the existing deadline. A grayscale
+        // shortlist cannot exclude a lower scoring candidate whose color is valid.
+        for y in window.min_y..=window.max_y {
+            for x in window.min_x..=window.max_x {
+                deadline.check("joint template/color match")?;
+                let raw_score = score_window(&search, &stats, &integrals, metric, x, y);
+                let candidate = template_match_from_candidate(
+                    MatchCandidate { x, y, raw_score },
+                    &template,
+                    offset_x,
+                    offset_y,
+                )?;
+                if best.is_none_or(|best| raw_score > best.raw_score) {
+                    best = Some(candidate);
+                }
+                if candidate.score >= threshold
+                    && accepted.is_none_or(|best| raw_score > best.raw_score)
+                    && accept(candidate)?
+                {
+                    accepted = Some(candidate);
+                }
+            }
+        }
+        deadline.check("joint template/color match")?;
+        Ok(TemplateMatchSelection {
+            best_template: best
+                .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?,
+            accepted,
+        })
+    }
+
+    fn prepare_template_match(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+    ) -> RecognitionResult<(GrayImage, GrayImage, u32, u32)> {
         let template = image::load_from_memory_with_format(template_png, ImageFormat::Png)
             .map_err(|err| decode_error("template PNG", err))?
             .to_luma8();
@@ -210,63 +323,7 @@ impl Scene {
             )));
         }
 
-        let use_fast_path = should_use_fast_path(&search, &template);
-        let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
-
-        match metric {
-            MatchMetric::CrossCorrelationNormalized => {
-                if use_fast_path {
-                    full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
-                } else {
-                    // The bounded ccorr path preserves the existing imageproc semantics.
-                    let response = match_template_map(
-                        &search,
-                        &template,
-                        MatchTemplateMethod::CrossCorrelationNormalized,
-                    );
-                    deadline.check("ccorr_normed template match")?;
-                    let extremes = find_extremes(&response);
-                    let raw_score = extremes.max_value;
-                    let score = normalize_ncc_score(raw_score);
-                    let x =
-                        i32::try_from(offset_x + extremes.max_value_location.0).map_err(|_| {
-                            RecognitionError::fatal("template match x coordinate exceeds i32 range")
-                        })?;
-                    let y =
-                        i32::try_from(offset_y + extremes.max_value_location.1).map_err(|_| {
-                            RecognitionError::fatal("template match y coordinate exceeds i32 range")
-                        })?;
-
-                    Ok(TemplateMatch {
-                        x,
-                        y,
-                        width: i32::try_from(template.width()).map_err(|_| {
-                            RecognitionError::fatal("template match width exceeds i32 range")
-                        })?,
-                        height: i32::try_from(template.height()).map_err(|_| {
-                            RecognitionError::fatal("template match height exceeds i32 range")
-                        })?,
-                        raw_score,
-                        score,
-                    })
-                }
-            }
-            MatchMetric::CorrelationCoefficientNormalized => {
-                if use_fast_path {
-                    full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
-                } else {
-                    exact_metric_match(
-                        &search,
-                        &template,
-                        metric,
-                        offset_x,
-                        offset_y,
-                        SearchWindow::full(&search, &template),
-                        &deadline,
-                    )
-                }
-            }
-        }
+        Ok((search, template, offset_x, offset_y))
     }
 
     pub fn compare_color(&self, region: Rect, expected: [u8; 3]) -> RecognitionResult<ColorMatch> {

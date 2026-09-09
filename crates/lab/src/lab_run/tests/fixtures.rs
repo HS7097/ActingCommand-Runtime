@@ -224,6 +224,7 @@
                 max_distance: 20.0,
                 mean,
                 expected: mean,
+                region: None,
             }),
             ocr: None,
             nn: None,

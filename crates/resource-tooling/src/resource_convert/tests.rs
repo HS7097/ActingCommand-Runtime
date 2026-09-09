@@ -1279,9 +1279,55 @@ fn color_check_region_is_flattened() {
         "expected":[10,20,30]
     });
     assert_eq!(
-        color_check_to_pack(Some(&input)).unwrap().unwrap(),
+        color_check_to_pack(Some(&input), "template")
+            .unwrap()
+            .unwrap(),
         json!({"region":{"x":1,"y":2,"width":3,"height":4},"expected":[10,20,30]})
     );
+
+    // #279 TEMPLATE-MATCH-COLOR-v1 declaration-boundary scenario, using the
+    // existing converter and alias propagation rather than a generated fixture.
+    let relative = json!({"region":{"mode":"template_relative","anchor_target_id":"page/marker","offset":{"x":-2,"y":3},"width":4,"height":2},"expected":[10,20,30]});
+    assert_eq!(
+        color_check_to_pack(Some(&relative), "page/marker").unwrap(),
+        Some(relative.clone())
+    );
+    assert!(color_check_to_pack(Some(&relative), "page/other").is_err());
+    for (pointer, bad) in [
+        ("/region/width", json!(0)),
+        ("/region/offset/x", json!(2147483648_u64)),
+        ("/expected", json!([256, 0, 0])),
+    ] {
+        let mut invalid = relative.clone();
+        *invalid.pointer_mut(pointer).unwrap() = bad;
+        assert!(
+            color_check_to_pack(Some(&invalid), "page/marker").is_err(),
+            "accepted {pointer}"
+        );
+    }
+    let mut invalid = relative.clone();
+    invalid["region"]["offset"]["extra"] = json!(1);
+    assert!(color_check_to_pack(Some(&invalid), "page/marker").is_err());
+    let mut targets = HashMap::from([
+        (
+            "page/marker".to_string(),
+            json!({"id":"page/marker","template_path":"templates/marker.png","color_check":relative}),
+        ),
+        (
+            "template/marker".to_string(),
+            json!({"id":"template/marker","template_path":"templates/marker.png"}),
+        ),
+    ]);
+    propagate_color_checks(
+        &mut targets,
+        &["page/marker".to_string(), "template/marker".to_string()],
+    );
+    let propagated = &targets["template/marker"]["color_check"];
+    assert_eq!(propagated["region"]["anchor_target_id"], "template/marker");
+    assert_eq!(propagated["region"]["offset"], json!({"x":-2,"y":3}));
+    let check: actingcommand_recognition_pack::ColorCheck =
+        serde_json::from_value(propagated.clone()).unwrap();
+    check.validate_for_template("template/marker").unwrap();
 }
 
 #[test]

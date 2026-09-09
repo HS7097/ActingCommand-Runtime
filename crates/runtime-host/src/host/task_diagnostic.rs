@@ -444,6 +444,7 @@ impl RuntimeContainedTask<'_> {
                     max_distance: value.max_distance,
                     mean: value.mean,
                     expected: value.expected,
+                    region: value.region.map(Into::into),
                 }),
                 source,
             })),

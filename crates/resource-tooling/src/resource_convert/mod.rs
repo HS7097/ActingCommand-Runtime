@@ -1155,7 +1155,7 @@ impl OperationConverter {
                     &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
                     template_threshold(&source)?,
-                    color_check_to_pack(source.get("color_check"))?,
+                    color_check_to_pack(source.get("color_check"), &target_id)?,
                     None,
                 )?;
                 add_first_target(&mut targets, &mut order, target_id, target);
@@ -2490,7 +2490,7 @@ fn ocr_region_to_pack(region: &Value) -> CliOutcome<Value> {
         let object = require_exact_object(
             region,
             &["mode", "anchor_target_id", "offset", "width", "height"],
-            "template_relative OCR region",
+            "template_relative region",
         )?;
         for field in ["anchor_target_id", "offset", "width", "height"] {
             required_map_field(object, field)?;
@@ -3321,7 +3321,14 @@ fn propagate_color_checks(targets: &mut HashMap<String, Value>, order: &[String]
             continue;
         };
         if let Some(color_check) = by_basename.get(name) {
-            target.insert("color_check".to_string(), color_check.clone());
+            let mut color_check = color_check.clone();
+            if color_check.pointer("/region/mode").and_then(Value::as_str)
+                == Some("template_relative")
+            {
+                // A propagated check remains relative to this alias's candidate.
+                color_check["region"]["anchor_target_id"] = Value::String(id.clone());
+            }
+            target.insert("color_check".to_string(), color_check);
         }
     }
 }
@@ -3777,7 +3784,7 @@ fn region_to_guard_rect(region: &Value, coordinate_space: &Value) -> CliOutcome<
     }
 }
 
-fn color_check_to_pack(color_check: Option<&Value>) -> CliOutcome<Option<Value>> {
+fn color_check_to_pack(color_check: Option<&Value>, target_id: &str) -> CliOutcome<Option<Value>> {
     let Some(color_check) = color_check else {
         return Ok(None);
     };
@@ -3788,7 +3795,19 @@ fn color_check_to_pack(color_check: Option<&Value>) -> CliOutcome<Option<Value>>
     if let Some(object) = output.as_object_mut()
         && let Some(region) = color_check.get("region")
     {
-        object.insert("region".to_string(), region_to_pack(region)?);
+        if region.get("mode").and_then(Value::as_str) == Some("template_relative") {
+            require_exact_object(color_check, &["region", "expected"], "relative color check")?;
+            object.insert("region".to_string(), ocr_region_to_pack(region)?);
+            let check: actingcommand_recognition_pack::ColorCheck =
+                serde_json::from_value(output.clone()).map_err(|error| {
+                    CliError::package_invalid(format!("invalid relative color check: {error}"))
+                })?;
+            check
+                .validate_for_template(target_id)
+                .map_err(|error| CliError::package_invalid(error.message()))?;
+        } else {
+            object.insert("region".to_string(), region_to_pack(region)?);
+        }
     }
     Ok(Some(output))
 }

@@ -337,6 +337,7 @@ pub fn target_evaluation_response(evaluation: &TargetEvaluation) -> TargetEvalua
             max_distance: color.max_distance,
             mean: color.mean,
             expected: color.expected,
+            region: color.region.map(rect_response),
         }),
     }
 }
@@ -540,6 +541,8 @@ pub struct ColorEvaluationResponse {
     pub max_distance: f32,
     pub mean: [u8; 3],
     pub expected: [u8; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<RectResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
