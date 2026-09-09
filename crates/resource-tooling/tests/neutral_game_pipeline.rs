@@ -108,6 +108,7 @@ fn fields_v1_neutral_declaration_and_package_closure() {
             maa_tasks_root: None,
             dry_run: true,
         })
+        .map_err(Box::new)
     };
     convert(&task).expect("0.8 source declaration");
     for case in 0..9 {
@@ -151,7 +152,6 @@ fn fields_v1_neutral_declaration_and_package_closure() {
         maa_tasks_root: None,
         dry_run: false,
     })
-    .map_err(Box::new)
     .unwrap();
     let out = temp.path().join("fields.zip");
     let prepared = prepare_package_build_task(PackageBuildTaskRequest {
