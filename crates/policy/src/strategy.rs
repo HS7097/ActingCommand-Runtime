@@ -2011,6 +2011,8 @@ mod tests {
             outcome_key: "completed".to_owned(),
             value: FactValue::Integer(31),
             observed_at_unix_ms: report.as_of_unix_ms(),
+            expires_at_unix_ms: None,
+            activity_window_id: None,
         });
         assert_eq!(
             resolve_metric_current(

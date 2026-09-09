@@ -47,6 +47,18 @@ pub struct ObservedOutcome {
     pub outcome_key: String,
     pub value: FactValue,
     pub observed_at_unix_ms: u64,
+    #[serde(default)]
+    pub expires_at_unix_ms: Option<u64>,
+    /// The admitted activity window, projected from the settled run's ledger facts.
+    #[serde(default)]
+    pub activity_window_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompletedActivityWindow {
+    pub window_id: String,
+    pub completed_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +69,9 @@ pub struct TaskRuntimeSnapshot {
     pub last_dispatched_unix_ms: Option<u64>,
     pub eligible_since_unix_ms: Option<u64>,
     pub terminal_state: Option<TaskTerminalState>,
+    /// Settled execution evidence, including tasks with no mapped outcome consumer.
+    #[serde(default)]
+    pub completed_window: Option<CompletedActivityWindow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,6 +457,96 @@ fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a Obse
     })
 }
 
+fn project_time_validity(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<EvaluationFacts> {
+    let resets = catalog
+        .catalog()
+        .timeline
+        .events
+        .iter()
+        .filter(|event| !event.invalidates_fact_prefixes.is_empty())
+        .map(|event| Ok((event, invalidation_occurrences(event, time)?)))
+        .collect::<PolicyEvaluationResult<Vec<_>>>()?;
+    let validity = |scope: &ScopeSelector, key: &str, observed: u64, expiry: &mut Option<u64>| {
+        for (event, (latest, next)) in &resets {
+            if !scope_covers(&event.scope, scope, &facts.instances)
+                || !event
+                    .invalidates_fact_prefixes
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix))
+            {
+                continue;
+            }
+            // Millisecond timestamps cannot order an observation at the reset instant.
+            if latest.is_some_and(|at| observed <= at) {
+                return false;
+            }
+            *expiry = min_wake(*expiry, next.and_then(|at| at.checked_sub(1)));
+        }
+        true
+    };
+    let mut projected = facts.clone();
+    projected.facts.retain_mut(|fact| {
+        validity(
+            &fact.scope,
+            &fact.fact_key,
+            fact.observed_at_unix_ms,
+            &mut fact.expires_at_unix_ms,
+        )
+    });
+    projected.outcomes.retain_mut(|outcome| {
+        validity(
+            &ScopeSelector::Instance {
+                instance_id: outcome.instance_id.clone(),
+            },
+            &format!("outcome.{}.{}", outcome.task_id, outcome.outcome_key),
+            outcome.observed_at_unix_ms,
+            &mut outcome.expires_at_unix_ms,
+        )
+    });
+    for state in &mut projected.tasks {
+        if state.completed_window.as_ref().is_some_and(|completed| {
+            !validity(
+                &ScopeSelector::Instance {
+                    instance_id: state.instance_id.clone(),
+                },
+                &format!("task.{}.terminal_state", state.task_id),
+                completed.completed_at_unix_ms,
+                &mut None,
+            )
+        }) {
+            state.completed_window = None;
+            state.terminal_state = None;
+        }
+    }
+    Ok(projected)
+}
+
+fn scope_covers(
+    scope: &ScopeSelector,
+    observed: &ScopeSelector,
+    instances: &[InstanceSnapshot],
+) -> bool {
+    if scope == observed {
+        return true;
+    }
+    match observed {
+        ScopeSelector::Instance { instance_id } => instances.iter().any(|instance| {
+            instance.instance_id == *instance_id && scope_matches_instance(scope, instance)
+        }),
+        ScopeSelector::Server { server_id } => {
+            matches!(scope, ScopeSelector::Game { .. })
+                && instances.iter().any(|instance| {
+                    instance.server_id == *server_id && scope_matches_instance(scope, instance)
+                })
+        }
+        ScopeSelector::Game { .. } => false,
+    }
+}
+
 /// Evaluates one pinned snapshot without reading clocks, storage, devices, or process state.
 pub fn evaluate(
     catalog: &CompiledCatalog,
@@ -475,6 +580,9 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
+
+    let effective_facts = project_time_validity(catalog, facts, time)?;
+    let facts = &effective_facts;
 
     let catalog_bundle = catalog.catalog();
     let task_states: BTreeMap<(&str, &str), &TaskRuntimeSnapshot> = facts
@@ -526,6 +634,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
         .iter()
         .map(|event| (event.id.as_str(), event))
         .collect();
+    let mut invalidation_wake = None;
     for event in &catalog_bundle.timeline.events {
         let wake = if event.validity.is_some() {
             timeline_window(event, time)?.next_wake
@@ -533,7 +642,12 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
             next_schedule_occurrence(&event.schedule, time)?
         };
         next_wake = min_wake(next_wake, wake);
+        if !event.invalidates_fact_prefixes.is_empty() {
+            invalidation_wake =
+                min_wake(invalidation_wake, invalidation_occurrences(event, time)?.1);
+        }
     }
+    next_wake = min_wake(next_wake, invalidation_wake);
     // Admission's existing freshness ceiling is inclusive; V2 boundaries are exclusive.
     let timeline_fresh_until =
         if catalog_bundle.timeline.schema_version == crate::SCHEDULING_SCHEMA_VERSION_V2 {
@@ -547,7 +661,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                 })
                 .transpose()?
         } else {
-            None
+            invalidation_wake.and_then(|boundary| boundary.checked_sub(1))
         };
     let mut preload_hint = None;
     let placement_context = PlacementContext {
@@ -562,6 +676,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
     let mut candidates = Vec::new();
 
     for task in &catalog_bundle.tasks.tasks {
+        let referenced_outcome_keys = catalog.referenced_outcome_keys(&task.id);
         let matching_instances: Vec<&InstanceSnapshot> = facts
             .instances
             .iter()
@@ -631,17 +746,57 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                     ));
                 }
                 PredicateTruth::True => {
-                    let stop = evaluate_predicate(
-                        &task.feedback_stop,
-                        state,
-                        &decision_scope,
-                        facts,
-                        &pool_specs,
-                        &pool_values,
-                        time,
-                        &timeline_events,
-                        &mut task_work.reasons,
-                    )?;
+                    let window =
+                        select_activity_profile(&catalog_bundle.activity.profiles, instance)
+                            .map(|profile| activity_window_at(profile, time.unix_ms))
+                            .transpose()?
+                            .flatten();
+                    let has_window_result = window.as_ref().is_some_and(|window| {
+                        if referenced_outcome_keys.is_empty() {
+                            state
+                                .filter(|state| state.terminal_state.is_some())
+                                .and_then(|state| state.completed_window.as_ref())
+                                .is_some_and(|result| {
+                                    result.window_id == window.window_id
+                                        && window.contains(result.completed_at_unix_ms)
+                                })
+                        } else {
+                            facts.outcomes.iter().any(|outcome| {
+                                outcome.task_id == task.id
+                                    && referenced_outcome_keys.contains(&outcome.outcome_key)
+                                    && outcome.instance_id == instance.instance_id
+                                    && outcome.activity_window_id.as_deref()
+                                        == Some(window.window_id.as_str())
+                                    && window.contains(outcome.observed_at_unix_ms)
+                                    && outcome
+                                        .expires_at_unix_ms
+                                        .is_none_or(|expiry| time.unix_ms <= expiry)
+                            })
+                        }
+                    });
+                    let mut stop = if has_window_result {
+                        evaluate_predicate(
+                            &task.feedback_stop,
+                            state,
+                            &decision_scope,
+                            facts,
+                            &pool_specs,
+                            &pool_values,
+                            time,
+                            &timeline_events,
+                            &mut task_work.reasons,
+                        )?
+                    } else {
+                        PredicateEvaluation::known(false, None)
+                    };
+                    if let Some(window) = window {
+                        stop.next_wake_unix_ms =
+                            min_wake(stop.next_wake_unix_ms, Some(window.until_unix_ms));
+                        stop.fresh_until_unix_ms = min_wake(
+                            stop.fresh_until_unix_ms,
+                            window.until_unix_ms.checked_sub(1),
+                        );
+                    }
                     task_work.next_wake_unix_ms =
                         min_wake(task_work.next_wake_unix_ms, stop.next_wake_unix_ms);
                     match stop.truth {
@@ -1099,6 +1254,75 @@ fn select_activity_profile<'a>(
                 .cmp(&activity_scope_specificity(&right.scope))
                 .then_with(|| right.id.cmp(&left.id))
         })
+}
+
+/// One half-open occurrence of a declared activity window, in declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityWindowOccurrence {
+    pub local_day: i64,
+    pub window_id: String,
+    pub from_unix_ms: u64,
+    pub until_unix_ms: u64,
+}
+
+impl ActivityWindowOccurrence {
+    fn contains(&self, timestamp: u64) -> bool {
+        self.from_unix_ms <= timestamp && timestamp < self.until_unix_ms
+    }
+}
+
+/// Pure activity-window calculation shared with Runtime's admission owner.
+pub fn activity_window_at(
+    profile: &ActivityProfile,
+    now_unix_ms: u64,
+) -> PolicyEvaluationResult<Option<ActivityWindowOccurrence>> {
+    const DAY_MS: i128 = 86_400_000;
+    const MINUTE_MS: i128 = 60_000;
+    for (index, window) in profile.windows.iter().enumerate() {
+        let offset = i128::from(window.utc_offset_minutes) * MINUTE_MS;
+        let local_ms = i128::from(now_unix_ms) + offset;
+        let day = local_ms.div_euclid(DAY_MS);
+        let minute = local_ms.rem_euclid(DAY_MS) / MINUTE_MS;
+        let start = i128::from(window.start_minute_of_day);
+        let end = i128::from(window.end_minute_of_day);
+        let full_day = start == end;
+        let active_day = if !full_day && start > end && minute < end {
+            day - 1
+        } else {
+            day
+        };
+        let weekday = ((active_day + 3).rem_euclid(7) + 1) as u8;
+        let active = full_day
+            || if start < end {
+                minute >= start && minute < end
+            } else {
+                minute >= start || minute < end
+            };
+        if !active || !window.weekdays.contains(&weekday) {
+            continue;
+        }
+        let from = active_day * DAY_MS + if full_day { 0 } else { start * MINUTE_MS } - offset;
+        let until = active_day * DAY_MS
+            + if full_day {
+                DAY_MS
+            } else if start > end {
+                DAY_MS + end * MINUTE_MS
+            } else {
+                end * MINUTE_MS
+            }
+            - offset;
+        let local_day = i64::try_from(active_day)
+            .map_err(|_| PolicyEvaluationError::overflow("activity window day overflowed"))?;
+        return Ok(Some(ActivityWindowOccurrence {
+            local_day,
+            window_id: format!("{}:{local_day}:{index}", profile.id),
+            from_unix_ms: u64::try_from(from.max(0))
+                .map_err(|_| PolicyEvaluationError::overflow("activity window start overflowed"))?,
+            until_unix_ms: u64::try_from(until)
+                .map_err(|_| PolicyEvaluationError::overflow("activity window end overflowed"))?,
+        }));
+    }
+    Ok(None)
 }
 
 const fn activity_scope_specificity(scope: &ScopeSelector) -> u8 {
@@ -1737,10 +1961,24 @@ fn evaluate_predicate(
                     reason: "outcome_missing".to_owned(),
                 }));
             };
-            Ok(PredicateEvaluation::known(
+            if observation
+                .expires_at_unix_ms
+                .is_some_and(|expiry| time.unix_ms > expiry)
+            {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: decision_scope.clone(),
+                    fact_key: format!("outcome.{task_id}.{outcome_key}"),
+                    reason: "outcome_expired".to_owned(),
+                }));
+            }
+            let mut result = PredicateEvaluation::known(
                 compare_fact_values(&observation.value, *comparison, value)?,
-                None,
-            ))
+                observation
+                    .expires_at_unix_ms
+                    .and_then(|expiry| expiry.checked_add(1)),
+            );
+            result.fresh_until_unix_ms = observation.expires_at_unix_ms;
+            Ok(result)
         }
     }
 }
@@ -2053,6 +2291,13 @@ fn schedule_occurrences(
         | ClockSchedule::Weekly { clock_source, .. } => clock_source,
     };
     let clock = ClockCoordinate::new(source, time)?;
+    schedule_occurrences_on_clock(schedule, &clock)
+}
+
+fn schedule_occurrences_on_clock(
+    schedule: &ClockSchedule,
+    clock: &ClockCoordinate,
+) -> PolicyEvaluationResult<(Option<u64>, Option<u64>)> {
     let occurrences = match schedule {
         ClockSchedule::Interval {
             every_ms,
@@ -2097,6 +2342,59 @@ fn schedule_occurrences(
             .1
             .map(|value| clock.to_unix_ms(value))
             .transpose()?,
+    ))
+}
+
+/// Invalidation is an occurrence, independent of availability duration. The last
+/// occurrence inside validity remains effective after the interval has closed.
+fn invalidation_occurrences(
+    event: &TimelineEvent,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<(Option<u64>, Option<u64>)> {
+    let Some(validity) = &event.validity else {
+        return schedule_occurrences(&event.schedule, time);
+    };
+    let source = match &event.schedule {
+        ClockSchedule::Interval { clock_source, .. }
+        | ClockSchedule::At { clock_source, .. }
+        | ClockSchedule::Daily { clock_source, .. }
+        | ClockSchedule::Weekly { clock_source, .. } => clock_source,
+    };
+    let clock = ClockCoordinate::new(source, time)?;
+    let at = |unix_ms: u64| -> PolicyEvaluationResult<(Option<u64>, Option<u64>)> {
+        let coordinate = i128::from(unix_ms) - clock.unix_delta_ms;
+        if coordinate < 0 {
+            return Ok((None, None));
+        }
+        let cursor = ClockCoordinate {
+            now_ms: u64::try_from(coordinate)
+                .map_err(|_| PolicyEvaluationError::overflow("reset coordinate overflowed"))?,
+            unix_delta_ms: clock.unix_delta_ms,
+            utc_offset_minutes: clock.utc_offset_minutes,
+        };
+        schedule_occurrences_on_clock(&event.schedule, &cursor)
+    };
+    let until = validity.until_unix_ms.0;
+    let latest = if time.unix_ms < validity.from_unix_ms {
+        None
+    } else {
+        at(until.map_or(time.unix_ms, |end| time.unix_ms.min(end - 1)))?
+            .0
+            .filter(|occurrence| *occurrence >= validity.from_unix_ms)
+    };
+    let next = if until.is_some_and(|end| time.unix_ms >= end) {
+        None
+    } else if time.unix_ms < validity.from_unix_ms {
+        let (latest, next) = at(validity.from_unix_ms)?;
+        latest
+            .filter(|occurrence| *occurrence == validity.from_unix_ms)
+            .or(next)
+    } else {
+        at(time.unix_ms)?.1
+    };
+    Ok((
+        latest,
+        next.filter(|occurrence| until.is_none_or(|end| *occurrence < end)),
     ))
 }
 
@@ -2444,6 +2742,17 @@ fn validate_inputs(
             )));
         }
         validate_observation_time("outcome", outcome.observed_at_unix_ms, time.unix_ms)?;
+        if outcome
+            .expires_at_unix_ms
+            .is_some_and(|expiry| expiry <= outcome.observed_at_unix_ms)
+        {
+            return Err(PolicyEvaluationError::invalid(
+                "outcome expiration must follow observation",
+            ));
+        }
+        if let Some(window_id) = &outcome.activity_window_id {
+            validate_id("outcome activity window id", window_id)?;
+        }
         if !outcome_keys.insert((
             outcome.task_id.as_str(),
             outcome.instance_id.as_str(),
@@ -2483,6 +2792,19 @@ fn validate_inputs(
             .flatten()
         {
             validate_observation_time("task state", timestamp, time.unix_ms)?;
+        }
+        if let Some(completed) = &state.completed_window {
+            validate_id("completed activity window id", &completed.window_id)?;
+            validate_observation_time(
+                "completed activity window",
+                completed.completed_at_unix_ms,
+                time.unix_ms,
+            )?;
+            if state.terminal_state.is_none() {
+                return Err(PolicyEvaluationError::invalid(
+                    "completed activity window requires a settled terminal state",
+                ));
+            }
         }
     }
 
@@ -3031,6 +3353,109 @@ mod tests {
         )
         .expect("Unix epoch");
         assert_eq!(result.active, Some((0, 100)));
+
+        // Specification criterion: Workflow #267 POLICY-TIME-VALIDITY-v1.
+        let mut docs = example_documents();
+        for doc in [&mut docs.0, &mut docs.1, &mut docs.2, &mut docs.3] {
+            doc["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+        }
+        let mut predicate = false_fact();
+        predicate["value"]["value"] = serde_json::json!(false);
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({"kind":"all","predicates":[predicate, {
+            "kind":"outcome","task_id":"fixture.observe","outcome_key":"completed",
+            "comparison":"eq","value":{"type":"boolean","value":false}
+        }]});
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        docs.3["events"] = serde_json::json!([{
+            "id":"reset","scope":{"kind":"server","server_id":"fixture-server-a"},
+            "event_kind":"reset","schedule":{"kind":"interval","every_ms":100,"anchor_ms":NOW+10,
+                "clock_source":{"kind":"server","timezone_id":"fixed/utc","utc_offset_minutes":0,
+                    "dst_offset_minutes":0,"maintenance_drift_ms":0}},
+            "duration_ms":0,"invalidates_fact_prefixes":["fixture.","outcome.fixture.observe."],
+            "validity":{"from_unix_ms":NOW+10,"until_unix_ms":NOW+50}
+        }]);
+        let mut facts = base_facts();
+        facts.outcomes.push(ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: "fixture-instance-a".to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Boolean(false),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: None,
+            activity_window_id: None,
+        });
+        for duration in [0, 5] {
+            docs.3["events"][0]["duration_ms"] = serde_json::json!(duration);
+            let compiled = compile_documents(docs.clone());
+            for (now, expected) in [
+                (NOW, EligibilityState::True),
+                (NOW + 10, EligibilityState::Unknown),
+                (NOW + 16, EligibilityState::Unknown),
+                (NOW + 200, EligibilityState::Unknown),
+            ] {
+                let time = EvaluationTime {
+                    unix_ms: now,
+                    monotonic_ms: now,
+                };
+                let evaluation = evaluate(&compiled, &facts, &base_resources(), time, 7).unwrap();
+                assert_eq!(evaluation.decisions[0].eligibility, expected);
+                if now == NOW {
+                    assert_eq!(evaluation.next_wake_unix_ms, Some(NOW + 10));
+                    assert_eq!(
+                        evaluation.dispatch_intents[0]
+                            .prerequisites
+                            .facts_fresh_until_unix_ms,
+                        Some(NOW + 9)
+                    );
+                } else {
+                    let projected = project_time_validity(&compiled, &facts, time).unwrap();
+                    assert!(projected.facts.is_empty());
+                    assert!(projected.outcomes.is_empty());
+                }
+            }
+            let mut refreshed = facts.clone();
+            refreshed.facts[0].observed_at_unix_ms = NOW + 11;
+            refreshed.outcomes[0].observed_at_unix_ms = NOW + 11;
+            assert_eq!(
+                evaluate(
+                    &compiled,
+                    &refreshed,
+                    &base_resources(),
+                    EvaluationTime {
+                        unix_ms: NOW + 200,
+                        monotonic_ms: NOW + 200,
+                    },
+                    7
+                )
+                .unwrap()
+                .dispatch_intents
+                .len(),
+                1
+            );
+        }
+        for scope in [
+            serde_json::json!({"kind":"server","server_id":"other-server"}),
+            serde_json::json!({"kind":"instance","instance_id":"fixture-instance-b"}),
+        ] {
+            docs.3["events"][0]["scope"] = scope;
+            let compiled = compile_documents(docs.clone());
+            assert_eq!(
+                evaluate(
+                    &compiled,
+                    &facts,
+                    &base_resources(),
+                    EvaluationTime {
+                        unix_ms: NOW + 200,
+                        monotonic_ms: NOW + 200,
+                    },
+                    7
+                )
+                .unwrap()
+                .dispatch_intents
+                .len(),
+                1
+            );
+        }
     }
 
     // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
@@ -3344,6 +3769,55 @@ mod tests {
             stale.decisions[0].detection_suggestions[0].reason,
             "fact_stale"
         );
+
+        // Specification criterion: outcome TTL shares the fact freshness boundary.
+        let mut docs = example_documents();
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({
+            "kind":"outcome","task_id":"fixture.observe","outcome_key":"completed",
+            "comparison":"eq","value":{"type":"boolean","value":true}
+        });
+        let compiled = compile_documents(docs);
+        facts.outcomes.push(ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: "fixture-instance-a".to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Boolean(true),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: Some(NOW + 10),
+            activity_window_id: None,
+        });
+        for (now, expected) in [
+            (NOW, EligibilityState::True),
+            (NOW + 10, EligibilityState::True),
+            (NOW + 11, EligibilityState::Unknown),
+        ] {
+            let result = evaluate(
+                &compiled,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: now,
+                    monotonic_ms: now,
+                },
+                7,
+            )
+            .unwrap();
+            assert_eq!(result.decisions[0].eligibility, expected);
+            if expected == EligibilityState::True {
+                assert_eq!(
+                    result.dispatch_intents[0]
+                        .prerequisites
+                        .facts_fresh_until_unix_ms,
+                    Some(NOW + 10)
+                );
+                assert_eq!(result.next_wake_unix_ms, Some(NOW + 11));
+            } else {
+                assert_eq!(
+                    result.decisions[0].detection_suggestions[0].reason,
+                    "outcome_expired"
+                );
+            }
+        }
         assert!(stale.dispatch_intents.is_empty());
 
         let unavailable = evaluate_case(&[NOW + 47 * HOUR_MS], NOW, false);
@@ -3377,6 +3851,7 @@ mod tests {
                 last_dispatched_unix_ms: None,
                 eligible_since_unix_ms: Some(late_time.unix_ms - 1),
                 terminal_state: None,
+                completed_window: None,
             },
             TaskRuntimeSnapshot {
                 task_id: "fixture.observe-secondary".to_owned(),
@@ -3384,6 +3859,7 @@ mod tests {
                 last_dispatched_unix_ms: None,
                 eligible_since_unix_ms: Some(0),
                 terminal_state: None,
+                completed_window: None,
             },
         ];
         let result =
@@ -3519,11 +3995,16 @@ mod tests {
 
     #[test]
     fn outcomes_and_dispatches_remain_instance_scoped() {
-        let catalog = catalog(|tasks| {
-            tasks["tasks"][0]["scope"] =
-                serde_json::json!({"kind": "server", "server_id": "fixture-server-a"});
-            tasks["tasks"][0]["trigger"] = due_clock();
-        });
+        // Specification criterion: Workflow #267 POLICY-TIME-VALIDITY-v1.
+        let mut docs = example_documents();
+        docs.0["tasks"][0]["scope"] =
+            serde_json::json!({"kind": "server", "server_id": "fixture-server-a"});
+        docs.0["tasks"][0]["trigger"] = due_clock();
+        for profile in docs.2["profiles"].as_array_mut().expect("profiles") {
+            profile["windows"][0]["start_minute_of_day"] = serde_json::json!(0);
+            profile["windows"][0]["end_minute_of_day"] = serde_json::json!(0);
+        }
+        let catalog = compile_documents(docs.clone());
         let mut facts = base_facts();
         facts.instances.push(InstanceSnapshot {
             instance_id: "fixture-instance-b".to_owned(),
@@ -3541,6 +4022,8 @@ mod tests {
                 outcome_key: "completed".to_owned(),
                 value: FactValue::Boolean(true),
                 observed_at_unix_ms: NOW,
+                expires_at_unix_ms: None,
+                activity_window_id: Some("fixture-activity-a:0:0".to_owned()),
             },
             ObservedOutcome {
                 task_id: "fixture.observe".to_owned(),
@@ -3548,6 +4031,8 @@ mod tests {
                 outcome_key: "completed".to_owned(),
                 value: FactValue::Boolean(false),
                 observed_at_unix_ms: NOW,
+                expires_at_unix_ms: None,
+                activity_window_id: Some("fixture-activity-game:0:0".to_owned()),
             },
         ];
 
@@ -3585,6 +4070,7 @@ mod tests {
                 last_dispatched_unix_ms: None,
                 eligible_since_unix_ms: None,
                 terminal_state: None,
+                completed_window: None,
             });
             let result = evaluate(
                 &catalog,
@@ -3614,6 +4100,101 @@ mod tests {
                 .is_err()
             );
         }
+
+        let time = EvaluationTime {
+            unix_ms: NOW,
+            monotonic_ms: NOW,
+        };
+        for window_id in [None, Some("fixture-activity-a:-1:0".to_owned())] {
+            let mut historical = facts.clone();
+            historical.outcomes[0].activity_window_id = window_id;
+            let result = evaluate(&catalog, &historical, &base_resources(), time, 9).unwrap();
+            assert_eq!(
+                result.dispatch_intents.len(),
+                2,
+                "first dispatch follows trigger"
+            );
+        }
+        let mut historical = serde_json::to_value(&facts).unwrap();
+        for outcome in historical["outcomes"].as_array_mut().unwrap() {
+            outcome
+                .as_object_mut()
+                .unwrap()
+                .remove("activity_window_id");
+            outcome
+                .as_object_mut()
+                .unwrap()
+                .remove("expires_at_unix_ms");
+        }
+        let historical: EvaluationFacts = serde_json::from_value(historical).unwrap();
+        assert!(
+            historical
+                .outcomes
+                .iter()
+                .all(|outcome| outcome.activity_window_id.is_none())
+        );
+        assert_eq!(
+            evaluate(&catalog, &historical, &base_resources(), time, 9)
+                .unwrap()
+                .dispatch_intents
+                .len(),
+            2
+        );
+
+        // No mapped consumer: only a settled execution in this window enables stop.
+        docs.0["tasks"][0]["feedback_stop"] = false_fact();
+        let unmapped = compile_documents(docs);
+        assert!(
+            unmapped
+                .referenced_outcome_keys("fixture.observe")
+                .is_empty()
+        );
+        let mut unmapped_facts = facts.clone();
+        unmapped_facts.outcomes.clear();
+        unmapped_facts.facts[0].value = FactValue::Boolean(true);
+        unmapped_facts.tasks.push(TaskRuntimeSnapshot {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: "fixture-instance-a".to_owned(),
+            last_dispatched_unix_ms: None,
+            eligible_since_unix_ms: None,
+            terminal_state: Some(TaskTerminalState::Succeeded),
+            completed_window: None,
+        });
+        assert_eq!(
+            evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9)
+                .unwrap()
+                .dispatch_intents
+                .len(),
+            2
+        );
+        unmapped_facts.tasks[0].completed_window = Some(CompletedActivityWindow {
+            window_id: "fixture-activity-a:0:0".to_owned(),
+            completed_at_unix_ms: NOW,
+        });
+        let stopped = evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9).unwrap();
+        assert_eq!(stopped.dispatch_intents.len(), 1);
+        assert_eq!(
+            stopped.dispatch_intents[0].instance_id,
+            "fixture-instance-b"
+        );
+        unmapped_facts.facts.clear();
+        let unknown = evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9).unwrap();
+        assert_eq!(
+            decision_for(&unknown, "fixture.observe", "fixture-instance-a").eligibility,
+            EligibilityState::Unknown
+        );
+
+        let next_day = EvaluationTime {
+            unix_ms: NOW + 86_400_000,
+            monotonic_ms: NOW + 86_400_000,
+        };
+        assert_eq!(
+            evaluate(&catalog, &facts, &base_resources(), next_day, 9)
+                .unwrap()
+                .dispatch_intents
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -3867,6 +4448,7 @@ mod tests {
             last_dispatched_unix_ms: Some(NOW),
             eligible_since_unix_ms: Some(NOW),
             terminal_state: None,
+            completed_window: None,
         });
 
         let result = evaluate(
@@ -3906,6 +4488,7 @@ mod tests {
             last_dispatched_unix_ms: Some(NOW - 100),
             eligible_since_unix_ms: Some(NOW - 100),
             terminal_state: None,
+            completed_window: None,
         });
 
         let result = evaluate(

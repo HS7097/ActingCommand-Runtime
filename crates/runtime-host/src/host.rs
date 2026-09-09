@@ -4197,6 +4197,8 @@ impl HostShared {
                 outcome_key: outcome.disposition().outcome_key().to_owned(),
                 value: PolicyFactValue::Boolean(true),
                 observed_at_unix_ms: outcome.terminal_timestamp_unix_ms(),
+                expires_at_unix_ms: None,
+                activity_window_id: None,
             });
         }
         let fact_store = lock(&self.facts, "project_policy_facts")?;

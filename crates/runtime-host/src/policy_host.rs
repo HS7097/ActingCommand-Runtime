@@ -924,6 +924,7 @@ impl PolicyHost {
                     // No ledger fact establishes the start of continuous eligibility.
                     eligible_since_unix_ms: None,
                     terminal_state,
+                    completed_window: None,
                 })
             })
             .collect()
