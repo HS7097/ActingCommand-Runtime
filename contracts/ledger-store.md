@@ -196,6 +196,13 @@ these actions. No S0 file retention or verifier behavior changes.
 
 ## S1–S5 ownership and acceptance map
 
+The future source-tree `PackageRef` belongs to the separately frozen package
+identity/containment contract in #288. Its issuer, source-tree identity and ledger
+representation require coordination at that shared boundary. S0 preserves current
+package facts and artifact references for the storage comparison. Parallel policy
+time/window work (#267) and translator-owner relocation (#288) retain their own
+owners; the six SQL views remain assigned to the stages below.
+
 | Stage | Concrete boundary and remaining proof |
 | --- | --- |
 | S1 | Extract `RuntimeDatabase` as the sole low-level SQLite/schema/key/migration/transaction/backup owner from RuntimeState. Ledger and RuntimeState depend downward; business crates do not enter that owner. Preserve current RuntimeState behavior. |
