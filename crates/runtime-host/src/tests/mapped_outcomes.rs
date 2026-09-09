@@ -1299,7 +1299,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
             .expect("next legal task passes the final admission lock"),
         PolicyDispatchAdmission::Granted { .. }
     ));
-    clock.advance(1);
+    clock.advance(PolicyCadence::default().cooldown_ms);
     let stopped = restarted
         .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
         .expect("settled unconsumed result enables feedback after recovery")

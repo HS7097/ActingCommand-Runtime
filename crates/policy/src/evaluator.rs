@@ -815,7 +815,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                             result_expiry.and_then(|expiry| expiry.checked_add(1)),
                         );
                     }
-                    if let Some(window) = window {
+                    if let Some(window) = window.filter(|_| has_window_result) {
                         stop.next_wake_unix_ms =
                             min_wake(stop.next_wake_unix_ms, Some(window.until_unix_ms));
                         stop.fresh_until_unix_ms = min_wake(

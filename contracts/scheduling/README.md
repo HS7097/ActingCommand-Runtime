@@ -132,8 +132,8 @@ local start day for windows crossing midnight. A result must both name that
 window and have completed inside it. An enabled stop predicate retains Unknown
 when its required observation is unavailable. Missing historical window fields
 default to `None`, which supplies no evidence for feedback stop; a missing outcome
-expiry supplies no additional TTL. Activity-window closure also bounds freshness
-and wakes reevaluation. These input projections add no ledger wire or stored
+expiry supplies no additional TTL. An enabled feedback stop's activity-window
+closure also bounds freshness and wakes reevaluation. These input projections add no ledger wire or stored
 transaction state.
 
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
