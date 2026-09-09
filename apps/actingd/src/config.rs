@@ -1273,7 +1273,6 @@ mod tests {
     use actingcommand_device::{DeviceErrorCategory, SegmentedSwipeAction};
     use actingcommand_vision_ffi::{FastDeployPpocrArtifacts, OnnxExecutionProvider};
     use serde_json::json;
-    use std::io::Write;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
