@@ -3,6 +3,7 @@
 use actingcommand_contract::page_projection::{
     ProjectionCatalog, ProjectionMetadata, VerifiedProjectionMetadata,
 };
+use actingcommand_contract::PackageRef;
 use actingcommand_page_detector::{
     PageDefinition, PageDetector, PageSet, load_page_set_from_json_str,
 };
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use zip::ZipArchive;
 
 pub mod source;
+mod git_source;
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
 
@@ -169,6 +171,41 @@ pub struct Containment {
 }
 
 impl Containment {
+    /// Reads one explicitly referenced local package, without obtaining material online.
+    pub fn load_path(
+        &mut self,
+        instance: &InstanceId,
+        locator: &Path,
+        expected: &PackageRef,
+        observation: bool,
+        deadline: std::time::Instant,
+    ) -> ContainmentResult<&LoadedBundle> {
+        expected.validate().map_err(|_| git_source::source_error("package_reference_invalid"))?;
+        match expected {
+            PackageRef::LegacyZipSha256(hash) => {
+                let file = std::fs::File::open(locator).map_err(|_| git_source::source_error("package_open_failed"))?;
+                let metadata = file.metadata().map_err(|_| git_source::source_error("package_metadata_failed"))?;
+                if !metadata.is_file() || metadata.len() > self.limits.max_compressed_bytes {
+                    return Err(git_source::source_error("package_size_invalid"));
+                }
+                let mut bytes = Vec::new();
+                file.take(self.limits.max_compressed_bytes.saturating_add(1)).read_to_end(&mut bytes)
+                    .map_err(|_| git_source::source_error("package_read_failed"))?;
+                if std::time::Instant::now() >= deadline { return Err(git_source::source_error("package_deadline")); }
+                self.load_for(instance, &bytes, &Sha256Hash::parse_hex(hash)?, observation)
+            }
+            PackageRef::GitSourceTree(reference) => {
+                let entries = git_source::snapshot(locator, reference, self.limits, deadline)?;
+                let package = git_source::compile(entries, self.limits)?;
+                if std::time::Instant::now() >= deadline { return Err(git_source::source_error("source_tree_deadline")); }
+                let bundle = LoadedBundle::from_memory_package(package, expected.clone(),
+                    self.vision_provider.as_ref().map(Arc::clone), observation)?;
+                let bench = self.benches.entry(instance.clone()).or_insert_with(|| Bench::new(instance.clone()));
+                bench.loaded = Some(bundle);
+                Ok(bench.loaded.as_ref().expect("bundle inserted before returning"))
+            }
+        }
+    }
     pub fn new() -> Self {
         Self::with_limits(ContainmentLimits::default())
     }
@@ -245,7 +282,7 @@ impl Containment {
         let package = MemoryPackage::from_zip(task_zip_bytes, self.limits, instance)?;
         let bundle = LoadedBundle::from_memory_package(
             package,
-            actual,
+            PackageRef::LegacyZipSha256(actual.to_string()),
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
         )?;
@@ -385,7 +422,7 @@ pub enum PackageLayout {
 pub struct LoadedBundle {
     projection_metadata: Option<VerifiedProjectionMetadata>,
     task_id: TaskId,
-    verified: Sha256Hash,
+    verified: PackageRef,
     layout: PackageLayout,
     entries: Arc<BTreeMap<String, Vec<u8>>>,
     entry_count: usize,
@@ -408,7 +445,7 @@ pub struct LoadedBundle {
 impl LoadedBundle {
     fn from_memory_package(
         package: MemoryPackage,
-        verified: Sha256Hash,
+        verified: PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         observation: bool,
     ) -> ContainmentResult<Self> {
@@ -477,8 +514,8 @@ impl LoadedBundle {
         &self.task_id
     }
 
-    pub fn verified_hash(&self) -> Sha256Hash {
-        self.verified
+    pub fn package_ref(&self) -> &PackageRef {
+        &self.verified
     }
 
     pub fn layout(&self) -> PackageLayout {
@@ -873,6 +910,7 @@ impl AssetResolver for MemoryAssetResolver {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainmentError {
+    SourceTree { message: String },
     InvalidInstanceId,
     MissingTaskId,
     InvalidHash {
@@ -946,6 +984,7 @@ pub enum ContainmentError {
 impl fmt::Display for ContainmentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SourceTree { message } => write!(f, "fatal containment error: {message}"),
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
             Self::InvalidHash { value } => write!(

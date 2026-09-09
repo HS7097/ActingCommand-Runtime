@@ -1388,7 +1388,7 @@ pub enum ContainedTaskTrace {
     PackageAdmitted {
         task_label: String,
         package_label: String,
-        package_sha256: String,
+        package_sha256: actingcommand_contract::PackageRef,
     },
     RunStarted,
     EntryRecognition {
@@ -1558,7 +1558,7 @@ pub struct PreparedContainedTask {
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     post_admission_fields: Option<PreparedOcrFields>,
-    package_sha256: String,
+    package_sha256: actingcommand_contract::PackageRef,
     entry_count: usize,
     task_count: usize,
 }
@@ -1685,7 +1685,7 @@ impl PreparedContainedTask {
         &self.control.package_id
     }
 
-    pub fn package_sha256(&self) -> &str {
+    pub fn package_sha256(&self) -> &actingcommand_contract::PackageRef {
         &self.package_sha256
     }
 

@@ -245,7 +245,7 @@ pub struct PolicyRunContext {
     admission: PolicyAdmissionRecord,
     intent: DispatchIntent,
     reason_chain: DecisionReasonChain,
-    package_digest: String,
+    package_digest: actingcommand_contract::PackageRef,
 }
 
 impl PolicyRunContext {
@@ -329,7 +329,7 @@ impl PolicyRunContext {
         &self.intent.procedure_ref
     }
 
-    pub fn package_digest(&self) -> &str {
+    pub fn package_digest(&self) -> &actingcommand_contract::PackageRef {
         &self.package_digest
     }
 
@@ -2389,7 +2389,8 @@ fn detection_signal_id(kind: &str, components: &[&str]) -> String {
 fn event_data(
     payload: &actingcommand_contract::PolicyDispatchPayload,
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
-    for digest in [payload.package_digest(), payload.procedure_binding_digest()] {
+    payload.package_digest().validate().map_err(|_| fatal("procedure_binding_event_invalid", "recover_policy_dispatches"))?;
+    for digest in [payload.procedure_binding_digest()] {
         let valid = digest.strip_prefix("sha256:").is_some_and(|value| {
             value.len() == 64
                 && value

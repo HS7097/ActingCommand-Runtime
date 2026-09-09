@@ -49,7 +49,7 @@ pub struct OfflineSimulationResult {
     pub mode: &'static str,
     pub executed: bool,
     pub package_id: String,
-    pub package_sha256: String,
+    pub package_sha256: actingcommand_contract::PackageRef,
     pub decision_fingerprint: String,
     pub task_id: String,
     pub entry_count: usize,
@@ -215,7 +215,7 @@ struct DecisionFingerprintProjection<'a> {
 
 fn fingerprint_decision(
     package_id: &str,
-    package_sha256: &str,
+    package_sha256: &actingcommand_contract::PackageRef,
     task_id: &str,
     recognition: &[OfflineRecognitionResult],
     decision: &OfflineDecision,

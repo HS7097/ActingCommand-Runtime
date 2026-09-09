@@ -289,8 +289,8 @@ pub struct DispatchIntent {
     pub instance_id: String,
     pub operation_id: String,
     pub procedure_ref: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub package_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "actingcommand_contract::package::optional_policy_reference")]
+    pub package_digest: Option<actingcommand_contract::PackageRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub procedure_binding_digest: Option<String>,
     pub catalog_hash: String,

@@ -584,7 +584,7 @@ pub enum EffectiveConfigurationFacts {
         input_observed: bool,
     },
     EntryRecovery {
-        package_sha256: String,
+        package_sha256: crate::PackageRef,
         timing: EffectiveTaskTiming,
     },
     Capture {
