@@ -204,7 +204,7 @@ impl Containment {
             }
             PackageRef::GitSourceTree(reference) => {
                 let entries = git_source::snapshot(locator, reference, self.limits, deadline)?;
-                let package = git_source::compile(entries, self.limits, deadline)?;
+                let (package, operation) = git_source::compile(entries, self.limits, deadline)?;
                 if std::time::Instant::now() >= deadline {
                     return Err(git_source::source_error("source_tree_deadline"));
                 }
@@ -213,6 +213,7 @@ impl Containment {
                     expected.clone(),
                     self.vision_provider.as_ref().map(Arc::clone),
                     observation,
+                    Some(operation),
                 )?;
                 if std::time::Instant::now() >= deadline {
                     return Err(git_source::source_error("source_tree_deadline"));
@@ -308,6 +309,7 @@ impl Containment {
             PackageRef::LegacyZipSha256(actual.to_string()),
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
+            None,
         )?;
         let bench = self
             .benches
@@ -471,13 +473,19 @@ impl LoadedBundle {
         verified: PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         observation: bool,
+        execution_operation: Option<Value>,
     ) -> ContainmentResult<Self> {
         let entries = Arc::new(package.entries);
-        let metadata = if observation {
+        let mut metadata = if observation {
             PackageMetadata::from_observation_entries(&entries)?
         } else {
             PackageMetadata::from_entries(&entries)?
         };
+        // Source entries remain the verified original bytes for provenance and restore.
+        // The execution document is derived by the same pure canonicalization as ZIP tooling.
+        if let Some(operation) = execution_operation {
+            metadata.operation = operation;
+        }
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
         let projection_metadata = if let (Some(pack), Some(pages), Some(navigation)) = (
             &metadata.recognition_pack_path,

@@ -76,7 +76,7 @@ impl GitReader<'_> {
                     .take(limit.saturating_add(1))
                     .read_to_end(&mut bytes)
                     .map_err(|_| "source_git_read_failed")
-                    .and_then(|_| {
+                    .and({
                         if bytes.len() as u64 > limit {
                             Err("source_git_output_limit")
                         } else {
@@ -535,7 +535,7 @@ pub(super) fn compile(
     mut entries: BTreeMap<String, Vec<u8>>,
     limits: ContainmentLimits,
     deadline: Instant,
-) -> ContainmentResult<MemoryPackage> {
+) -> ContainmentResult<(MemoryPackage, Value)> {
     use source::{Bundle, ConversionFiles, OperationConverter, SourceFile, SourceRead};
     if Instant::now() >= deadline {
         return Err(source_error("source_tree_deadline"));
@@ -643,6 +643,18 @@ pub(super) fn compile(
             path: "resources/operations".to_owned(),
             message: error.to_string(),
         })?;
+    let operation = converter
+        .canonical_task(&control.entry_task_id)
+        .map_err(|error| ContainmentError::PackParse {
+            path: format!("resources/operations/{}/task.json", control.entry_task_id),
+            message: error.to_string(),
+        })?;
+    let operation_bytes = serde_json::to_vec(&operation)
+        .map_err(|_| source_error("source_conversion_encode_failed"))?
+        .len() as u64;
+    if operation_bytes > limits.max_entry_bytes {
+        return Err(source_error("source_compiled_entry_limit"));
+    }
     drop(files);
     let generated = [
         (
@@ -657,8 +669,14 @@ pub(super) fn compile(
             format!("resources/navigation/{stem}.navigation.json"),
             outputs.navigation,
         ),
-        ("resources/operations/index.json".to_owned(), outputs.index),
-        ("resources/primitives.json".to_owned(), outputs.primitives),
+        (
+            "resources/operations/operations.index.json".to_owned(),
+            outputs.index,
+        ),
+        (
+            "resources/operations/operations.primitives.json".to_owned(),
+            outputs.primitives,
+        ),
     ];
     for (path, value) in generated {
         if Instant::now() >= deadline {
@@ -694,7 +712,7 @@ pub(super) fn compile(
     );
     // Projection declarations remain the exact verified source bytes; build_all
     // has already checked them against the generated catalog.
-    let mut resident_bytes = 0_u64;
+    let mut resident_bytes = operation_bytes;
     for bytes in entries.values() {
         if bytes.len() as u64 > limits.max_entry_bytes {
             return Err(source_error("source_compiled_entry_limit"));
@@ -709,9 +727,12 @@ pub(super) fn compile(
     {
         return Err(source_error("source_compiled_size_limit"));
     }
-    Ok(MemoryPackage {
-        entry_count: entries.len(),
-        entries,
-        resident_bytes,
-    })
+    Ok((
+        MemoryPackage {
+            entry_count: entries.len(),
+            entries,
+            resident_bytes,
+        },
+        operation,
+    ))
 }

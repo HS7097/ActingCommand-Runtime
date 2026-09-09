@@ -44,7 +44,10 @@ absolute admission deadline and the existing file count, byte and resident limit
 
 Only after the entire snapshot is verified may it be parsed. The same in-memory bytes
 feed the pure converter owned by `pack-containment::source` and the normal reference
-closure/recognition/navigation validation. The loaded capability retains the snapshot.
+closure/recognition/navigation validation. The entry execution document also uses the
+existing `canonical_task` transformation (including inferred guards and canonical click
+geometry). The loaded capability retains original source entry bytes for provenance and
+restore alongside that derived execution document.
 
 ## Self-contained source layout
 
