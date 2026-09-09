@@ -555,8 +555,12 @@ impl RuntimeHost {
             &ledger,
             &events,
         )?;
+        let database = Arc::new(
+            RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
+                .map_err(|error| RuntimeHostError::state(&error))?,
+        );
         let state = Arc::new(
-            RuntimeStateStore::open(&config.state_root, &config.secret_fingerprint_salt)
+            RuntimeStateStore::from_database(database)
                 .map_err(|error| RuntimeHostError::state(&error))?,
         );
         let mut policy = PolicyHost::open(

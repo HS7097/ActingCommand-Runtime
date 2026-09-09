@@ -46,6 +46,7 @@ const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
     "crates/recognition",
     "crates/recognition-pack",
     "crates/runtime-client",
+    "crates/runtime-database",
     "crates/runtime-host",
     "crates/runtime-state",
     "crates/scheduler",
@@ -188,6 +189,7 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
     for required_root in [
         "crates/host-metrics",
         "crates/policy",
+        "crates/runtime-database",
         "crates/runtime-state",
     ] {
         assert!(
@@ -333,7 +335,9 @@ fn c3b_client_device_authority_stays_behind_runtime() {
             let dependency_name = dependency["name"].as_str().expect("dependency name");
             if matches!(
                 dependency_name,
-                "actingcommand-device" | "actingcommand-recognition"
+                "actingcommand-device"
+                    | "actingcommand-recognition"
+                    | "actingcommand-runtime-database"
             ) {
                 violations.push(format!(
                     "{package_name}: production dependency reaches {dependency_name}"

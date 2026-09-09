@@ -196,6 +196,9 @@ these actions. No S0 file retention or verifier behavior changes.
 
 ## S1–S5 ownership and acceptance map
 
+The S1 physical owner and preserved state assembly are described in
+[Runtime database owner](runtime-database.md).
+
 The future source-tree `PackageRef` belongs to the separately frozen package
 identity/containment contract in #288. Its issuer, source-tree identity and ledger
 representation require coordination at that shared boundary. S0 preserves current
