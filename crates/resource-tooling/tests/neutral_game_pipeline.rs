@@ -151,6 +151,7 @@ fn fields_v1_neutral_declaration_and_package_closure() {
         maa_tasks_root: None,
         dry_run: false,
     })
+    .map_err(Box::new)
     .unwrap();
     let out = temp.path().join("fields.zip");
     let prepared = prepare_package_build_task(PackageBuildTaskRequest {
@@ -226,6 +227,7 @@ fn zero_input_fields_build_and_declaration_boundaries() {
             env: PackageEnvOptions::default(),
         })?
         .build(&AuthoringEnvironmentSnapshot::default())
+        .map_err(Box::new)
     };
     build(&task, "navigable_route", "fields").expect("official zero-input build-task");
     let bytes = open_published_package(&temp.path().join("fields.zip"))
