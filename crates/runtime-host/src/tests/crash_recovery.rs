@@ -1111,8 +1111,21 @@ fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
             run_id: Some(context.run_id()),
             ..EventQuery::default()
         };
+        let pending = host
+            .query_persisted_events_for_test(query.clone())
+            .expect("original pending run facts");
         host.evaluate_policy_cycle(PolicyTrigger::Reconciliation)
             .expect("reconciliation while the exact lease is active");
+        assert_eq!(
+            host.query_persisted_events_for_test(query.clone())
+                .expect("unchanged pending run facts"),
+            pending
+        );
+        assert!(
+            host.pinned_policy_catalog(context.decision_id())
+                .expect("pending catalog pin")
+                .is_some()
+        );
         assert!(
             host.query_persisted_events_for_test(query.clone())
                 .expect("active run facts")
@@ -1131,6 +1144,15 @@ fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
         let settled = host
             .query_persisted_events_for_test(query.clone())
             .expect("online settled run facts");
+        let release = settled
+            .iter()
+            .find(|event| event.event_type() == EventType::LeaseReleased)
+            .expect("contained request release");
+        assert_eq!(release.links().request_id(), Some(&receipt.request_id()));
+        assert_ne!(
+            release.links().request_id(),
+            Some(&context.admission_request_id())
+        );
         for event_type in [
             EventType::TaskCompleted,
             EventType::LeaseReleased,

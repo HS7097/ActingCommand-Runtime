@@ -2551,15 +2551,7 @@ fn reconcile_scheduled_policy_outcomes_for(
             [] => {
                 let releases = persisted
                     .iter()
-                    .filter(|event| {
-                        event.event_type() == EventType::LeaseReleased
-                            && event.links().instance_id() == Some(instance_id)
-                            && event.links().request_id() == Some(request_id)
-                            && event.links().correlation_id() == Some(correlation_id)
-                            && event.links().task_id() == Some(task_id)
-                            && event.links().run_id() == Some(run_id)
-                            && event.links().lease_id() == Some(lease_id)
-                    })
+                    .filter(|event| scheduled_admission_release_matches(event, intent, lease_id))
                     .collect::<Vec<_>>();
                 let release = match releases.as_slice() {
                     [] => continue,
@@ -2616,6 +2608,20 @@ fn reconcile_scheduled_policy_outcomes_for(
         policy.complete_dispatch(&decision_id, &completion)?;
     }
     Ok(())
+}
+
+fn scheduled_admission_release_matches(
+    event: &PersistedEvent,
+    intent: &PersistedEvent,
+    lease_id: &LeaseId,
+) -> bool {
+    event.event_type() == EventType::LeaseReleased
+        && event.links().instance_id() == intent.links().instance_id()
+        && event.links().request_id() == intent.links().request_id()
+        && event.links().correlation_id() == intent.links().correlation_id()
+        && event.links().task_id() == intent.links().task_id()
+        && event.links().run_id() == intent.links().run_id()
+        && event.links().lease_id() == Some(lease_id)
 }
 
 fn recover_authoritative_policy_outcomes(
@@ -4082,8 +4088,13 @@ impl HostShared {
                     .cloned()
                     .collect(),
             )?;
+            let pending_completions = policy
+                .pending_dispatch_completions()
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let mut settled = false;
             for decision_id in eligible {
-                if policy.dispatch_needs_completion(&decision_id)? {
+                if pending_completions.contains(&decision_id) {
                     let execution = policy.execution_data(&decision_id)?;
                     policy.completion_data(&decision_id)?;
                     let completion = self
@@ -4092,16 +4103,21 @@ impl HostShared {
                         .map_err(|_| ledger_error("reconcile_policy_settlements"))?;
                     policy.complete_dispatch(&decision_id, &completion)?;
                 }
-                lock(
-                    &self.policy_dispatch_clocks,
-                    "clear_reconciled_policy_clock",
-                )?
-                .remove(&decision_id);
+                if !policy.dispatch_needs_completion(&decision_id)? {
+                    lock(
+                        &self.policy_dispatch_clocks,
+                        "clear_reconciled_policy_clock",
+                    )?
+                    .remove(&decision_id);
+                    settled = true;
+                }
             }
-            *lock(
-                &self.authoritative_policy_outcomes,
-                "recover_online_policy_outcomes",
-            )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
+            if settled {
+                *lock(
+                    &self.authoritative_policy_outcomes,
+                    "recover_online_policy_outcomes",
+                )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
+            }
             Ok(())
         })();
         if let Err(error) = &result
@@ -4236,6 +4252,9 @@ impl HostShared {
                 // The accepted recovery consumer can settle a released admission
                 // without a task terminal only when no effect was started.
                 if !missing_outcomes.contains(decision_id)
+                    || !persisted
+                        .iter()
+                        .any(|event| scheduled_admission_release_matches(event, intent, lease_id))
                     || persisted.iter().any(|event| {
                         event.links().task_id() == links.task_id()
                             && event.links().run_id() == links.run_id()
