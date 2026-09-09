@@ -361,7 +361,10 @@ fn read_rows(
                 .checked_add(length)
                 .ok_or_else(|| failure("ledger_snapshot_overflow", "count_sqlite_bytes"))?;
             check_read_budget(budget, *bytes, 0)?;
-            values.push(SqlValue::from(value));
+            values.push(
+                SqlValue::try_from(value)
+                    .map_err(|_| failure("invalid_sqlite_value", "decode_sqlite_column"))?,
+            );
         }
         result.push(values);
     }
