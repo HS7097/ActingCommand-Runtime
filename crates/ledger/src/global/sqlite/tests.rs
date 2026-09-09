@@ -244,13 +244,13 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
                         bytes,
                         actingcommand_artifact_store::ArtifactWriteContext::new(
                             ArtifactLinksDraft::default()
-                                .with_run_id(run.clone())
-                                .with_frame_id(frame.clone())
-                                .with_correlation_id(correlation.clone()),
+                                .with_run_id(run)
+                                .with_frame_id(frame)
+                                .with_correlation_id(correlation),
                             EventLinksDraft::default()
-                                .with_run_id(run.clone())
-                                .with_frame_id(frame.clone())
-                                .with_correlation_id(correlation.clone()),
+                                .with_run_id(run)
+                                .with_frame_id(frame)
+                                .with_correlation_id(correlation),
                             u64::MAX,
                         ),
                         ArtifactIssuePolicy::new(

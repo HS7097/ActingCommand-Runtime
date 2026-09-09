@@ -84,12 +84,11 @@ impl SqliteLedgerStore {
             head_hash,
         };
         let mut store = Self::recovered(backend, next, events)?;
-        if let Some(previous_owner) = stale_owner {
-            if let Err(error) =
+        if let Some(previous_owner) = stale_owner
+            && let Err(error) =
                 store.append_recovery(RecoveryReason::StaleOwner, Some(previous_owner), None, None)
-            {
-                return Err(error.with_close_result(store.backend.close()));
-            }
+        {
+            return Err(error.with_close_result(store.backend.close()));
         }
         Ok(store)
     }

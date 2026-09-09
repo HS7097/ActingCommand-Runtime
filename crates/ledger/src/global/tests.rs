@@ -1368,6 +1368,7 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
         GlobalLedger::open,
         |config| {
             GlobalLedger::open_read_only(config, |_| None)
+                .map(Box::new)
                 .map(store_contract::ContractReadOnly::Segment)
         },
     );

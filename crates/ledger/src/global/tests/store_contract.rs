@@ -170,8 +170,8 @@ fn segment_store_event_trace_preserves_the_shared_typed_corpus() {
 }
 
 pub(super) enum ContractReadOnly {
-    Segment(GlobalLedgerReadOnly),
-    Sqlite(SqliteLedgerReadOnly),
+    Segment(Box<GlobalLedgerReadOnly>),
+    Sqlite(Box<SqliteLedgerReadOnly>),
 }
 impl ContractReadOnly {
     fn query(&self, query: &EventQuery) -> Vec<PersistedEvent> {

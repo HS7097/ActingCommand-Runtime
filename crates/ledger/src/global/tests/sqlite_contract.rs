@@ -39,6 +39,7 @@ fn sqlite_runs_the_existing_seven_store_contracts() {
                 Arc::clone(held.borrow().as_ref().expect("same database owner")),
                 |_| None,
             )
+            .map(Box::new)
             .map(store_contract::ContractReadOnly::Sqlite)
         },
     );
