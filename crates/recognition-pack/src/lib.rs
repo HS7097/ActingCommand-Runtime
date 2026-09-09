@@ -300,10 +300,48 @@ pub struct NnTarget {
     pub click: Option<PackRect>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ColorCheck {
-    pub region: PackRect,
+    pub region: PackRegion,
     pub expected: [u8; 3],
+}
+
+impl ColorCheck {
+    pub fn validate_for_template(&self, target_id: &str) -> RecognitionPackResult<()> {
+        let mut errors = Vec::new();
+        match &self.region {
+            PackRegion::Rect(rect) => validate_rect_shape(*rect, "color_check.region", &mut errors),
+            PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+                anchor_target_id,
+                width,
+                height,
+                ..
+            }) => {
+                if anchor_target_id != target_id {
+                    errors.push(
+                        "relative color anchor must name the template target itself".to_string(),
+                    );
+                }
+                validate_rect_shape(
+                    PackRect {
+                        x: 0,
+                        y: 0,
+                        width: *width,
+                        height: *height,
+                    },
+                    "color_check.region",
+                    &mut errors,
+                );
+            }
+            PackRegion::Keyword(_) => errors
+                .push("color_check.region must be a rectangle or template_relative".to_string()),
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(RecognitionPackError::fatal(errors.join("; ")))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -567,6 +605,8 @@ pub struct TemplateRegionEvaluationRow {
     pub threshold: f32,
     pub passed: bool,
     pub selected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorEvaluation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -581,6 +621,8 @@ pub struct ColorEvaluation {
     pub max_distance: f32,
     pub mean: [u8; 3],
     pub expected: [u8; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<PackRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -773,38 +815,23 @@ impl SceneEvaluation<'_> {
         if !evaluated.passed {
             return Err(fail(evidence, OcrRegionUnresolvedReason::AnchorNotMatched));
         }
-        let Some((x, y)) = matched
-            .x
-            .checked_add(offset.x)
-            .zip(matched.y.checked_add(offset.y))
-        else {
-            return Err(fail(
-                evidence,
-                OcrRegionUnresolvedReason::CoordinateOverflow,
-            ));
-        };
-        let rect = PackRect {
-            x,
-            y,
-            width: *width,
-            height: *height,
+        let rect = match resolve_template_relative_region(
+            self.scene,
+            PackPoint {
+                x: matched.x,
+                y: matched.y,
+            },
+            *offset,
+            *width,
+            *height,
+        ) {
+            Ok(rect) => rect,
+            Err((rect, reason)) => {
+                evidence.roi = rect.map(Into::into);
+                return Err(fail(evidence, reason));
+            }
         };
         evidence.roi = Some(rect.into());
-        let Some((right, bottom)) = x.checked_add(*width).zip(y.checked_add(*height)) else {
-            return Err(fail(
-                evidence,
-                OcrRegionUnresolvedReason::CoordinateOverflow,
-            ));
-        };
-        if x < 0
-            || y < 0
-            || right < 0
-            || bottom < 0
-            || right as u32 > self.scene.width()
-            || bottom as u32 > self.scene.height()
-        {
-            return Err(fail(evidence, OcrRegionUnresolvedReason::OutOfFrame));
-        }
         Ok((rect, evidence))
     }
 }
@@ -998,6 +1025,41 @@ impl RecognitionEvaluator {
             .unwrap_or(self.pack.defaults.template_threshold);
         let mut rows = Vec::with_capacity(regions.len());
         for (index, requested_region) in regions.iter().copied().enumerate() {
+            if target
+                .color_check
+                .as_ref()
+                .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
+            {
+                let evaluation = self.evaluate_relative_color_template(
+                    scene,
+                    target,
+                    &template_png,
+                    Some(requested_region.into()),
+                )?;
+                let matched = evaluation.template.ok_or_else(|| {
+                    RecognitionPackError::fatal(
+                        "joint template evaluation omitted template evidence",
+                    )
+                })?;
+                rows.push(TemplateRegionEvaluationRow {
+                    index,
+                    requested_region,
+                    metric,
+                    matched_rect: PackRect {
+                        x: matched.x,
+                        y: matched.y,
+                        width: matched.width,
+                        height: matched.height,
+                    },
+                    raw_score: matched.raw_score,
+                    normalized_score: matched.score,
+                    threshold,
+                    passed: evaluation.passed,
+                    selected: false,
+                    color: evaluation.color,
+                });
+                continue;
+            }
             let matched = scene
                 .match_template_with_metric(
                     &template_png,
@@ -1020,6 +1082,7 @@ impl RecognitionEvaluator {
                 threshold,
                 passed: matched.score >= threshold,
                 selected: false,
+                color: None,
             });
         }
 
@@ -1235,6 +1298,13 @@ impl RecognitionEvaluator {
                 ))
             })?;
         let region = target_region(&target.id, &target.region)?;
+        if target
+            .color_check
+            .as_ref()
+            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
+        {
+            return self.evaluate_relative_color_template(scene, target, &template_png, region);
+        }
         let matched = scene
             .match_template_with_metric(&template_png, region, self.default_match_metric())
             .map_err(|err| primitive_error(&target.id, err))?;
@@ -1252,7 +1322,7 @@ impl RecognitionEvaluator {
         };
         let template_ok = template.score >= template.threshold;
 
-        let color = match target.color_check {
+        let color = match &target.color_check {
             Some(check) => Some(self.evaluate_color_check(scene, &target.id, check)?),
             None => None,
         };
@@ -1270,6 +1340,115 @@ impl RecognitionEvaluator {
             ocr: None,
             nn: None,
             message: template_message(template_ok, color_ok),
+        })
+    }
+
+    fn evaluate_relative_color_template(
+        &self,
+        scene: &Scene,
+        target: &TemplateTarget,
+        template_png: &[u8],
+        search_region: Option<recognition::Rect>,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let check = target
+            .color_check
+            .as_ref()
+            .ok_or_else(|| RecognitionPackError::fatal("relative color check missing"))?;
+        let PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+            offset,
+            width,
+            height,
+            ..
+        }) = &check.region
+        else {
+            return Err(RecognitionPackError::fatal(
+                "relative color declaration missing",
+            ));
+        };
+        let threshold = target
+            .threshold
+            .unwrap_or(self.pack.defaults.template_threshold);
+        let mut best_color_score: Option<f32> = None;
+        let mut best_color = None;
+        let mut best_color_unresolved = None;
+        let mut accepted_color = None;
+        let selection = scene
+            .match_template_with_filter(
+                template_png,
+                search_region,
+                self.default_match_metric(),
+                threshold,
+                |candidate| {
+                    let (color, unresolved) = match resolve_template_relative_region(
+                        scene,
+                        PackPoint {
+                            x: candidate.x,
+                            y: candidate.y,
+                        },
+                        *offset,
+                        *width,
+                        *height,
+                    ) {
+                        Ok(region) => {
+                            let measured = scene.compare_color(region.into(), check.expected)?;
+                            (
+                                Some(ColorEvaluation {
+                                    distance: measured.distance,
+                                    max_distance: self.pack.defaults.color_max_distance,
+                                    mean: measured.mean,
+                                    expected: check.expected,
+                                    region: Some(region),
+                                }),
+                                None,
+                            )
+                        }
+                        Err((_, reason)) => (None, Some(reason)),
+                    };
+                    if best_color_score.is_none_or(|score| candidate.raw_score > score) {
+                        best_color_score = Some(candidate.raw_score);
+                        best_color = color;
+                        best_color_unresolved = unresolved;
+                    }
+                    let passed = color.is_some_and(|color| color.distance <= color.max_distance);
+                    if passed {
+                        accepted_color = color;
+                    }
+                    Ok(passed)
+                },
+            )
+            .map_err(|err| primitive_error(&target.id, err))?;
+        let matched = selection.accepted.unwrap_or(selection.best_template);
+        let passed = selection.accepted.is_some();
+        let (color, unresolved) = if passed {
+            (accepted_color, None)
+        } else {
+            (best_color, best_color_unresolved)
+        };
+        Ok(TargetEvaluation {
+            id: target.id.clone(),
+            kind: TargetKind::Template,
+            passed,
+            template: Some(TemplateEvaluation {
+                x: matched.x,
+                y: matched.y,
+                width: matched.width,
+                height: matched.height,
+                raw_score: matched.raw_score,
+                score: matched.score,
+                threshold,
+            }),
+            color,
+            ocr: None,
+            nn: None,
+            message: match unresolved {
+                Some(reason) => format!(
+                    "no joint template/color match; best template color region unresolved: {reason:?}"
+                ),
+                None => template_message(
+                    matched.score >= threshold,
+                    color.is_none_or(|color| color.distance <= color.max_distance),
+                ),
+            },
         })
     }
 
@@ -1429,9 +1608,14 @@ impl RecognitionEvaluator {
         &self,
         scene: &Scene,
         target_id: &str,
-        check: ColorCheck,
+        check: &ColorCheck,
     ) -> RecognitionPackResult<ColorEvaluation> {
-        self.evaluate_color_match(scene, target_id, check.region, check.expected)
+        let PackRegion::Rect(region) = check.region else {
+            return Err(RecognitionPackError::fatal(
+                "relative color requires its template candidate",
+            ));
+        };
+        self.evaluate_color_match(scene, target_id, region, check.expected)
     }
 
     fn evaluate_color_match(
@@ -1449,6 +1633,7 @@ impl RecognitionEvaluator {
             max_distance: self.pack.defaults.color_max_distance,
             mean: matched.mean,
             expected,
+            region: None,
         })
     }
 
@@ -1679,11 +1864,26 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
                 &format!("schema 0.6 target[{index}].color_check"),
             )?;
             if let Some(region) = color_check.get("region") {
-                validate_strict_object(
-                    region,
-                    &["x", "y", "width", "height"],
-                    &format!("schema 0.6 target[{index}].color_check.region"),
-                )?;
+                if region.get("mode").is_some() {
+                    validate_strict_object(
+                        region,
+                        &["mode", "anchor_target_id", "offset", "width", "height"],
+                        "relative color region",
+                    )?;
+                    validate_strict_object(
+                        region.get("offset").ok_or_else(|| {
+                            RecognitionPackError::fatal("relative color offset missing")
+                        })?,
+                        &["x", "y"],
+                        "relative color offset",
+                    )?;
+                } else {
+                    validate_strict_object(
+                        region,
+                        &["x", "y", "width", "height"],
+                        &format!("schema 0.6 target[{index}].color_check.region"),
+                    )?;
+                }
             }
         }
     }
@@ -1786,12 +1986,27 @@ fn validate_pack(
                 if let Some(RecognitionMask::Bitmap { path }) = &target.mask {
                     validate_template_path(path, &format!("target[{index}].mask"), errors);
                 }
-                if let Some(check) = target.color_check {
-                    validate_rect_shape(
-                        check.region,
-                        &format!("target[{index}].color_check.region"),
-                        errors,
-                    );
+                if let Some(check) = &target.color_check {
+                    if let Err(error) = check.validate_for_template(&target.id) {
+                        errors.push(format!("target[{index}]: {}", error.message()));
+                    }
+                    if let PackRegion::TemplateRelative(
+                        TemplateRelativeRegion::TemplateRelative { width, height, .. },
+                    ) = &check.region
+                    {
+                        if pack.schema_version != "0.6" {
+                            errors.push(format!(
+                                "target[{index}] relative color requires schema_version '0.6'"
+                            ));
+                        }
+                        if pack.coordinate_space.is_some_and(|space| {
+                            *width as u32 > space.width || *height as u32 > space.height
+                        }) {
+                            errors.push(format!(
+                                "target[{index}] relative color dimensions exceed coordinate space"
+                            ));
+                        }
+                    }
                 }
                 validate_template_path(&target.template_path, &format!("target[{index}]"), errors);
                 if is_template_path_safe(&target.template_path)
@@ -2119,6 +2334,43 @@ fn validate_rect_shape(rect: PackRect, label: &str, errors: &mut Vec<String>) {
             rect.width, rect.height
         ));
     }
+}
+
+fn resolve_template_relative_region(
+    scene: &Scene,
+    origin: PackPoint,
+    offset: OcrRegionOffset,
+    width: i32,
+    height: i32,
+) -> Result<PackRect, (Option<PackRect>, OcrRegionUnresolvedReason)> {
+    let Some((x, y)) = origin
+        .x
+        .checked_add(offset.x)
+        .zip(origin.y.checked_add(offset.y))
+    else {
+        return Err((None, OcrRegionUnresolvedReason::CoordinateOverflow));
+    };
+    let rect = PackRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let Some((right, bottom)) = x.checked_add(width).zip(y.checked_add(height)) else {
+        return Err((Some(rect), OcrRegionUnresolvedReason::CoordinateOverflow));
+    };
+    if x < 0
+        || y < 0
+        || width <= 0
+        || height <= 0
+        || right < 0
+        || bottom < 0
+        || right as u32 > scene.width()
+        || bottom as u32 > scene.height()
+    {
+        return Err((Some(rect), OcrRegionUnresolvedReason::OutOfFrame));
+    }
+    Ok(rect)
 }
 
 fn validate_region_shape(region: &PackRegion, label: &str, errors: &mut Vec<String>) {
@@ -3627,6 +3879,131 @@ mod tests {
     }
 
     #[test]
+    fn relative_color_rejects_a_high_scoring_gray_status_row() {
+        // Workflow #279 B19 first red: the status color belongs to the matched row.
+        let fixture = TemplateFixture::new();
+        let evaluator =
+            fixture.template_with_relative_color_evaluator(0.90, OcrRegionOffset { x: 8, y: 0 });
+        let evaluation = evaluator
+            .evaluate_target(&fixture.scene_with_template(), "template")
+            .expect("evaluation");
+        assert!(!evaluation.passed);
+        let template = evaluation.template.expect("template evidence");
+        assert_eq!((template.x, template.y), (20, 15));
+        assert!(template.score >= 0.99);
+        let color = evaluation.color.expect("sampled status color");
+        assert_eq!(color.region, Some(rect(28, 15, 2, 2)));
+        assert_eq!(color.mean, [30, 31, 32]);
+        assert!(color.distance > color.max_distance);
+    }
+
+    #[test]
+    fn relative_color_selects_the_valid_candidate_and_tracks_its_movement() {
+        let fixture = TemplateFixture::new();
+        let evaluator =
+            fixture.template_with_relative_color_evaluator(0.90, OcrRegionOffset { x: 8, y: 0 });
+        for (x, y) in [(12_u32, 28_u32), (34, 30)] {
+            let mut frame = blank_image(64, 48, [30, 31, 32]);
+            paste(&mut frame, &fixture.template, 12, 8);
+            paste(&mut frame, &fixture.template, x, y);
+            frame.set(x, y, [80, 85, 90]);
+            paste(&mut frame, &blank_image(2, 2, [255, 0, 0]), x + 8, y);
+            let scene = Scene::from_png(&encode_png(&frame)).expect("scene");
+            let grayscale = scene
+                .match_template_with_metric(
+                    &encode_png(&fixture.template),
+                    None,
+                    MatchMetric::CrossCorrelationNormalized,
+                )
+                .expect("grayscale match");
+            assert_eq!((grayscale.x, grayscale.y), (12, 8));
+            let evaluation = evaluator
+                .evaluate_target(&scene, "template")
+                .expect("joint match");
+            assert!(evaluation.passed);
+            let matched = evaluation.template.expect("template");
+            assert_eq!((matched.x, matched.y), (x as i32, y as i32));
+            assert!(matched.score < grayscale.score);
+            let color = evaluation.color.expect("color");
+            assert_eq!(color.region, Some(rect(x as i32 + 8, y as i32, 2, 2)));
+            assert_eq!(color.mean, [255, 0, 0]);
+            assert_eq!(color.distance, 0.0);
+            let stored = serde_json::to_value(&evaluation).expect("evaluation evidence");
+            assert_eq!(stored["color"]["region"]["x"], x + 8);
+            assert_eq!(stored["template"]["y"], y);
+            let batch = evaluator
+                .evaluate_template_regions(
+                    &scene,
+                    "template",
+                    &[rect(8, 4, 20, 14), rect(x as i32 - 4, y as i32 - 4, 20, 14)],
+                )
+                .expect("same joint rule in region batch");
+            assert!(!batch.rows[0].passed);
+            assert!(!batch.rows[0].selected);
+            assert!(batch.rows[1].passed && batch.rows[1].selected);
+            assert_eq!(batch.rows[1].matched_rect, rect(x as i32, y as i32, 8, 6));
+            assert_eq!(batch.rows[1].color, Some(color));
+        }
+    }
+
+    #[test]
+    fn relative_color_does_not_match_without_the_template() {
+        let fixture = TemplateFixture::new();
+        let evaluator =
+            fixture.template_with_relative_color_evaluator(1.0, OcrRegionOffset { x: 8, y: 0 });
+        let scene = Scene::from_png(&encode_png(&blank_image(64, 48, [255, 0, 0]))).expect("scene");
+        let evaluation = evaluator
+            .evaluate_target(&scene, "template")
+            .expect("evaluation");
+        assert!(!evaluation.passed);
+        assert!(evaluation.template.expect("best template evidence").score < 1.0);
+    }
+
+    #[test]
+    fn relative_color_declaration_and_resolved_region_fail_closed() {
+        let fixture = TemplateFixture::new();
+        let mut value: Value = serde_json::from_str(&template_pack_json("templates/button.png"))
+            .expect("fixture JSON");
+        value["schema_version"] = serde_json::json!("0.6");
+        let valid = serde_json::json!({"region":{"mode":"template_relative","anchor_target_id":"template","offset":{"x":8,"y":0},"width":2,"height":2},"expected":[255,0,0]});
+        for (pointer, bad) in [
+            ("/region/mode", serde_json::json!("unknown")),
+            (
+                "/region/anchor_target_id",
+                serde_json::json!("another-template"),
+            ),
+            ("/region/offset/x", serde_json::json!(2147483648_u64)),
+            ("/region/width", serde_json::json!(0)),
+            ("/region/height", serde_json::json!(100)),
+        ] {
+            let mut check = valid.clone();
+            *check.pointer_mut(pointer).expect("declared field") = bad;
+            value["targets"][0]["color_check"] = check;
+            let result = load_pack_from_json_str(&value.to_string())
+                .and_then(|pack| RecognitionEvaluator::new(fixture.dir.path.clone(), pack));
+            assert!(result.is_err(), "accepted invalid {pointer}");
+        }
+        value["targets"][0]["color_check"] = valid.clone();
+        value["targets"][0]["color_check"]["region"]["offset"]["extra"] = serde_json::json!(1);
+        assert!(load_pack_from_json_str(&value.to_string()).is_err());
+        value["targets"][0] = serde_json::json!({"type":"color","id":"color","region":{"x":0,"y":0,"width":2,"height":2},"expected":[255,0,0],"color_check":valid});
+        assert!(load_pack_from_json_str(&value.to_string()).is_err());
+
+        for offset in [
+            OcrRegionOffset { x: i32::MAX, y: 0 },
+            OcrRegionOffset { x: -24, y: 0 },
+        ] {
+            let evaluator = fixture.template_with_relative_color_evaluator(0.90, offset);
+            let evaluation = evaluator
+                .evaluate_target(&fixture.scene_with_template(), "template")
+                .expect("unmatched region");
+            assert!(!evaluation.passed);
+            assert!(evaluation.color.is_none());
+            assert!(evaluation.message.contains("region unresolved"));
+        }
+    }
+
+    #[test]
     fn coordinate_space_mismatch_is_fatal() {
         let dir = TestDir::new();
         let pack = RecognitionPack {
@@ -3921,7 +4298,7 @@ mod tests {
                     mask: None,
                     rect_move: None,
                     color_check: Some(ColorCheck {
-                        region: rect(0, 0, 8, 8),
+                        region: PackRegion::Rect(rect(0, 0, 8, 8)),
                         expected,
                     }),
                     click: None,
@@ -3929,6 +4306,30 @@ mod tests {
                 ..base_pack()
             };
             RecognitionEvaluator::new(self.dir.path.clone(), pack).expect("evaluator")
+        }
+
+        fn template_with_relative_color_evaluator(
+            &self,
+            threshold: f32,
+            offset: OcrRegionOffset,
+        ) -> RecognitionEvaluator {
+            let mut pack = self.template_with_color_evaluator([255, 0, 0]).pack;
+            pack.schema_version = "0.6".to_string();
+            let RecognitionTarget::Template(target) = &mut pack.targets[0] else {
+                panic!("template fixture")
+            };
+            target.region = PackRegion::Rect(rect(0, 0, 64, 48));
+            target.threshold = Some(threshold);
+            target.color_check = Some(ColorCheck {
+                region: PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+                    anchor_target_id: target.id.clone(),
+                    offset,
+                    width: 2,
+                    height: 2,
+                }),
+                expected: [255, 0, 0],
+            });
+            RecognitionEvaluator::new(self.dir.path.clone(), pack).expect("relative evaluator")
         }
 
         fn mixed_vision_pack(&self) -> RecognitionPack {

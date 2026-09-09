@@ -267,6 +267,8 @@ pub struct TaskDiagnosticColorData {
     pub max_distance: f32,
     pub mean: [u8; 3],
     pub expected: [u8; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<crate::OcrRegionRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
