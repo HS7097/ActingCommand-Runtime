@@ -171,11 +171,28 @@ pub(super) struct PackageInput {
 }
 
 impl PackageInput {
-    pub fn open(flags: &FlagArgs) -> CliOutcome<Self> {
+    pub fn declared_reference(flags: &FlagArgs) -> CliOutcome<PackageRef> {
         let source = flags.optional("--package-ref");
         if source.is_some() && flags.optional("--expected-sha256").is_some() {
             return Err(CliError::usage("provide one package reference"));
         }
+        match source {
+            Some(value) => PackageRef::parse_argument(&value)
+                .map_err(|error| CliError::package_invalid(error.to_string())),
+            None => Ok(PackageRef::LegacyZipSha256(
+                explicit_hash(flags)?.hash().to_string(),
+            )),
+        }
+    }
+
+    pub fn open(flags: &FlagArgs) -> CliOutcome<Self> {
+        Self::open_declared(flags, Self::declared_reference(flags)?)
+    }
+
+    pub fn open_declared(flags: &FlagArgs, reference: PackageRef) -> CliOutcome<Self> {
+        reference
+            .validate()
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
         if flags.optional("--package").is_some() && flags.optional("--zip").is_some() {
             return Err(CliError::usage("provide one package locator"));
         }
@@ -187,11 +204,6 @@ impl PackageInput {
                 "--zip"
             },
         )?;
-        let reference = match source {
-            Some(value) => PackageRef::parse_argument(&value)
-                .map_err(|error| CliError::package_invalid(error.to_string()))?,
-            None => PackageRef::LegacyZipSha256(explicit_hash(flags)?.hash().to_string()),
-        };
         let reader = match &reference {
             PackageRef::LegacyZipSha256(_) => Some(open_published_package(&logical)?),
             PackageRef::GitSourceTree(_) => None,
