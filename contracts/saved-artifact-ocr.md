@@ -2,8 +2,9 @@
 
 `actinglab recognize-artifact --request <absolute-request-json>` forwards one
 typed `RecognizeArtifact` request to the Runtime selected by
-`ACTING_RUNTIME_STATE_ROOT`. The destination Runtime records a new historical
-recognition. It owns the configured production Provider and closes it through
+`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, set to the destination Runtime state directory.
+The destination Runtime records a new historical recognition. It owns the
+configured production Provider and closes it through
 its normal lifecycle. This command requires Lab origin.
 
 The request JSON contains `source`, `package_path`, `expected_sha256`, and
