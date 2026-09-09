@@ -5244,9 +5244,13 @@ impl HostShared {
             None,
         )?;
         let execution_input = PolicyExecutionInput::Succeeded;
-        let replayed = lock(&self.policy, "replay_scheduled_policy_completion")?
-            .replay_execution(context.decision_id(), &execution_input)?
-            .is_some();
+        let replayed = {
+            let policy = lock(&self.policy, "replay_scheduled_policy_completion")?;
+            policy
+                .replay_execution(context.decision_id(), &execution_input)?
+                .is_some()
+                && !policy.dispatch_needs_completion(context.decision_id())?
+        };
         let authoritative_outcome =
             self.read_scheduled_policy_outcome(context, terminal, receipt.request_id(), replayed)?;
         let execution = self.record_policy_dispatch_outcome_under_gate(
