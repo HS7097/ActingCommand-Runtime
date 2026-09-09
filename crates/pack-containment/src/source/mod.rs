@@ -3,6 +3,10 @@
 //! Pure operation conversion over supplied source data and byte snapshots.
 //! No resource admission or filesystem reads occur in this module.
 
+#![forbid(unsafe_code)]
+// Conversion keeps the existing LabError-by-value API.
+#![allow(clippy::result_large_err)]
+
 use actingcommand_contract::page_projection::{ProjectionCatalog, ProjectionMetadata};
 use actingcommand_contract::{
     LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
