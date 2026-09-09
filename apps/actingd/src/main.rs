@@ -237,7 +237,12 @@ fn execute_policy_cycle(
         let admission = match admission {
             Ok(admission) => admission,
             Err(error) if !error.is_fatal() => {
-                // Runtime admission preserves the typed rejection in GlobalLedger.
+                eprintln!(
+                    "WARNING actingd policy admission refused decision={} code={} operation={}",
+                    intent.decision_id,
+                    error.code(),
+                    error.operation()
+                );
                 continue;
             }
             Err(error) => return Err(ActingdError::runtime(error)),
