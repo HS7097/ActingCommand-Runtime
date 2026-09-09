@@ -491,8 +491,6 @@ fn mapped_policy_facts(outcome_key: &str, include_caller_outcome: bool) -> Evalu
         fact_key: "fixture.followup.stop".to_owned(),
         value: FactValue::Boolean(false),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS,
-        expires_at_unix_ms: None,
-        activity_window_id: None,
         expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 900_000),
         confidence_milli: 1_000,
     });
@@ -508,6 +506,8 @@ fn pending_policy_facts() -> EvaluationFacts {
         outcome_key: "completed".to_owned(),
         value: FactValue::Boolean(false),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: None,
+        activity_window_id: None,
     });
     facts.instances.push(InstanceSnapshot {
         instance_id: POLICY_INSTANCE_ALIAS_B.to_owned(),
