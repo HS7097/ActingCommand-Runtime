@@ -292,14 +292,50 @@ fn invoke_ocr(
 
 fn invoke_ocr_with_attestation(
     capability: &OcrCapability,
-    request: OcrInferenceRequest,
+    mut request: OcrInferenceRequest,
 ) -> Result<OcrInferenceOutput, VisionProviderError> {
-    let mut slot = capability.engine.lock().map_err(|_| {
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_millis(request.timeout_ms))
+        .ok_or_else(|| {
+            VisionProviderError::new(VisionProviderErrorCode::Timeout, "OCR deadline overflow")
+        })?;
+    let mut slot = loop {
+        match capability.engine.try_lock() {
+            Ok(slot) => break slot,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(VisionProviderError::new(
+                    VisionProviderErrorCode::Internal,
+                    "OCR engine mutex is poisoned",
+                ));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(VisionProviderError::new(
+                        VisionProviderErrorCode::Timeout,
+                        "OCR engine ownership wait exceeded request deadline",
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    };
+    request.timeout_ms = u64::try_from(
+        deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis(),
+    )
+    .map_err(|_| {
         VisionProviderError::new(
-            VisionProviderErrorCode::Internal,
-            "OCR engine mutex is poisoned",
+            VisionProviderErrorCode::Timeout,
+            "OCR remaining budget overflow",
         )
     })?;
+    if request.timeout_ms == 0 {
+        return Err(VisionProviderError::new(
+            VisionProviderErrorCode::Timeout,
+            "OCR request deadline exhausted before inference",
+        ));
+    }
     let engine = slot.as_mut().ok_or_else(|| {
         VisionProviderError::new(
             VisionProviderErrorCode::Unavailable,

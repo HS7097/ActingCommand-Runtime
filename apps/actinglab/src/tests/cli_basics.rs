@@ -5,6 +5,18 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("runtime-must-not-exist");
     let _runtime_env = use_runtime_state_root(&root);
+    // Specification: Workflow #269 SAVED-ARTIFACT-OCR-v1, one forwarding CLI entry.
+    let saved = command_capabilities().into_iter()
+        .find(|entry| entry["command"] == "recognize-artifact").unwrap();
+    assert_eq!(saved["needs"], json!(["running_runtime"]));
+    let malformed = temp.path().join("malformed-request.json");
+    fs::write(&malformed, b"{}").unwrap();
+    for args in [vec!["--json".to_owned(), "recognize-artifact".into()],
+        vec!["--json".to_owned(), "recognize-artifact".into(), "--request".into(), malformed.to_str().unwrap().into()]] {
+        let output = run_cli(args, true);
+        assert_eq!(output.exit_code(), 2, "{}", output.envelope_json());
+        assert!(!root.exists());
+    }
     for operation in ["register", "match", "retire"] {
         let name = format!("lab signatures {operation}");
         let capability = command_capabilities()
