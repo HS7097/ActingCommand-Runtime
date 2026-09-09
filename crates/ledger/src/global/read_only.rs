@@ -23,8 +23,8 @@ use std::time::Instant;
 
 #[derive(Clone)]
 pub struct GlobalLedgerReadOnlyConfig {
-    root: PathBuf,
-    budget: Option<(u64, usize, Instant)>,
+    pub(super) root: PathBuf,
+    pub(super) budget: Option<(u64, usize, Instant)>,
 }
 
 impl GlobalLedgerReadOnlyConfig {
@@ -412,7 +412,7 @@ fn read_segment_snapshots(
     Ok((snapshots, storage))
 }
 
-fn check_read_budget(
+pub(super) fn check_read_budget(
     budget: Option<(u64, usize, Instant)>,
     bytes: u64,
     events: usize,
