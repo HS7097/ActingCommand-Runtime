@@ -5,6 +5,7 @@ use actingcommand_contract::{
     ReleaseTransitionData, ReleaseTransitionKind, RuntimeReleaseSet, StateMigrationData,
     StateRecoveryAction, StateTransitionStatus, StateValidationResult,
 };
+use actingcommand_runtime_database::RuntimeDatabase;
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::Type,
 };
@@ -14,18 +15,17 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, MutexGuard};
 
 pub const RUNTIME_STATE_SCHEMA_VERSION: &str = "actingcommand.runtime-state.v1";
-pub const RUNTIME_STATE_DATABASE_FILE: &str = "runtime-state.sqlite";
-pub const RUNTIME_STATE_INTEGRITY_KEY_FILE: &str = "runtime-state.key";
+pub use actingcommand_runtime_database::{
+    DATABASE_FILE as RUNTIME_STATE_DATABASE_FILE,
+    INTEGRITY_KEY_FILE as RUNTIME_STATE_INTEGRITY_KEY_FILE,
+};
 pub const RUNTIME_RELEASE_BLOB_DIRECTORY: &str = "release-blobs";
 
 const MAX_STATE_DOCUMENT_BYTES: usize = 1024 * 1024;
 const MAX_PROJECTION_ENTRY_BYTES: usize = 64 * 1024;
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 static RELEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,71 +207,39 @@ impl ReleaseTransitionPreview {
 /// SQLite is the sole mutable-state authority. The keyed envelope detects out-of-band edits;
 /// it is an integrity boundary, not encryption or DRM.
 pub struct RuntimeStateStore {
-    database_path: PathBuf,
+    database: Arc<RuntimeDatabase>,
     release_blobs: PathBuf,
-    connection: Mutex<Connection>,
-    integrity_key: Box<[u8]>,
 }
 
 impl RuntimeStateStore {
     pub fn open(root: &Path, integrity_key: &[u8]) -> RuntimeStateResult<Self> {
-        if integrity_key.len() < 16 || integrity_key.len() > 1024 {
-            return Err(fatal("state_integrity_key_invalid", "open_runtime_state"));
-        }
-        fs::create_dir_all(root)
-            .map_err(|_| fatal("state_root_create_failed", "open_runtime_state"))?;
-        require_regular_directory(root)?;
-        let release_blobs = prepare_release_blob_store(root)?;
-        let database_path = root.join(RUNTIME_STATE_DATABASE_FILE);
-        let database_existed = database_path.exists();
-        if database_existed {
-            require_regular_file(&database_path)?;
-        }
-        let integrity_key = load_or_create_integrity_key(root, integrity_key, database_existed)?;
-        let connection = Connection::open(&database_path)
-            .map_err(|_| fatal("state_database_open_failed", "open_runtime_state"))?;
-        connection
-            .busy_timeout(BUSY_TIMEOUT)
-            .map_err(|_| fatal("state_database_config_failed", "open_runtime_state"))?;
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
-            )
-            .map_err(|_| fatal("state_database_config_failed", "open_runtime_state"))?;
-        connection
-            .execute_batch(include_str!("schema.sql"))
-            .map_err(|_| fatal("state_schema_initialize_failed", "open_runtime_state"))?;
-        let schema_version = connection
-            .query_row(
-                "SELECT value FROM state_meta WHERE key = 'schema_version'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|_| fatal("state_schema_metadata_missing", "open_runtime_state"))?;
-        if schema_version != RUNTIME_STATE_SCHEMA_VERSION {
-            return Err(fatal(
-                "state_schema_version_unsupported",
-                "open_runtime_state",
-            ));
-        }
-        let integrity = connection
-            .query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0))
-            .map_err(|_| fatal("state_integrity_check_failed", "open_runtime_state"))?;
-        if integrity != "ok" {
-            return Err(fatal("state_database_corrupt", "open_runtime_state"));
-        }
-        let store = Self {
-            database_path,
-            release_blobs,
-            connection: Mutex::new(connection),
+        Self::from_database(Arc::new(Self::open_database(root, integrity_key)?))
+    }
+
+    /// Constructs the one physical database using the state-owned schema and files.
+    /// Host shares this owner at its existing state assembly point.
+    pub fn open_database(root: &Path, integrity_key: &[u8]) -> RuntimeStateResult<RuntimeDatabase> {
+        RuntimeDatabase::open(
+            root,
             integrity_key,
+            include_str!("schema.sql"),
+            RUNTIME_STATE_SCHEMA_VERSION,
+            |root| prepare_release_blob_store(root).map(|_| ()),
+        )
+    }
+
+    /// Validates the typed state view of an already opened shared database.
+    pub fn from_database(database: Arc<RuntimeDatabase>) -> RuntimeStateResult<Self> {
+        let store = Self {
+            release_blobs: database.root().join(RUNTIME_RELEASE_BLOB_DIRECTORY),
+            database,
         };
         store.validate_all()?;
         Ok(store)
     }
 
     pub fn database_path(&self) -> &Path {
-        &self.database_path
+        self.database.database_path()
     }
 
     pub fn read_json_document(&self, state_key: &str) -> RuntimeStateResult<Option<StateDocument>> {
@@ -1390,23 +1358,14 @@ impl RuntimeStateStore {
     }
 
     fn integrity_tag(&self, domain: &str, fields: &[&[u8]]) -> String {
-        let mut digest = Sha256::new();
-        digest.update(b"actingcommand-keyed-integrity-v1\0");
-        update_field(&mut digest, domain.as_bytes());
-        update_field(&mut digest, &self.integrity_key);
-        for field in fields {
-            update_field(&mut digest, field);
-        }
-        format!("sha256:{:x}", digest.finalize())
+        self.database.integrity_tag(domain, fields)
     }
 
     fn connection(
         &self,
         operation: &'static str,
     ) -> RuntimeStateResult<MutexGuard<'_, Connection>> {
-        self.connection
-            .lock()
-            .map_err(|_| fatal("state_connection_poisoned", operation))
+        self.database.connection(operation).map_err(Into::into)
     }
 }
 
@@ -2011,59 +1970,6 @@ fn require_regular_directory(path: &Path) -> RuntimeStateResult<()> {
         return Err(fatal("state_root_unsafe", "open_runtime_state"));
     }
     Ok(())
-}
-
-fn require_regular_file(path: &Path) -> RuntimeStateResult<()> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| fatal("state_database_inspect_failed", "open_runtime_state"))?;
-    if !metadata.is_file() || is_link_or_reparse(&metadata) {
-        return Err(fatal("state_database_unsafe", "open_runtime_state"));
-    }
-    Ok(())
-}
-
-fn load_or_create_integrity_key(
-    root: &Path,
-    bootstrap_seed: &[u8],
-    database_existed: bool,
-) -> RuntimeStateResult<Box<[u8]>> {
-    let path = root.join(RUNTIME_STATE_INTEGRITY_KEY_FILE);
-    if path.exists() {
-        require_regular_file(&path)?;
-        let bytes = fs::read(&path)
-            .map_err(|_| fatal("state_integrity_key_read_failed", "open_runtime_state"))?;
-        if bytes.len() != 32 {
-            return Err(fatal("state_integrity_key_invalid", "open_runtime_state"));
-        }
-        return Ok(bytes.into_boxed_slice());
-    }
-    if database_existed {
-        return Err(fatal("state_integrity_key_missing", "open_runtime_state"));
-    }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| fatal("state_integrity_key_clock_failed", "open_runtime_state"))?;
-    let mut digest = Sha256::new();
-    digest.update(b"actingcommand-runtime-state-key-v1\0");
-    update_field(&mut digest, bootstrap_seed);
-    update_field(&mut digest, &now.as_nanos().to_be_bytes());
-    update_field(&mut digest, &std::process::id().to_be_bytes());
-    let key = digest.finalize().to_vec();
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&path)
-        .map_err(|_| fatal("state_integrity_key_create_failed", "open_runtime_state"))?;
-    file.write_all(&key)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| fatal("state_integrity_key_write_failed", "open_runtime_state"))?;
-    sync_state_directory(root)?;
-    Ok(key.into_boxed_slice())
 }
 
 #[cfg(unix)]

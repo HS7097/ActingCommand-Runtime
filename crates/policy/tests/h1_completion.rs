@@ -149,6 +149,7 @@ impl SimulationState {
                 last_dispatched_unix_ms: self.last_dispatched.get(&task.id).copied(),
                 eligible_since_unix_ms: Some(0),
                 terminal_state: None,
+                completed_window: None,
             })
             .collect();
         EvaluationFacts {
