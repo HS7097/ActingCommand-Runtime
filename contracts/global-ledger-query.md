@@ -1,5 +1,8 @@
 # GlobalLedger query conditions
 
+The private persistence boundary and staged database behavior are specified in
+[GlobalLedger storage contract](ledger-store.md).
+
 `EventQuery` is the shared, storage-independent query declaration. Ledger
 `EventIndexes` selects candidates and applies the same predicates to live
 queries, read-only snapshots and subscription projection. Indexes are rebuilt
