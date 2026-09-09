@@ -65,7 +65,7 @@ impl SqliteLedgerStore {
         let (mut ownership, stale_owner) =
             WriterOwnership::acquire(database.root(), &config.owner_id)?;
         let recovered = (|| {
-            initialize(&database)?;
+            initialize(&database, ownership.is_new())?;
             let raw = read_snapshot(&database, None)?;
             verify_snapshot(&database, raw, &mut verifier)
         })();
@@ -235,7 +235,7 @@ fn validate_root(root: &std::path::Path, database: &RuntimeDatabase) -> GlobalLe
     Ok(())
 }
 
-fn initialize(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
+fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult<()> {
     let mut connection = database.connection("initialize_sqlite_ledger")?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -243,7 +243,7 @@ fn initialize(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
     let tables: i64 = transaction.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0))
         .map_err(|error| sql_error(error, "inspect_ledger_schema"))?;
     match tables {
-        0 => {
+        0 if first_use => {
             transaction
                 .execute_batch(include_str!("sqlite/schema.sql"))
                 .map_err(|error| sql_error(error, "initialize_ledger_schema"))?;

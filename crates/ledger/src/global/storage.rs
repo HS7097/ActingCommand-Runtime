@@ -2290,6 +2290,8 @@ pub(super) struct WriterMetadata {
 }
 
 pub(super) struct WriterOwnership {
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    newly_created: bool,
     file: File,
     metadata: WriterMetadata,
     closed: bool,
@@ -2350,12 +2352,19 @@ impl WriterOwnership {
         write_writer_metadata(&mut file, &metadata)?;
         Ok((
             Self {
+                #[cfg(any(test, feature = "sqlite-candidate"))]
+                newly_created: created,
                 file,
                 metadata,
                 closed: false,
             },
             stale_owner,
         ))
+    }
+
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    pub(super) fn is_new(&self) -> bool {
+        self.newly_created
     }
 
     pub(super) fn close(&mut self) -> GlobalLedgerResult<()> {

@@ -32,8 +32,10 @@ Request result and consumes no sequence.
 
 The Ledger-owned [schema](../crates/ledger/src/global/sqlite/schema.sql) contains
 `ledger_events`, `ledger_links`, `ledger_artifacts` and `ledger_meta`. On initial
-candidate use these tables are created atomically; partial schemas fail. Existing
-tables are read and verified. The canonical `StoredEventRecord` determines every
+candidate use these tables are created atomically only with a newly created
+writer lock. An existing owner record with missing or partial Ledger schema fails
+closed, including an interrupted first initialization whose completeness cannot
+be established. Existing tables are read and verified. The canonical `StoredEventRecord` determines every
 indexed event/link value and ordered artifact row. Only sequence and EventId are
 event identities with unique constraints; run/task/lease values span many facts.
 

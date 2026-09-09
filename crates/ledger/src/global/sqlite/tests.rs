@@ -130,6 +130,10 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             "UPDATE ledger_meta SET integrity_tag='token-secret-invalid-meta'",
         ),
         ("missing metadata", "DELETE FROM ledger_meta"),
+        (
+            "missing schema",
+            "DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta",
+        ),
     ] {
         let root = TempDir::new().expect("root");
         let database = database(root.path());
