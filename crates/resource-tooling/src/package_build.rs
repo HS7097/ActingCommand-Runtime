@@ -2671,31 +2671,9 @@ pub(crate) fn validate_ocr_mode_declaration(
             .map_err(|e| CliError::package_invalid(e.to_string()))?;
         return declaration.validate(scheduling);
     }
-    if schema != "0.8" {
-        return Err(CliError::package_invalid("ocr_mode_schema_mismatch"));
-    }
-    let declaration: OcrFieldsDeclaration = serde_json::from_value(value.clone())
-        .map_err(|e| CliError::package_invalid(e.to_string()))?;
-    declaration.validate().map_err(CliError::package_invalid)?;
-    let scheduling: SchedulingOutcomeDeclaration = serde_json::from_value(
-        scheduling
-            .cloned()
-            .ok_or_else(|| CliError::package_invalid("ocr_fields_outcome_missing"))?,
+    actingcommand_pack_containment::source::validate_ocr_fields_mode_declaration(
+        schema, value, scheduling,
     )
-    .map_err(|e| CliError::package_invalid(e.to_string()))?;
-    scheduling
-        .validate()
-        .map_err(|e| CliError::package_invalid(e.to_string()))?;
-    if scheduling
-        .mappings()
-        .iter()
-        .filter(|m| m.outcome_key() == declaration.outcome_key)
-        .count()
-        != 1
-    {
-        return Err(CliError::package_invalid("ocr_fields_outcome_invalid"));
-    }
-    Ok(())
 }
 
 impl OperationBundle {
