@@ -5502,7 +5502,7 @@ impl HostShared {
                 EffectDisposition::Indeterminate,
                 DiagnosticDetailDraft::new(
                     "policy_driver",
-                    "scheduled_execution",
+                    RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
                     "runtime_host",
                     error.operation(),
                     error.code(),
