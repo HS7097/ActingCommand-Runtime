@@ -3,6 +3,7 @@ use actingcommand_pack_containment::source::array_field;
 use actingcommand_pack_containment::validate_recognition_metadata;
 use actingcommand_recognition_pack::FsAssetResolver;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[test]

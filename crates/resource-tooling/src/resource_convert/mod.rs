@@ -4,8 +4,8 @@ use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
 pub(crate) use actingcommand_pack_containment::source::validate_phases_bundle;
 use actingcommand_pack_containment::source::{
-    self, ConversionFiles, SourceFile, SourceRead, first_server_scope, required_string,
-    resource_ids, string_field,
+    self, ConversionFiles, SourceFile, SourceRead, canonical_resource_identifier,
+    first_server_scope, required_string, resource_ids, string_field,
 };
 pub use actingcommand_pack_containment::source::{
     Bundle, ConvertOutputs, canonical_game, canonical_locale, canonical_server,
@@ -13,7 +13,7 @@ pub use actingcommand_pack_containment::source::{
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};

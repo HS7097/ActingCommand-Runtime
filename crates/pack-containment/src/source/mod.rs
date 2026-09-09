@@ -157,7 +157,7 @@ pub fn canonical_server(value: &str) -> CliOutcome<String> {
     canonical_resource_identifier("server", value)
 }
 
-fn canonical_resource_identifier(label: &str, value: &str) -> CliOutcome<String> {
+pub fn canonical_resource_identifier(label: &str, value: &str) -> CliOutcome<String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.is_empty()
         || normalized.len() > 128
