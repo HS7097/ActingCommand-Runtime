@@ -196,6 +196,9 @@ these actions. No S0 file retention or verifier behavior changes.
 
 ## S1–S5 ownership and acceptance map
 
+The S1 physical owner and preserved state assembly are described in
+[Runtime database owner](runtime-database.md).
+
 The future source-tree `PackageRef` belongs to the separately frozen package
 identity/containment contract in #288. Its issuer, source-tree identity and ledger
 representation require coordination at that shared boundary. S0 preserves current
@@ -205,7 +208,7 @@ owners; the six SQL views remain assigned to the stages below.
 
 | Stage | Concrete boundary and remaining proof |
 | --- | --- |
-| S1 | Extract `RuntimeDatabase` as the sole low-level SQLite/schema/key/migration/transaction/backup owner from RuntimeState. Ledger and RuntimeState depend downward; business crates do not enter that owner. Preserve current RuntimeState behavior. |
+| S1 | Extract `RuntimeDatabase` as the physical SQLite/path/connection-mutex/key/tag owner, including existing startup and schema-version checks. RuntimeState supplies its schema and retains business transactions and behavior; the database owner has no business-crate dependencies. Database backup/restore and general schema upgrades belong to S3/S5. |
 | S2 | Add private candidate `SqliteLedgerStore` through the same writer. Store canonical records, indexed event columns/links/artifact order, sequence and integrity metadata in one append transaction. Verify canonical hashes, chain/head and index consistency; run actual same-input differential and crash/verification matrix. Production stays on Segment until cutover. Prepare sensitivity columns and the schema needed by the terminal views. |
 | S3 | Freeze the real migration object separately. Stop its owner, back up both stores, verify segments/artifacts, transactionally import unchanged identities/sequences/timestamps, compare results, then publish one atomic cutover marker. Prove interrupted import/reentry and backup/restore. No live dual write. Once SQLite contains new events, recovery uses SQLite backup/restore; never automatically restart the old writer. |
 | S4 | Runtime-owned coordination makes database-internal catalog/release/state/projection changes and their ledger facts one transaction. Implement the six host-query views, sending-side filtering and derived run recovery status; connect frame pins/persistence, disk capacity and retention with explicit owner evidence. External effects keep intent-before-act/outcome-after-act. |
