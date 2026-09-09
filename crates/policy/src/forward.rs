@@ -537,6 +537,7 @@ fn update_task_states(
             state.last_dispatched_unix_ms = Some(dispatched_at_unix_ms);
             state.eligible_since_unix_ms = None;
             state.terminal_state = Some(TaskTerminalState::Succeeded);
+            state.completed_window = None;
         } else {
             states.push(TaskRuntimeSnapshot {
                 task_id: intent.task_id.clone(),
@@ -544,6 +545,7 @@ fn update_task_states(
                 last_dispatched_unix_ms: Some(dispatched_at_unix_ms),
                 eligible_since_unix_ms: None,
                 terminal_state: Some(TaskTerminalState::Succeeded),
+                completed_window: None,
             });
         }
     }
@@ -1011,11 +1013,21 @@ mod tests {
     const NOW: u64 = 1_699_963_200_000;
 
     fn catalog() -> CompiledCatalog {
+        let mut tasks: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../contracts/scheduling/examples/catalog-a/tasks.json"
+        ))
+        .expect("tasks");
+        // Missing input is a trigger gap; feedback alone does not gate first dispatch.
+        tasks["tasks"][0]["trigger"] = serde_json::json!({
+            "kind": "all", "predicates": [tasks["tasks"][0]["trigger"].clone(), {
+                "kind": "outcome", "task_id": "fixture.observe", "outcome_key": "completed",
+                "comparison": "eq", "value": {"type": "boolean", "value": false}
+            }]
+        });
         compile_catalog(&CatalogSources {
             tasks: CatalogDocumentSource::new(
                 "memory://neutral/tasks.json",
-                include_bytes!("../../../contracts/scheduling/examples/catalog-a/tasks.json")
-                    .to_vec(),
+                serde_json::to_vec(&tasks).expect("tasks bytes"),
             ),
             pools: CatalogDocumentSource::new(
                 "memory://neutral/pools.json",
@@ -1048,6 +1060,8 @@ mod tests {
                     outcome_key: "completed".to_owned(),
                     value: FactValue::Boolean(false),
                     observed_at_unix_ms: NOW,
+                    expires_at_unix_ms: None,
+                    activity_window_id: None,
                 })
                 .into_iter()
                 .collect(),

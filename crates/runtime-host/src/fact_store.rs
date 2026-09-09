@@ -1399,6 +1399,8 @@ mod tests {
                 outcome_key: "completed".to_owned(),
                 value: PolicyFactValue::Boolean(false),
                 observed_at_unix_ms: 1_000,
+                expires_at_unix_ms: None,
+                activity_window_id: None,
             }],
             tasks: vec![TaskRuntimeSnapshot {
                 task_id: "task-a".to_owned(),
@@ -1406,6 +1408,7 @@ mod tests {
                 last_dispatched_unix_ms: None,
                 eligible_since_unix_ms: Some(1_000),
                 terminal_state: None,
+                completed_window: None,
             }],
             instances: vec![InstanceSnapshot {
                 instance_id: "instance-a".to_owned(),
