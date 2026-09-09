@@ -87,7 +87,7 @@ pub struct RuntimeContractError {
 }
 
 impl RuntimeContractError {
-    const fn new(code: &'static str) -> Self {
+    pub(crate) const fn new(code: &'static str) -> Self {
         Self { code }
     }
 
