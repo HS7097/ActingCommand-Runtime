@@ -44,6 +44,37 @@ impl RuntimeDatabase {
     where
         E: From<RuntimeDatabaseError>,
     {
+        Self::open_with_initializer(root, bootstrap_seed, prepare_root, |connection| {
+            connection
+                .execute_batch(schema_sql)
+                .map_err(|_| failure("state_schema_initialize_failed", "open_runtime_state"))?;
+            let schema_version = connection
+                .query_row(
+                    "SELECT value FROM state_meta WHERE key = 'schema_version'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|_| failure("state_schema_metadata_missing", "open_runtime_state"))?;
+            if schema_version != expected_version {
+                return Err(
+                    failure("state_schema_version_unsupported", "open_runtime_state").into(),
+                );
+            }
+            Ok(())
+        })
+    }
+
+    /// Opens the physical owner with a component-owned initialization callback.
+    /// The callback runs before quick_check and before publishing the connection.
+    pub fn open_with_initializer<E>(
+        root: &Path,
+        bootstrap_seed: &[u8],
+        prepare_root: impl FnOnce(&Path) -> Result<(), E>,
+        initialize: impl FnOnce(&Connection) -> Result<(), E>,
+    ) -> Result<Self, E>
+    where
+        E: From<RuntimeDatabaseError>,
+    {
         if bootstrap_seed.len() < 16 || bootstrap_seed.len() > 1024 {
             return Err(failure("state_integrity_key_invalid", "open_runtime_state").into());
         }
@@ -67,19 +98,7 @@ impl RuntimeDatabase {
                 "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
             )
             .map_err(|_| failure("state_database_config_failed", "open_runtime_state"))?;
-        connection
-            .execute_batch(schema_sql)
-            .map_err(|_| failure("state_schema_initialize_failed", "open_runtime_state"))?;
-        let schema_version = connection
-            .query_row(
-                "SELECT value FROM state_meta WHERE key = 'schema_version'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|_| failure("state_schema_metadata_missing", "open_runtime_state"))?;
-        if schema_version != expected_version {
-            return Err(failure("state_schema_version_unsupported", "open_runtime_state").into());
-        }
+        initialize(&connection)?;
         let integrity = connection
             .query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0))
             .map_err(|_| failure("state_integrity_check_failed", "open_runtime_state"))?;

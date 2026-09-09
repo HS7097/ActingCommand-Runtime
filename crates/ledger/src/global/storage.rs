@@ -93,9 +93,12 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
     assert_eq!(second.sequence(), first.sequence() + 1);
     assert!(committed.sampled_at_monotonic_ns >= initial.sampled_at_monotonic_ns);
     assert!(committed.write_sync_max_ns <= committed.write_sync_total_ns);
-    let read_only = File::open(segment_path(&store.segments_dir, store.active_index))
-        .expect("read-only handle");
-    let writable = std::mem::replace(&mut store.active_file, read_only);
+    let read_only = File::open(segment_path(
+        &store.backend.segments_dir,
+        store.backend.active_index,
+    ))
+    .expect("read-only handle");
+    let writable = std::mem::replace(&mut store.backend.active_file, read_only);
     let error = store.append(draft(42_000)).expect_err("write failure");
     assert!(error.is_fatal());
     assert_eq!(
@@ -110,7 +113,7 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
     assert_eq!(failed.successful_commits, committed.successful_commits);
     assert_eq!(failed.through_sequence, committed.through_sequence);
     assert_eq!(failed.write_sync_total_ns, committed.write_sync_total_ns);
-    store.active_file = writable;
+    store.backend.active_file = writable;
     {
         let held = store
             .commit_statistics
@@ -146,8 +149,23 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
     store.close().expect("close");
 }
 
-pub(super) struct SegmentStore {
+pub(super) trait DurableStorage: Send + 'static {
+    fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>>;
+    fn close(&mut self) -> GlobalLedgerResult<()>;
+}
+
+/// Shared typed semantics and committed snapshot, owned by the existing writer.
+pub(super) struct EventStore<B> {
     pub(super) commit_statistics: Arc<CommitStatistics>,
+    pub(super) backend: B,
+    next_sequence: u64,
+    events: Vec<PersistedEvent>,
+    indexes: EventIndexes,
+}
+
+pub(super) type SegmentStore = EventStore<SegmentStorage>;
+
+pub(super) struct SegmentStorage {
     root: PathBuf,
     segments_dir: PathBuf,
     ownership: WriterOwnership,
@@ -155,9 +173,6 @@ pub(super) struct SegmentStore {
     active_index: u64,
     active_bytes: u64,
     active_file: File,
-    next_sequence: u64,
-    events: Vec<PersistedEvent>,
-    indexes: EventIndexes,
 }
 
 impl SegmentStore {
@@ -231,13 +246,15 @@ impl SegmentStore {
             };
         let mut store = Self {
             commit_statistics,
-            root: config.root.clone(),
-            segments_dir,
-            ownership,
-            segment_max_bytes: config.segment_max_bytes,
-            active_index,
-            active_bytes,
-            active_file,
+            backend: SegmentStorage {
+                root: config.root.clone(),
+                segments_dir,
+                ownership,
+                segment_max_bytes: config.segment_max_bytes,
+                active_index,
+                active_bytes,
+                active_file,
+            },
             next_sequence,
             indexes: EventIndexes::from_events(&events),
             events,
@@ -256,16 +273,41 @@ impl SegmentStore {
                 )?;
                 verify_recovery_event(&event, &repair)?;
                 repair_test_barrier("after_recovery_append")?;
-                append_repair_record(&store.root, &repair.completed())?;
+                append_repair_record(&store.backend.root, &repair.completed())?;
                 repair_test_barrier("after_completion")?;
             }
             Ok(())
         })();
         if let Err(error) = recovery_result {
-            store.ownership.close()?;
+            store.backend.ownership.close()?;
             return Err(error);
         }
         Ok(store)
+    }
+}
+
+impl<B: DurableStorage> EventStore<B> {
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    pub(super) fn recovered(
+        mut backend: B,
+        next_sequence: u64,
+        events: Vec<PersistedEvent>,
+    ) -> GlobalLedgerResult<Self> {
+        let commit_statistics =
+            match CommitStatistics::new(events.last().map_or(0, PersistedEvent::sequence)) {
+                Ok(statistics) => Arc::new(statistics),
+                Err(error) => {
+                    backend.close()?;
+                    return Err(error);
+                }
+            };
+        Ok(Self {
+            commit_statistics,
+            backend,
+            next_sequence,
+            indexes: EventIndexes::from_events(&events),
+            events,
+        })
     }
 
     pub(super) fn append(
@@ -1073,30 +1115,7 @@ impl SegmentStore {
                 "append_event",
             ));
         }
-        let mut bytes = serde_json::to_vec(&StoredLine {
-            line_type: LINE_TYPE.to_string(),
-            event: StoredEventRecord::from_event(&event),
-        })
-        .map_err(|error| {
-            GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
-        })?;
-        bytes.push(b'\n');
-        if self.active_bytes > 0
-            && self.active_bytes.saturating_add(bytes.len() as u64) > self.segment_max_bytes
-        {
-            self.rotate()?;
-        }
-        let write_started = Instant::now();
-        self.active_file
-            .write_all(&bytes)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "append_event", &error))?;
-        self.active_file
-            .sync_all()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_event", &error))?;
-        let write_sync_ns = Instant::now()
-            .checked_duration_since(write_started)
-            .and_then(|value| u64::try_from(value.as_nanos()).ok());
-        self.active_bytes = self.active_bytes.saturating_add(bytes.len() as u64);
+        let write_sync_ns = self.backend.persist(&event)?;
         self.next_sequence = following_sequence;
         self.indexes.insert(&event, self.events.len());
         self.events.push(event.clone());
@@ -1147,29 +1166,10 @@ impl SegmentStore {
     }
 
     pub(super) fn close(mut self) -> GlobalLedgerResult<()> {
-        self.active_file
-            .sync_all()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_on_close", &error))?;
-        self.ownership.close()
+        self.backend.close()
     }
 
-    fn rotate(&mut self) -> GlobalLedgerResult<()> {
-        self.active_file
-            .sync_all()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_before_rotate", &error))?;
-        self.active_index = self.active_index.saturating_add(1);
-        let path = segment_path(&self.segments_dir, self.active_index);
-        self.active_file = OpenOptions::new()
-            .create_new(true)
-            .append(true)
-            .read(true)
-            .open(path)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "create_segment", &error))?;
-        self.active_bytes = 0;
-        Ok(())
-    }
-
-    fn append_recovery(
+    pub(super) fn append_recovery(
         &mut self,
         reason: RecoveryReason,
         previous_owner: Option<String>,
@@ -1210,6 +1210,61 @@ impl SegmentStore {
             GlobalLedgerError::fatal("recovery_event_failed", "sanitize_recovery_event")
         })?;
         self.append_with_event_id(draft, event_id)
+    }
+}
+
+impl DurableStorage for SegmentStorage {
+    fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
+        let mut bytes = serde_json::to_vec(&StoredLine {
+            line_type: LINE_TYPE.to_string(),
+            event: StoredEventRecord::from_event(event),
+        })
+        .map_err(|error| {
+            GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
+        })?;
+        bytes.push(b'\n');
+        if self.active_bytes > 0
+            && self.active_bytes.saturating_add(bytes.len() as u64) > self.segment_max_bytes
+        {
+            self.rotate()?;
+        }
+        let write_started = Instant::now();
+        self.active_file
+            .write_all(&bytes)
+            .map_err(|error| GlobalLedgerError::io("ledger_io", "append_event", &error))?;
+        self.active_file
+            .sync_all()
+            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_event", &error))?;
+        let write_sync_ns = Instant::now()
+            .checked_duration_since(write_started)
+            .and_then(|value| u64::try_from(value.as_nanos()).ok());
+        self.active_bytes = self.active_bytes.saturating_add(bytes.len() as u64);
+        Ok(write_sync_ns)
+    }
+
+    fn close(&mut self) -> GlobalLedgerResult<()> {
+        self.active_file
+            .sync_all()
+            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_on_close", &error))?;
+        self.ownership.close()
+    }
+}
+
+impl SegmentStorage {
+    fn rotate(&mut self) -> GlobalLedgerResult<()> {
+        self.active_file
+            .sync_all()
+            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_before_rotate", &error))?;
+        self.active_index = self.active_index.saturating_add(1);
+        let path = segment_path(&self.segments_dir, self.active_index);
+        self.active_file = OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .read(true)
+            .open(path)
+            .map_err(|error| GlobalLedgerError::io("ledger_io", "create_segment", &error))?;
+        self.active_bytes = 0;
+        Ok(())
     }
 }
 
@@ -2164,7 +2219,7 @@ pub(super) fn complete_record_len(bytes: &[u8]) -> usize {
 }
 
 #[cfg(test)]
-fn repair_test_barrier(stage: &str) -> GlobalLedgerResult<()> {
+pub(super) fn repair_test_barrier(stage: &str) -> GlobalLedgerResult<()> {
     if std::env::var("ACTINGCOMMAND_TEST_REPAIR_FAILPOINT").as_deref() != Ok(stage) {
         return Ok(());
     }
@@ -2234,14 +2289,17 @@ pub(super) struct WriterMetadata {
     pub(super) closed_at_unix_ms: Option<u64>,
 }
 
-struct WriterOwnership {
+pub(super) struct WriterOwnership {
     file: File,
     metadata: WriterMetadata,
     closed: bool,
 }
 
 impl WriterOwnership {
-    fn acquire(root: &Path, owner_id: &str) -> GlobalLedgerResult<(Self, Option<String>)> {
+    pub(super) fn acquire(
+        root: &Path,
+        owner_id: &str,
+    ) -> GlobalLedgerResult<(Self, Option<String>)> {
         let path = root.join("writer.lock");
         let (mut file, created) = match OpenOptions::new()
             .create_new(true)
@@ -2300,7 +2358,7 @@ impl WriterOwnership {
         ))
     }
 
-    fn close(&mut self) -> GlobalLedgerResult<()> {
+    pub(super) fn close(&mut self) -> GlobalLedgerResult<()> {
         if self.closed {
             return Ok(());
         }
@@ -2445,7 +2503,7 @@ fn unix_ms_now() -> GlobalLedgerResult<u64> {
         .map_err(|_| GlobalLedgerError::fatal("clock_before_epoch", "read_clock"))
 }
 
-fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {
+pub(super) fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {
     sequence
         .checked_add(1)
         .ok_or_else(|| GlobalLedgerError::fatal("sequence_exhausted", "increment_sequence"))

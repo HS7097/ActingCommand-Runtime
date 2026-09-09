@@ -166,10 +166,37 @@ fn segment_store_event_trace_preserves_the_shared_typed_corpus() {
     assert_eq!(trace.canonical_records.len(), 3);
     assert_eq!(trace.projections.len(), 7);
     assert_eq!(trace.duplicate.code(), "duplicate_event_id");
+    assert_eq!(trace, event_trace(super::sqlite_contract::open, &drafts));
+}
+
+pub(super) enum ContractReadOnly {
+    Segment(GlobalLedgerReadOnly),
+    Sqlite(SqliteLedgerReadOnly),
+}
+impl ContractReadOnly {
+    fn query(&self, query: &EventQuery) -> Vec<PersistedEvent> {
+        match self {
+            Self::Segment(snapshot) => snapshot.query(query),
+            Self::Sqlite(snapshot) => snapshot.query(query),
+        }
+    }
+    fn query_page(
+        &self,
+        query: &EventQuery,
+        after: u64,
+        through: u64,
+        limit: usize,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        match self {
+            Self::Segment(snapshot) => snapshot.query_page(query, after, through, limit),
+            Self::Sqlite(snapshot) => snapshot.query_page(query, after, through, limit),
+        }
+    }
 }
 
 pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
     open: impl Fn(GlobalLedgerConfig) -> GlobalLedgerResult<GlobalLedger>,
+    read: impl Fn(GlobalLedgerReadOnlyConfig) -> GlobalLedgerResult<ContractReadOnly>,
 ) {
     let temp = TempDir::new().expect("temp");
     let ledger = open(config(&temp, "writer-one")).expect("ledger");
@@ -302,8 +329,7 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
     );
     assert!(project_subscription_event(&correlated, &combined, ProjectionProfile::Lab).is_some());
     let snapshot =
-        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(temp.path()), |_| None)
-            .expect("read-only query index");
+        read(GlobalLedgerReadOnlyConfig::new(temp.path())).expect("read-only query index");
     assert_eq!(snapshot.query(&combined), vec![correlated.clone()]);
     assert_eq!(
         snapshot

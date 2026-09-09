@@ -1364,7 +1364,13 @@ fn recovered_policy_completion_rejects_duplicate_execution_evidence() {
 
 #[test]
 fn query_filters_by_sequence_and_all_typed_correlation_ids() {
-    store_contract::query_filters_by_sequence_and_all_typed_correlation_ids(GlobalLedger::open);
+    store_contract::query_filters_by_sequence_and_all_typed_correlation_ids(
+        GlobalLedger::open,
+        |config| {
+            GlobalLedger::open_read_only(config, |_| None)
+                .map(store_contract::ContractReadOnly::Segment)
+        },
+    );
 }
 
 #[test]
@@ -2582,3 +2588,6 @@ fn duplicate_event_id_is_fatal() {
 }
 
 mod store_contract;
+
+#[path = "tests/sqlite_contract.rs"]
+pub(super) mod sqlite_contract;

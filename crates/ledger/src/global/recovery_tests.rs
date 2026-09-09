@@ -243,7 +243,7 @@ fn spawn_repair_child(root: &Path, stage: &str, ready: &Path) -> Child {
         .expect("spawn repair child")
 }
 
-fn wait_for_barrier(child: &mut Child, ready: &Path, stage: &str) {
+pub(super) fn wait_for_barrier(child: &mut Child, ready: &Path, stage: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if ready.exists() {
