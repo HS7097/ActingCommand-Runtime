@@ -1812,7 +1812,20 @@ fn mapped_two_key_any_policy_sources(
     first_outcome_key: &str,
     second_outcome_key: &str,
 ) -> CatalogSources {
-    mapped_policy_sources_with_keys(version, &[first_outcome_key, second_outcome_key])
+    let mut sources =
+        mapped_policy_sources_with_keys(version, &[first_outcome_key, second_outcome_key]);
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("two-key activity fixture");
+    // The Any recovery consumes a real ledger terminal at the runner's wall time.
+    // Keep this fixture open every day while retaining its sampled interval and budgets.
+    activity["profiles"][0]["windows"] = serde_json::json!([{
+        "weekdays": [1, 2, 3, 4, 5, 6, 7],
+        "utc_offset_minutes": 0,
+        "start_minute_of_day": 0,
+        "end_minute_of_day": 0
+    }]);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("two-key activity bytes");
+    sources
 }
 
 fn budget_policy_sources(version: u64) -> CatalogSources {
@@ -6820,10 +6833,22 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
         })
         .expect("two-key disposition");
     assert_eq!(disposition.outcome_key(), effect_key);
+    // The existing 60s minimum activity interval also exceeds the 1s task cooldown.
+    // Use the admitted sample, and keep the original terminal and fact TTL unchanged.
+    let followup_unix_ms = terminal
+        .timestamp_unix_ms
+        .max(context.admission().activity.next_eligible_unix_ms)
+        .checked_add(1)
+        .expect("two-key followup time");
     let mut facts = mapped_policy_facts(effect_key, false);
     for fact in &mut facts.facts {
         fact.observed_at_unix_ms = terminal.timestamp_unix_ms;
         fact.expires_at_unix_ms = Some(terminal.timestamp_unix_ms + 900_000);
+        assert!(
+            fact.expires_at_unix_ms
+                .is_some_and(|expires_at| followup_unix_ms < expires_at),
+            "two-key followup must retain a fresh stop fact"
+        );
     }
     drop(client);
     host.close().expect("close before outcome-driven recovery");
@@ -6849,23 +6874,22 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
             &facts,
             &policy_resources(),
             EvaluationTime {
-                unix_ms: terminal.timestamp_unix_ms + 1,
-                monotonic_ms: terminal.timestamp_unix_ms + 1,
+                unix_ms: followup_unix_ms,
+                monotonic_ms: followup_unix_ms,
             },
             76,
             PolicyTrigger::FactsChanged,
         )
         .expect("two-key authoritative recovery evaluation");
+    let followup_evaluation = followup.evaluation.expect("two-key followup evaluation");
     assert_eq!(
-        followup
-            .evaluation
-            .expect("two-key followup evaluation")
+        followup_evaluation
             .dispatch_intents
             .iter()
             .filter(|intent| intent.task_id == "fixture.followup")
             .count(),
         1,
-        "existing Any must consume the one exact-run authoritative key"
+        "existing Any must consume the one exact-run authoritative key; evaluation={followup_evaluation:?}"
     );
     reopened.close().expect("close recovered runtime host");
 }
