@@ -4160,7 +4160,7 @@ impl HostShared {
             // retains the instance even before its first task event is appended.
             if runs
                 .values()
-                .any(|run| Some(run.instance_id) == links.instance_id())
+                .any(|run| Some(run.instance_id) == links.instance_id().copied())
             {
                 continue;
             }
@@ -4191,7 +4191,7 @@ impl HostShared {
                     "select_policy_settlements",
                 ));
             };
-            if leases.iter().any(|token| token.lease_id() == lease_id) {
+            if leases.iter().any(|token| token.lease_id() == *lease_id) {
                 continue;
             }
             let releases = persisted
