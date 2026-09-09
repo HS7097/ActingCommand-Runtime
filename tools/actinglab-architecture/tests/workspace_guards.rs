@@ -944,6 +944,7 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
         root.join("crates/ledger/src/global.rs"),
         root.join("crates/ledger/src/global/projection.rs"),
         root.join("crates/ledger/src/global/storage.rs"),
+        root.join("crates/ledger/src/global/sqlite.rs"),
     ]);
     let forbidden = [
         "ClassifiedField",

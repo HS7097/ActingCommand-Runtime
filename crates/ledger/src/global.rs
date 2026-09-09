@@ -4,8 +4,12 @@
 
 mod projection;
 mod read_only;
+#[cfg(any(test, feature = "sqlite-candidate"))]
+mod sqlite;
 mod storage;
 mod store;
+#[cfg(any(test, feature = "sqlite-candidate"))]
+pub use sqlite::SqliteLedgerReadOnly;
 
 pub(crate) use projection::query_matches;
 
@@ -112,6 +116,21 @@ impl GlobalLedgerError {
             detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
         }
+    }
+
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    fn with_close_result(mut self, result: GlobalLedgerResult<()>) -> Self {
+        if let Err(secondary) = result {
+            let context = format!(
+                "close failure {} during {}",
+                secondary.code, secondary.operation
+            );
+            self.detail = Some(match self.detail {
+                Some(original) => format!("{original}; {context}"),
+                None => context,
+            });
+        }
+        self
     }
 
     fn terminal(&self) -> bool {
@@ -688,6 +707,47 @@ impl GlobalLedger {
         Self::open_with_store(config, move |config| {
             SegmentStore::open_with_artifact_verifier(config, verifier)
         })
+    }
+
+    /// Explicit candidate assembly; the production constructors retain Segment storage.
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    pub fn open_sqlite_candidate(
+        config: GlobalLedgerConfig,
+        database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
+    ) -> GlobalLedgerResult<Self> {
+        Self::open_with_store(config, move |config| {
+            sqlite::SqliteLedgerStore::open(
+                config,
+                database,
+                None::<fn(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>>,
+            )
+        })
+    }
+
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    pub fn open_sqlite_candidate_with_artifact_verifier<F>(
+        config: GlobalLedgerConfig,
+        database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
+        verifier: F,
+    ) -> GlobalLedgerResult<Self>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        Self::open_with_store(config, move |config| {
+            sqlite::SqliteLedgerStore::open(config, database, Some(verifier))
+        })
+    }
+
+    #[cfg(any(test, feature = "sqlite-candidate"))]
+    pub fn open_sqlite_candidate_read_only<F>(
+        config: GlobalLedgerReadOnlyConfig,
+        database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
+        verifier: F,
+    ) -> GlobalLedgerResult<SqliteLedgerReadOnly>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        SqliteLedgerReadOnly::open(config, database, verifier)
     }
 
     fn open_with_store<S, F>(config: GlobalLedgerConfig, open_store: F) -> GlobalLedgerResult<Self>

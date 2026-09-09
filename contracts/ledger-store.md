@@ -2,8 +2,10 @@
 
 S0 freezes the existing behavior behind the private `global::store::LedgerStore`
 boundary. `GlobalLedger` remains the public fact owner and single writer; its
-production constructors open `SegmentStore`. The interface introduces no backend
-configuration, database, migration command or consumer write path.
+production constructors open `SegmentStore`. The explicit feature-gated
+[SQLite candidate](sqlite-ledger-candidate.md) uses the same writer and shared
+semantic core. Its database assembly and read-only adapter retain the S0 behavior
+and approved S2 differential boundary.
 
 ## Open, ownership and durable append
 

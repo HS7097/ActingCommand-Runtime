@@ -2,7 +2,8 @@
 
 //! Private durable-store boundary. See contracts/ledger-store.md for the S0 contract.
 
-use super::{CommitStatistics, GlobalLedgerResult, SegmentStore};
+use super::storage::{DurableStorage, EventStore};
+use super::{CommitStatistics, GlobalLedgerResult};
 use crate::PersistedEvent;
 use actingcommand_contract::{EventQuery, PolicyExecutionEventData, SanitizedEventDraft};
 use std::sync::Arc;
@@ -43,7 +44,7 @@ pub(super) trait LedgerStore: Send + 'static {
     fn close(self) -> GlobalLedgerResult<()>;
 }
 
-impl LedgerStore for SegmentStore {
+impl<B: DurableStorage> LedgerStore for EventStore<B> {
     fn commit_statistics(&self) -> Arc<CommitStatistics> {
         Arc::clone(&self.commit_statistics)
     }
