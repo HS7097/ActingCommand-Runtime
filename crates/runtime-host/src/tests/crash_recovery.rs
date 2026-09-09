@@ -1103,6 +1103,72 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
 
 #[test]
 fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
+    {
+        let root = TempDir::new().expect("tempdir");
+        let (host, _state, context, request, _policy_time, _clock) =
+            admitted_mapped_run_fixture_with_policy_time(&root, "resident-reconciled");
+        let query = EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        };
+        host.evaluate_policy_cycle(PolicyTrigger::Reconciliation)
+            .expect("reconciliation while the exact lease is active");
+        assert!(
+            host.query_persisted_events_for_test(query.clone())
+                .expect("active run facts")
+                .iter()
+                .all(|event| !matches!(
+                    event.event_type(),
+                    EventType::PolicyExecutionRecorded | EventType::PolicyDispatchCompleted
+                )),
+            "an active admitted run must remain pending"
+        );
+        let receipt = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect("one mapped contained run");
+        host.evaluate_policy_cycle(PolicyTrigger::Reconciliation)
+            .expect("online settlement from the exact terminal and release");
+        let settled = host
+            .query_persisted_events_for_test(query.clone())
+            .expect("online settled run facts");
+        for event_type in [
+            EventType::TaskCompleted,
+            EventType::LeaseReleased,
+            EventType::InputCommitted,
+            EventType::PolicyExecutionRecorded,
+            EventType::PolicyDispatchCompleted,
+        ] {
+            assert_eq!(
+                settled
+                    .iter()
+                    .filter(|event| event.event_type() == event_type)
+                    .count(),
+                1,
+                "online {event_type:?} must be unique"
+            );
+        }
+        assert!(
+            host.pinned_policy_catalog(context.decision_id())
+                .expect("online catalog pin")
+                .is_none()
+        );
+        let replay = host
+            .complete_scheduled_policy_run(&context, &receipt)
+            .expect("late same-run completion replays the settled outcome");
+        assert!(
+            replay.1.is_some(),
+            "the mapped outcome is available after online settlement"
+        );
+        host.evaluate_policy_cycle(PolicyTrigger::Reconciliation)
+            .expect("repeated online reconciliation");
+        assert_eq!(
+            host.query_persisted_events_for_test(query)
+                .expect("same run after late completion and reconciliation"),
+            settled,
+            "online recovery and replay must not append duplicate run facts or effects"
+        );
+        host.close().expect("close online-reconciled host");
+    }
     for point in ["after_policy_execution", "after_policy_completion"] {
         let root = TempDir::new().expect("tempdir");
         let shared_instance_id = instance_id();

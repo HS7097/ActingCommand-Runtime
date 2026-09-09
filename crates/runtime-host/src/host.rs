@@ -2420,6 +2420,14 @@ fn reconcile_scheduled_policy_outcomes(
     ledger: &GlobalLedger,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
+    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending)
+}
+
+fn reconcile_scheduled_policy_outcomes_for(
+    policy: &mut PolicyHost,
+    ledger: &GlobalLedger,
+    pending: Vec<String>,
+) -> RuntimeHostResult<()> {
     if pending.is_empty() {
         return Ok(());
     }
@@ -3990,7 +3998,7 @@ impl HostShared {
         observed_monotonic_ms: u64,
     ) -> RuntimeHostResult<PolicyCycle> {
         if trigger == PolicyTrigger::Reconciliation {
-            self.reconcile_completed_policy_dispatches()?;
+            self.reconcile_pending_policy_settlements()?;
         }
         let _detection_gate = lock(&self.detection_write_gate, "plan_policy_detection")?;
         let procedure_manifest = lock(&self.procedure_manifest, "read_procedure_manifest")?
@@ -4048,26 +4056,42 @@ impl HostShared {
         Ok(cycle)
     }
 
-    fn reconcile_completed_policy_dispatches(&self) -> RuntimeHostResult<()> {
+    fn reconcile_pending_policy_settlements(&self) -> RuntimeHostResult<()> {
         let result: RuntimeHostResult<()> = (|| {
             let _gate = lock(&self.policy_outcome_gate, "reconcile_policy_settlements")?;
             let mut policy = lock(&self.policy, "reconcile_policy_settlements")?;
-            let pending = policy.pending_dispatch_completions();
+            let missing_outcomes = policy
+                .pending_dispatch_outcomes()
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let mut pending = policy.pending_dispatch_completions();
+            pending.extend(missing_outcomes.iter().cloned());
             if pending.is_empty() {
                 return Ok(());
             }
-            let eligible = self.inactive_policy_settlements(&pending)?;
+            let eligible = self.inactive_policy_settlements(&pending, &missing_outcomes)?;
             if eligible.is_empty() {
                 return Ok(());
             }
+            reconcile_scheduled_policy_outcomes_for(
+                &mut policy,
+                &self.ledger,
+                eligible
+                    .iter()
+                    .filter(|id| missing_outcomes.contains(*id))
+                    .cloned()
+                    .collect(),
+            )?;
             for decision_id in eligible {
-                let execution = policy.execution_data(&decision_id)?;
-                policy.completion_data(&decision_id)?;
-                let completion = self
-                    .ledger
-                    .reconcile_scheduled_policy_settlement(execution)
-                    .map_err(|_| ledger_error("reconcile_policy_settlements"))?;
-                policy.complete_dispatch(&decision_id, &completion)?;
+                if policy.dispatch_needs_completion(&decision_id)? {
+                    let execution = policy.execution_data(&decision_id)?;
+                    policy.completion_data(&decision_id)?;
+                    let completion = self
+                        .ledger
+                        .reconcile_scheduled_policy_settlement(execution)
+                        .map_err(|_| ledger_error("reconcile_policy_settlements"))?;
+                    policy.complete_dispatch(&decision_id, &completion)?;
+                }
                 lock(
                     &self.policy_dispatch_clocks,
                     "clear_reconciled_policy_clock",
@@ -4090,7 +4114,11 @@ impl HostShared {
 
     // policy_outcome_gate excludes a context committing its outcome while these
     // exact ledger links are checked against the existing execution owners.
-    fn inactive_policy_settlements(&self, pending: &[String]) -> RuntimeHostResult<Vec<String>> {
+    fn inactive_policy_settlements(
+        &self,
+        pending: &[String],
+        missing_outcomes: &BTreeSet<String>,
+    ) -> RuntimeHostResult<Vec<String>> {
         let persisted = self
             .ledger
             .query(EventQuery::default())
@@ -4189,7 +4217,7 @@ impl HostShared {
                 .filter(|event| {
                     matches!(
                         event.event_type(),
-                        EventType::TaskCompleted | EventType::TaskFailed
+                        EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
                     ) && event.links().instance_id() == links.instance_id()
                         && event.links().request_id().is_some()
                         && event.links().correlation_id() == links.correlation_id()
@@ -4198,14 +4226,31 @@ impl HostShared {
                         && event.links().lease_id() == Some(lease_id)
                 })
                 .count();
-            if terminals == 0 {
-                continue;
-            }
-            if terminals != 1 {
+            if terminals > 1 {
                 return Err(policy_admission_fatal(
                     "policy_run_terminal_not_unique",
                     "select_policy_settlements",
                 ));
+            }
+            if terminals == 0 {
+                // The accepted recovery consumer can settle a released admission
+                // without a task terminal only when no effect was started.
+                if !missing_outcomes.contains(decision_id)
+                    || persisted.iter().any(|event| {
+                        event.links().task_id() == links.task_id()
+                            && event.links().run_id() == links.run_id()
+                            && matches!(
+                                event.event_type(),
+                                EventType::TaskEffectIntent
+                                    | EventType::TaskEffectCompleted
+                                    | EventType::InputIntent
+                                    | EventType::InputCommitted
+                                    | EventType::InputFailed
+                            )
+                    })
+                {
+                    continue;
+                }
             }
             if releases == 1 {
                 eligible.push(decision_id.clone());
