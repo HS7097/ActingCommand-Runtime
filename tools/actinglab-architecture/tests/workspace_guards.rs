@@ -1312,12 +1312,14 @@ fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
         .expect("read Runtime contract");
     let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
         .expect("read Runtime host");
+    let read_events = fs::read_to_string(root.join("crates/runtime-host/src/host/read_events.rs"))
+        .expect("read Runtime host read events");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
     let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
 
     assert!(contract.contains("RuntimeControlPlaneStatus"));
-    assert!(host.contains("fn control_plane_status"));
+    assert!(read_events.contains("fn control_plane_status"));
     assert!(host.contains("initial_registered_instances"));
     assert!(client.contains("pub fn status"));
     assert!(!lab.contains("RuntimeControlPlaneStatus"));
