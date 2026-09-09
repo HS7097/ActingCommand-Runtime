@@ -9,10 +9,8 @@ use actingcommand_contract::{
     RuntimeEvidenceExportRequest, RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor,
     TaskOutcome,
 };
-use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
-use std::fs;
 
 const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
     ("--from-sequence", "from_sequence"),

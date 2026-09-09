@@ -43,7 +43,11 @@ impl HostShared {
                         ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
                     ))
                     .ok_or_else(|| {
-                        observation_integrity_failure("observation_package_deadline_overflow")
+                        observation_admission_error(
+                            "observation_package_deadline_overflow",
+                            "admit_contained_observation",
+                            "admission deadline overflow",
+                        )
                     })?;
                 return PreparedPageObservation::load_path(
                     instance_alias,
@@ -80,10 +84,13 @@ impl HostShared {
                 ));
             }
             let expected = ExternalExpectedSha256::parse_hex(
-                input
-                    .expected_sha256()
-                    .legacy_sha256()
-                    .ok_or_else(|| observation_integrity_failure("observation_hash_invalid"))?,
+                input.expected_sha256().legacy_sha256().ok_or_else(|| {
+                    observation_admission_error(
+                        "observation_hash_invalid",
+                        "admit_contained_observation",
+                        "legacy package reference required",
+                    )
+                })?,
             )
             .map_err(|error| {
                 observation_admission_error(

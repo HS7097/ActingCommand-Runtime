@@ -763,7 +763,7 @@ fn procedure_alias_rebinding_reports_package_digest_mismatch_before_lease() {
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     let original_package_digest = intent
         .package_digest
-        .as_deref()
+        .as_ref()
         .expect("bound package digest")
         .to_owned();
     record_policy_approval(&host, &intent);
