@@ -1012,18 +1012,69 @@ fn frame_region_to_recognition_tensor(
     let mut tensor = vec![0.0_f32; plane_size * 3];
 
     for out_y in 0..input_shape.height {
-        let src_y = rect.y + (out_y * rect.height / input_shape.height).min(rect.height - 1);
+        let (src_y, fy) = rec_resize_coordinate(out_y, rect.height, input_shape.height);
+        let y_weights = rec_linear_weights(fy);
+        // OpenCV retains the vertical weights when both rows clamp to an edge.
+        let top = rect.y + src_y.clamp(0, rect.height as isize - 1) as usize;
+        let bottom = rect.y + (src_y + 1).clamp(0, rect.height as isize - 1) as usize;
         for out_x in 0..resized_width {
-            let src_x = rect.x + (out_x * rect.width / resized_width).min(rect.width - 1);
-            let pixel_offset = (src_y * frame_width + src_x) * channels;
-            let (r, g, b) = read_rgb_pixel(&frame.pixels, frame.pixel_format, pixel_offset)?;
+            let (src_x, mut fx) = rec_resize_coordinate(out_x, rect.width, resized_width);
+            if src_x < 0 || src_x >= rect.width as isize - 1 {
+                fx = 0.0;
+            }
+            let left = src_x.clamp(0, rect.width as isize - 1) as usize;
+            let right = (left + 1).min(rect.width - 1);
+            let x_weights = rec_linear_weights(fx);
+            let read = |y, x| {
+                read_rgb_pixel(
+                    &frame.pixels,
+                    frame.pixel_format,
+                    (y * frame_width + rect.x + x) * channels,
+                )
+            };
+            let tl = read(top, left)?;
+            let tr = read(top, right)?;
+            let bl = read(bottom, left)?;
+            let br = read(bottom, right)?;
             let dst = out_y * input_shape.width + out_x;
-            tensor[dst] = normalize_rec_pixel(r);
-            tensor[plane_size + dst] = normalize_rec_pixel(g);
-            tensor[plane_size * 2 + dst] = normalize_rec_pixel(b);
+            // The frame remains RGB; RecResizeImg's internal NCHW input is BGR.
+            for (channel, samples) in [
+                [tl.2, tr.2, bl.2, br.2],
+                [tl.1, tr.1, bl.1, br.1],
+                [tl.0, tr.0, bl.0, br.0],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                tensor[channel * plane_size + dst] =
+                    normalize_rec_pixel(rec_linear_pixel(samples, x_weights, y_weights));
+            }
         }
     }
     Ok(tensor)
+}
+
+fn rec_resize_coordinate(output: usize, source_size: usize, output_size: usize) -> (isize, f32) {
+    let scale = 1.0 / (output_size as f64 / source_size as f64);
+    let coordinate = ((output as f64 + 0.5) * scale - 0.5) as f32;
+    let base = coordinate.floor();
+    (base as isize, coordinate - base)
+}
+
+fn rec_linear_weights(fraction: f32) -> [i32; 2] {
+    // OpenCV INTER_LINEAR's uint8 path uses 11-bit coefficients, nearest-even.
+    [
+        ((1.0 - fraction) * 2048.0).round_ties_even() as i32,
+        (fraction * 2048.0).round_ties_even() as i32,
+    ]
+}
+
+fn rec_linear_pixel(samples: [u8; 4], x_weights: [i32; 2], y_weights: [i32; 2]) -> u8 {
+    let top = i32::from(samples[0]) * x_weights[0] + i32::from(samples[1]) * x_weights[1];
+    let bottom = i32::from(samples[2]) * x_weights[0] + i32::from(samples[3]) * x_weights[1];
+    // Preserve uint8 INTER_LINEAR's staged integer quantization before normalization.
+    // Reference: OpenCV 4.12.0 resize.cpp, VResizeLinear<uchar, int, short, ...>.
+    ((((y_weights[0] * (top >> 4)) >> 16) + ((y_weights[1] * (bottom >> 4)) >> 16) + 2) >> 2) as u8
 }
 
 fn frame_region_to_detection_tensor(
@@ -1776,10 +1827,163 @@ mod tests {
         .expect("tensor");
 
         assert_eq!(tensor.len(), 6);
-        assert!((tensor[0] + 1.0).abs() < 0.001);
-        assert!((tensor[1] - 1.0).abs() < 0.001);
-        assert!((tensor[4] - 1.0).abs() < 0.001);
-        assert!((tensor[5] + 1.0).abs() < 0.001);
+        assert!((tensor[0] - 1.0).abs() < 0.001);
+        assert!((tensor[1] + 1.0).abs() < 0.001);
+        assert!((tensor[2] - (127.0 / 127.5 - 1.0)).abs() < 0.001);
+        assert_eq!(tensor[2], tensor[3]);
+        assert!((tensor[4] + 1.0).abs() < 0.001);
+        assert!((tensor[5] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn recognition_resize_samples_linear_bgr_inside_region_and_zero_pads() {
+        // Workflow #269 OCR-RECOGNIZER-PREPROCESS-v1: fixed model RecResizeImg spec.
+        let mut frame = VisionFrame {
+            width: 5,
+            height: 4,
+            pixel_format: VisionPixelFormat::Rgb8,
+            pixels: vec![255; 5 * 4 * 3],
+        };
+        let source = [
+            [[0, 30, 240], [60, 90, 180], [120, 150, 120]],
+            [[120, 90, 120], [180, 150, 60], [240, 210, 0]],
+        ];
+        for (y, row) in source.iter().enumerate() {
+            for (x, pixel) in row.iter().enumerate() {
+                let offset = ((y + 1) * 5 + x + 1) * 3;
+                frame.pixels[offset..offset + 3].copy_from_slice(pixel);
+            }
+        }
+        let original_pixels = frame.pixels.clone();
+        let region = VisionRect {
+            x: 1,
+            y: 1,
+            width: 3,
+            height: 2,
+        };
+        let shape = RecognitionInputShape {
+            height: 3,
+            width: 7,
+        };
+        let tensor = frame_region_to_recognition_tensor(&frame, region, &shape).expect("tensor");
+        // ceil(3 / 2 * 3) = 5 columns. Half-pixel positions are -0.2, 0.4,
+        // 1, 1.6, 2.2 horizontally and -1/6, 1/2, 7/6 vertically.
+        let expected_bgr: [[u8; 15]; 3] = [
+            [
+                240, 216, 180, 144, 120, 180, 156, 120, 84, 60, 120, 96, 60, 24, 0,
+            ],
+            [
+                30, 54, 90, 126, 150, 60, 84, 120, 156, 180, 90, 114, 150, 186, 210,
+            ],
+            [
+                0, 24, 60, 96, 120, 60, 84, 120, 156, 180, 120, 144, 180, 216, 240,
+            ],
+        ];
+        assert_eq!(tensor.len(), 3 * 3 * 7);
+        assert_eq!(shape.to_ort_shape(), [1, 3, 3, 7]);
+        for (channel, expected) in expected_bgr.iter().enumerate() {
+            for y in 0..3 {
+                for x in 0..5 {
+                    let value = f32::from(expected[y * 5 + x]) / 127.5 - 1.0;
+                    assert!((tensor[channel * 21 + y * 7 + x] - value).abs() < 0.000001);
+                }
+                assert_eq!(
+                    &tensor[channel * 21 + y * 7 + 5..channel * 21 + y * 7 + 7],
+                    &[0.0, 0.0]
+                );
+            }
+        }
+        assert_eq!(frame.pixels, original_pixels);
+        assert_eq!(dynamic_width_for_region(region, 48).expect("width"), 72);
+        assert_eq!(
+            dynamic_width_for_region(VisionRect { width: 1, ..region }, 48).expect("minimum"),
+            32
+        );
+        assert_eq!(
+            dynamic_width_for_region(
+                VisionRect {
+                    width: 100,
+                    ..region
+                },
+                48
+            )
+            .expect("maximum"),
+            320
+        );
+        assert!(
+            dynamic_width_for_region(
+                VisionRect {
+                    height: 0,
+                    ..region
+                },
+                48
+            )
+            .is_err()
+        );
+        assert_eq!(
+            positive_or_default(-1, 48, "recognizer height").expect("dynamic height"),
+            48
+        );
+        assert!(positive_or_default(0, 48, "recognizer height").is_err());
+        for invalid in [
+            VisionRect { x: -1, ..region },
+            VisionRect { width: 0, ..region },
+            VisionRect {
+                height: 4,
+                ..region
+            },
+        ] {
+            assert!(frame_region_to_recognition_tensor(&frame, invalid, &shape).is_err());
+        }
+        frame.pixels.truncate(3);
+        let error =
+            frame_region_to_recognition_tensor(&frame, region, &shape).expect_err("short pixels");
+        assert!(error.contains("pixel buffer ended"));
+    }
+
+    #[test]
+    fn recognition_resize_quantizes_uint8_and_caps_width_for_rgba_and_gray() {
+        let region = VisionRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        };
+        let shape = RecognitionInputShape {
+            height: 2,
+            width: 3,
+        };
+        for (pixel_format, pixels, expected) in [
+            (
+                VisionPixelFormat::Rgba8,
+                vec![0, 1, 0, 255, 1, 0, 1, 0],
+                [
+                    [0_u8, 0, 1, 0, 0, 1],
+                    [1, 0, 0, 1, 0, 0],
+                    [0, 0, 1, 0, 0, 1],
+                ],
+            ),
+            (
+                VisionPixelFormat::Gray8,
+                vec![0, 1],
+                [[0, 0, 1, 0, 0, 1]; 3],
+            ),
+        ] {
+            let frame = VisionFrame {
+                width: 2,
+                height: 1,
+                pixel_format,
+                pixels,
+            };
+            let tensor =
+                frame_region_to_recognition_tensor(&frame, region, &shape).expect("tensor");
+            // Aspect width 4 caps to 3. The middle uint8 sample is 0: retaining
+            // the clamped row weights 1/4 and 3/4 gives (0 + 1 + 2) >> 2.
+            assert_eq!(tensor.len(), 18);
+            for (actual, expected) in tensor.iter().zip(expected.into_iter().flatten()) {
+                assert!((*actual - (f32::from(expected) / 127.5 - 1.0)).abs() < 0.000001);
+            }
+        }
     }
 
     #[test]
