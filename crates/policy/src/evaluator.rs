@@ -3770,54 +3770,6 @@ mod tests {
             "fact_stale"
         );
 
-        // Specification criterion: outcome TTL shares the fact freshness boundary.
-        let mut docs = example_documents();
-        docs.0["tasks"][0]["trigger"] = serde_json::json!({
-            "kind":"outcome","task_id":"fixture.observe","outcome_key":"completed",
-            "comparison":"eq","value":{"type":"boolean","value":true}
-        });
-        let compiled = compile_documents(docs);
-        facts.outcomes.push(ObservedOutcome {
-            task_id: "fixture.observe".to_owned(),
-            instance_id: "fixture-instance-a".to_owned(),
-            outcome_key: "completed".to_owned(),
-            value: FactValue::Boolean(true),
-            observed_at_unix_ms: NOW,
-            expires_at_unix_ms: Some(NOW + 10),
-            activity_window_id: None,
-        });
-        for (now, expected) in [
-            (NOW, EligibilityState::True),
-            (NOW + 10, EligibilityState::True),
-            (NOW + 11, EligibilityState::Unknown),
-        ] {
-            let result = evaluate(
-                &compiled,
-                &facts,
-                &base_resources(),
-                EvaluationTime {
-                    unix_ms: now,
-                    monotonic_ms: now,
-                },
-                7,
-            )
-            .unwrap();
-            assert_eq!(result.decisions[0].eligibility, expected);
-            if expected == EligibilityState::True {
-                assert_eq!(
-                    result.dispatch_intents[0]
-                        .prerequisites
-                        .facts_fresh_until_unix_ms,
-                    Some(NOW + 10)
-                );
-                assert_eq!(result.next_wake_unix_ms, Some(NOW + 11));
-            } else {
-                assert_eq!(
-                    result.decisions[0].detection_suggestions[0].reason,
-                    "outcome_expired"
-                );
-            }
-        }
         assert!(stale.dispatch_intents.is_empty());
 
         let unavailable = evaluate_case(&[NOW + 47 * HOUR_MS], NOW, false);
@@ -4627,6 +4579,55 @@ mod tests {
             result.decisions[0].detection_suggestions[0].reason,
             "fact_stale"
         );
+
+        // Specification criterion: outcome TTL shares the fact freshness boundary.
+        let mut docs = example_documents();
+        docs.0["tasks"][0]["trigger"] = serde_json::json!({
+            "kind":"outcome","task_id":"fixture.observe","outcome_key":"completed",
+            "comparison":"eq","value":{"type":"boolean","value":true}
+        });
+        let compiled = compile_documents(docs);
+        facts.outcomes.push(ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: "fixture-instance-a".to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Boolean(true),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: Some(NOW + 10),
+            activity_window_id: None,
+        });
+        for (now, expected) in [
+            (NOW, EligibilityState::True),
+            (NOW + 10, EligibilityState::True),
+            (NOW + 11, EligibilityState::Unknown),
+        ] {
+            let result = evaluate(
+                &compiled,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: now,
+                    monotonic_ms: now,
+                },
+                7,
+            )
+            .unwrap();
+            assert_eq!(result.decisions[0].eligibility, expected);
+            if expected == EligibilityState::True {
+                assert_eq!(
+                    result.dispatch_intents[0]
+                        .prerequisites
+                        .facts_fresh_until_unix_ms,
+                    Some(NOW + 10)
+                );
+                assert_eq!(result.next_wake_unix_ms, Some(NOW + 11));
+            } else {
+                assert_eq!(
+                    result.decisions[0].detection_suggestions[0].reason,
+                    "outcome_expired"
+                );
+            }
+        }
     }
 
     #[test]

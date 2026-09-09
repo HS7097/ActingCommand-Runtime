@@ -165,6 +165,20 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
             projection.ledger_position() >= projection.outcome().identity().terminal_sequence(),
             "{case}: wake projection must cover its source terminal"
         );
+        let snapshot = host
+            .policy_outcome_key_snapshot_for_test()
+            .expect("settled snapshot");
+        let completed = snapshot
+            .completed_runs
+            .get(&(
+                "fixture.observe".to_owned(),
+                POLICY_INSTANCE_ALIAS.to_owned(),
+            ))
+            .expect("this mapped run");
+        assert_eq!(
+            completed.activity_window_id,
+            context.admission().activity.window_id
+        );
 
         let mut client = TestClient::connect(&host);
         let events = projected_events(
@@ -1074,6 +1088,9 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
     let mut tasks: serde_json::Value = serde_json::from_slice(&sources.tasks.bytes).unwrap();
     tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(1);
     tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(1);
+    // #267: retain the budget checks, then exercise stop with recovered window evidence.
+    tasks["tasks"][0]["feedback_stop"]["schedule"]["at_ms"] =
+        serde_json::json!(POLICY_NOW_UNIX_MS + 600_001);
     let mut followup = tasks["tasks"][0].clone();
     followup["id"] = serde_json::json!("fixture.followup");
     followup["priority"] = serde_json::json!(50);
@@ -1282,6 +1299,23 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
             .expect("next legal task passes the final admission lock"),
         PolicyDispatchAdmission::Granted { .. }
     ));
+    clock.advance(1);
+    let stopped = restarted
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect("settled unconsumed result enables feedback after recovery")
+        .evaluation
+        .expect("feedback evaluation");
+    assert!(
+        stopped
+            .decisions
+            .iter()
+            .find(|decision| decision.task_id == "fixture.observe")
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "feedback_stop_true")
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     restarted.close().expect("close recovered host");
 }
 

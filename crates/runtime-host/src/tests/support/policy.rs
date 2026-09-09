@@ -51,11 +51,13 @@ fn policy_sources(version: u64) -> CatalogSources {
     let mut sources = CatalogSources {
         tasks: CatalogDocumentSource::new(
             "memory://fixture/tasks.json",
-            include_bytes!("../../../../../contracts/scheduling/examples/catalog-a/tasks.json").to_vec(),
+            include_bytes!("../../../../../contracts/scheduling/examples/catalog-a/tasks.json")
+                .to_vec(),
         ),
         pools: CatalogDocumentSource::new(
             "memory://fixture/pools.json",
-            include_bytes!("../../../../../contracts/scheduling/examples/catalog-a/pools.json").to_vec(),
+            include_bytes!("../../../../../contracts/scheduling/examples/catalog-a/pools.json")
+                .to_vec(),
         ),
         activity: CatalogDocumentSource::new(
             "memory://fixture/activity.json",
@@ -155,6 +157,10 @@ fn mapped_policy_sources_with_keys(version: u64, outcome_keys: &[&str]) -> Catal
         "value": {"type": "boolean", "value": true},
         "max_age_ms": 900000
     });
+    // The fixture's stop flag also controls first-dispatch availability explicitly.
+    followup["trigger"] = serde_json::json!({"kind":"all","predicates":[
+        followup["trigger"].clone(), {"kind":"not","predicate":followup["feedback_stop"].clone()}
+    ]});
     followup["produces"] = serde_json::json!([]);
     followup["instance_overrides"] = serde_json::json!([]);
     tasks["tasks"]
@@ -440,6 +446,8 @@ fn policy_facts() -> EvaluationFacts {
             outcome_key: "completed".to_owned(),
             value: FactValue::Boolean(false),
             observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+            expires_at_unix_ms: None,
+            activity_window_id: None,
         }],
         tasks: Vec::new(),
         instances: vec![InstanceSnapshot {
@@ -472,6 +480,8 @@ fn mapped_policy_facts(outcome_key: &str, include_caller_outcome: bool) -> Evalu
             outcome_key: outcome_key.to_owned(),
             value: FactValue::Boolean(true),
             observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+            expires_at_unix_ms: None,
+            activity_window_id: None,
         });
     }
     facts.facts.push(ObservedFact {
@@ -481,6 +491,8 @@ fn mapped_policy_facts(outcome_key: &str, include_caller_outcome: bool) -> Evalu
         fact_key: "fixture.followup.stop".to_owned(),
         value: FactValue::Boolean(false),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: None,
+        activity_window_id: None,
         expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 900_000),
         confidence_milli: 1_000,
     });
