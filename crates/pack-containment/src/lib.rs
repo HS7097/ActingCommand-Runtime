@@ -23,6 +23,8 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 use zip::ZipArchive;
 
+pub mod source;
+
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
 
 pub const DEFAULT_MAX_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
