@@ -106,111 +106,6 @@ fn test_color_guard() -> OperationGuard {
     }
 }
 
-fn captured_scene(page: Option<&str>, verify_template_matched: bool) -> CapturedScene {
-    CapturedScene {
-        scene: Scene::from_png(one_pixel_png()).expect("scene"),
-        matched_page: page.map(str::to_string),
-        page_evaluations: page
-            .map(|page| {
-                vec![PageEvaluation {
-                    page_id: page.to_string(),
-                    matched: true,
-                    required_passed: 1,
-                    required_total: 1,
-                    any_of_passed: 0,
-                    any_of_total: 0,
-                    optional_passed: 0,
-                    optional_total: 0,
-                    forbidden_passed: 0,
-                    forbidden_total: 0,
-                    target_results: Vec::new(),
-                    message: "fixture matched".to_string(),
-                }]
-            })
-            .unwrap_or_default(),
-        verify_template_matched,
-        width: 1,
-        height: 1,
-    }
-}
-
-fn captured_scene_with_matches(pages: &[&str], verify_template_matched: bool) -> CapturedScene {
-    CapturedScene {
-        scene: Scene::from_png(one_pixel_png()).expect("scene"),
-        matched_page: pages.first().map(|page| (*page).to_string()),
-        page_evaluations: pages
-            .iter()
-            .map(|page| PageEvaluation {
-                page_id: (*page).to_string(),
-                matched: true,
-                required_passed: 1,
-                required_total: 1,
-                any_of_passed: 0,
-                any_of_total: 0,
-                optional_passed: 0,
-                optional_total: 0,
-                forbidden_passed: 0,
-                forbidden_total: 0,
-                target_results: Vec::new(),
-                message: "fixture matched".to_string(),
-            })
-            .collect(),
-        verify_template_matched,
-        width: 1,
-        height: 1,
-    }
-}
-
-fn captured_rgb_scene(page: Option<&str>, rgb: [u8; 3]) -> CapturedScene {
-    CapturedScene {
-        scene: Scene::from_pixels(1, 1, &rgb, ScenePixelFormat::Rgb8).expect("scene"),
-        matched_page: page.map(str::to_string),
-        page_evaluations: Vec::new(),
-        verify_template_matched: false,
-        width: 1,
-        height: 1,
-    }
-}
-
-fn one_pixel_color_evaluator(expected: [u8; 3]) -> RecognitionEvaluator {
-    let pack = load_pack_from_json_str(&format!(
-        r#"{{
-                "schema_version":"0.3",
-                "game":"arknights",
-                "server":"cn",
-                "coordinate_space":{{"width":1,"height":1}},
-                "defaults":{{"color_max_distance":0.0}},
-                "targets":[{{
-                    "type":"color",
-                    "id":"target/button",
-                    "region":{{"x":0,"y":0,"width":1,"height":1}},
-                    "expected":[{},{},{}]
-                }}]
-            }}"#,
-        expected[0], expected[1], expected[2]
-    ))
-    .expect("pack");
-    RecognitionEvaluator::new(PathBuf::from("."), pack).expect("evaluator")
-}
-
-struct StaticCapture {
-    frame: Frame,
-}
-
-impl CaptureBackend for StaticCapture {
-    fn capture(&mut self) -> actingcommand_device::DeviceResult<Frame> {
-        Ok(self.frame.clone())
-    }
-    fn close_once(
-        &mut self,
-        _authority: actingcommand_device::DeviceCloseAuthority,
-    ) -> actingcommand_device::DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
-        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
-            0,
-        ))
-    }
-}
-
 fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvaluation {
     TargetEvaluation {
         id: id.to_string(),
@@ -234,27 +129,6 @@ fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvalu
     }
 }
 
-fn template_target_evaluation(id: &str, rect: PackRect) -> TargetEvaluation {
-    TargetEvaluation {
-        id: id.to_string(),
-        kind: TargetKind::Template,
-        passed: true,
-        template: Some(actingcommand_recognition_pack::TemplateEvaluation {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            raw_score: 1.0,
-            score: 1.0,
-            threshold: 0.9,
-        }),
-        color: None,
-        ocr: None,
-        nn: None,
-        message: "template passed".to_string(),
-    }
-}
-
 fn one_pixel_png() -> &'static [u8] {
     &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
@@ -272,34 +146,6 @@ fn write_test_zip(path: &Path, files: &[(&str, &[u8])]) {
         zip.write_all(content).expect("write file");
     }
     zip.finish().expect("finish");
-}
-
-fn zip_text(archive: &mut ZipArchive<File>, name: &str) -> String {
-    let mut entry = archive.by_name(name).expect("zip entry");
-    let mut text = String::new();
-    entry.read_to_string(&mut text).expect("zip text");
-    text
-}
-
-fn has_record_type(ledger: &actingcommand_ledger::LedgerRead, record_type: &str) -> bool {
-    ledger.records.iter().any(|record| {
-        record.payload.get("record_type").and_then(Value::as_str) == Some(record_type)
-    })
-}
-
-fn has_event(ledger: &actingcommand_ledger::LedgerRead, event: &str) -> bool {
-    ledger
-        .events
-        .iter()
-        .any(|entry| entry.payload.get("event").and_then(Value::as_str) == Some(event))
-}
-
-fn assert_ordered(text: &str, needles: &[&str]) {
-    let mut previous = 0;
-    for needle in needles {
-        let offset = text[previous..].find(needle).expect("needle order");
-        previous += offset + needle.len();
-    }
 }
 
 fn write_minimal_lab_package(path: &Path) {
@@ -377,104 +223,6 @@ fn write_minimal_lab_package(path: &Path) {
                         "schema_version":"0.3",
                         "pages":[
                             {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}
-                        ]
-                    }"#,
-                ),
-            ],
-        );
-}
-
-fn write_recovery_suggestion_lab_package(path: &Path) {
-    write_test_zip(
-            path,
-            &[
-                (
-                    "control.json",
-                    br#"{
-                        "schema_version":"Lab-1y.control.v1",
-                        "package_id":"fixture.recovery",
-                        "execution_mode":"navigable_route",
-                        "game":"arknights",
-                        "server":"cn",
-                        "resolution":{"width":1280,"height":720},
-                        "entry_task_id":"task",
-                        "capture_interval_ms":1,
-                        "step_timeout_ms":1,
-                        "max_steps":3
-                    }"#,
-                ),
-                (
-                    "resources/manifest.json",
-                    br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
-                ),
-                (
-                    "resources/operations/task/task.json",
-                    br#"{
-                        "schema_version":"0.6",
-                        "task_id":"task",
-                        "game":"arknights",
-                        "server_scope":["cn"],
-                        "coordinate_space":{"width":1280,"height":720},
-                        "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
-                        "entry_page":"home",
-                        "target_page":"terminal",
-                        "recovery":{"kind":"return_home","task_id":"return_home"},
-                        "max_task_retries":1,
-                        "on_exhausted":"pause",
-                        "operations":[{
-                            "id":"open_terminal",
-                            "purpose":"force a sealed recovery suggestion",
-                            "from":"home",
-                            "to":"terminal",
-                            "click":{"kind":"point","x":1,"y":1},
-                            "retryable":true,
-                            "effect":"navigation_only",
-                            "unguarded_trusted_coordinate":true
-                        }]
-                    }"#,
-                ),
-                (
-                    "resources/operations/return_home/task.json",
-                    br#"{
-                        "schema_version":"0.6",
-                        "task_id":"return_home",
-                        "game":"arknights",
-                        "server_scope":["cn"],
-                        "coordinate_space":{"width":1280,"height":720},
-                        "target_page":"home",
-                        "operations":[{
-                            "id":"return_home_action",
-                            "purpose":"sealed successor fixture",
-                            "from":"any",
-                            "to":"home",
-                            "click":{"kind":"point","x":2,"y":2},
-                            "effect":"navigation_only",
-                            "unguarded_trusted_coordinate":true
-                        }]
-                    }"#,
-                ),
-                (
-                    "resources/recognition/arknights.cn.pack.json",
-                    br#"{
-                        "schema_version":"0.3",
-                        "game":"arknights",
-                        "server":"cn",
-                        "locale":"zh-CN",
-                        "coordinate_space":{"width":1280,"height":720},
-                        "defaults":{"color_max_distance":0.0},
-                        "targets":[
-                            {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,0]},
-                            {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,255,255]}
-                        ]
-                    }"#,
-                ),
-                (
-                    "resources/recognition/arknights.cn.pages.json",
-                    br#"{
-                        "schema_version":"0.3",
-                        "pages":[
-                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
-                            {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
                         ]
                     }"#,
                 ),

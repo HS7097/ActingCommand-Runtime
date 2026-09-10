@@ -974,6 +974,108 @@ mod tests {
     }
 
     #[test]
+    fn completed_projection_requires_terminal_receipt() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut sink = RecordingSink::default();
+        let identity = test_identity();
+        let frame = store_frame(
+            temp.path().join("artifacts"),
+            identity,
+            1,
+            1_752_147_200_123,
+            b"frame",
+            &mut sink,
+        );
+        let output = temp.path().join("missing-terminal.zip");
+        let mut request = export_request(
+            output.clone(),
+            identity,
+            TaskOutcome::Success,
+            complete_summary(vec![(1, frame)], None),
+        );
+        request
+            .events
+            .retain(|event| event.event_type == EventType::CaptureSummaryCommitted);
+        assert_eq!(request.events.len(), 1);
+        let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+
+        let error = exporter
+            .export(request, &mut sink)
+            .expect_err("missing terminal receipt must fail");
+
+        assert_eq!(error.code(), "evidence_terminal_invalid");
+        assert!(!output.exists());
+        assert!(
+            !sink
+                .event_types
+                .contains(&EventType::ArtifactExportCompleted)
+        );
+    }
+
+    #[test]
+    fn completed_projection_rejects_finish_ok_with_missing_output_zip_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut sink = RecordingSink::default();
+        let identity = test_identity();
+        let frame = store_frame(
+            temp.path().join("artifacts"),
+            identity,
+            1,
+            1_752_147_200_123,
+            b"frame",
+            &mut sink,
+        );
+        let request = export_request(
+            temp.path().join("missing-output.zip"),
+            identity,
+            TaskOutcome::Success,
+            complete_summary(vec![(1, frame)], None),
+        );
+        let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+        let receipt = exporter.export(request, &mut sink).expect("export");
+        fs::remove_file(receipt.output_path()).expect("remove exported archive");
+
+        let error = verify_evidence_archive(receipt.output_path(), receipt.zip_sha256())
+            .expect_err("missing output zip file must fail");
+
+        assert_eq!(error.code(), "evidence_archive_read_failed");
+    }
+
+    #[test]
+    fn completed_projection_rejects_finish_ok_with_output_zip_sha256_mismatch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut sink = RecordingSink::default();
+        let identity = test_identity();
+        let frame = store_frame(
+            temp.path().join("artifacts"),
+            identity,
+            1,
+            1_752_147_200_123,
+            b"frame",
+            &mut sink,
+        );
+        let request = export_request(
+            temp.path().join("mismatched-output.zip"),
+            identity,
+            TaskOutcome::Success,
+            complete_summary(vec![(1, frame)], None),
+        );
+        let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+        let receipt = exporter.export(request, &mut sink).expect("export");
+        let mut mismatched_hash = receipt.zip_sha256().to_owned();
+        let replacement = if mismatched_hash.starts_with('0') {
+            "1"
+        } else {
+            "0"
+        };
+        mismatched_hash.replace_range(..1, replacement);
+
+        let error = verify_evidence_archive(receipt.output_path(), &mismatched_hash)
+            .expect_err("mismatched output zip hash must fail");
+
+        assert_eq!(error.code(), "evidence_archive_hash_mismatch");
+    }
+    #[test]
     fn same_millisecond_screenshots_receive_collision_suffixes() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
