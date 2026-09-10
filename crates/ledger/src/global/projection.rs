@@ -304,8 +304,8 @@ pub(super) fn project<E: LedgerEventRead>(event: &E, profile: ProjectionProfile)
     }
 }
 
-pub(super) fn project_if_matches<E: LedgerEventRead>(
-    event: &E,
+pub(super) fn project_if_matches(
+    event: &PersistedEvent,
     query: &EventQuery,
     profile: ProjectionProfile,
 ) -> Option<ProjectedEvent> {
@@ -415,7 +415,7 @@ pub(super) fn project_scheduling_outcomes(
     })
 }
 
-pub(crate) fn query_matches<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bool {
+pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
     query_matches_fields(query, event)
         && query.view.is_none_or(|view| {
             view.contains(
