@@ -77,7 +77,7 @@ impl HostShared {
                         failure.error.projection().clone(),
                     )?
                     .with_resource_declaration(rejection, rejected)
-                    .map_err(receipt_error);
+                    .map_err(|_| receipt_error());
                 }
                 runtime_error_receipt(
                     request,
