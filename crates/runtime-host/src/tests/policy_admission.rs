@@ -152,6 +152,20 @@ fn catalog_cas_conflict_preserves_nonfatal_identity_and_effect() {
         second
     );
 
+    let document = host
+        .shared_ref("verify_catalog_state")
+        .expect("live host")
+        .state
+        .read_json_document(actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY)
+        .expect("committed catalog state")
+        .expect("active pointer");
+    let pointer: serde_json::Value =
+        serde_json::from_slice(document.payload()).expect("catalog pointer");
+    assert_eq!(
+        pointer["generation"]["catalog_hash"],
+        second.catalog_hash(),
+        "confirmed rollback preserves the durable pointer"
+    );
     let mut client = TestClient::connect(&host);
     let failures = projected_events(
         &mut client,

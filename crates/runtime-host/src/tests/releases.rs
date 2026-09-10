@@ -258,5 +258,37 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
     };
     assert_eq!(payload.migration().state_key(), "policy.catalog.active");
     drop(client);
+    reopened
+        .activate_policy_catalog(&policy_sources(2))
+        .expect("activate later catalog");
     reopened.close().expect("close reopened host");
+
+    // Workflow #109: a valid older pointer cannot authorize the latest catalog state.
+    let database =
+        actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
+            .expect("existing fixture database");
+    database.connection("prepare older verified catalog pointer").expect("connection")
+        .execute_batch("BEGIN IMMEDIATE;
+            DELETE FROM state_documents WHERE state_key='policy.catalog.active';
+            DELETE FROM state_document_history WHERE state_key='policy.catalog.active' AND revision>1;
+            INSERT INTO state_documents SELECT * FROM state_document_history WHERE state_key='policy.catalog.active' AND revision=1;
+            COMMIT;")
+        .expect("retain older valid State material with unchanged later Ledger facts");
+    drop(database);
+    let error = match RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    ) {
+        Err(error) => error,
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("an older source must not authorize current State");
+        }
+    };
+    assert_eq!(error.code(), "catalog_active_source_mismatch");
+    assert!(error.is_fatal());
 }
