@@ -3048,9 +3048,9 @@ mod tests {
                             .is_finished()
                     );
                     phase = "parent_release_worker";
-                    release_tx
-                        .send(())
-                        .expect("release owned test worker after timeout");
+                    release_tx.send(()).unwrap_or_else(|error| {
+                        panic!("release owned test worker after timeout: {error:?}; phase={phase}");
+                    });
                     let worker = backend.worker.as_mut().unwrap();
                     worker.timeout = Duration::from_secs(2);
                     phase = "parent_join_worker";
