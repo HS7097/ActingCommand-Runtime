@@ -130,9 +130,15 @@ pub(crate) fn run(
     root: &Path,
     salt: &[u8],
     clock: Arc<dyn RuntimeClock>,
-    request: LedgerMaintenanceRequest,
+    mut request: LedgerMaintenanceRequest,
 ) -> Result<LedgerMaintenanceReceipt> {
     validate_request(&request)?;
+    for path in [&mut request.backup, &mut request.target]
+        .into_iter()
+        .flatten()
+    {
+        *path = actingcommand_runtime_database::resolve_maintenance_destination(path)?;
+    }
     let deadline = request.limits.deadline()?;
     let events = RuntimeEvents::new(salt, Arc::clone(&clock))?;
     let OwnerStartup {

@@ -117,6 +117,8 @@ impl RuntimeDatabase {
         limits: MaintenanceLimits,
         deadline: Instant,
     ) -> RuntimeDatabaseResult<DatabaseBackup> {
+        let destination = resolve_maintenance_destination(destination)?;
+        let destination = destination.as_path();
         let mut warnings = Vec::new();
         let result = (|| {
             require_disjoint(&self.root, destination)?;
@@ -522,25 +524,41 @@ pub fn list_material(
     Ok(files)
 }
 
+/// Resolves caller-relative destinations once against the process working directory.
+pub fn resolve_maintenance_destination(target: &Path) -> RuntimeDatabaseResult<PathBuf> {
+    if target.as_os_str().is_empty() {
+        return Err(failure(
+            "maintenance_target_invalid",
+            "resolve_maintenance_target",
+        ));
+    }
+    let absolute =
+        std::path::absolute(target).map_err(|error| io("resolve_maintenance_target", &error))?;
+    if absolute
+        .try_exists()
+        .map_err(|error| io("inspect_maintenance_target", &error))?
+    {
+        return absolute
+            .canonicalize()
+            .map_err(|error| io("resolve_maintenance_target", &error));
+    }
+    let parent = absolute
+        .parent()
+        .ok_or_else(|| failure("maintenance_target_invalid", "resolve_maintenance_target"))?
+        .canonicalize()
+        .map_err(|error| io("resolve_maintenance_target_parent", &error))?;
+    Ok(parent.join(
+        absolute
+            .file_name()
+            .ok_or_else(|| failure("maintenance_target_invalid", "resolve_maintenance_target"))?,
+    ))
+}
+
 pub fn require_disjoint(source: &Path, target: &Path) -> RuntimeDatabaseResult<()> {
     let source = source
         .canonicalize()
         .map_err(|error| io("resolve_maintenance_source", &error))?;
-    let target =
-        if target.exists() {
-            target
-                .canonicalize()
-                .map_err(|error| io("resolve_maintenance_target", &error))?
-        } else {
-            let parent = target
-                .parent()
-                .ok_or_else(|| failure("maintenance_target_invalid", "resolve_maintenance_target"))?
-                .canonicalize()
-                .map_err(|error| io("resolve_maintenance_target_parent", &error))?;
-            parent.join(target.file_name().ok_or_else(|| {
-                failure("maintenance_target_invalid", "resolve_maintenance_target")
-            })?)
-        };
+    let target = resolve_maintenance_destination(target)?;
     if source.starts_with(&target) || target.starts_with(&source) {
         return Err(failure(
             "maintenance_paths_overlap",

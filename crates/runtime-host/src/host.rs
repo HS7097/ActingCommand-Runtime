@@ -100,9 +100,7 @@ use actingcommand_ledger::critical::{
     CriticalOperation, DefiniteEffectDisposition, EventAppender, LeaseTransitionTarget,
     ReleaseTransitionTarget, execute_critical,
 };
-use actingcommand_ledger::{
-    GlobalLedger, GlobalLedgerConfig, PersistedEvent, project_subscription_event,
-};
+use actingcommand_ledger::{GlobalLedger, PersistedEvent, project_subscription_event};
 use actingcommand_pack_containment::{
     Containment, DEFAULT_MAX_COMPRESSED_BYTES, InstanceId as ContainmentInstanceId, PackageLayout,
     Sha256Hash,
