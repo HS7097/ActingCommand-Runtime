@@ -850,6 +850,15 @@ pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutco
             .get("schema_version")
             .and_then(Value::as_str),
     };
+    // Runtime task preparation does not consume the Lab recovery settings.
+    for field in ["max_task_retries", "on_exhausted"] {
+        if bundle.operation().get(field).is_some() {
+            return Err(declaration.error(
+                &child("", field),
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+    }
     declaration.bundle(bundle.operation(), true)?;
     let operation = Bundle {
         task_id: bundle.task_id().as_str().to_owned(),
