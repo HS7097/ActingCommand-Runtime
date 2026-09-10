@@ -4,7 +4,7 @@
 
 use crate::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::{
-    LabErrorClass, page_projection::ProjectionMetadata,
+    LabErrorClass, ResourceDeclarationIssue, page_projection::ProjectionMetadata,
     resource_declaration::ProcedureBindingConfigFile,
 };
 use actingcommand_execution_kernel::{
@@ -266,12 +266,14 @@ impl DeclarationReader {
             validate_resource_declarations(path, &data)?;
             "resources"
         } else if name.ends_with(".pack.json") {
-            actingcommand_recognition_pack::load_pack_from_json_str(text)
-                .map_err(|error| invalid(path, &error.to_string()))?;
+            actingcommand_recognition_pack::load_pack_from_json_str(text).map_err(|error| {
+                declaration_parser_error(path, &error.to_string(), error.declaration_issue())
+            })?;
             "recognition"
         } else if name.ends_with(".pages.json") {
-            actingcommand_page_detector::load_page_set_from_json_str(text)
-                .map_err(|error| invalid(path, &error.to_string()))?;
+            actingcommand_page_detector::load_page_set_from_json_str(text).map_err(|error| {
+                declaration_parser_error(path, &error.to_string(), error.declaration_issue())
+            })?;
             "pages"
         } else if name.ends_with(".navigation.json") {
             let value = serde_json::from_slice(&bytes)
@@ -737,6 +739,21 @@ fn at_file(mut error: CliError, path: &Path) -> CliError {
     }
     error.details = Some(details);
     error
+}
+
+fn declaration_parser_error(
+    path: &Path,
+    reason: &str,
+    issue: Option<&ResourceDeclarationIssue>,
+) -> CliError {
+    let failure = invalid(path, reason);
+    if let Some(issue) = issue {
+        let mut issue = issue.clone();
+        issue.declaration_file = path_text(path);
+        failure.with_details(json!(issue))
+    } else {
+        failure
+    }
 }
 
 fn invalid(path: &Path, reason: &str) -> CliError {

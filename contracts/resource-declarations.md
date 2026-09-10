@@ -58,7 +58,7 @@ bounds fail. The task owner's smaller dependency bounds remain effective.
 
 Success uses `actinglab.resource-declarations.v1`, with per-path results and the
 actual JSON read paths/byte count. Native parser errors retain their reason and
-file context. Task declaration errors retain the shared JSON-pointer details.
+file context. Structured declaration errors retain the shared JSON-pointer details.
 Validation does not convert resources, build a package, load image/model bytes,
 create an evaluator, detect an environment or acquire a Runtime/device holder.
 Production keeps its subsequent asset, reference, admission and execution checks.
