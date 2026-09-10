@@ -70,7 +70,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
                     .unwrap_or_else(|| error.to_string()),
             )
         })?;
-    let package_sha256 = prepared.package_sha256().to_string();
+    let package_sha256 = prepared.package_sha256().clone();
     let fixture = load_fixture_sequence(&args.fixtures)?;
     let simulation =
         simulate_contained_task(&prepared, fixture.frames).map_err(map_simulation_error)?;
@@ -573,7 +573,7 @@ struct OfflineResultRecord {
     mode: &'static str,
     executed: bool,
     runtime_head: &'static str,
-    package_sha256: String,
+    package_sha256: actingcommand_contract::PackageRef,
     decision_fingerprint: String,
     fixture_sequence_sha256: String,
     fixtures: Vec<FixtureBinding>,

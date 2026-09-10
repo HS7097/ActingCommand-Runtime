@@ -13,7 +13,7 @@ pub const MAX_OBSERVATION_TARGETS: usize = 64;
 #[serde(deny_unknown_fields)]
 pub struct ContainedObservationRequest {
     package_path: String,
-    expected_sha256: String,
+    expected_sha256: crate::PackageRef,
     targets: Vec<String>,
 }
 
@@ -26,7 +26,7 @@ impl fmt::Debug for ContainedObservationRequest {
 impl ContainedObservationRequest {
     pub fn new(
         package_path: impl Into<String>,
-        expected_sha256: impl Into<String>,
+        expected_sha256: impl Into<crate::PackageRef>,
         targets: Vec<String>,
     ) -> RuntimeContractResult<Self> {
         let request = Self {
@@ -46,7 +46,7 @@ impl ContainedObservationRequest {
                 "invalid_observation_package_path",
             ));
         }
-        validate_sha256_hex(&self.expected_sha256)?;
+        self.expected_sha256.validate()?;
         if self.targets.len() > MAX_OBSERVATION_TARGETS
             || self.targets.iter().enumerate().any(|(index, target)| {
                 target.is_empty()
@@ -62,7 +62,7 @@ impl ContainedObservationRequest {
     pub fn package_path(&self) -> &str {
         &self.package_path
     }
-    pub fn expected_sha256(&self) -> &str {
+    pub fn expected_sha256(&self) -> &crate::PackageRef {
         &self.expected_sha256
     }
     pub fn targets(&self) -> &[String] {
@@ -138,8 +138,8 @@ pub struct ContainedObservationEvidence {
     pub request_id: RequestId,
     pub correlation_id: CorrelationId,
     pub instance_id: InstanceId,
-    pub expected_package_sha256: String,
-    pub actual_package_sha256: String,
+    pub expected_package_sha256: crate::PackageRef,
+    pub actual_package_sha256: crate::PackageRef,
     pub frame: ReadonlyObservation,
     pub rgb8_sha256: String,
     pub status: PageObservationStatus,
@@ -158,8 +158,8 @@ impl fmt::Debug for ContainedObservationEvidence {
 #[serde(deny_unknown_fields)]
 pub struct ContainedPageObservation {
     pub instance_id: InstanceId,
-    pub expected_package_sha256: String,
-    pub actual_package_sha256: String,
+    pub expected_package_sha256: crate::PackageRef,
+    pub actual_package_sha256: crate::PackageRef,
     pub frame: ReadonlyObservation,
     pub status: PageObservationStatus,
     pub projection: PageProjection,
@@ -176,7 +176,7 @@ impl ContainedPageObservation {
             .validate()
             .map_err(|_| RuntimeContractError::new("invalid_page_observation_artifact"))?;
         self.facts.validate()?;
-        validate_sha256_hex(&self.expected_package_sha256)?;
+        self.expected_package_sha256.validate()?;
         if self.expected_package_sha256 != self.actual_package_sha256
             || self.artifact.kind != ArtifactKind::DiagnosticJson
             || self.artifact.byte_count > MAX_OBSERVATION_ARTIFACT_BYTES as u64

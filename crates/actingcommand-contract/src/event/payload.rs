@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-pub mod ledger_migration;
+mod ledger_migration;
 mod signature;
 pub use ledger_migration::*;
 
-use signature::*;
+pub use signature::*;
 mod vendor_stdio;
 pub use vendor_stdio::*;
 mod adb_recovery;
@@ -2269,7 +2269,7 @@ pub struct PolicyDispatchEventData {
     pub task_id: String,
     pub instance_id: String,
     pub operation_id: String,
-    pub package_digest: String,
+    pub package_digest: crate::PackageRef,
     pub procedure_binding_digest: String,
     pub reason_chain_id: String,
     pub reasons: Vec<PolicyReasonRecord>,
@@ -2534,8 +2534,8 @@ pub struct PolicyDispatchPayload {
     task_id: String,
     instance_id: String,
     operation_id: String,
-    #[serde(default)]
-    package_digest: String,
+    #[serde(default, with = "crate::package::prefixed_reference")]
+    package_digest: crate::PackageRef,
     #[serde(default)]
     procedure_binding_digest: String,
     reason_chain_id: String,
@@ -2615,7 +2615,7 @@ impl PolicyDispatchPayload {
         &self.operation_id
     }
 
-    pub fn package_digest(&self) -> &str {
+    pub fn package_digest(&self) -> &crate::PackageRef {
         &self.package_digest
     }
 
@@ -2804,7 +2804,7 @@ pub enum TaskSemanticFact {
     PackageAdmitted {
         package_label: String,
         task_label: String,
-        package_sha256: String,
+        package_sha256: crate::PackageRef,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response_deadline_monotonic_ms: Option<u64>,
     },
@@ -2834,15 +2834,15 @@ pub enum TaskSemanticFact {
         required: bool,
     },
     EntryRecoveryPackageAdmitted {
-        package_sha256: String,
+        package_sha256: crate::PackageRef,
     },
     EntryRecoveryCompleted {
-        package_sha256: String,
+        package_sha256: crate::PackageRef,
         final_page: String,
         executed_steps: u32,
     },
     EntryRecoveryFailed {
-        package_sha256: String,
+        package_sha256: crate::PackageRef,
         failure_code: String,
     },
     EntryTargetDisposition {
@@ -3517,16 +3517,7 @@ impl TaskSemanticFact {
             } => {
                 validate_task_semantic_label(package_label, "package_label")?;
                 validate_task_semantic_label(task_label, "task_label")?;
-                if package_sha256.len() != 64
-                    || !package_sha256
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-                {
-                    return Err(SanitizationError::new(
-                        "invalid_task_package_fingerprint",
-                        "package_sha256",
-                    ));
-                }
+                validate_task_package_sha256(package_sha256)?;
                 if response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0) {
                     return Err(SanitizationError::new(
                         "invalid_task_response_deadline",
@@ -3772,19 +3763,10 @@ fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), 
     }
 }
 
-fn validate_task_package_sha256(value: &str) -> Result<(), SanitizationError> {
-    if value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        Ok(())
-    } else {
-        Err(SanitizationError::new(
-            "invalid_task_package_fingerprint",
-            "package_sha256",
-        ))
-    }
+fn validate_task_package_sha256(value: &crate::PackageRef) -> Result<(), SanitizationError> {
+    value
+        .validate()
+        .map_err(|_| SanitizationError::new("invalid_task_package_fingerprint", "package_sha256"))
 }
 
 fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), SanitizationError> {
@@ -5559,7 +5541,9 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     crate::validate_instance_alias(&data.instance_id)
         .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
     validate_policy_token(&data.operation_id, "operation_id")?;
-    validate_policy_digest(&data.package_digest, "package_digest")?;
+    data.package_digest
+        .validate()
+        .map_err(|_| SanitizationError::new("invalid_policy_digest", "package_digest"))?;
     validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;

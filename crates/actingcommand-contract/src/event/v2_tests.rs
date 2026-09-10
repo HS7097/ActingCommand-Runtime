@@ -133,7 +133,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         task_id: "task:fixture-a".to_owned(),
         instance_id: "instance:fixture-a".to_owned(),
         operation_id: "operation:fixture-a".to_owned(),
-        package_digest: format!("sha256:{}", "c".repeat(64)),
+        package_digest: format!("sha256:{}", "c".repeat(64)).into(),
         procedure_binding_digest: format!("sha256:{}", "d".repeat(64)),
         reason_chain_id: "reason:fixture-a".to_owned(),
         reasons: vec![PolicyReasonRecord {
@@ -2271,7 +2271,7 @@ fn task_semantic_payload_rejects_invalid_facts() {
         TaskSemanticFact::PackageAdmitted {
             package_label: "package".to_string(),
             task_label: "task".to_string(),
-            package_sha256: "not-a-sha256".to_string(),
+            package_sha256: "not-a-sha256".into(),
             response_deadline_monotonic_ms: Some(60_000),
         },
         TaskSemanticFact::RecognitionStarted {

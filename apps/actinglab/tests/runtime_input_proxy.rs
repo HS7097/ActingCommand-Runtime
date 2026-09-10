@@ -148,7 +148,7 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
                 "node.a",
                 ContainedLabOperationRequest {
                     package_path: package.to_str().unwrap().to_string(),
-                    expected_sha256: hash.clone(),
+                    expected_sha256: hash.clone().into(),
                     selection,
                     projection_hint: LabProjectionHint {
                         sequence: None,
@@ -471,7 +471,7 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
             "node.a",
             ContainedLabOperationRequest {
                 package_path: published_source.path().to_str().unwrap().into(),
-                expected_sha256: hash.clone(),
+                expected_sha256: hash.clone().into(),
                 selection: LabOperationSelection::Element {
                     id: "undeclared".into(),
                 },

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::commands::capabilities::command_cap;
-use super::contained_resources::finish_package_use;
+use super::contained_resources::{PackageInput, finish_package_use};
 use super::{CliError, CliOutcome, FlagArgs, runtime_state_root};
 use actingcommand_artifact_store::verify_evidence_archive;
 use actingcommand_contract::{
@@ -9,11 +9,8 @@ use actingcommand_contract::{
     RuntimeEvidenceExportRequest, RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor,
     TaskOutcome,
 };
-use actingcommand_pack_containment::Sha256Hash;
-use actingcommand_resource_tooling::{PublishedPackageReader, open_published_package};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
-use std::fs;
 
 const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
     ("--from-sequence", "from_sequence"),
@@ -112,31 +109,16 @@ pub(super) fn run_package_debug(args: &[String]) -> CliOutcome<Value> {
 
 struct PreparedPackageDebug {
     request: PackageDebugRequest,
-    reader: PublishedPackageReader,
+    reader: PackageInput,
 }
 
-fn package_debug_request(flags: &FlagArgs, command: &str) -> CliOutcome<PreparedPackageDebug> {
-    let package = flags.required_path("--zip")?;
-    let reader = open_published_package(&package)?;
-    let package = fs::canonicalize(reader.path()).map_err(|error| {
-        CliError::package_invalid(format!(
-            "failed to resolve debug package {}: {error}",
-            reader.path().display()
-        ))
-    })?;
-    let expected = flags
-        .optional("--expected-sha256")
-        .filter(|value| value != "true")
-        .ok_or_else(|| {
-            CliError::usage(format!(
-                "{command} requires --expected-sha256 <sha256> from an external trust source"
-            ))
-        })?;
-    let expected = Sha256Hash::parse_hex(&expected)
-        .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let request =
-        PackageDebugRequest::new(package.to_string_lossy().into_owned(), expected.to_string())
-            .map_err(|error| CliError::usage(error.to_string()))?;
+fn package_debug_request(flags: &FlagArgs, _command: &str) -> CliOutcome<PreparedPackageDebug> {
+    let reader = PackageInput::open(flags)?;
+    let request = PackageDebugRequest::new(
+        reader.path().to_string_lossy().into_owned(),
+        reader.reference.clone(),
+    )
+    .map_err(|error| CliError::usage(error.to_string()))?;
     Ok(PreparedPackageDebug { request, reader })
 }
 

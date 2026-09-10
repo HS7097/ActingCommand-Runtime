@@ -47,7 +47,7 @@ impl RuntimeDebugSession {
             .find(|instance| instance.instance_alias() == instance_alias)
             .ok_or_else(|| observation_error("runtime_observation_instance_unknown"))?
             .instance_id();
-        let expected = request.expected_sha256().to_string();
+        let expected = request.expected_sha256().clone();
         let timeout = self
             .client
             .connection("observe_contained_page")?
@@ -95,7 +95,7 @@ fn verify_observation(
     receipt: RuntimeReceipt,
     correlation: CorrelationId,
     instance: InstanceId,
-    expected: &str,
+    expected: &actingcommand_contract::PackageRef,
     events: &[ProjectedEvent],
 ) -> RuntimeClientResult<VerifiedPageObservation> {
     receipt
@@ -106,7 +106,7 @@ fn verify_observation(
     };
     if receipt.correlation_id() != correlation
         || observation.instance_id != instance
-        || observation.expected_package_sha256 != expected
+        || &observation.expected_package_sha256 != expected
     {
         return Err(observation_error("runtime_observation_identity_mismatch"));
     }
@@ -238,8 +238,8 @@ fn verify_observation(
         || evidence.request_id != receipt.request_id()
         || evidence.correlation_id != correlation
         || evidence.instance_id != instance
-        || evidence.expected_package_sha256 != expected
-        || evidence.actual_package_sha256 != expected
+        || &evidence.expected_package_sha256 != expected
+        || &evidence.actual_package_sha256 != expected
         || evidence.frame != observation.frame
         || evidence.status != observation.status
         || evidence.projection != observation.projection

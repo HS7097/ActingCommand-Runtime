@@ -62,6 +62,26 @@ pub struct ExternallyVerifiedBundle {
 }
 
 impl ExternallyVerifiedBundle {
+    pub fn load_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        observation: bool,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ExecutionBundleError> {
+        let instance = InstanceId::new(instance_label)?;
+        let mut containment = match vision_provider {
+            Some(provider) => Containment::with_vision_provider(provider),
+            None => Containment::new(),
+        };
+        containment.load_path(&instance, locator, expected, observation, deadline)?;
+        let bundle = containment
+            .take_loaded(&instance)
+            .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
+        Ok(Self { bundle })
+    }
+
     pub fn load_observation(
         instance_label: &str,
         zip_bytes: &[u8],
