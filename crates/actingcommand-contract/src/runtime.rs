@@ -2281,7 +2281,7 @@ impl RuntimeEventQueryPage {
                     .events
                     .iter()
                     .any(|event| event.links.run_id() == Some(&group.run_id))
-                || (group.state == crate::LedgerRecoveryState::Unknown) != !group.gaps.is_empty()
+                || (group.state == crate::LedgerRecoveryState::Unknown) == group.gaps.is_empty()
                 || (group.state == crate::LedgerRecoveryState::Recovered
                     && (group.evidence.is_empty()
                         || group.evidence.iter().any(|item| item.success.is_none())))
