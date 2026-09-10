@@ -2774,6 +2774,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn nemu_owned_close_retires_sync_handle_and_preserves_real_failures() {
+        use std::io::Write as _;
         use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
         static CALLS: AtomicUsize = AtomicUsize::new(0);
         static LAST_ID: AtomicI32 = AtomicI32::new(0);
@@ -2782,194 +2783,402 @@ mod tests {
             CALLS.fetch_add(1, Ordering::SeqCst);
         }
 
+        let mut summary = std::env::var_os("GITHUB_STEP_SUMMARY").map(|path| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(path)
+                .expect("open native CI step summary before owned stdio")
+        });
         for mode in 0..5 {
+            let mut worker_summary = summary
+                .as_ref()
+                .map(|file| file.try_clone().expect("clone owned CI summary handle"));
             let before = CALLS.load(Ordering::SeqCst);
             let (tx, rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let handle = thread::spawn(move || {
-                let mut state = NemuIpcWorkerState {
-                    // An existing OS library reference exercises real local unload, not an SDK.
-                    library: Some(unsafe { Library::new("kernel32.dll") }.expect("OS library")),
-                    stdio_session: Some(VendorStdioSession::start().expect("owned stdio")),
-                    nemu_folder: Vec::new(),
-                    instance_id: 1,
-                    display_id: 0,
-                    connect_id: 40 + mode,
-                    raw_buffer: Vec::new(),
+                let mut phase = "worker_library_start";
+                let mut errors = Vec::<(&str, DeviceError)>::new();
+                let mut worker_state = None;
+                let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker_state = Some(NemuIpcWorkerState {
+                        // An existing OS library reference exercises real local unload, not an SDK.
+                        library: Some(unsafe { Library::new("kernel32.dll") }.expect("OS library")),
+                        stdio_session: Some({
+                            phase = "worker_stdio_start";
+                            VendorStdioSession::start()
+                                .inspect_err(|error| errors.push((phase, error.clone())))
+                                .expect("owned stdio")
+                        }),
+                        nemu_folder: Vec::new(),
+                        instance_id: 1,
+                        display_id: 0,
+                        connect_id: 40 + mode,
+                        raw_buffer: Vec::new(),
+                        frame_width: 0,
+                        frame_height: 0,
+                        vendor_stdio: Vec::new(),
+                    });
+                    let state = worker_state.as_mut().expect("initialized worker state");
+                    phase = "worker_ready_send";
+                    ready_tx.send(()).expect("worker ready");
+                    phase = "worker_shutdown_receive";
+                    let NemuIpcCommand::Shutdown {
+                        authority,
+                        response,
+                    } = rx.recv().expect("shutdown")
+                    else {
+                        panic!("only shutdown is expected");
+                    };
+                    if mode == 4 {
+                        phase = "worker_release_receive";
+                        release_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("release delayed worker");
+                    }
+                    if mode == 2 {
+                        phase = "worker_stdio_finish_before_snapshot";
+                        state
+                            .stdio_session
+                            .as_mut()
+                            .expect("stdio")
+                            .finish()
+                            .inspect_err(|error| errors.push((phase, error.clone())))
+                            .expect("close stdio before snapshot");
+                    }
+                    phase = "worker_disconnect";
+                    let result = state
+                        .disconnect(authority, |_| {
+                            if mode == 1 {
+                                Err(DeviceError::fatal("missing disconnect symbol"))
+                            } else {
+                                Ok(returned_disconnect as NemuDisconnect)
+                            }
+                        })
+                        .inspect_err(|error| errors.push((phase, error.clone())));
+                    if matches!(mode, 1 | 3) {
+                        assert_eq!(
+                            state.connect_id,
+                            40 + mode,
+                            "no native call retired this handle"
+                        );
+                        // Release the in-test opaque ID; it never belonged to a native provider.
+                        state.connect_id = 0;
+                    } else {
+                        assert_eq!(
+                            state.connect_id, 0,
+                            "a returned call must retire its handle"
+                        );
+                    }
+                    phase = "worker_retired_disconnect";
+                    state
+                        .disconnect(DeviceCloseAuthority::FencedDeviceWrite, |_| {
+                            panic!("a retired handle must not resolve or call disconnect again")
+                        })
+                        .inspect_err(|error| errors.push((phase, error.clone())))
+                        .expect("retired disconnect");
+                    phase = "worker_cleanup";
+                    let cleanup = state
+                        .close(DeviceCloseAuthority::FencedDeviceWrite)
+                        .inspect_err(|error| errors.push((phase, error.clone())));
+                    assert!(state.stdio_session.is_none());
+                    assert!(state.library.is_none());
+                    let result = match result {
+                        Ok(()) => cleanup,
+                        Err(primary) => match cleanup {
+                            Ok(_) => Err(primary),
+                            Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
+                        },
+                    };
+                    phase = "worker_close_response";
+                    if mode == 4 {
+                        assert!(
+                            response.send(result.clone()).is_err(),
+                            "the original waiter timed out"
+                        );
+                    } else {
+                        response.send(result.clone()).expect("close response");
+                    }
+                    phase = "worker_shutdown_queue";
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "close-once cannot enqueue another shutdown"
+                    );
+                    result.map(|_| ())
+                }));
+                match execution {
+                    Ok(result) => result,
+                    Err(original) => {
+                        if let Some(file) = worker_summary.as_mut() {
+                            let panic_text = original
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| original.downcast_ref::<&str>().copied())
+                                .unwrap_or("non-string panic payload preserved");
+                            let mut context = [0u8; 16 * 1024];
+                            let mut remaining = &mut context[..16 * 1024 - 128];
+                            let formatted = (|| -> std::io::Result<()> {
+                                writeln!(
+                                    remaining,
+                                    "\n### Nemu owned-close failure: worker mode={mode} phase={phase}"
+                                )?;
+                                writeln!(remaining, "original panic: {panic_text}")?;
+                                writeln!(
+                                    remaining,
+                                    "state(connect_id, session_present, library_present)={:?}; error_count={}",
+                                    worker_state.as_ref().map(|state| (
+                                        state.connect_id,
+                                        state.stdio_session.is_some(),
+                                        state.library.is_some()
+                                    )),
+                                    errors.len()
+                                )?;
+                                for (at, error) in &errors {
+                                    writeln!(
+                                        remaining,
+                                        "error phase={at}: {error:?}; quiescence={:?} count={} causes={}",
+                                        error.resource_quiescence(),
+                                        error.resource_count(),
+                                        error.resource_close_causes().len()
+                                    )?;
+                                    for cause in error.resource_close_causes() {
+                                        writeln!(remaining, "cause={cause:?}")?;
+                                        if let Some(facts) = cause.vendor_stdio() {
+                                            writeln!(
+                                                remaining,
+                                                "stdio pid={} created={:?} started={} steps={} dropped={}",
+                                                facts.process_id,
+                                                facts.process_created_filetime,
+                                                facts.started_filetime,
+                                                facts.steps.len(),
+                                                facts.dropped_count
+                                            )?;
+                                            for step in &facts.steps {
+                                                writeln!(remaining, "{step:?}")?;
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            })();
+                            let used = 16 * 1024 - 128 - remaining.len();
+                            let valid = std::str::from_utf8(&context[..used])
+                                .map_or_else(|error| error.valid_up_to(), |_| used);
+                            let footer: &[u8] = if formatted.is_err() || valid != used {
+                                b"\n[truncated: 16-KiB record limit or formatting failure; remaining context omitted]\n"
+                            } else {
+                                b"\n[end Nemu failure context]\n"
+                            };
+                            context[valid..valid + footer.len()].copy_from_slice(footer);
+                            let record = &context[..valid + footer.len()];
+                            if let Err(error) = file.write_all(record).and_then(|()| file.flush()) {
+                                eprintln!(
+                                    "CI summary write/flush failed: {error}; original failure retained:\n{}",
+                                    String::from_utf8_lossy(record)
+                                );
+                            }
+                        }
+                        std::panic::resume_unwind(original)
+                    }
+                }
+            });
+            let mut handle = Some(handle);
+            let mut phase = "parent_worker_ready";
+            let mut errors = Vec::<(&str, DeviceError)>::new();
+            let mut parent_backend = None;
+            let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ready_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("initialized local worker");
+                parent_backend = Some(NemuIpcBackend {
+                    worker: Some(NemuIpcWorker {
+                        tx,
+                        handle: handle.take(),
+                        timeout: if mode == 4 {
+                            Duration::from_millis(25)
+                        } else {
+                            Duration::from_secs(2)
+                        },
+                        poisoned: false,
+                        close_result: None,
+                    }),
                     frame_width: 0,
                     frame_height: 0,
                     vendor_stdio: Vec::new(),
-                };
-                ready_tx.send(()).expect("worker ready");
-                let NemuIpcCommand::Shutdown {
-                    authority,
-                    response,
-                } = rx.recv().expect("shutdown")
-                else {
-                    panic!("only shutdown is expected");
-                };
-                if mode == 4 {
-                    release_rx
-                        .recv_timeout(Duration::from_secs(5))
-                        .expect("release delayed worker");
-                }
-                if mode == 2 {
-                    state
-                        .stdio_session
-                        .as_mut()
-                        .expect("stdio")
-                        .finish()
-                        .expect("close stdio before snapshot");
-                }
-                let result = state.disconnect(authority, |_| {
-                    if mode == 1 {
-                        Err(DeviceError::fatal("missing disconnect symbol"))
-                    } else {
-                        Ok(returned_disconnect as NemuDisconnect)
-                    }
-                });
-                if matches!(mode, 1 | 3) {
-                    assert_eq!(
-                        state.connect_id,
-                        40 + mode,
-                        "no native call retired this handle"
-                    );
-                    // Release the in-test opaque ID; it never belonged to a native provider.
-                    state.connect_id = 0;
-                } else {
-                    assert_eq!(
-                        state.connect_id, 0,
-                        "a returned call must retire its handle"
-                    );
-                }
-                state
-                    .disconnect(DeviceCloseAuthority::FencedDeviceWrite, |_| {
-                        panic!("a retired handle must not resolve or call disconnect again")
-                    })
-                    .expect("retired disconnect");
-                let cleanup = state.close(DeviceCloseAuthority::FencedDeviceWrite);
-                assert!(state.stdio_session.is_none());
-                assert!(state.library.is_none());
-                let result = match result {
-                    Ok(()) => cleanup,
-                    Err(primary) => match cleanup {
-                        Ok(_) => Err(primary),
-                        Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
-                    },
-                };
-                if mode == 4 {
-                    assert!(
-                        response.send(result.clone()).is_err(),
-                        "the original waiter timed out"
-                    );
-                } else {
-                    response.send(result.clone()).expect("close response");
-                }
-                assert!(
-                    rx.try_recv().is_err(),
-                    "close-once cannot enqueue another shutdown"
-                );
-                result.map(|_| ())
-            });
-            ready_rx
-                .recv_timeout(Duration::from_secs(10))
-                .expect("initialized local worker");
-            let mut backend = NemuIpcBackend {
-                worker: Some(NemuIpcWorker {
-                    tx,
-                    handle: Some(handle),
-                    timeout: if mode == 4 {
-                        Duration::from_millis(25)
-                    } else {
-                        Duration::from_secs(2)
-                    },
-                    poisoned: false,
                     close_result: None,
-                }),
-                frame_width: 0,
-                frame_height: 0,
-                vendor_stdio: Vec::new(),
-                close_result: None,
-            };
-            let authority = if mode == 3 {
-                DeviceCloseAuthority::LocalOnly
-            } else {
-                DeviceCloseAuthority::FencedDeviceWrite
-            };
-            let first = backend.close_once(authority);
-            let second = backend.close_once(authority);
-            match (&first, &second) {
-                (Ok(first), Ok(second)) => assert_eq!(first, second),
-                (Err(first), Err(second)) => {
-                    assert_eq!(
-                        first.resource_close_causes(),
-                        second.resource_close_causes()
-                    );
-                    assert_eq!(first.resource_quiescence(), second.resource_quiescence());
-                    assert_eq!(first.to_string(), second.to_string());
-                }
-                _ => panic!("the first terminal result must be stable"),
-            }
-            if mode == 4 {
-                assert!(
-                    !backend
-                        .worker
-                        .as_ref()
-                        .unwrap()
-                        .handle
-                        .as_ref()
-                        .unwrap()
-                        .is_finished()
-                );
-                release_tx
-                    .send(())
-                    .expect("release owned test worker after timeout");
-                let worker = backend.worker.as_mut().unwrap();
-                worker.timeout = Duration::from_secs(2);
-                worker.join_bounded().expect("finish local test cleanup");
-                let late = backend.close_once(authority).expect_err("cached timeout");
-                assert_eq!(
-                    late.resource_close_causes(),
-                    first.as_ref().unwrap_err().resource_close_causes(),
-                    "late join cannot overwrite first failure"
-                );
-                assert_eq!(
-                    late.resource_quiescence(),
-                    Some(DeviceResourceQuiescence::Unconfirmed)
-                );
-            }
-            if mode == 0 {
-                let outcome = first.expect("complete local close chain");
-                assert_eq!(outcome.quiescence(), DeviceResourceQuiescence::Confirmed);
-                assert!(outcome.resource_count() >= 3);
-                assert!(backend.worker.is_none());
-            } else {
-                let error = first.expect_err("real close failure remains visible");
-                assert_eq!(
-                    error.resource_quiescence(),
-                    Some(DeviceResourceQuiescence::Unconfirmed)
-                );
-                let expected = match mode {
-                    1 => DeviceResourceClosePhase::DisconnectSymbol,
-                    2 => DeviceResourceClosePhase::SnapshotRead,
-                    3 => DeviceResourceClosePhase::DisconnectCall,
-                    4 => DeviceResourceClosePhase::WorkerReceive,
-                    _ => unreachable!(),
+                });
+                let backend = parent_backend.as_mut().expect("initialized test backend");
+                let authority = if mode == 3 {
+                    DeviceCloseAuthority::LocalOnly
+                } else {
+                    DeviceCloseAuthority::FencedDeviceWrite
                 };
-                assert!(
-                    error
-                        .resource_close_causes()
-                        .iter()
-                        .any(|cause| cause.phase() == expected)
+                phase = "parent_first_close";
+                let first = backend
+                    .close_once(authority)
+                    .inspect_err(|error| errors.push((phase, error.clone())));
+                phase = "parent_second_close";
+                let second = backend
+                    .close_once(authority)
+                    .inspect_err(|error| errors.push((phase, error.clone())));
+                match (&first, &second) {
+                    (Ok(first), Ok(second)) => assert_eq!(first, second),
+                    (Err(first), Err(second)) => {
+                        assert_eq!(
+                            first.resource_close_causes(),
+                            second.resource_close_causes()
+                        );
+                        assert_eq!(first.resource_quiescence(), second.resource_quiescence());
+                        assert_eq!(first.to_string(), second.to_string());
+                    }
+                    _ => panic!("the first terminal result must be stable"),
+                }
+                if mode == 4 {
+                    phase = "parent_delayed_worker";
+                    assert!(
+                        !backend
+                            .worker
+                            .as_ref()
+                            .unwrap()
+                            .handle
+                            .as_ref()
+                            .unwrap()
+                            .is_finished()
+                    );
+                    phase = "parent_release_worker";
+                    release_tx
+                        .send(())
+                        .expect("release owned test worker after timeout");
+                    let worker = backend.worker.as_mut().unwrap();
+                    worker.timeout = Duration::from_secs(2);
+                    phase = "parent_join_worker";
+                    worker
+                        .join_bounded()
+                        .inspect_err(|error| errors.push((phase, error.clone())))
+                        .expect("finish local test cleanup");
+                    phase = "parent_late_close";
+                    let late = backend.close_once(authority).expect_err("cached timeout");
+                    errors.push((phase, late.clone()));
+                    assert_eq!(
+                        late.resource_close_causes(),
+                        first.as_ref().unwrap_err().resource_close_causes(),
+                        "late join cannot overwrite first failure"
+                    );
+                    assert_eq!(
+                        late.resource_quiescence(),
+                        Some(DeviceResourceQuiescence::Unconfirmed)
+                    );
+                }
+                phase = "parent_terminal_assertions";
+                if mode == 0 {
+                    let outcome = first.expect("complete local close chain");
+                    assert_eq!(outcome.quiescence(), DeviceResourceQuiescence::Confirmed);
+                    assert!(outcome.resource_count() >= 3);
+                    assert!(backend.worker.is_none());
+                } else {
+                    let error = first.expect_err("real close failure remains visible");
+                    assert_eq!(
+                        error.resource_quiescence(),
+                        Some(DeviceResourceQuiescence::Unconfirmed)
+                    );
+                    let expected = match mode {
+                        1 => DeviceResourceClosePhase::DisconnectSymbol,
+                        2 => DeviceResourceClosePhase::SnapshotRead,
+                        3 => DeviceResourceClosePhase::DisconnectCall,
+                        4 => DeviceResourceClosePhase::WorkerReceive,
+                        _ => unreachable!(),
+                    };
+                    assert!(
+                        error
+                            .resource_close_causes()
+                            .iter()
+                            .any(|cause| cause.phase() == expected)
+                    );
+                }
+                assert_eq!(
+                    CALLS.load(Ordering::SeqCst) - before,
+                    usize::from(matches!(mode, 0 | 2 | 4))
                 );
-            }
-            assert_eq!(
-                CALLS.load(Ordering::SeqCst) - before,
-                usize::from(matches!(mode, 0 | 2 | 4))
-            );
-            if matches!(mode, 0 | 2 | 4) {
-                assert_eq!(LAST_ID.load(Ordering::SeqCst), 40 + mode);
+                if matches!(mode, 0 | 2 | 4) {
+                    assert_eq!(LAST_ID.load(Ordering::SeqCst), 40 + mode);
+                }
+            }));
+            if let Err(original) = execution {
+                if let Some(file) = summary.as_mut() {
+                    let panic_text = original
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| original.downcast_ref::<&str>().copied())
+                        .unwrap_or("non-string panic payload preserved");
+                    let mut context = [0u8; 16 * 1024];
+                    let mut remaining = &mut context[..16 * 1024 - 128];
+                    let formatted = (|| -> std::io::Result<()> {
+                        writeln!(
+                            remaining,
+                            "\n### Nemu owned-close failure: parent mode={mode} phase={phase}"
+                        )?;
+                        writeln!(remaining, "original panic: {panic_text}")?;
+                        writeln!(
+                            remaining,
+                            "worker(handle_present, finished)={:?}; unassigned_handle_finished={:?}; error_count={}",
+                            parent_backend
+                                .as_ref()
+                                .and_then(|backend| backend.worker.as_ref())
+                                .map(|worker| (
+                                    worker.handle.is_some(),
+                                    worker.handle.as_ref().map(|handle| handle.is_finished())
+                                )),
+                            handle.as_ref().map(|handle| handle.is_finished()),
+                            errors.len()
+                        )?;
+                        for (at, error) in &errors {
+                            writeln!(
+                                remaining,
+                                "error phase={at}: {error:?}; quiescence={:?} count={} causes={}",
+                                error.resource_quiescence(),
+                                error.resource_count(),
+                                error.resource_close_causes().len()
+                            )?;
+                            for cause in error.resource_close_causes() {
+                                writeln!(remaining, "cause={cause:?}")?;
+                                if let Some(facts) = cause.vendor_stdio() {
+                                    writeln!(
+                                        remaining,
+                                        "stdio pid={} created={:?} started={} steps={} dropped={}",
+                                        facts.process_id,
+                                        facts.process_created_filetime,
+                                        facts.started_filetime,
+                                        facts.steps.len(),
+                                        facts.dropped_count
+                                    )?;
+                                    for step in &facts.steps {
+                                        writeln!(remaining, "{step:?}")?;
+                                    }
+                                }
+                            }
+                        }
+                        Ok(())
+                    })();
+                    let used = 16 * 1024 - 128 - remaining.len();
+                    let valid = std::str::from_utf8(&context[..used])
+                        .map_or_else(|error| error.valid_up_to(), |_| used);
+                    let footer: &[u8] = if formatted.is_err() || valid != used {
+                        b"\n[truncated: 16-KiB record limit or formatting failure; remaining context omitted]\n"
+                    } else {
+                        b"\n[end Nemu failure context]\n"
+                    };
+                    context[valid..valid + footer.len()].copy_from_slice(footer);
+                    let record = &context[..valid + footer.len()];
+                    if let Err(error) = file.write_all(record).and_then(|()| file.flush()) {
+                        eprintln!(
+                            "CI summary write/flush failed: {error}; original failure retained:\n{}",
+                            String::from_utf8_lossy(record)
+                        );
+                    }
+                }
+                std::panic::resume_unwind(original)
             }
         }
     }
