@@ -781,7 +781,14 @@ fn execute_runtime_debug_input(
     let input = session.input(&token, action);
     let release = session.release_lease(&token);
     match (input, release) {
-        (Ok(action_id), Ok(())) => Ok(action_id),
+        (Ok(receipt), Ok(())) => match receipt.result() {
+            Some(actingcommand_contract::RuntimeResult::InputCommitted { action_id }) => {
+                Ok(*action_id)
+            }
+            _ => Err(CliError::device(
+                "Runtime input receipt has no committed action",
+            )),
+        },
         (Err(primary), Ok(())) => Err(CliError::device(primary.to_string())),
         (Ok(_), Err(release)) => Err(CliError::device(format!(
             "Runtime input committed but lease release failed: {release}"

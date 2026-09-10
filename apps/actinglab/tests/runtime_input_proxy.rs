@@ -2834,6 +2834,24 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
         envelope.pointer("/data/backend").and_then(Value::as_str),
         Some("runtime_proxy")
     );
+    let outcome = envelope
+        .pointer("/data/input_outcome")
+        .expect("single-input outcome");
+    assert_eq!(outcome["input_stage"], "committed");
+    assert_eq!(outcome["close_stage"], "succeeded");
+    let receipt: actingcommand_contract::RuntimeReceipt =
+        serde_json::from_value(outcome["input_receipt"].clone())
+            .expect("original Runtime input receipt");
+    receipt.validate().expect("valid input receipt envelope");
+    assert_eq!(
+        receipt.state(),
+        actingcommand_contract::RuntimeReceiptState::Completed
+    );
+    assert!(receipt.terminal().is_some());
+    assert!(matches!(
+        receipt.result(),
+        Some(actingcommand_contract::RuntimeResult::InputCommitted { .. })
+    ));
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
     host.close().expect("close host");

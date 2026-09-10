@@ -8,7 +8,14 @@ use super::{CliError, ErrorKind, RUNTIME_VERSION, SCHEMA_VERSION};
 pub(super) fn human_summary(command: &str, data: &Value) -> String {
     match data {
         Value::String(text) => text.clone(),
-        _ => format!("{command} ok"),
+        _ => with_input_outcome(format!("{command} ok"), data),
+    }
+}
+
+fn with_input_outcome(summary: String, data: &Value) -> String {
+    match data.get("input_outcome") {
+        Some(outcome) => format!("{summary}\ninput_outcome: {outcome}"),
+        None => summary,
     }
 }
 
@@ -39,6 +46,10 @@ impl CliResult {
     pub(super) fn err(command: String, err: CliError, print_json: bool) -> Self {
         let exit_code = err.exit_code();
         let human = format!("{}: {}", err.code, err.message);
+        let human = match err.details.as_ref() {
+            Some(details) => with_input_outcome(human, details),
+            None => human,
+        };
         Self {
             print_json,
             envelope: Envelope::err(

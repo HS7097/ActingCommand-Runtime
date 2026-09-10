@@ -443,7 +443,7 @@ impl SemanticInputExecutor for AppSemanticInputExecutor {
         ))
         .and_then(|client| RuntimeInputProxy::connect(client, &metadata.instance_alias))
         .map_err(|error| LabError::device(error.to_string()))?;
-        let operation = proxy.input(action);
+        let operation = proxy.input(action).map(|_| ());
         let close = proxy.close();
         match (operation, close) {
             (Ok(()), Ok(())) => Ok(input_report()),

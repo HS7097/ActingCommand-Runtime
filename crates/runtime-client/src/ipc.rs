@@ -238,5 +238,10 @@ fn receipt_read_error(
         }
         _ => fallback_code,
     };
-    RuntimeClientError::fatal(code, "exchange_runtime_request")
+    let failure = RuntimeClientError::fatal(code, "exchange_runtime_request");
+    if fallback_code == "runtime_receipt_header_failed" {
+        failure.with_receipt_header_io(&error)
+    } else {
+        failure
+    }
 }
