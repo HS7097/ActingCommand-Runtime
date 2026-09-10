@@ -2560,11 +2560,11 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert_eq!(terminal.sequence, committed.sequence);
     assert_eq!(terminal.event_id, committed.event_id);
     assert_eq!(
-        committed.links.request_id(),
+        committed.links.request_id().copied(),
         Some(input_receipt.request_id())
     );
     assert_eq!(
-        committed.links.correlation_id(),
+        committed.links.correlation_id().copied(),
         Some(input_receipt.correlation_id())
     );
     assert_eq!(committed.links.action_id(), Some(action_id));
@@ -2915,11 +2915,11 @@ fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     let Some(RuntimeResult::InputCommitted { action_id }) = input_receipt.result() else {
         panic!("Debug input receipt must retain its commit result")
     };
-    assert_eq!(*input_receipt.correlation_id(), session.correlation_id());
+    assert_eq!(input_receipt.correlation_id(), session.correlation_id());
     assert_eq!(terminal.sequence, committed.sequence);
     assert_eq!(terminal.event_id, committed.event_id);
     assert_eq!(
-        committed.links.request_id(),
+        committed.links.request_id().copied(),
         Some(input_receipt.request_id())
     );
     assert_eq!(committed.links.action_id(), Some(action_id));

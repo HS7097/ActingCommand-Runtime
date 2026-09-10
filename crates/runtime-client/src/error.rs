@@ -123,8 +123,8 @@ impl RuntimeClientError {
         info: &RuntimeInfo,
     ) -> Self {
         if let Some(context) = self.receipt_header_io.as_mut() {
-            context.request_id = Some(*request.request_id());
-            context.correlation_id = Some(*request.correlation_id());
+            context.request_id = Some(request.request_id());
+            context.correlation_id = Some(request.correlation_id());
             context.expected_owner_epoch = Some(info.owner_epoch());
             context.expected_runtime_pid = Some(info.pid());
         }
