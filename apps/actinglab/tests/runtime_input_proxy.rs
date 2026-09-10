@@ -1607,9 +1607,9 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     {
         let mut context = [0_u8; 4 * 1024];
         let mut remaining = &mut context[..];
-        let formatted = write!(
+        let formatted = writeln!(
             remaining,
-            "filtered subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}\n",
+            "filtered subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}",
             filtered["data"]["progress"]["next_sequence"],
             filtered["data"]["progress"]["state"],
             filtered["data"]["filter"],
@@ -1660,9 +1660,9 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     if absent["data"]["events"] != json!([]) || absent["data"]["progress"]["state"] != "idle" {
         let mut context = [0_u8; 4 * 1024];
         let mut remaining = &mut context[..];
-        let formatted = write!(
+        let formatted = writeln!(
             remaining,
-            "absent subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}\n",
+            "absent subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}",
             absent["data"]["progress"]["next_sequence"],
             absent["data"]["progress"]["state"],
             absent["data"]["filter"],
