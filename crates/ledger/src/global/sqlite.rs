@@ -11,7 +11,10 @@ use super::{
     GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerReadOnlyConfig, GlobalLedgerResult,
     MAX_QUERY_PAGE_EVENTS,
 };
-use crate::{PersistedEvent, fact::StoredEventRecord};
+use crate::{
+    PersistedEvent,
+    fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
+};
 use actingcommand_contract::{
     EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference, RecoveryReason,
     VerifiedArtifactReference,
@@ -119,6 +122,14 @@ impl SqliteMarker {
         Ok(marker)
     }
     fn verify_events(&self, events: &[PersistedEvent]) -> GlobalLedgerResult<()> {
+        self.verify_records(
+            &events
+                .iter()
+                .map(StoredEventRecord::from_event)
+                .collect::<Vec<_>>(),
+        )
+    }
+    fn verify_records(&self, events: &[StoredEventRecord]) -> GlobalLedgerResult<()> {
         if let Some(record) = &self.migration {
             let prefix_length = usize::try_from(record.source_event_count)
                 .map_err(|_| failure("migration_prefix_invalid", "verify_cutover_prefix"))?;
@@ -136,7 +147,7 @@ impl SqliteMarker {
             };
             let head = prefix
                 .last()
-                .map(super::migration::canonical_record)
+                .map(super::migration::canonical_stored_record)
                 .transpose()?
                 .map_or_else(
                     || actingcommand_runtime_database::digest(&[]),
@@ -144,7 +155,8 @@ impl SqliteMarker {
                 );
             if completion.sequence() != record.cutover_sequence
                 || payload_record != Some(record.as_ref())
-                || super::migration::canonical_digest(prefix)? != record.imported_content_sha256
+                || super::migration::canonical_stored_digest(prefix)?
+                    != record.imported_content_sha256
                 || head != record.source_head_sha256
             {
                 return Err(failure(
@@ -588,6 +600,34 @@ impl DurableStorage for SqliteStorage {
     }
 }
 
+pub(super) fn open_metadata(
+    database: &RuntimeDatabase,
+    budget: ReadBudget,
+) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, u64)> {
+    let raw = read_snapshot(database, budget)?;
+    let bytes = raw.bytes;
+    let marker = SqliteMarker::parse(&raw.meta)?;
+    let (records, _) = verify_snapshot_records(database, raw)?;
+    if marker.state != "ready" {
+        return Err(failure(
+            "ledger_candidate_not_production",
+            "open_runtime_evidence",
+        ));
+    }
+    let through_sequence = records.last().map_or(0, StoredEventRecord::sequence);
+    let mut events = Vec::with_capacity(records.len());
+    for record in records {
+        check_read_budget(budget, bytes, events.len() + 1)?;
+        events.push(
+            record
+                .into_metadata()
+                .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
+        );
+    }
+    check_read_budget(budget, bytes, events.len())?;
+    Ok((events, through_sequence))
+}
+
 /// Verified immutable candidate facts. Physical observations belong to their backend.
 pub struct SqliteLedgerReadOnly {
     events: Vec<PersistedEvent>,
@@ -879,6 +919,28 @@ fn verify_snapshot<F>(
 where
     F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
 {
+    let budget = raw.budget;
+    let bytes = raw.bytes;
+    let (records, hash) = verify_snapshot_records(database, raw)?;
+    let mut events = Vec::with_capacity(records.len());
+    for stored in records {
+        check_read_budget(budget, bytes, events.len() + 1)?;
+        let event = match verifier.as_mut() {
+            Some(verifier) => stored.into_event_with_artifact_verifier(verifier),
+            None => stored.into_event(),
+        }
+        .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
+        check_read_budget(budget, bytes, events.len() + 1)?;
+        events.push(event);
+    }
+    Ok((events, hash))
+}
+
+/// Authenticates the complete ledger snapshot without opening referenced material.
+fn verify_snapshot_records(
+    database: &RuntimeDatabase,
+    raw: RawSnapshot,
+) -> GlobalLedgerResult<(Vec<StoredEventRecord>, Option<String>)> {
     let marker = SqliteMarker::parse(&raw.meta)?;
     let expected_format = if marker.state == "ready" {
         FORMAL_FORMAT_VERSION
@@ -914,11 +976,10 @@ where
         let stored: StoredEventRecord = serde_json::from_value(value).map_err(|error| {
             GlobalLedgerError::json("corrupt_ledger_record", "decode_sqlite_record", &error)
         })?;
-        let event = match verifier.as_mut() {
-            Some(verifier) => stored.into_event_with_artifact_verifier(verifier),
-            None => stored.into_event(),
-        }
-        .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
+        let event = stored
+            .clone()
+            .into_metadata()
+            .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
         let Some(SqlValue::Integer(stored_sequence)) = row.first() else {
             return Err(failure("invalid_event_integer", "recover_sqlite_sequence"));
         };
@@ -931,7 +992,7 @@ where
         if !ids.insert(*event.event_id()) {
             return Err(failure("duplicate_event_id", "recover_event_ids"));
         }
-        let projected = project_record(database, &event, head_hash.as_deref())?;
+        let projected = project_stored_record(database, &stored, head_hash.as_deref())?;
         if row != projected.event {
             return Err(failure("ledger_record_mismatch", "verify_sqlite_record"));
         }
@@ -939,7 +1000,7 @@ where
         expected_links.push(projected.links);
         expected_artifacts.extend(projected.artifacts);
         head_hash = Some(projected.hash);
-        events.push(event);
+        events.push(stored);
         next = increment_sequence(next)?;
     }
     if raw.links != expected_links || raw.artifacts != expected_artifacts {
@@ -949,14 +1010,14 @@ where
         != meta_row_with_marker(
             database,
             next,
-            events.last().map_or(0, PersistedEvent::sequence),
+            events.last().map_or(0, StoredEventRecord::sequence),
             head_hash.as_deref(),
             &marker,
         )
     {
         return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
     }
-    marker.verify_events(&events)?;
+    marker.verify_records(&events)?;
     Ok((events, head_hash))
 }
 
@@ -972,11 +1033,18 @@ fn project_record(
     event: &PersistedEvent,
     previous: Option<&str>,
 ) -> GlobalLedgerResult<ProjectedRecord> {
-    let stored = StoredEventRecord::from_event(event);
-    let bytes = serde_json::to_vec(&stored).map_err(|error| {
+    project_stored_record(database, &StoredEventRecord::from_event(event), previous)
+}
+
+fn project_stored_record(
+    database: &RuntimeDatabase,
+    stored: &StoredEventRecord,
+    previous: Option<&str>,
+) -> GlobalLedgerResult<ProjectedRecord> {
+    let bytes = serde_json::to_vec(stored).map_err(|error| {
         GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
     })?;
-    let value = serde_json::to_value(&stored).map_err(|error| {
+    let value = serde_json::to_value(stored).map_err(|error| {
         GlobalLedgerError::json(
             "event_serialization_failed",
             "project_sqlite_record",
@@ -988,11 +1056,11 @@ fn project_record(
         "ledger-event-v1",
         &[&bytes, hash.as_bytes(), previous.unwrap_or("").as_bytes()],
     );
-    let sequence = SqlValue::Integer(encode(event.sequence()));
+    let sequence = SqlValue::Integer(encode(stored.sequence()));
     let row = vec![
         sequence.clone(),
         text(&value, "event_id")?,
-        SqlValue::Integer(encode(event.timestamp_unix_ms())),
+        SqlValue::Integer(encode(stored.timestamp_unix_ms())),
         text(&value, "event_type")?,
         text(&value, "severity")?,
         text(&value, "sensitivity")?,

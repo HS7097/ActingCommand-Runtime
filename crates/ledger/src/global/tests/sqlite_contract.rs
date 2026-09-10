@@ -282,6 +282,40 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     assert!(view.is_complete());
     assert_eq!(&view.events()[..2], &expected);
     assert_eq!(view.latest_sequence(), 4);
+    let metadata =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path()))
+            .expect("metadata source verifies the imported prefix and marker");
+    assert_eq!(metadata.backend(), "sqlite");
+    assert!(metadata.read_complete());
+    assert_eq!(metadata.latest_sequence(), view.latest_sequence());
+    let request = actingcommand_contract::RuntimeEventQueryPageRequest::default();
+    let projected = metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Forensic,
+            &request,
+        )
+        .expect("metadata page");
+    let online = imported
+        .project_view_page(EventQuery::default(), ProjectionProfile::Forensic, request)
+        .expect("writer page");
+    assert_eq!(projected.events(), online.events());
+    assert_eq!(
+        projected.snapshot_ledger_position(),
+        online.snapshot_ledger_position()
+    );
+    assert_eq!(
+        projected.read_scope().unwrap().material_read,
+        actingcommand_contract::LedgerMaterialReadState::NotRequested
+    );
+    assert!(
+        GlobalLedger::open_metadata(
+            GlobalLedgerEvidenceConfig::new(imported_root.path()).with_budget(1, 1, deadline)
+        )
+        .err()
+        .expect("bounded metadata read")
+        .is_fatal()
+    );
     imported.close().expect("formal writer close");
     let reopened = LedgerMaintenance::acquire(imported_root.path(), false, limits, deadline)
         .expect("formal lock released");
@@ -304,6 +338,12 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         reopened
             .status(&imported_database, |_| None)
             .expect_err("malformed marker is fatal")
+            .is_fatal()
+    );
+    assert!(
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path()))
+            .err()
+            .expect("metadata does not skip malformed marker")
             .is_fatal()
     );
     imported_database.connection("remove schema in existing integrity specification").unwrap().execute_batch("DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta;").unwrap();

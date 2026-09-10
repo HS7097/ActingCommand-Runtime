@@ -343,17 +343,14 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
     assert!(project_subscription_event(&correlated, &combined, ProjectionProfile::Lab).is_some());
     let all_events = ledger.query(EventQuery::default()).unwrap();
     let projection_indexes = projection::EventIndexes::from_events(&all_events);
-    let view_page = projection_indexes
+    let view_page = ledger
         .project_view_page(
-            &all_events,
-            &combined,
+            combined.clone(),
             ProjectionProfile::Ui,
-            &actingcommand_contract::RuntimeEventQueryPageRequest::new(1, None)
+            actingcommand_contract::RuntimeEventQueryPageRequest::new(1, None)
                 .unwrap()
                 .at_snapshot(correlated.sequence())
                 .unwrap(),
-            actingcommand_contract::LedgerReadSource::Runtime,
-            true,
         )
         .unwrap();
     assert_eq!(view_page.events().len(), 1);
@@ -387,8 +384,14 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
             },
             ProjectionProfile::Ui,
             &actingcommand_contract::RuntimeEventQueryPageRequest::default(),
-            actingcommand_contract::LedgerReadSource::Offline,
-            false,
+            actingcommand_contract::LedgerReadScope {
+                source: actingcommand_contract::LedgerReadSource::Offline,
+                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
+                scanned_through_position: all_events.last().unwrap().sequence(),
+                read_complete: false,
+                limits: Vec::new(),
+            },
+            all_events.last().unwrap().sequence(),
         )
         .unwrap();
     assert!(empty_page.events().is_empty());
