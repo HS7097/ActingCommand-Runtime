@@ -3442,6 +3442,29 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
         .safe_reset("node.a")
         .expect_err("reset backend failure must be visible");
 
+    if error
+        .projection()
+        .is_none_or(|projection| projection.code != RuntimeErrorCode::BackendOperationFailed)
+    {
+        let mut output = [0_u8; 60 * 1024];
+        let mut remaining = &mut output[..];
+        let formatted = write!(
+            remaining,
+            "safe-reset original error: {error:#?}\ncommitted receipt: {:#?}\nHost fatal: {:#?}\nLedger evidence gap: no bounded direct Host query is exposed to this client specification; no IPC query or snapshot read attempted.\n",
+            error.committed_receipt(),
+            host.fatal_error(),
+        );
+        let used = 60 * 1024 - remaining.len();
+        let text = match std::str::from_utf8(&output[..used]) {
+            Ok(text) => text,
+            Err(error) => std::str::from_utf8(&output[..error.valid_up_to()])
+                .expect("valid diagnostic prefix"),
+        };
+        eprint!("{text}");
+        if formatted.is_err() {
+            eprintln!("\nFailure output incomplete: 60-KiB diagnostic limit reached.");
+        }
+    }
     assert_eq!(
         error.projection().expect("runtime projection").code,
         RuntimeErrorCode::BackendOperationFailed
