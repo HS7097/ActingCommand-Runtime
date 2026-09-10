@@ -14,13 +14,11 @@ use actingcommand_lab::{
     CaptureBackendFactory, CaptureBackendRequest, Clock, ConfigSource, EnvDetectRequest,
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
-    InputBackendRequest, Lab, LabError, LabPorts, LabState, LedgerEventEntry, LedgerLastResort,
-    LedgerReadback, LedgerRecordEntry, LedgerSink, RunLedgerSessionRequest, SemanticInputExecutor,
-    UserConfig,
+    InputBackendRequest, Lab, LabError, LabPorts, LabState, SemanticInputExecutor, UserConfig,
 };
-use actingcommand_ledger::{LastResortError, write_last_resort_error};
+
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -179,7 +177,6 @@ fn build_app_lab(
             capture: AppCaptureFactory {
                 authority: capture_authority,
             },
-            ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
                 config,
@@ -321,7 +318,6 @@ fn build_lab(
                     )
                 }),
             },
-            ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
                 config,
@@ -373,7 +369,6 @@ pub(super) struct AppLabPorts {
     input: AppInputFactory,
     semantic_input: AppSemanticInputExecutor,
     capture: AppCaptureFactory,
-    ledger: AppLedgerSink,
     clock: SystemClock,
     config: AppConfigSource,
 }
@@ -382,7 +377,6 @@ impl LabPorts for AppLabPorts {
     type InputFactory = AppInputFactory;
     type SemanticInput = AppSemanticInputExecutor;
     type CaptureFactory = AppCaptureFactory;
-    type Ledger = AppLedgerSink;
     type Time = SystemClock;
     type Config = AppConfigSource;
 
@@ -396,10 +390,6 @@ impl LabPorts for AppLabPorts {
 
     fn capture_factory(&self) -> &Self::CaptureFactory {
         &self.capture
-    }
-
-    fn ledger(&mut self) -> &mut Self::Ledger {
-        &mut self.ledger
     }
 
     fn clock(&self) -> &Self::Time {
@@ -627,71 +617,6 @@ impl CaptureBackendFactory for AppCaptureFactory {
             }
         }
     }
-}
-
-pub(super) struct AppLedgerSink;
-
-pub(super) struct AppRunLedgerSession;
-
-impl LedgerSink for AppLedgerSink {
-    type RunSession = AppRunLedgerSession;
-
-    fn run_session(&mut self) -> Self::RunSession {
-        AppRunLedgerSession
-    }
-
-    fn start_run_session(
-        _session: &mut Self::RunSession,
-        _request: RunLedgerSessionRequest,
-    ) -> CliOutcome<PathBuf> {
-        Err(retired_run_ledger_error("start_run_session"))
-    }
-
-    fn append_run_record(
-        _session: &mut Self::RunSession,
-        _record: LedgerRecordEntry,
-    ) -> CliOutcome<()> {
-        Err(retired_run_ledger_error("append_run_record"))
-    }
-
-    fn append_run_event(
-        _session: &mut Self::RunSession,
-        _event: LedgerEventEntry,
-    ) -> CliOutcome<()> {
-        Err(retired_run_ledger_error("append_run_event"))
-    }
-
-    fn sync_run_session(_session: &Self::RunSession) -> CliOutcome<()> {
-        Err(retired_run_ledger_error("sync_run_session"))
-    }
-
-    fn read_run_session(_session: &Self::RunSession) -> CliOutcome<LedgerReadback> {
-        Err(retired_run_ledger_error("read_run_session"))
-    }
-
-    fn write_run_last_resort(
-        run_root: Option<&Path>,
-        error: &LedgerLastResort,
-    ) -> CliOutcome<PathBuf> {
-        let error: LastResortError =
-            decode_ledger_json(&error.encoded_json()?, "last-resort ledger error")?;
-        write_last_resort_error(run_root, &error).map_err(app_ledger_error)
-    }
-}
-
-fn retired_run_ledger_error(operation: &'static str) -> LabError {
-    LabError::package_invalid(format!(
-        "{operation} is retired: production run facts are owned by the Runtime global ledger"
-    ))
-}
-
-fn decode_ledger_json<T: DeserializeOwned>(encoded: &str, label: &str) -> CliOutcome<T> {
-    serde_json::from_str(encoded)
-        .map_err(|error| LabError::package_invalid(format!("failed to decode {label}: {error}")))
-}
-
-fn app_ledger_error(error: impl std::fmt::Display) -> LabError {
-    LabError::package_invalid(error.to_string())
 }
 
 pub(super) struct SystemClock;

@@ -788,6 +788,8 @@ fn c5_run_state_machine_returns_data_only_successors() {
         .expect("read Lab operation adapter source");
     let lab_bundle = fs::read_to_string(root.join("crates/lab/src/lab_run/bundle.rs"))
         .expect("read Lab run bundle source");
+    let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
+        .expect("read contained task execution source");
 
     for required in [
         "pub struct RunStateMachine",
@@ -818,14 +820,14 @@ fn c5_run_state_machine_returns_data_only_successors() {
     }
     for required in [
         "RunStateMachine::new",
-        ".next_directive(&run_operations)",
+        ".next_directive(&candidates)",
         ".operation_succeeded(",
         ".operation_needs_recovery(",
-        "successor_suggested",
+        "RunTerminal::SuccessorSuggested",
     ] {
         assert!(
-            lab_api.contains(required),
-            "Lab run adapter no longer consumes execution-owned transition {required}"
+            contained.contains(required),
+            "contained task no longer consumes execution-owned transition {required}"
         );
     }
     for forbidden in [
@@ -835,8 +837,8 @@ fn c5_run_state_machine_returns_data_only_successors() {
         "recovery_result",
     ] {
         assert!(
-            !lab_api.contains(forbidden),
-            "Lab run adapter regained direct recovery chaining via {forbidden}"
+            !lab_api.contains(forbidden) && !contained.contains(forbidden),
+            "task consumer gained direct recovery chaining via {forbidden}"
         );
     }
     for forbidden in [
@@ -1293,20 +1295,18 @@ fn c5_portable_output_archive_is_owned_by_artifact_store() {
     let artifact_frame_store =
         fs::read_to_string(root.join("crates/artifact-store/src/frame_store.rs"))
             .expect("read artifact frame store source");
-    let lab_output = fs::read_to_string(root.join("crates/lab/src/lab_run/output.rs"))
-        .expect("read Lab run output");
-    let lab_context = fs::read_to_string(root.join("crates/lab/src/lab_run/context.rs"))
-        .expect("read Lab run context");
+    let exporter = fs::read_to_string(root.join("crates/artifact-store/src/exporter.rs"))
+        .expect("read evidence exporter");
+    let lab_api = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
+        .expect("read Lab validation adapter");
 
     assert!(artifact.contains("pub fn write_portable_projection_archive"));
     assert!(artifact_frame_store.contains("PortableFrameEvidenceProjection"));
     assert!(artifact_frame_store.contains("pub fn portable_evidence_projection"));
-    assert!(lab_context.contains("write_portable_projection_archive"));
-    assert!(lab_context.contains("portable_evidence_projection"));
-    assert!(lab_context.contains("frame_evidence.json"));
-    assert!(lab_context.contains("ScreenshotNameAllocator"));
-    assert!(!lab_context.contains("timestamp_file_stem"));
-    assert!(!lab_context.contains("HashMap<String, usize>"));
+    assert!(exporter.contains("pub struct EvidenceExporter"));
+    assert!(exporter.contains("ScreenshotNameAllocator::in_memory()"));
+    assert!(!lab_api.contains("timestamp_file_stem"));
+    assert!(!lab_api.contains("HashMap<String, usize>"));
     for forbidden in [
         "fn write_output_zip",
         "ZipWriter",
@@ -1314,7 +1314,7 @@ fn c5_portable_output_archive_is_owned_by_artifact_store() {
         "path_to_zip_name",
     ] {
         assert!(
-            !lab_output.contains(forbidden),
+            !lab_api.contains(forbidden),
             "Lab regained portable archive mechanics via {forbidden}"
         );
     }
@@ -2440,16 +2440,8 @@ fn c7_lab_has_no_production_ledger_writer_authority() {
             && !lab_run.contains(".lab_run("),
         "Lab run must submit one Runtime task request and render its GlobalLedger projection"
     );
-    for required in [
-        "pub(super) struct AppLedgerSink;",
-        "pub(super) struct AppRunLedgerSession;",
-        "retired_run_ledger_error",
-    ] {
-        assert!(
-            environment.contains(required),
-            "ActingLab disposable ledger adapter lost {required}"
-        );
-    }
+    assert!(environment.contains("finish_semantic_result_with_ledger"));
+    assert!(environment.contains("semantic_ledger_context"));
     for forbidden in [
         "Vec<LedgerRecord>",
         "Vec<LightEvent>",

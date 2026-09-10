@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::UserConfig;
-use crate::{
-    LedgerEventEntry, LedgerLastResort, LedgerReadback, LedgerRecordEntry, RunLedgerSessionRequest,
-};
 use actingcommand_contract::{InputAction, LabResult};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
     CaptureBackendName, InputBackend, TouchBackendConfig,
 };
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -156,86 +153,6 @@ pub trait CaptureBackendFactory {
     fn open(&self, request: CaptureBackendRequest) -> LabResult<Box<dyn CaptureBackend>>;
 }
 
-pub trait LedgerSink {
-    type RunSession;
-
-    fn run_session(&mut self) -> Self::RunSession;
-
-    fn start_run_session(
-        session: &mut Self::RunSession,
-        request: RunLedgerSessionRequest,
-    ) -> LabResult<PathBuf>;
-
-    fn append_run_record(
-        session: &mut Self::RunSession,
-        record: LedgerRecordEntry,
-    ) -> LabResult<()>;
-
-    fn append_run_event(session: &mut Self::RunSession, event: LedgerEventEntry) -> LabResult<()>;
-
-    fn sync_run_session(session: &Self::RunSession) -> LabResult<()>;
-
-    fn read_run_session(session: &Self::RunSession) -> LabResult<LedgerReadback>;
-
-    fn write_run_last_resort(
-        run_root: Option<&Path>,
-        error: &LedgerLastResort,
-    ) -> LabResult<PathBuf>;
-}
-
-#[cfg(test)]
-pub(crate) struct DisabledLedger;
-
-#[cfg(test)]
-impl LedgerSink for DisabledLedger {
-    type RunSession = ();
-
-    fn run_session(&mut self) -> Self::RunSession {}
-
-    fn start_run_session(
-        _session: &mut Self::RunSession,
-        _request: RunLedgerSessionRequest,
-    ) -> LabResult<PathBuf> {
-        disabled_ledger_effect()
-    }
-
-    fn append_run_record(
-        _session: &mut Self::RunSession,
-        _record: LedgerRecordEntry,
-    ) -> LabResult<()> {
-        disabled_ledger_effect()
-    }
-
-    fn append_run_event(
-        _session: &mut Self::RunSession,
-        _event: LedgerEventEntry,
-    ) -> LabResult<()> {
-        disabled_ledger_effect()
-    }
-
-    fn sync_run_session(_session: &Self::RunSession) -> LabResult<()> {
-        disabled_ledger_effect()
-    }
-
-    fn read_run_session(_session: &Self::RunSession) -> LabResult<LedgerReadback> {
-        disabled_ledger_effect()
-    }
-
-    fn write_run_last_resort(
-        _run_root: Option<&Path>,
-        _error: &LedgerLastResort,
-    ) -> LabResult<PathBuf> {
-        disabled_ledger_effect()
-    }
-}
-
-#[cfg(test)]
-fn disabled_ledger_effect<T>() -> LabResult<T> {
-    Err(actingcommand_contract::LabError::device(
-        "ledger port must not open in this test",
-    ))
-}
-
 pub trait Clock {
     fn now_unix_ms(&self) -> LabResult<u64>;
 
@@ -252,14 +169,12 @@ pub trait LabPorts {
     type InputFactory: InputBackendFactory;
     type SemanticInput: SemanticInputExecutor;
     type CaptureFactory: CaptureBackendFactory;
-    type Ledger: LedgerSink;
     type Time: Clock;
     type Config: ConfigSource;
 
     fn input_factory(&self) -> &Self::InputFactory;
     fn semantic_input(&self) -> &Self::SemanticInput;
     fn capture_factory(&self) -> &Self::CaptureFactory;
-    fn ledger(&mut self) -> &mut Self::Ledger;
     fn clock(&self) -> &Self::Time;
     fn config(&self) -> &Self::Config;
 }
