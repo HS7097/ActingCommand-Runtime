@@ -10,7 +10,7 @@ use actingcommand_contract::{
     verify_lab_operation_evidence,
 };
 use actingcommand_ledger::{
-    GlobalLedger, GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig, project_subscription_event,
+    GlobalLedger, GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, project_subscription_event,
 };
 use actingcommand_pack_containment::{Containment, InstanceId};
 use actingcommand_resource_tooling::{
@@ -106,23 +106,23 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
     let bundle = crate::contained_resources::finish_package_use(admitted, package.close())?;
 
     let mut artifact_failure = None;
-    let snapshot = GlobalLedger::open_read_only(
-        GlobalLedgerReadOnlyConfig::new(root.join("ledger")),
-        |reference| match verify_projected_read_only(&root, reference) {
-            Ok(verified) => Some(verified),
-            Err(error) => {
-                artifact_failure.get_or_insert(error.code());
-                None
+    let snapshot =
+        GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(&root), |reference| {
+            match verify_projected_read_only(&root, reference) {
+                Ok(verified) => Some(verified),
+                Err(error) => {
+                    artifact_failure.get_or_insert(error.code());
+                    None
+                }
             }
-        },
-    )
-    .map_err(|error| CliError::package_invalid(format!("resource restore ledger: {error}")))?;
+        })
+        .map_err(|error| CliError::package_invalid(format!("resource restore ledger: {error}")))?;
     if let Some(code) = artifact_failure {
         return Err(CliError::package_invalid(format!(
             "resource restore artifact verification: {code}"
         )));
     }
-    if snapshot.corrupt_tail().is_some() || through > snapshot.latest_sequence() {
+    if !snapshot.is_complete() || through > snapshot.latest_sequence() {
         return Err(restore_error(
             "requested ledger snapshot is incomplete or corrupt",
         ));
@@ -362,7 +362,7 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
 }
 
 fn restore_event_page(
-    snapshot: &GlobalLedgerReadOnly,
+    snapshot: &GlobalLedgerEvidence,
     query: &EventQuery,
     through: u64,
 ) -> CliOutcome<Vec<actingcommand_contract::ProjectedEvent>> {

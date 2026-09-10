@@ -243,7 +243,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     assert_eq!(
         GlobalLedger::open(GlobalLedgerConfig::new(
             imported_root.path().join("ledger"),
-            "other backend"
+            "other-backend"
         ))
         .expect_err("same OS writer lock")
         .code(),

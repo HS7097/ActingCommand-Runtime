@@ -587,7 +587,9 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
         }
         Err(error) => error,
     };
-    assert_eq!(error.code(), "ledger_failure");
+    assert_eq!(error.code(), "artifact_store_verification_failed");
+    assert_eq!(error.operation(), "validate_persisted_event");
+    assert_eq!(error.projection().code, RuntimeErrorCode::LedgerFailure);
     assert!(error.is_fatal());
 }
 
