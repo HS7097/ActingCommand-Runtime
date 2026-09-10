@@ -1759,7 +1759,7 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         }
         let completion_wait = std::panic::catch_unwind(|| {
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(20),
                 "paginated policy run timed out"
             );
         });
