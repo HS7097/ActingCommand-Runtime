@@ -12,7 +12,8 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_pack_containment::source::{
     Bundle, ConversionFiles, SourceFile, SourceRead, declaration_file_requests,
-    validate_bundle_declarations, validate_resource_declarations,
+    validate_bundle_declarations, validate_control_declarations, validate_navigation_declarations,
+    validate_resource_declarations,
 };
 use actingcommand_policy::{
     CatalogDocumentSource, SchedulingDocumentKind, validate_catalog_declaration,
@@ -272,6 +273,9 @@ impl DeclarationReader {
                 .map_err(|error| invalid(path, &error.to_string()))?;
             "pages"
         } else if name.ends_with(".navigation.json") {
+            let value = serde_json::from_slice(&bytes)
+                .map_err(|error| invalid(path, &format!("navigation JSON parse: {error}")))?;
+            validate_navigation_declarations(path, &value)?;
             DriveNavigationGraph::parse_json(text)
                 .map_err(|error| invalid(path, &error.to_string()))?;
             "navigation"
@@ -313,6 +317,7 @@ impl DeclarationReader {
         } else if name == "control.json" {
             let value = serde_json::from_slice(&bytes)
                 .map_err(|error| invalid(path, &format!("control JSON parse: {error}")))?;
+            validate_control_declarations(path, &value)?;
             validate_control_declaration(value)
                 .map_err(|error| invalid(path, &error.to_string()))?;
             "control"

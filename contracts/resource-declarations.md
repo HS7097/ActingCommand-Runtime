@@ -18,12 +18,12 @@ and `operation explain` keep their existing behavior.
 | Task truth-set and dictionary JSON | The task owner's `declaration_file_requests` and declaration validation |
 | `recognition/*.pack.json` | `load_pack_from_json_str` |
 | `recognition/*.pages.json` | `load_page_set_from_json_str` |
-| `navigation/*.navigation.json` | `DriveNavigationGraph::parse_json` |
+| `navigation/*.navigation.json` | `validate_navigation_declarations + DriveNavigationGraph::parse_json` |
 | `navigation/*.projection.json` | `ProjectionMetadata::parse` |
 | `env-detection/detections.json` | `parse_environment_catalog_value` |
 | `scheduling/{tasks,pools,activity,timeline}.json` | The production scheduling document parser and schema-version check |
 | `scheduling/procedure-manifest.*.json` | Shared `ProcedureBindingConfigFile` / `ScheduledExecutionConfigFile` serde declarations |
-| `control.json` | The production task-control parser and declaration validation |
+| `control.json` | The source control declaration validator and production task-control parser |
 | `tasks/maa-semantic-mapping.json`, `upstream-sync/maa.tasks.json` | The converter's existing declaration-pair rules |
 
 The named directories describe conventional resource layouts; explicitly selected
