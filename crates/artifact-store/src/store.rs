@@ -44,6 +44,7 @@ pub struct ArtifactWriteContext {
     created_at_unix_ms: u64,
     write_class: ArtifactWriteClass,
     capacity: Option<actingcommand_contract::CapacityDecision>,
+    bound_volume: Option<String>,
 }
 
 impl ArtifactWriteContext {
@@ -58,6 +59,7 @@ impl ArtifactWriteContext {
             created_at_unix_ms,
             write_class: ArtifactWriteClass::Business,
             capacity: None,
+            bound_volume: None,
         }
     }
 
@@ -883,7 +885,18 @@ fn admit_bytes(
     bytes: u64,
 ) -> ArtifactStoreResult<()> {
     if let Some(admission) = admission {
-        let decision = admission.decide(path, bytes)?;
+        let mut decision = admission.decide(path, bytes)?;
+        if context
+            .bound_volume
+            .as_ref()
+            .is_some_and(|bound| decision.target_volume.as_ref() != Some(bound))
+        {
+            decision.outcome = actingcommand_contract::CapacityAdmissionOutcome::Unknown;
+            decision.reason = actingcommand_contract::CapacityAdmissionReason::BindingChanged;
+        }
+        if context.bound_volume.is_none() {
+            context.bound_volume = decision.target_volume.clone();
+        }
         let allowed =
             decision.outcome.allows() || matches!(context.write_class, ArtifactWriteClass::Drain);
         context.capacity = Some(decision.clone());
@@ -1301,11 +1314,14 @@ fn cleanup_path(
     match fs::remove_file(path) {
         Ok(()) => error,
         Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => error,
-        Err(remove_error) => error.with_secondary(&ArtifactStoreError::fatal(
-            "artifact_cleanup_failed",
-            operation,
-            remove_error.to_string(),
-        )),
+        Err(remove_error) => error.with_secondary(
+            &ArtifactStoreError::fatal(
+                "artifact_cleanup_failed",
+                operation,
+                remove_error.to_string(),
+            )
+            .with_raw_os_error(remove_error.raw_os_error()),
+        ),
     }
 }
 

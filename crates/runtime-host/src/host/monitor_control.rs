@@ -194,6 +194,42 @@ impl HostShared {
             links.clone(),
             MonitorPayloadDraft::requested(AuditInput::new()),
         )?;
+        if let Err(error) = self.admit_capacity() {
+            if error.is_fatal() {
+                return Err(error);
+            }
+            let mut registry = lock(&self.monitor_registry, "refuse_monitor_capacity")?;
+            let update = registry.prepare_failure(
+                probe,
+                started_at_unix_ms,
+                unix_ms_now()?,
+                error.projection().code,
+            )?;
+            let failed = self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links.clone(),
+                MonitorPayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .with_runtime_state(update.fact)
+                .map_err(|_| {
+                    RuntimeHostError::fatal(
+                        "monitor_state_invalid",
+                        "refuse_monitor_capacity",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?,
+            )?;
+            registry.apply(&failed)?;
+            drop(registry);
+            self.record_required_failure(&error, &failed, links)?;
+            return Ok(());
+        }
         self.append_event_raw(
             EventSeverity::Info,
             EventSource::Runtime,

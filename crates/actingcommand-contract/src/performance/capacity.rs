@@ -166,6 +166,19 @@ pub enum CapacityAdmissionOutcome {
     RequiredBytesOverflow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapacityAdmissionReason {
+    FreshSample,
+    NoCommittedFact,
+    OwnerChanged,
+    OutsideFreshness,
+    BindingChanged,
+    SampleUnavailable,
+    HardThreshold,
+    KnownBytesOverflow,
+}
+
 impl CapacityAdmissionOutcome {
     pub const fn allows(self) -> bool {
         matches!(self, Self::Allowed | Self::SoftPressure)
@@ -180,7 +193,10 @@ pub struct CapacityDecision {
     pub decided_at_unix_ms: u64,
     pub decided_at_monotonic_ms: u64,
     pub requested_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_volume: Option<String>,
     pub outcome: CapacityAdmissionOutcome,
+    pub reason: CapacityAdmissionReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact: Option<CapacityFactReference>,
 }
@@ -188,6 +204,9 @@ pub struct CapacityDecision {
 impl CapacityDecision {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.decided_at_unix_ms == 0
+            || self.target_volume.as_ref().is_some_and(|id| {
+                id.is_empty() || id.len() > 128 || id.chars().any(char::is_control)
+            })
             || self
                 .fact
                 .as_ref()

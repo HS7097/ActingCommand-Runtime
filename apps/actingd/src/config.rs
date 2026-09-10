@@ -306,6 +306,7 @@ impl ActingdConfigFile {
         let mut host =
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
                 .with_device_diagnostic_mode(self.device_diagnostic_mode)
+                .with_capacity_thresholds(self.capacity_thresholds)
                 .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
                 .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());

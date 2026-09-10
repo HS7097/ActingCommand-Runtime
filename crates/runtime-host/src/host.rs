@@ -11,7 +11,6 @@ use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::performance::{
     PerformanceMonitor, PerformanceSemanticEvent, PerformanceTick, PipelineEventObservation,
-    system_performance_sampler,
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::planning::collect_maintenance_evidence;
@@ -669,6 +668,48 @@ impl RuntimeHost {
                 )
                 .with_native_detail(format!("{error:?}"))
             })?;
+        let performance = (|| {
+            PerformanceMonitor::preflight_capacity(
+                crate::performance::CapacityPreflightConfig {
+                    performance: config.performance_monitor.clone(),
+                    thresholds: config.capacity_thresholds,
+                },
+                crate::performance::CapacityRoots::new(
+                    owner_epoch,
+                    &config.state_root,
+                    artifacts.root(),
+                )?,
+                &ledger,
+                &events,
+                &artifacts,
+                Arc::clone(&config.clock),
+            )
+        })();
+        let performance = match performance {
+            Ok(performance) => performance,
+            Err(mut original) => {
+                let ledger_closed = ledger.close().map_err(|error| {
+                    RuntimeHostError::fatal(
+                        error.code(),
+                        error.operation(),
+                        RuntimeErrorCode::LedgerFailure,
+                    )
+                    .with_native_detail(format!("{error:?}"))
+                });
+                let owner_closed = config
+                    .clock
+                    .sample()
+                    .and_then(|now| owner.close(now.unix_ms));
+                for result in [ledger_closed, owner_closed] {
+                    if let Err(secondary) = result {
+                        original = original
+                            .into_fatal()
+                            .with_related_failure("capacity_startup_cleanup", &secondary);
+                    }
+                }
+                return Err(original);
+            }
+        };
         let provider = match assemble(&mut crate::ProviderStartup {
             ledger: &ledger,
             events: &events,
@@ -767,12 +808,6 @@ impl RuntimeHost {
         )?;
         let prepared = (|| {
             let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
-            let performance = match config.performance_monitor.clone() {
-                Some(performance_config) => {
-                    PerformanceMonitor::enabled(performance_config, system_performance_sampler())?
-                }
-                None => PerformanceMonitor::disabled(),
-            };
             let performance_interval = performance.sample_interval();
             let performance_control =
                 PerformanceBalanceController::new(config.performance_control.clone())?;

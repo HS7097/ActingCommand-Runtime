@@ -7,13 +7,14 @@ use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
 };
 use actingcommand_contract::{
-    AuditInput, CapacityAdmissionOutcome, CapacityDecision, CapacityFactReference,
-    CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds, CapacityVolumeSample,
-    EventActor, EventSeverity, EventSource, LifecycleNativeDetail, OriginModule, OwnerEpoch,
-    PerformanceCapacitySample, PerformanceContext, PerformanceMetric, PerformanceMonitorHealth,
-    PerformanceMonitorStateEventData, PerformancePayloadDraft, PerformancePressureEventData,
-    PerformancePressureKind, PerformancePressureRecord, PerformancePressureSeverity,
-    PerformancePressureValue, PerformanceSummaryEventData, RuntimeErrorCode,
+    AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityDecision,
+    CapacityFactReference, CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds,
+    CapacityVolumeSample, EventActor, EventSeverity, EventSource, LifecycleNativeDetail,
+    OriginModule, OwnerEpoch, PerformanceCapacitySample, PerformanceContext, PerformanceMetric,
+    PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePayloadDraft,
+    PerformancePressureEventData, PerformancePressureKind, PerformancePressureRecord,
+    PerformancePressureSeverity, PerformancePressureValue, PerformanceSummaryEventData,
+    RuntimeErrorCode,
 };
 use actingcommand_host_metrics::{CapacityTarget, capacity_volume, sample_capacity};
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
@@ -108,48 +109,60 @@ impl CapacityProjection {
             decided_at_unix_ms: now.unix_ms,
             decided_at_monotonic_ms: now.monotonic_ms,
             requested_bytes: bytes,
+            target_volume: target_volume
+                .as_ref()
+                .and_then(|binding| binding.as_ref().ok())
+                .cloned(),
             outcome: CapacityAdmissionOutcome::Unknown,
+            reason: CapacityAdmissionReason::NoCommittedFact,
             fact: committed.as_ref().map(|value| value.reference.clone()),
         };
         let Some(committed) = committed else {
             return Ok(decision);
         };
         let sample = &committed.sample;
-        if sample.owner_epoch != self.owner_epoch
-            || !now
-                .unix_ms
-                .checked_sub(sample.observed_at_unix_ms)
-                .is_some_and(|age| age <= sample.freshness_ms)
+        if sample.owner_epoch != self.owner_epoch {
+            decision.reason = CapacityAdmissionReason::OwnerChanged;
+            return Ok(decision);
+        }
+        if !now
+            .unix_ms
+            .checked_sub(sample.observed_at_unix_ms)
+            .is_some_and(|age| age <= sample.freshness_ms)
             || !now
                 .monotonic_ms
                 .checked_sub(sample.observed_at_monotonic_ms)
                 .is_some_and(|age| age <= sample.freshness_ms)
-            || bindings.iter().any(|(purpose, binding)| {
-                !sample.volumes.iter().any(|volume| {
-                    volume.purposes.contains(purpose)
-                        && binding.as_ref().ok() == volume.volume_id.as_ref()
-                        && binding.is_ok()
-                })
-            })
-            || target_volume.as_ref().is_some_and(|binding| {
-                binding.as_ref().ok().is_none_or(|id| {
-                    !sample.volumes.iter().any(|volume| {
-                        volume.volume_id.as_ref() == Some(id)
-                            && volume.purposes.iter().any(|purpose| {
-                                matches!(
-                                    purpose,
-                                    CapacityPurpose::Artifact | CapacityPurpose::ArtifactStaging
-                                )
-                            })
-                    })
-                })
-            })
         {
+            decision.reason = CapacityAdmissionReason::OutsideFreshness;
+            return Ok(decision);
+        }
+        if bindings.iter().any(|(purpose, binding)| {
+            !sample.volumes.iter().any(|volume| {
+                volume.purposes.contains(purpose)
+                    && binding.as_ref().ok() == volume.volume_id.as_ref()
+                    && binding.is_ok()
+            })
+        }) || target_volume.as_ref().is_some_and(|binding| {
+            binding.as_ref().ok().is_none_or(|id| {
+                !sample.volumes.iter().any(|volume| {
+                    volume.volume_id.as_ref() == Some(id)
+                        && volume.purposes.iter().any(|purpose| {
+                            matches!(
+                                purpose,
+                                CapacityPurpose::Artifact | CapacityPurpose::ArtifactStaging
+                            )
+                        })
+                })
+            })
+        }) {
+            decision.reason = CapacityAdmissionReason::BindingChanged;
             return Ok(decision);
         }
         let mut outcome = CapacityAdmissionOutcome::Allowed;
         for volume in &sample.volumes {
             let Some(free) = volume.available_bytes else {
+                decision.reason = CapacityAdmissionReason::SampleUnavailable;
                 return Ok(decision);
             };
             let bytes = if target_volume
@@ -163,10 +176,12 @@ impl CapacityProjection {
             };
             let Some(required) = sample.thresholds.hard_bytes.checked_add(bytes) else {
                 decision.outcome = CapacityAdmissionOutcome::RequiredBytesOverflow;
+                decision.reason = CapacityAdmissionReason::KnownBytesOverflow;
                 return Ok(decision);
             };
             if free < required {
                 decision.outcome = CapacityAdmissionOutcome::HardPressure;
+                decision.reason = CapacityAdmissionReason::HardThreshold;
                 return Ok(decision);
             }
             if free < sample.thresholds.soft_bytes {
@@ -174,6 +189,7 @@ impl CapacityProjection {
             }
         }
         decision.outcome = outcome;
+        decision.reason = CapacityAdmissionReason::FreshSample;
         Ok(decision)
     }
 
