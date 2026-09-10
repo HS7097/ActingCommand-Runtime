@@ -1678,6 +1678,30 @@ impl RuntimeHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn capacity_sampler_for_test(
+        &self,
+    ) -> RuntimeHostResult<Box<dyn Fn() -> RuntimeHostResult<()> + Send>> {
+        let owner = Arc::downgrade(self.shared.as_ref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "runtime_host_closed",
+                "sample_test_capacity",
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?);
+        Ok(Box::new(move || {
+            let shared = owner.upgrade().ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "runtime_host_closed",
+                    "sample_test_capacity",
+                    RuntimeErrorCode::RuntimeUnavailable,
+                )
+            })?;
+            lock(&shared.performance, "sample_test_capacity")?
+                .sample_and_record_capacity(&shared.ledger, &shared.events)
+        }))
+    }
+
+    #[cfg(test)]
     pub(crate) fn observe_performance_control_for_test(
         &self,
         observation: crate::PerformanceControlObservation,
