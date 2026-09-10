@@ -17,7 +17,7 @@ fn session_throat_policy_payload(
     Ok(json!({
         "schema_version": "session.throat_policy.v0.1",
         "status": "offline_policy",
-        "purpose": "machine-readable unique Session Layer control throat policy",
+        "purpose": "machine-readable Runtime control boundary and retired Session selectors",
         "generated_at_unix_ms": current_unix_ms(),
         "scope": {
             "instance": global.instance.clone(),
@@ -25,32 +25,43 @@ fn session_throat_policy_payload(
             "server": global.server.clone()
         },
         "session_layer": {
-            "resident_daemon": true,
-            "only_control_throat": true,
+            "execution_authority": "runtime",
+            "status": "retired",
+            "available": false,
+            "reason_code": "legacy_session_authority_retired",
+            "resident_daemon": false,
+            "only_control_throat": false,
             "clients_must_not_directly_touch_adb_or_devices": true,
             "ui_must_not_directly_touch_adb_or_device": true,
-            "scheduler_must_use_session_layer_for_device_control": true,
-            "agents_must_use_session_layer_for_device_control": true
+            "scheduler_must_use_session_layer_for_device_control": false,
+            "agents_must_use_session_layer_for_device_control": false
         },
         "strict_session_throat": {
+            "status": "retired",
+            "available": false,
+            "reason_code": "legacy_session_authority_retired",
             "flag": "--require-session",
             "env": REQUIRE_SESSION_DAEMON_ENV,
-            "failure_code": "session_daemon_required",
+            "failure_code": "validation_failed",
             "failure_is_visible": true
         },
         "route_policy": {
             "local_read_only_queries": {
                 "may_run_local_when_no_resident_daemon": true,
-                "prefer_resident_daemon_when_alive": true,
+                "prefer_resident_daemon_when_alive": false,
                 "local_override_flag": "--local"
             },
             "control_requests": {
-                "must_use_resident_daemon_when_available_or_strict": true,
+                "must_use_resident_daemon_when_available_or_strict": false,
+                "execution_authority": "runtime",
                 "requires_matching_lease": true,
                 "blocked_without_matching_lease_code": "lab_lease_required"
             },
             "daemon_internal_execution": {
-                "forces_local_execution": true,
+                "status": "retired",
+                "available": false,
+                "reason_code": "legacy_session_authority_retired",
+                "forces_local_execution": false,
                 "reason": "avoid recursive request requeue inside the resident daemon"
             },
             "trusted_remote": {
@@ -465,20 +476,28 @@ pub(crate) fn session_access_contract() -> Value {
         "schema_version": "session.access.v0.1",
         "purpose": "machine-readable access boundary for Session Layer clients",
         "session_layer": {
-            "resident_daemon": true,
-            "only_control_throat": true,
+            "execution_authority": "runtime",
+            "status": "retired",
+            "available": false,
+            "reason_code": "legacy_session_authority_retired",
+            "resident_daemon": false,
+            "only_control_throat": false,
             "ui_direct_device_access_allowed": false,
             "direct_adb_access_allowed_for_clients": false
         },
         "entrypoints": {
             "local_cli": {
                 "status": "available",
+                "available": true,
+                "reason_code": "offline_handler_ready",
                 "encryption_required": false,
                 "authentication_required": false,
                 "command": "actinglab"
             },
             "trusted_remote": {
                 "status": "reserved",
+                "available": false,
+                "reason_code": "trusted_remote_transport_reserved",
                 "encryption_required": true,
                 "authentication_required": true,
                 "minimum_transport": "TLS or mutually authenticated local IPC",
@@ -492,6 +511,7 @@ pub(crate) fn session_access_contract() -> Value {
                 "blocked_without_encryption_code": "trusted_remote_transport_blocked"
             }
         },
+        "daemon_routes": {"status": "retired", "available": false, "reason_code": "legacy_session_authority_retired"},
         "daemon_queries": {
             "bootstrap": "session request bootstrap",
             "throat_policy": "session request throat-policy",
@@ -622,13 +642,14 @@ pub(crate) fn session_access_contract() -> Value {
             }
         },
         "safety": {
+            "strict_session_throat_status": "retired",
             "strict_session_throat_flag": "--require-session",
             "strict_session_throat_env": REQUIRE_SESSION_DAEMON_ENV,
-            "strict_session_throat_failure_code": "session_daemon_required",
+            "strict_session_throat_failure_code": "validation_failed",
             "clients_must_not_directly_touch_adb_or_devices": true,
             "ui_must_not_directly_touch_adb_or_device": true,
             "control_requests_require_matching_lease": true,
-            "requests_are_serialized_by_resident_daemon": true,
+            "requests_are_serialized_by_resident_daemon": false,
             "severe_errors_fail_loud": true,
             "transient_recovery_path_must_be_logged": true
         },
@@ -660,20 +681,28 @@ pub(crate) fn session_api_contract() -> Value {
         "schema_version": "session.api.v0.1",
         "purpose": "machine-readable command and envelope contract for Session Layer clients",
         "session_layer": {
-            "resident_daemon": true,
-            "only_control_throat": true,
+            "execution_authority": "runtime",
+            "status": "retired",
+            "available": false,
+            "reason_code": "legacy_session_authority_retired",
+            "resident_daemon": false,
+            "only_control_throat": false,
             "clients_must_not_directly_touch_adb_or_devices": true,
-            "requests_are_serialized_by_resident_daemon": true
+            "requests_are_serialized_by_resident_daemon": false
         },
         "access_channels": {
             "local_cli": {
                 "status": "available",
+                "available": true,
+                "reason_code": "offline_handler_ready",
                 "command": "actinglab",
                 "encryption_required": false,
                 "authentication_required": false
             },
             "trusted_remote": {
                 "status": "reserved",
+                "available": false,
+                "reason_code": "trusted_remote_transport_reserved",
                 "network_listener_implemented": false,
                 "encryption_required": true,
                 "authentication_required": true,
@@ -688,7 +717,9 @@ pub(crate) fn session_api_contract() -> Value {
             }
         },
         "daemon_request_queue": {
-            "status": "available",
+            "status": "retired",
+            "available": false,
+            "reason_code": "legacy_session_authority_retired",
             "submit_command": "session request <command>",
             "request_dir": "requests/",
             "response_dir": "responses/",
@@ -1130,7 +1161,7 @@ pub(crate) fn session_api_contract() -> Value {
         },
         "failure_contract": {
             "missing_or_stale_daemon_code": "runtime_not_running",
-            "strict_session_throat_failure_code": "session_daemon_required",
+            "strict_session_throat_failure_code": "validation_failed",
             "control_without_matching_lease_code": "lab_lease_required",
             "untrusted_remote_endpoint_code": "trusted_remote_transport_blocked",
             "missing_trusted_remote_auth_code": "trusted_remote_auth_required",
@@ -1257,7 +1288,9 @@ fn session_stream_view_contract() -> Value {
         "check_schema_version": "session.stream_check.v0.1",
         "plan_schema_version": "session.stream_plan.v0.1",
         "event_schema_version": "session.stream.event.v0.1",
-        "bounded_local_cli_status": "available",
+        "bounded_local_cli_status": "unverified",
+        "bounded_local_cli_available": false,
+        "bounded_local_cli_reason_code": "runtime_dependency_unverified",
         "read_only_without_input_relay_requires_lease": false,
         "input_relay_requires_lease": true,
         "safe_to_start_field": "safe_to_start",
