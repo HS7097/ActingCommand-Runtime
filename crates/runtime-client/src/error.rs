@@ -207,11 +207,17 @@ impl fmt::Debug for RuntimeClientError {
 impl fmt::Display for RuntimeClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.projection {
-            Some(projection) => write!(
-                formatter,
-                "runtime client error {} during {} with runtime code {:?}",
-                self.code, self.operation, projection.code
-            ),
+            Some(projection) => {
+                write!(
+                    formatter,
+                    "runtime client error {} during {} with runtime code {:?}",
+                    self.code, self.operation, projection.code
+                )?;
+                if let Some(related) = &self.related {
+                    write!(formatter, "; related failure: {related}")?;
+                }
+                Ok(())
+            }
             None => match (&self.committed_receipt, &self.related) {
                 (Some(_), Some(related)) => write!(
                     formatter,
