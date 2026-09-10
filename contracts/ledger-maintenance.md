@@ -24,7 +24,9 @@ actingd ledger-maintenance verify --config runtime.json
 actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target restored-root
 ```
 
-Backup paths must be disjoint from the source and must not already exist.
+Relative destinations resolve against the process working directory before
+validation, creation and sync. Backup paths must be disjoint from the source and
+must not already exist.
 Import and dry-run explicitly reuse a completed, frozen pre-cutover backup.
 Restore creates a new empty stopped root; `--artifact-root` optionally supplies
 the original external artifact bytes. A successful receipt reports its precise

@@ -2172,7 +2172,7 @@ mod tests {
                     .exists()
             );
             let snapshot =
-                GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(state_root), |_| None)
+                GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(&state_root), |_| None)
                     .expect("startup ledger remains readable");
             let observations = snapshot
                 .events()

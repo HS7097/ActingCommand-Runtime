@@ -229,7 +229,7 @@ impl ForensicRequest {
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
     Signatures(Box<SignatureReplayReport>),
-    Open(OpenReport),
+    Open(Box<OpenReport>),
     Events(EventsReport),
     Performance(Box<PerformanceReport>),
     Stability(Box<StabilityReport>),
@@ -638,8 +638,8 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     }
 
     match request.command {
-        ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(open_report(
-            &snapshot,
+        ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(Box::new(
+            open_report(&snapshot),
         )))),
         ForensicCommand::Events => Ok(ForensicOutput::Machine(ForensicReport::Events(
             events_report(&snapshot, request.events)?,

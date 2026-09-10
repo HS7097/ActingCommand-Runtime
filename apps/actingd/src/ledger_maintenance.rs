@@ -19,8 +19,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     let mut backup = None;
     let mut target = None;
     let mut artifact_root = None;
-    let mut remaining = arguments[2..].chunks_exact(2);
-    for pair in &mut remaining {
+    let (pairs, remaining) = arguments[2..].as_chunks::<2>();
+    for pair in pairs {
         let slot = match pair[0].to_str() {
             Some("--config") => &mut config,
             Some("--backup") => &mut backup,
@@ -33,7 +33,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         }
         *slot = Some(PathBuf::from(&pair[1]));
     }
-    if !remaining.remainder().is_empty() {
+    if !remaining.is_empty() {
         return Err(ActingdError::config("maintenance_option_invalid"));
     }
     let config = config.ok_or_else(|| ActingdError::config("maintenance_config_missing"))?;
