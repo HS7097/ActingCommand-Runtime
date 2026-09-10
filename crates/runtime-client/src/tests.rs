@@ -3450,8 +3450,8 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
         let mut remaining = &mut output[..];
         let formatted = write!(
             remaining,
-            "safe-reset original error: {error:#?}\ncommitted receipt: {:#?}\nHost fatal: {:#?}\nLedger evidence gap: no bounded direct Host query is exposed to this client specification; no IPC query or snapshot read attempted.\n",
-            error.committed_receipt(),
+            "safe-reset original error: {error:#?}\ncommitted receipt JSON: {:#?}\nHost fatal: {:#?}\nLedger evidence gap: no bounded direct Host query is exposed to this client specification; no IPC query or snapshot read attempted.\n",
+            error.committed_receipt().map(serde_json::to_string),
             host.fatal_error(),
         );
         let used = 60 * 1024 - remaining.len();

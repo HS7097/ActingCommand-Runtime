@@ -1433,10 +1433,10 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
             let mut remaining = &mut output[..];
             let formatted = write!(
                 remaining,
-                "mapped case={case}; task operation={:?}; task request_id={}; task correlation_id={}\nHost fatal: {:#?}\nLedger evidence gap: query_persisted_events_for_test materializes all matches before a 32-event limit can be applied; open_evidence opens and checks the whole database before its snapshot budget. No unbounded read or new IPC query attempted.\n",
+                "mapped case={case}; task operation={:?}; task request_id_json={:?}; task correlation_id_json={:?}\nHost fatal: {:#?}\nLedger evidence gap: query_persisted_events_for_test materializes all matches before a 32-event limit can be applied; open_evidence opens and checks the whole database before its snapshot budget. No unbounded read or new IPC query attempted.\n",
                 request.operation(),
-                request.request_id(),
-                request.correlation_id(),
+                serde_json::to_string(&request.request_id()),
+                serde_json::to_string(&request.correlation_id()),
                 host.fatal_error(),
             );
             let used = 60 * 1024 - remaining.len();

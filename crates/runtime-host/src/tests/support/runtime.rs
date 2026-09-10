@@ -201,10 +201,10 @@ impl TestClient {
         })();
         result.map_err(|error: RuntimeHostError| {
             error.with_native_detail(format!(
-                "frame_read={read_branch}; operation={:?}; request_id={}; correlation_id={}",
+                "frame_read={read_branch}; operation={:?}; request_id_json={:?}; correlation_id_json={:?}",
                 request.operation(),
-                request.request_id(),
-                request.correlation_id(),
+                serde_json::to_string(&request.request_id()),
+                serde_json::to_string(&request.correlation_id()),
             ))
         })
     }
