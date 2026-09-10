@@ -186,6 +186,15 @@ impl PackageInput {
     }
 
     pub fn open(flags: &FlagArgs) -> CliOutcome<Self> {
+        // Locator validation owns the pre-capture loose-resource rejection.
+        explicit_path(
+            flags,
+            if flags.optional("--package").is_some() {
+                "--package"
+            } else {
+                "--zip"
+            },
+        )?;
         Self::open_declared(flags, Self::declared_reference(flags)?)
     }
 
