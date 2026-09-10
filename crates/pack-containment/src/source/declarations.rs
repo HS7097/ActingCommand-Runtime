@@ -89,13 +89,17 @@ impl Declaration<'_> {
                 "files" => {
                     for (index, file) in self.array(value, &pointer)?.iter().enumerate() {
                         let pointer = child(&pointer, &index.to_string());
-                        let file = self.object(file, &pointer, &["path", "sha256", "hash"])?;
+                        let file =
+                            self.object(file, &pointer, &["path", "sha256", "hash", "bytes"])?;
                         self.string(
                             self.required(file, &pointer, "path")?,
                             &child(&pointer, "path"),
                         )?;
                         for (field, value) in file {
-                            if !value.is_null() {
+                            if field == "bytes" {
+                                // PackageValidationResponse preserves the declared manifest metadata.
+                                self.unsigned(value, &child(&pointer, field))?;
+                            } else if !value.is_null() {
                                 self.string(value, &child(&pointer, field))?;
                             }
                         }
@@ -393,7 +397,9 @@ impl Declaration<'_> {
             "rect" | "specific_rect" => &["kind", "x", "y", "width", "height"],
             "offset" => &["kind", "target_id", "offset"],
             "target" | "target_center" => &["kind", "target_id", "offset"],
-            "drag" if canonical => &["kind", "from_rect", "to_rect", "duration_ms"],
+            "drag" if canonical && value.get("from").is_none() && value.get("to").is_none() => {
+                &["kind", "from_rect", "to_rect", "duration_ms"]
+            }
             "drag" => &["kind", "from", "to", "duration_ms"],
             "single_touch_drag_with_vertical_brake_v1" if canonical => &[
                 "kind",
@@ -573,7 +579,13 @@ impl Declaration<'_> {
         Ok(())
     }
 
-    fn target(&self, value: &Value, pointer: &str, family: &str) -> CliOutcome<()> {
+    fn target(
+        &self,
+        value: &Value,
+        pointer: &str,
+        family: &str,
+        canonical: bool,
+    ) -> CliOutcome<()> {
         let fields: &[&str] = match family {
             "anchors" => &[
                 "id",
@@ -618,11 +630,11 @@ impl Declaration<'_> {
         };
         let object = self.object(value, pointer, fields)?;
         self.string(self.required(object, pointer, "id")?, &child(pointer, "id"))?;
-        self.source_region(
-            self.required(object, pointer, "region")?,
-            &child(pointer, "region"),
-            family == "ocr_targets",
-        )?;
+        if let Some(region) = object.get("region") {
+            self.source_region(region, &child(pointer, "region"), family == "ocr_targets")?;
+        } else if !canonical || family != "anchors" {
+            self.required(object, pointer, "region")?;
+        }
         if matches!(family, "anchors" | "verify_templates") {
             self.string(
                 self.required(object, pointer, "template")?,
@@ -949,10 +961,19 @@ pub fn validate_resource_declarations(path: &Path, resources: &Value) -> CliOutc
     let object = declaration.object(
         resources,
         "",
-        &["schema_version", "resources", "control_points"],
+        &[
+            "schema_version",
+            "resources",
+            "resource_count",
+            "control_points",
+        ],
     )?;
     if let Some(schema) = object.get("schema_version") {
         declaration.string(schema, "/schema_version")?;
+    }
+    if let Some(count) = object.get("resource_count") {
+        // add_resources_json preserves this metadata and derives it for selected task subsets.
+        declaration.unsigned(count, "/resource_count")?;
     }
     let resources = declaration.required(object, "", "resources")?;
     for (index, resource) in declaration
@@ -1408,6 +1429,8 @@ impl Declaration<'_> {
                 "post_admission_ocr",
                 "stability_termination",
                 "recovery",
+                "max_task_retries",
+                "on_exhausted",
                 "operations",
                 "anchors",
                 "verify_templates",
@@ -1470,6 +1493,8 @@ impl Declaration<'_> {
                 "locale" | "goal" | "entry_page" if !value.is_null() => {
                     self.string(value, &pointer)?
                 }
+                "on_exhausted" if !value.is_null() => self.string(value, &pointer)?,
+                "max_task_retries" if !value.is_null() => self.unsigned(value, &pointer)?,
                 "target_page" if !value.is_null() => self.page(value, &pointer)?,
                 "error_pages" => self.strings(value, &pointer)?,
                 "timeout_ms" | "max_steps" => self.unsigned(value, &pointer)?,
@@ -1486,7 +1511,12 @@ impl Declaration<'_> {
                 }
                 "anchors" | "verify_templates" | "color_probes" | "ocr_targets" => {
                     for (index, target) in self.array(value, &pointer)?.iter().enumerate() {
-                        self.target(target, &child(&pointer, &index.to_string()), field)?;
+                        self.target(
+                            target,
+                            &child(&pointer, &index.to_string()),
+                            field,
+                            canonical,
+                        )?;
                     }
                 }
                 "page_rules" => {
