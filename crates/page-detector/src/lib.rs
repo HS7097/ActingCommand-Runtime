@@ -212,8 +212,23 @@ pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
                     .keys()
                     .find(|field| !fields.contains(&field.as_str()))
             {
-                let mut error =
-                    PageDetectorError::fatal(format!("{pointer} contains unknown field '{field}'"));
+                let (reason, description) = if pointer.is_empty()
+                    && ["converter_schema_version", "generated", "generated_by"]
+                        .contains(&field.as_str())
+                {
+                    (
+                        actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+                        "unconsumed",
+                    )
+                } else {
+                    (
+                        actingcommand_contract::ResourceDeclarationReason::UnknownField,
+                        "unknown",
+                    )
+                };
+                let mut error = PageDetectorError::fatal(format!(
+                    "{pointer} contains {description} field '{field}'"
+                ));
                 error.declaration_issue =
                     Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
                         declaration_file: "recognition.pages.json".to_string(),
@@ -222,37 +237,13 @@ pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
                             field.replace('~', "~0").replace('/', "~1")
                         ),
                         schema_version: schema.map(str::to_owned),
-                        reason: actingcommand_contract::ResourceDeclarationReason::UnknownField,
+                        reason,
                     }));
                 return Err(error);
             }
             Ok(())
         };
-    check(
-        &value,
-        "",
-        &[
-            "schema_version",
-            "converter_schema_version",
-            "generated",
-            "generated_by",
-            "pages",
-        ],
-    )?;
-    // Generator provenance is part of the declared format even though detection uses only pages.
-    for field in ["converter_schema_version", "generated_by"] {
-        if value.get(field).is_some_and(|value| !value.is_string()) {
-            return Err(PageDetectorError::fatal(format!(
-                "/{field} must be a string"
-            )));
-        }
-    }
-    if value
-        .get("generated")
-        .is_some_and(|value| !value.is_boolean())
-    {
-        return Err(PageDetectorError::fatal("/generated must be a boolean"));
-    }
+    check(&value, "", &["schema_version", "pages"])?;
     if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
         for (index, page) in pages.iter().enumerate() {
             check(

@@ -1199,9 +1199,6 @@ fn build_pack_without_ocr_targets_preserves_existing_output() {
         pack,
         json!({
             "schema_version": "0.6",
-            "converter_schema_version": "0.5",
-            "generated": true,
-            "generated_by": "actinglab resource convert",
             "game": "neutral",
             "server": "test",
             "locale": "en-US",
@@ -1215,9 +1212,6 @@ fn build_pack_without_ocr_targets_preserves_existing_output() {
         concat!(
             "{\n",
             "  \"schema_version\": \"0.6\",\n",
-            "  \"converter_schema_version\": \"0.5\",\n",
-            "  \"generated\": true,\n",
-            "  \"generated_by\": \"actinglab resource convert\",\n",
             "  \"game\": \"neutral\",\n",
             "  \"server\": \"test\",\n",
             "  \"locale\": \"en-US\",\n",
