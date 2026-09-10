@@ -43,7 +43,7 @@ pub struct ArtifactWriteContext {
     event_links: EventLinksDraft,
     created_at_unix_ms: u64,
     write_class: ArtifactWriteClass,
-    capacity: Option<actingcommand_contract::CapacityDecision>,
+    pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
     bound_volume: Option<String>,
 }
 
@@ -312,6 +312,24 @@ impl ArtifactStore {
                 "capacity owner cannot be replaced",
             )
         })
+    }
+
+    #[cfg(feature = "capture")]
+    pub(crate) fn inherit_capacity(&self, source: &Self) -> ArtifactStoreResult<()> {
+        if let Some(admission) = source.capacity.get() {
+            self.install_capacity_admission(Arc::clone(admission))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "capture")]
+    pub(crate) fn admit_new_bytes(
+        &self,
+        context: &mut ArtifactWriteContext,
+        path: &Path,
+        bytes: u64,
+    ) -> ArtifactStoreResult<()> {
+        admit_bytes(self.capacity.get().map(Arc::as_ref), context, path, bytes)
     }
 
     /// Restores the exact external bytes of an already persisted Ledger reference.

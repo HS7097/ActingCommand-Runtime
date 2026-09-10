@@ -53,6 +53,10 @@ native detail, optional raw OS code and bounded secondary causes remain intact,
 with capacity fact references as context. A real cleanup or Ledger failure is
 fatal even when its primary admission refusal was nonfatal.
 
+Runtime evidence exports share this projection, including ZIP output writes. A
+target on a volume absent from the committed sample is Unknown. The ZIP writer
+retains its first write refusal/error through finalization and cleanup.
+
 Detachable offline resource tools do not construct a production Runtime capacity
 owner. Formal offline Ledger maintenance retains its existing ownership, inactive
 recovery and error rules.

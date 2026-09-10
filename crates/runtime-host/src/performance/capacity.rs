@@ -153,15 +153,10 @@ impl CapacityProjection {
             })
         }) || target_volume.as_ref().is_some_and(|binding| {
             binding.as_ref().ok().is_none_or(|id| {
-                !sample.volumes.iter().any(|volume| {
-                    volume.volume_id.as_ref() == Some(id)
-                        && volume.purposes.iter().any(|purpose| {
-                            matches!(
-                                purpose,
-                                CapacityPurpose::Artifact | CapacityPurpose::ArtifactStaging
-                            )
-                        })
-                })
+                !sample
+                    .volumes
+                    .iter()
+                    .any(|volume| volume.volume_id.as_ref() == Some(id))
             })
         }) {
             decision.reason = CapacityAdmissionReason::BindingChanged;

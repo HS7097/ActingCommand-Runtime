@@ -6144,13 +6144,14 @@ impl HostShared {
             documents,
             archive_context,
         };
-        let mut exporter = EvidenceExporter::open(self.artifacts.root()).map_err(|error| {
-            RequestFailure::request(
-                evidence_request_error(error.code()),
-                RuntimeReceiptState::Failed,
-                Some(terminal_from_projected(&terminal_receipt)),
-            )
-        })?;
+        let mut exporter =
+            EvidenceExporter::open_with_admission(&self.artifacts).map_err(|error| {
+                RequestFailure::request(
+                    evidence_request_error(error.code()),
+                    RuntimeReceiptState::Failed,
+                    Some(terminal_from_projected(&terminal_receipt)),
+                )
+            })?;
         let mut sink = RuntimeArtifactEventSink {
             ledger: &self.ledger,
             events: &self.events,
@@ -6162,6 +6163,12 @@ impl HostShared {
                     validated.correlation_id(),
                     EventType::ArtifactExportFailed,
                 )?;
+                if error.capacity().is_some() {
+                    let mut failure = online_observation::observation_artifact_failure(error);
+                    failure.terminal = failure_terminal
+                        .or_else(|| Some(terminal_from_projected(&terminal_receipt)));
+                    return Err(failure);
+                }
                 return Err(RequestFailure::request(
                     evidence_request_error(error.code()),
                     RuntimeReceiptState::Failed,
