@@ -1178,11 +1178,10 @@ mod tests {
         let original_path = std::env::var_os("PATH");
         let original_adb = std::env::var_os(ACTINGCOMMAND_ADB_PATH_ENV);
         let original_mumu = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV);
-        let discovery_error = DeviceError::fatal(
-            "failed to enumerate Windows processes: injected process discovery failure",
-        );
-
         let outcome = std::panic::catch_unwind(|| {
+            let discovery_error = DeviceError::fatal(
+                "failed to enumerate Windows processes: injected process discovery failure",
+            );
             unsafe {
                 std::env::set_var("PATH", &temp);
                 std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
@@ -1204,7 +1203,7 @@ mod tests {
             }
             let explicit_error =
                 resolve_adb_path(None).expect_err("explicit MuMu root must be strict");
-            (fallback, no_path_error, explicit_error)
+            (fallback, no_path_error, explicit_error, discovery_error)
         });
 
         TEST_MUMU_DISCOVERY_ERROR.with(|slot| {
@@ -1225,7 +1224,7 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(&temp);
-        let (fallback, no_path_error, explicit_error) =
+        let (fallback, no_path_error, explicit_error, discovery_error) =
             outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 
         assert_eq!(fallback.source, AdbPathSource::PathBaseline);
