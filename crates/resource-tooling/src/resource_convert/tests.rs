@@ -619,12 +619,19 @@ fn invalid_error_page_identifiers_fail_loud() {
 
         let error = OperationConverter::load(root.path(), None, None, None).expect_err(case);
 
-        assert_eq!(error.code, "package_invalid");
-        assert!(
-            error.message.contains(expected),
-            "{case}: {}",
-            error.message
-        );
+        if case == "wrong-shape" {
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let details = error.details.expect("typed declaration refusal");
+            assert_eq!(details["field_path"], "/error_pages");
+            assert_eq!(details["reason"], "invalid_type");
+        } else {
+            assert_eq!(error.code, "package_invalid");
+            assert!(
+                error.message.contains(expected),
+                "{case}: {}",
+                error.message
+            );
+        }
     }
 }
 
@@ -840,11 +847,18 @@ fn invalid_finite_page_declarations_fail_closed() {
         let error = OperationConverter::load(root.path(), None, None, None)
             .and_then(|converter| converter.build_all())
             .expect_err(case);
-        assert!(
-            error.message.contains(expected),
-            "{case}: {}",
-            error.message
-        );
+        if case == "malformed-destination" {
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let details = error.details.expect("typed declaration refusal");
+            assert_eq!(details["field_path"], "/operations/0/to");
+            assert_eq!(details["reason"], "invalid_type");
+        } else {
+            assert!(
+                error.message.contains(expected),
+                "{case}: {}",
+                error.message
+            );
+        }
     }
 }
 
@@ -881,11 +895,23 @@ fn malformed_expect_after_declarations_fail_closed() {
         let error = OperationConverter::load(root.path(), None, None, None)
             .and_then(|converter| converter.build_all())
             .expect_err(case);
-        assert!(
-            error.message.contains(expected),
-            "{case}: {}",
-            error.message
-        );
+        if matches!(case, "not-an-object" | "missing-page-id") {
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let details = error.details.expect("typed declaration refusal");
+            let (pointer, reason) = if case == "not-an-object" {
+                ("/operations/0/expect_after", "invalid_type")
+            } else {
+                ("/operations/0/expect_after/page_id", "missing_field")
+            };
+            assert_eq!(details["field_path"], pointer);
+            assert_eq!(details["reason"], reason);
+        } else {
+            assert!(
+                error.message.contains(expected),
+                "{case}: {}",
+                error.message
+            );
+        }
     }
 }
 
@@ -1458,6 +1484,7 @@ fn build_pack_includes_verify_template_targets() {
                     "task_id": "daily-check",
                     "game": "neutral",
                     "server_scope": ["test"],
+                    "coordinate_space": {"width":1280,"height":720},
                     "defaults": {"template_threshold":0.95},
                     "anchors": [{
                         "id":"shared-page","template":"assets/HOME.png",
@@ -1486,6 +1513,7 @@ fn build_pack_includes_verify_template_targets() {
                     "task_id": "local-check",
                     "game": "neutral",
                     "server_scope": ["test"],
+                    "coordinate_space": {"width":1280,"height":720},
                     "defaults": {"template_threshold":0.9},
                     "anchors": [{
                         "id":"local-page","template":"assets/SUCCESS.png",
@@ -2160,7 +2188,10 @@ fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
     })
     .expect_err("missing coordinate_space must fail before output");
 
-    assert!(err.message.contains("missing coordinate_space"));
+    assert_eq!(err.code, "resource_declaration_invalid");
+    let details = err.details.expect("typed declaration refusal");
+    assert_eq!(details["field_path"], "/coordinate_space");
+    assert_eq!(details["reason"], "missing_field");
     for output in [
         "recognition/neutral.test.pack.json",
         "recognition/neutral.test.pages.json",
