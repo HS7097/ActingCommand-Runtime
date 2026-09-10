@@ -1721,13 +1721,21 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
     let root = value.as_object().ok_or_else(|| {
         RecognitionPackError::fatal("schema 0.6 recognition pack root must be an object")
     })?;
+    for field in ["converter_schema_version", "generated", "generated_by"] {
+        if root.contains_key(field) {
+            return Err(RecognitionPackError::fatal(format!(
+                "recognition pack contains unconsumed field '{field}'"
+            ))
+            .at_declaration(
+                format!("/{field}"),
+                actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+    }
     reject_unknown_fields(
         root,
         &[
             "schema_version",
-            "converter_schema_version",
-            "generated",
-            "generated_by",
             "game",
             "server",
             "locale",
@@ -1737,21 +1745,6 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         ],
         "",
     )?;
-    for field in ["converter_schema_version", "generated_by"] {
-        if root.get(field).is_some_and(|value| !value.is_string()) {
-            return Err(RecognitionPackError::fatal(format!(
-                "schema 0.6 recognition pack field '{field}' must be a string"
-            )));
-        }
-    }
-    if root
-        .get("generated")
-        .is_some_and(|value| !value.is_boolean())
-    {
-        return Err(RecognitionPackError::fatal(
-            "schema 0.6 recognition pack field 'generated' must be a boolean",
-        ));
-    }
     if let Some(coordinate_space) = root.get("coordinate_space")
         && !coordinate_space.is_null()
     {
@@ -2952,7 +2945,7 @@ mod tests {
         .expect_err("unknown fields are rejected in every supported declaration format");
         assert_fatal_contains(legacy, "unknown field 'legacy_extension'");
 
-        load_pack_from_json_str(
+        let err = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.6",
                 "converter_schema_version": "0.5",
@@ -2962,7 +2955,15 @@ mod tests {
                 "targets": []
             }"#,
         )
-        .expect("declared generator metadata remains valid in strict schema");
+        .expect_err("unconsumed metadata is rejected before recognition admission");
+        let issue = err
+            .declaration_issue()
+            .expect("structured declaration issue");
+        assert_eq!(issue.field_path, "/converter_schema_version");
+        assert_eq!(
+            issue.reason,
+            actingcommand_contract::ResourceDeclarationReason::UnconsumedField
+        );
 
         let err = load_pack_from_json_str(
             r#"{
@@ -2972,8 +2973,8 @@ mod tests {
                 "targets": []
             }"#,
         )
-        .expect_err("declared generator metadata retains its wire type");
-        assert_fatal_contains(err, "generated' must be a boolean");
+        .expect_err("unconsumed declaration is rejected regardless of its value");
+        assert_fatal_contains(err, "unconsumed field 'generated'");
 
         let err = load_pack_from_json_str(
             r#"{

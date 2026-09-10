@@ -898,12 +898,6 @@ impl OperationConverter {
                 "schema_version",
                 Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
             ),
-            (
-                "converter_schema_version",
-                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
-            ),
-            ("generated", Value::Bool(true)),
-            ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("game", Value::String(self.game.clone())),
             ("server", Value::String(self.server.clone())),
             ("locale", Value::String(self.locale.clone())),
@@ -991,12 +985,6 @@ impl OperationConverter {
                 "schema_version",
                 Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
             ),
-            (
-                "converter_schema_version",
-                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
-            ),
-            ("generated", Value::Bool(true)),
-            ("generated_by", Value::String(GENERATED_BY.to_string())),
             (
                 "pages",
                 Value::Array(
