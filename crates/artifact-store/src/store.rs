@@ -176,7 +176,9 @@ impl ArtifactStream {
                     "artifact_cleanup_failed",
                     "cleanup_artifact_temp",
                     error.to_string(),
-                );
+                )
+                .with_raw_os_error(error.raw_os_error())
+                .with_capacity(self.context.capacity.clone());
                 Err(self
                     .failure
                     .map_or_else(|| cleanup.clone(), |error| error.with_secondary(&cleanup)))
@@ -507,6 +509,7 @@ impl ArtifactStore {
                     "sync_artifact_temp",
                     error.to_string(),
                 )
+                .with_raw_os_error(error.raw_os_error())
             })?;
             file.rewind().map_err(|error| {
                 ArtifactStoreError::fatal(
@@ -514,6 +517,7 @@ impl ArtifactStore {
                     "rewind_artifact_temp",
                     error.to_string(),
                 )
+                .with_raw_os_error(error.raw_os_error())
             })?;
             ArtifactMaterial::read_from(file).map_err(|error| {
                 ArtifactStoreError::fatal(
@@ -521,6 +525,7 @@ impl ArtifactStore {
                     "read_artifact_for_verification",
                     error.to_string(),
                 )
+                .with_raw_os_error(error.raw_os_error())
             })
         })()
         .map_err(|error| stream.fail(error))?;
@@ -809,6 +814,7 @@ impl ArtifactStore {
                 "store_artifact",
                 error.to_string(),
             )
+            .with_raw_os_error(error.raw_os_error())
         })?;
         if final_path.exists() {
             return Err(ArtifactStoreError::fatal(

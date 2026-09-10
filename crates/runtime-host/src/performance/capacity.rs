@@ -125,6 +125,14 @@ impl CapacityProjection {
             decision.reason = CapacityAdmissionReason::OwnerChanged;
             return Ok(decision);
         }
+        if sample
+            .volumes
+            .iter()
+            .any(|volume| volume.available_bytes.is_none())
+        {
+            decision.reason = CapacityAdmissionReason::SampleUnavailable;
+            return Ok(decision);
+        }
         if !now
             .unix_ms
             .checked_sub(sample.observed_at_unix_ms)
@@ -346,23 +354,24 @@ impl PerformanceMonitor {
                 let purposes = sample
                     .targets
                     .into_iter()
-                    .filter_map(|index| {
+                    .map(|index| {
                         capacity
                             .projection
                             .targets
                             .get(index)
                             .map(|(purpose, _)| *purpose)
+                            .ok_or_else(|| failure("invalid_capacity_sample_target"))
                     })
-                    .collect();
-                CapacityVolumeSample {
+                    .collect::<RuntimeHostResult<Vec<_>>>()?;
+                Ok(CapacityVolumeSample {
                     volume_id: sample.volume_id,
                     purposes,
                     available_bytes,
                     state,
                     cause,
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<RuntimeHostResult<Vec<_>>>()?;
         let sample = PerformanceCapacitySample {
             owner_epoch: capacity.projection.owner_epoch,
             observed_at_unix_ms: now.unix_ms,

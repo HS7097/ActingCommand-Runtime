@@ -1446,6 +1446,13 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn sensitivity(&self) -> Sensitivity {
         let mut sensitivity = Sensitivity::Internal;
+        if self
+            .capacity
+            .as_ref()
+            .is_some_and(|capacity| capacity.target_volume.is_some())
+        {
+            sensitivity = Sensitivity::Sensitive;
+        }
         if self.adb_recovery.is_some() {
             sensitivity = Sensitivity::Sensitive;
         }
@@ -1483,6 +1490,9 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn public_summary(&self) -> Self {
         let mut result = self.clone();
+        if let Some(capacity) = &mut result.capacity {
+            capacity.target_volume = None;
+        }
         result.primary_detail = None;
         result.adb_recovery = None;
         result.native_detail = None;

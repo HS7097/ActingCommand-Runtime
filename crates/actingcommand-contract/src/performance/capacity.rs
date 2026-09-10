@@ -204,6 +204,26 @@ pub struct CapacityDecision {
 impl CapacityDecision {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.decided_at_unix_ms == 0
+            || !matches!(
+                (self.outcome, self.reason),
+                (
+                    CapacityAdmissionOutcome::Allowed | CapacityAdmissionOutcome::SoftPressure,
+                    CapacityAdmissionReason::FreshSample
+                ) | (
+                    CapacityAdmissionOutcome::HardPressure,
+                    CapacityAdmissionReason::HardThreshold
+                ) | (
+                    CapacityAdmissionOutcome::RequiredBytesOverflow,
+                    CapacityAdmissionReason::KnownBytesOverflow
+                ) | (
+                    CapacityAdmissionOutcome::Unknown,
+                    CapacityAdmissionReason::NoCommittedFact
+                        | CapacityAdmissionReason::OwnerChanged
+                        | CapacityAdmissionReason::OutsideFreshness
+                        | CapacityAdmissionReason::BindingChanged
+                        | CapacityAdmissionReason::SampleUnavailable
+                )
+            )
             || self.target_volume.as_ref().is_some_and(|id| {
                 id.is_empty() || id.len() > 128 || id.chars().any(char::is_control)
             })

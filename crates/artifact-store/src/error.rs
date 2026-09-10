@@ -18,7 +18,7 @@ pub struct ArtifactStoreError {
     omitted_secondary_count: u64,
     fatal: bool,
     raw_os_error: Option<i32>,
-    capacity: Option<actingcommand_contract::CapacityDecision>,
+    capacity: Option<Box<actingcommand_contract::CapacityDecision>>,
 }
 
 impl ArtifactStoreError {
@@ -58,7 +58,7 @@ impl ArtifactStoreError {
             "committed capacity facts do not permit these new bytes",
         );
         error.fatal = false;
-        error.capacity = Some(decision);
+        error.capacity = Some(Box::new(decision));
         error
     }
 
@@ -72,13 +72,13 @@ impl ArtifactStoreError {
         capacity: Option<actingcommand_contract::CapacityDecision>,
     ) -> Self {
         if self.capacity.is_none() {
-            self.capacity = capacity;
+            self.capacity = capacity.map(Box::new);
         }
         self
     }
 
     pub fn capacity(&self) -> Option<&actingcommand_contract::CapacityDecision> {
-        self.capacity.as_ref()
+        self.capacity.as_deref()
     }
 
     pub const fn raw_os_error(&self) -> Option<i32> {
@@ -136,7 +136,7 @@ impl ArtifactStoreError {
             primary: self.primary_cause(),
             secondary: self.secondary.clone(),
             omitted_secondary_count: self.omitted_secondary_count,
-            capacity: self.capacity.clone(),
+            capacity: self.capacity.as_deref().cloned(),
         }
     }
 
