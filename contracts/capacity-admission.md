@@ -35,8 +35,9 @@ consecutive failure, and recovery through existing monitor events. Low-space
 transitions use the existing performance pressure family. Capacity remains
 recoverable in the same loop; Ledger failures remain fatal.
 
-Startup preflight follows successful Ledger construction and precedes Provider
-assembly. It returns the same performance owner used by the existing thread. A
+In `start_with_provider`, startup preflight follows successful Ledger construction
+and precedes Provider assembly. `start` passes a Provider that its caller has
+already constructed. Preflight returns the same performance owner used by the existing thread. A
 low/Unknown initial fact is recorded before the existing failed-start cleanup.
 Direct/scheduled task admission follows replay resolution. Lease admission and
 queued transfer authorization use the same predicate; rejection of a successor

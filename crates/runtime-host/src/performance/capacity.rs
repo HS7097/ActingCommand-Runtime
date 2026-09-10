@@ -393,7 +393,13 @@ impl PerformanceMonitor {
                 CapacityState::SoftPressure | CapacityState::HardPressure
             )
         });
-        let severity = if unknown || pressure {
+        let severity = if sample
+            .volumes
+            .iter()
+            .any(|volume| volume.state == CapacityState::HardPressure)
+        {
+            EventSeverity::Error
+        } else if unknown || pressure {
             EventSeverity::Warning
         } else {
             EventSeverity::Info
@@ -499,15 +505,21 @@ impl CapacityMonitor {
             .min()
             .ok_or_else(|| failure("invalid_capacity_sample"))?;
         if free < self.thresholds.soft_bytes {
-            let severity = if free < self.thresholds.hard_bytes {
+            let peak_free = self
+                .pressure
+                .as_ref()
+                .map_or(free, |pressure| match &pressure.peak {
+                    PerformancePressureValue::DiskCapacity {
+                        available_bytes, ..
+                    } => free.min(*available_bytes),
+                    _ => free,
+                });
+            let severity = if peak_free < self.thresholds.hard_bytes {
                 PerformancePressureSeverity::High
             } else {
                 PerformancePressureSeverity::Elevated
             };
-            let changed = self
-                .pressure
-                .as_ref()
-                .is_none_or(|pressure| pressure.severity != severity);
+            let started = self.pressure.is_none();
             let record = PerformancePressureRecord {
                 kind: PerformancePressureKind::DiskCapacity,
                 severity,
@@ -516,11 +528,11 @@ impl CapacityMonitor {
                 }),
                 last_observed_at_unix_ms: now.unix_ms,
                 peak: PerformancePressureValue::DiskCapacity {
-                    available_bytes: free,
+                    available_bytes: peak_free,
                     thresholds: self.thresholds,
                 },
             };
-            if changed {
+            if started {
                 append(
                     ledger,
                     events,
