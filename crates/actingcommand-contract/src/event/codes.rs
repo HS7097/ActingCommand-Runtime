@@ -249,6 +249,7 @@ closed_code!(EvidenceCompleteness {
 closed_code!(RecoveryReason {
     StaleOwner => "stale_owner",
     TruncatedFinalTail => "truncated_final_tail",
+    StorageCutover => "storage_cutover",
 });
 
 closed_code!(ResourceAuthoringPhase {

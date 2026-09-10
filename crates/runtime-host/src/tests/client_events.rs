@@ -660,8 +660,18 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
     );
     drop(state);
 
-    fs::remove_file(root.path().join(RUNTIME_STATE_DATABASE_FILE))
-        .expect("remove compact projection database");
+    let database =
+        actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
+            .expect("shared database");
+    database
+        .connection("remove reconstructible projection in existing specification")
+        .expect("connection")
+        .execute(
+            "DELETE FROM projection_entries WHERE namespace='policy.planning-signal.v1'",
+            [],
+        )
+        .expect("remove compact projection");
+    drop(database);
 
     let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
     reopened
@@ -674,4 +684,17 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
     );
     drop(client);
     reopened.close().expect("close reopened host");
+    fs::remove_file(root.path().join(RUNTIME_STATE_DATABASE_FILE))
+        .expect("missing physical database case");
+    let error = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .err()
+    .expect("missing authoritative database must fail");
+    assert!(error.is_fatal());
 }

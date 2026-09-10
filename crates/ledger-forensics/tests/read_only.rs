@@ -500,7 +500,7 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
     match &outputs[0] {
         ForensicOutput::Machine(ForensicReport::Open(report)) => {
             assert!(report.event_count >= 2);
-            assert!(report.repair_count >= 1);
+            assert!(report.repair_count.expect("Segment physical repairs") >= 1);
             assert!(report.corrupt_tail.is_some());
             match &report.writer {
                 WriterObservationReport::Locked { byte_count } => assert!(*byte_count > 0),
@@ -543,8 +543,21 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
     }
     match &outputs[4] {
         ForensicOutput::Machine(ForensicReport::Repairs(report)) => {
-            assert!(!report.repairs.is_empty());
-            assert!(report.repairs.iter().all(|repair| repair.completed));
+            assert!(
+                !report
+                    .repairs
+                    .as_ref()
+                    .expect("Segment physical repairs")
+                    .is_empty()
+            );
+            assert!(
+                report
+                    .repairs
+                    .as_ref()
+                    .expect("Segment physical repairs")
+                    .iter()
+                    .all(|repair| repair.completed)
+            );
         }
         output => panic!("unexpected repairs output: {output:?}"),
     }

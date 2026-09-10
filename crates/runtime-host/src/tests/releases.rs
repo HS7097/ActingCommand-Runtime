@@ -194,17 +194,20 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
         .expect("activate catalog");
     host.close().expect("close host");
 
-    for name in [
-        RUNTIME_STATE_DATABASE_FILE.to_owned(),
-        format!("{RUNTIME_STATE_DATABASE_FILE}-wal"),
-        format!("{RUNTIME_STATE_DATABASE_FILE}-shm"),
-        RUNTIME_STATE_INTEGRITY_KEY_FILE.to_owned(),
-    ] {
-        let path = root.path().join(name);
-        if path.exists() {
-            fs::remove_file(path).expect("remove current state file");
-        }
-    }
+    let database =
+        actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
+            .expect("shared database");
+    database
+        .connection("prepare legacy catalog pointer in existing specification")
+        .expect("connection")
+        .execute_batch(
+            "BEGIN IMMEDIATE;
+             DELETE FROM state_documents WHERE state_key='policy.catalog.active';
+             DELETE FROM state_document_history WHERE state_key='policy.catalog.active';
+             COMMIT;",
+        )
+        .expect("prepare absent catalog pointer without changing ledger or key");
+    drop(database);
     let legacy = root
         .path()
         .join("policy")

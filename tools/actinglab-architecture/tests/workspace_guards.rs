@@ -951,6 +951,8 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
         root.join("crates/ledger/src/global/projection.rs"),
         root.join("crates/ledger/src/global/storage.rs"),
         root.join("crates/ledger/src/global/sqlite.rs"),
+        root.join("crates/ledger/src/global/migration.rs"),
+        root.join("crates/ledger/src/global/evidence.rs"),
     ]);
     let forbidden = [
         "ClassifiedField",
@@ -1071,7 +1073,9 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
         .expect("read Runtime host");
     let store = fs::read_to_string(root.join("crates/artifact-store/src/store.rs"))
         .expect("read artifact store");
-    assert!(host.contains("GlobalLedger::open_with_artifact_verifier"));
+    assert!(host.contains("LedgerMaintenance::acquire"));
+    assert!(host.contains(".open_writer("));
+    assert!(host.contains("verify_recovery_reference(reference)"));
     assert!(store.contains("pub fn verify_recovery_reference"));
 }
 

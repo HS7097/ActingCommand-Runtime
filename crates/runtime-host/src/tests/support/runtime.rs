@@ -148,34 +148,65 @@ impl TestClient {
     }
 
     fn send(&mut self, request: &RuntimeRequest) -> RuntimeReceipt {
-        self.send_result(request).expect("runtime receipt")
+        self.send_result(request).unwrap_or_else(|error| {
+            panic!(
+                "runtime receipt: {error:?}; native read context: {}",
+                error
+                    .lifecycle
+                    .native_detail
+                    .as_deref()
+                    .map_or("unavailable", |detail| detail.text()),
+            )
+        })
     }
 
     fn send_result(&mut self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
-        write_frame(&mut self.stream, request, DEFAULT_RUNTIME_MAX_FRAME_BYTES)?;
-        let FrameRead::Data(frame) = read_frame(&mut self.stream, DEFAULT_RUNTIME_MAX_FRAME_BYTES)?
-        else {
-            return Err(RuntimeHostError::request(
-                "test_receipt_missing",
-                "read_test_receipt",
-                RuntimeErrorCode::ProtocolInvalid,
-            ));
-        };
-        let receipt = serde_json::from_slice::<RuntimeReceipt>(&frame).map_err(|_| {
-            RuntimeHostError::request(
-                "test_receipt_invalid",
-                "read_test_receipt",
-                RuntimeErrorCode::ProtocolInvalid,
-            )
-        })?;
-        receipt.validate().map_err(|_| {
-            RuntimeHostError::request(
-                "test_receipt_invalid",
-                "read_test_receipt",
-                RuntimeErrorCode::ProtocolInvalid,
-            )
-        })?;
-        Ok(receipt)
+        let mut read_branch = "not_read";
+        let result = (|| {
+            write_frame(&mut self.stream, request, DEFAULT_RUNTIME_MAX_FRAME_BYTES)?;
+            read_branch = "read_error";
+            let frame = match read_frame(&mut self.stream, DEFAULT_RUNTIME_MAX_FRAME_BYTES)? {
+                FrameRead::Data(frame) => {
+                    read_branch = "Data";
+                    frame
+                }
+                missing @ (FrameRead::Idle | FrameRead::Closed) => {
+                    read_branch = if matches!(missing, FrameRead::Idle) {
+                        "Idle"
+                    } else {
+                        "Closed"
+                    };
+                    return Err(RuntimeHostError::request(
+                        "test_receipt_missing",
+                        "read_test_receipt",
+                        RuntimeErrorCode::ProtocolInvalid,
+                    ));
+                }
+            };
+            let receipt = serde_json::from_slice::<RuntimeReceipt>(&frame).map_err(|_| {
+                RuntimeHostError::request(
+                    "test_receipt_invalid",
+                    "read_test_receipt",
+                    RuntimeErrorCode::ProtocolInvalid,
+                )
+            })?;
+            receipt.validate().map_err(|_| {
+                RuntimeHostError::request(
+                    "test_receipt_invalid",
+                    "read_test_receipt",
+                    RuntimeErrorCode::ProtocolInvalid,
+                )
+            })?;
+            Ok(receipt)
+        })();
+        result.map_err(|error: RuntimeHostError| {
+            error.with_native_detail(format!(
+                "frame_read={read_branch}; operation={:?}; request_id_json={:?}; correlation_id_json={:?}",
+                request.operation(),
+                serde_json::to_string(&request.request_id()),
+                serde_json::to_string(&request.correlation_id()),
+            ))
+        })
     }
 
     fn acquire(&mut self, alias: &str) -> (RuntimeRequest, LeaseToken) {

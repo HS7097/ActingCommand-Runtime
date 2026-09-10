@@ -14,8 +14,8 @@ use actingcommand_contract::{
 };
 pub use actingcommand_contract::{MAX_SIGNATURE_PAGE_ROWS, SignaturePageRequest};
 use actingcommand_ledger::{
-    GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerReadOnly,
-    GlobalLedgerReadOnlyConfig, GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot,
+    GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerEvidence,
+    GlobalLedgerEvidenceConfig, GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot,
     GlobalLedgerWriterMetadataObservation, PerformanceLedgerSample, PerformanceProcessOwnership,
     PerformanceProcessSummary, PersistedEvent,
 };
@@ -229,7 +229,7 @@ impl ForensicRequest {
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
     Signatures(Box<SignatureReplayReport>),
-    Open(OpenReport),
+    Open(Box<OpenReport>),
     Events(EventsReport),
     Performance(Box<PerformanceReport>),
     Stability(Box<StabilityReport>),
@@ -280,12 +280,14 @@ pub struct RepairReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenReport {
-    pub storage_snapshot: Box<GlobalLedgerStorageSnapshot>,
+    pub storage_backend: &'static str,
+    pub read_complete: bool,
+    pub storage_snapshot: Option<Box<GlobalLedgerStorageSnapshot>>,
     pub latest_sequence: u64,
     pub event_count: usize,
     pub listed_through_segment: Option<u64>,
     pub writer: WriterObservationReport,
-    pub repair_count: usize,
+    pub repair_count: Option<usize>,
     pub corrupt_tail: Option<CorruptTailReport>,
 }
 
@@ -499,13 +501,16 @@ pub struct ChainReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TailReport {
+    pub storage_backend: &'static str,
+    pub physical_observation_applicable: bool,
     pub corrupt_tail: Option<CorruptTailReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RepairsReport {
+    pub storage_backend: &'static str,
     pub limit: usize,
-    pub repairs: Vec<RepairReport>,
+    pub repairs: Option<Vec<RepairReport>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -585,8 +590,8 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     let export = request.command == ForensicCommand::Export;
     let task_evidence = request.command == ForensicCommand::TaskEvidence;
     let mut artifact_failures = Vec::new();
-    let snapshot = GlobalLedger::open_read_only(
-        GlobalLedgerReadOnlyConfig::new(request.state_root.join("ledger")),
+    let snapshot = GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(&request.state_root),
         |reference| {
             let verified = if stability && reference.kind == ArtifactKind::DiagnosticJson {
                 let size = match task_records::is_task_stream(&artifact_root, reference) {
@@ -633,8 +638,8 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     }
 
     match request.command {
-        ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(open_report(
-            &snapshot,
+        ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(Box::new(
+            open_report(&snapshot),
         )))),
         ForensicCommand::Events => Ok(ForensicOutput::Machine(ForensicReport::Events(
             events_report(&snapshot, request.events)?,
@@ -674,10 +679,13 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
             )))
         }
         ForensicCommand::Tail => Ok(ForensicOutput::Machine(ForensicReport::Tail(TailReport {
+            storage_backend: snapshot.backend(),
+            physical_observation_applicable: snapshot.segment().is_some(),
             corrupt_tail: snapshot.corrupt_tail().map(corrupt_tail_report),
         }))),
         ForensicCommand::Repairs => Ok(ForensicOutput::Machine(ForensicReport::Repairs(
             RepairsReport {
+                storage_backend: snapshot.backend(),
                 limit: MAX_FORENSIC_REPAIRS,
                 repairs: repair_reports(&snapshot),
             },
@@ -711,7 +719,7 @@ pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> 
 }
 
 fn task_evidence_report(
-    snapshot: &GlobalLedgerReadOnly,
+    snapshot: &GlobalLedgerEvidence,
     request: ForensicEventsRequest,
     failures: Vec<StabilityFailure>,
 ) -> ForensicResult<TaskEvidenceReport> {
@@ -727,7 +735,7 @@ fn task_evidence_report(
     let limited = page.after_sequence != 0
         || page.next_after_sequence.is_some()
         || page.through_sequence != snapshot.latest_sequence()
-        || !snapshot.storage_snapshot().read_complete
+        || !snapshot.read_complete()
         || snapshot.corrupt_tail().is_some();
     let events = &page.events;
     let mut inputs = Vec::new();
@@ -874,7 +882,7 @@ fn task_evidence_report(
     if corrupt_tail.is_some() {
         gaps.insert("corrupt_tail");
     }
-    if !snapshot.storage_snapshot().read_complete {
+    if !snapshot.read_complete() {
         gaps.insert("storage_read_incomplete");
     }
     if page.through_sequence > snapshot.latest_sequence() {
@@ -1048,7 +1056,7 @@ fn task_frame_evidence(
 }
 
 fn events_report(
-    snapshot: &GlobalLedgerReadOnly,
+    snapshot: &GlobalLedgerEvidence,
     request: ForensicEventsRequest,
 ) -> ForensicResult<EventsReport> {
     let through_sequence = request
@@ -1106,7 +1114,7 @@ fn events_report(
 }
 
 fn performance_report(
-    snapshot: &GlobalLedgerReadOnly,
+    snapshot: &GlobalLedgerEvidence,
     request: ForensicEventsRequest,
 ) -> ForensicResult<PerformanceReport> {
     let through_sequence = request
@@ -1176,7 +1184,7 @@ fn performance_report(
     let has_more = page_end < end;
     let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
     let mut gaps = Vec::new();
-    if !snapshot.storage_snapshot().read_complete {
+    if !snapshot.read_complete() {
         gaps.push("storage_read_incomplete");
     }
     if corrupt_tail.is_some() {
@@ -1265,7 +1273,7 @@ fn check_diagnostic_artifact_size(
 }
 
 fn stability_report(
-    snapshot: &GlobalLedgerReadOnly,
+    snapshot: &GlobalLedgerEvidence,
     root: &Path,
     request: ForensicEventsRequest,
     mut failures: Vec<StabilityFailure>,
@@ -1320,7 +1328,7 @@ fn stability_report(
     let has_more = page_end < end;
     let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
     let mut gaps = Vec::new();
-    if !snapshot.storage_snapshot().read_complete {
+    if !snapshot.read_complete() {
         gaps.push("storage_read_incomplete");
     }
     if corrupt_tail.is_some() {
@@ -1414,14 +1422,20 @@ fn project_stability(
     Ok(Some(comparison))
 }
 
-fn open_report(snapshot: &GlobalLedgerReadOnly) -> OpenReport {
+fn open_report(snapshot: &GlobalLedgerEvidence) -> OpenReport {
     OpenReport {
-        storage_snapshot: Box::new(snapshot.storage_snapshot().clone()),
+        storage_backend: snapshot.backend(),
+        read_complete: snapshot.read_complete(),
+        storage_snapshot: snapshot
+            .segment()
+            .map(|source| Box::new(source.storage_snapshot().clone())),
         latest_sequence: snapshot.latest_sequence(),
         event_count: snapshot.events().len(),
-        listed_through_segment: snapshot.listed_through_segment(),
+        listed_through_segment: snapshot
+            .segment()
+            .and_then(|source| source.listed_through_segment()),
         writer: writer_report(snapshot.writer_metadata()),
-        repair_count: snapshot.repairs().len(),
+        repair_count: snapshot.segment().map(|source| source.repairs().len()),
         corrupt_tail: snapshot.corrupt_tail().map(corrupt_tail_report),
     }
 }
@@ -1457,13 +1471,15 @@ fn corrupt_tail_report(tail: &GlobalLedgerCorruptTail) -> CorruptTailReport {
     }
 }
 
-fn repair_reports(snapshot: &GlobalLedgerReadOnly) -> Vec<RepairReport> {
-    snapshot
-        .repairs()
-        .iter()
-        .take(MAX_FORENSIC_REPAIRS)
-        .map(repair_report)
-        .collect()
+fn repair_reports(snapshot: &GlobalLedgerEvidence) -> Option<Vec<RepairReport>> {
+    snapshot.segment().map(|source| {
+        source
+            .repairs()
+            .iter()
+            .take(MAX_FORENSIC_REPAIRS)
+            .map(repair_report)
+            .collect()
+    })
 }
 
 fn repair_report(repair: &GlobalLedgerRepairRecord) -> RepairReport {
@@ -1479,7 +1495,7 @@ fn repair_report(repair: &GlobalLedgerRepairRecord) -> RepairReport {
     }
 }
 
-fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult<String> {
+fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult<String> {
     let open = open_report(snapshot);
     let repairs = repair_reports(snapshot);
     let query = serde_json::from_value(json!({})).map_err(query_error)?;
@@ -1488,6 +1504,8 @@ fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult
         .map_err(map_ledger_error)?;
     let mut report = String::new();
     writeln!(report, "ActingCommand ledger forensic export").expect("write String");
+    writeln!(report, "storage_backend: {}", open.storage_backend).expect("write String");
+    writeln!(report, "read_complete: {}", open.read_complete).expect("write String");
     writeln!(report, "latest_sequence: {}", open.latest_sequence).expect("write String");
     writeln!(report, "event_count: {}", open.event_count).expect("write String");
     writeln!(
@@ -1505,8 +1523,15 @@ fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult
     writeln!(
         report,
         "listed_through_segment: {}",
-        open.listed_through_segment
-            .map_or_else(|| "none".to_owned(), |value| value.to_string())
+        open.listed_through_segment.map_or_else(
+            || if snapshot.segment().is_some() {
+                "none"
+            } else {
+                "not_applicable"
+            }
+            .to_owned(),
+            |value| value.to_string()
+        )
     )
     .expect("write String");
     match &open.writer {
@@ -1540,10 +1565,23 @@ fn render_export(snapshot: &GlobalLedgerReadOnly, root: &Path) -> ForensicResult
         )
         .expect("write String");
     } else {
-        writeln!(report, "corrupt_tail: none").expect("write String");
+        writeln!(
+            report,
+            "corrupt_tail: {}",
+            if snapshot.segment().is_some() {
+                "none"
+            } else {
+                "not_applicable"
+            }
+        )
+        .expect("write String");
     }
-    writeln!(report, "repairs:").expect("write String");
-    for repair in repairs {
+    if repairs.is_none() {
+        writeln!(report, "repairs: not_applicable").expect("write String");
+    } else {
+        writeln!(report, "repairs:").expect("write String");
+    }
+    for repair in repairs.iter().flatten() {
         writeln!(
             report,
             "- id={} completed={} segment={} original={} repaired={} tail_sha256={} quarantine={}",

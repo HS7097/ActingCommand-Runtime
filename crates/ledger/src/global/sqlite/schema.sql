@@ -54,5 +54,6 @@ CREATE TABLE ledger_meta (
     migration_id TEXT,
     cutover_state TEXT NOT NULL,
     integer_encoding TEXT NOT NULL,
-    integrity_tag TEXT NOT NULL
+    integrity_tag TEXT NOT NULL,
+    migration_record TEXT
 ) STRICT;

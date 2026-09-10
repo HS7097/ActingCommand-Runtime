@@ -39,19 +39,17 @@ pub fn replay_signatures_read_only(
         ));
     }
     let open = |root: &Path| {
-        GlobalLedger::open_read_only(
-            GlobalLedgerReadOnlyConfig::new(root.join("ledger")),
-            |reference| verify_projected_read_only(root, reference).ok(),
-        )
+        GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root), |reference| {
+            verify_projected_read_only(root, reference).ok()
+        })
         .map_err(map_ledger_error)
     };
     let input_snapshot = open(&request.input_state_root)?;
     let catalog_snapshot = open(&request.catalog_state_root)?;
-    let input = SignaturePrefix::from_read_only(&input_snapshot, request.input_through)
+    let input = SignaturePrefix::from_evidence(&input_snapshot, request.input_through)
         .map_err(map_ledger_error)?;
-    let catalog_prefix =
-        SignaturePrefix::from_read_only(&catalog_snapshot, request.catalog_through)
-            .map_err(map_ledger_error)?;
+    let catalog_prefix = SignaturePrefix::from_evidence(&catalog_snapshot, request.catalog_through)
+        .map_err(map_ledger_error)?;
     let catalog = SignatureCatalog::from_prefix(&catalog_prefix);
     let page = replay_signatures(&input, &catalog, &request.page).map_err(map_ledger_error)?;
     Ok(ForensicOutput::Machine(ForensicReport::Signatures(
