@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
 
 #[test]
 fn derives_target_ids_like_python_converter() {
@@ -301,14 +302,18 @@ fn source_drag_rejects_canonical_or_mixed_endpoint_spelling() {
             "duration_ms": 500
         }),
     ] {
-        let operation = json!({"id": "drag", "click": click});
+        let operation = json!({"id": "drag", "from": "home", "click": click});
         let mut errors = Vec::new();
         let bundle = Bundle {
             task_id: "fixture".to_string(),
             dir: PathBuf::from("operations/fixture"),
             data: json!({
                 "schema_version": "0.6",
-                "coordinate_space": {"width": 1280, "height": 720}
+                "task_id": "fixture",
+                "game": "fixture",
+                "server_scope": ["test"],
+                "coordinate_space": {"width": 1280, "height": 720},
+                "operations": [operation.clone()]
             }),
         };
 
@@ -320,6 +325,15 @@ fn source_drag_rejects_canonical_or_mixed_endpoint_spelling() {
                 .any(|error| error.contains("source drag click must use from/to")),
             "{errors:?}"
         );
+        let rejection = declaration_file_requests(&[bundle]).expect_err(
+            "source declaration rejects canonical endpoint spelling before reading dependencies",
+        );
+        assert_eq!(rejection.code, "resource_declaration_invalid");
+        let issue: ResourceDeclarationIssue =
+            serde_json::from_value(rejection.details.unwrap()).unwrap();
+        assert_eq!(issue.declaration_file, "operations/fixture/task.json");
+        assert_eq!(issue.field_path, "/operations/0/click/from_rect");
+        assert_eq!(issue.reason, ResourceDeclarationReason::UnknownField);
     }
 }
 
