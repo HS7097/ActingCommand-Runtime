@@ -275,6 +275,12 @@ fn admit_mapped_run_at(
     unix_ms: u64,
     seed: u64,
 ) -> (Box<PolicyRunContext>, PolicyRecomputeDirective) {
+    host.shared
+        .performance
+        .lock()
+        .unwrap()
+        .sample_and_record_capacity(&host.shared.ledger, &host.shared.events)
+        .expect("capacity sample for mapped admission time");
     let facts = mapped_policy_facts_at(outcome_key, unix_ms, true);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(

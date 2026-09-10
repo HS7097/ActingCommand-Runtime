@@ -179,7 +179,7 @@ impl HostShared {
             )?;
             let mut performance = lock(&self.performance, "record_performance_event_reference")?;
             if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
-                || performance.sample_interval().is_some()
+                || performance.counters_enabled()
             {
                 performance.record_event_reference(event, *persisted.event_id())?;
             }
