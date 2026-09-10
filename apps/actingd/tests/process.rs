@@ -2055,9 +2055,13 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
         match snapshot {
             Ok(snapshot) => {
                 eprintln!(
-                    "authoritative ledger snapshot: latest_sequence={} listed_through_segment={:?} corrupt_tail={:?}",
+                    "authoritative ledger snapshot: backend={} read_complete={} latest_sequence={} listed_through_segment={:?} corrupt_tail={:?}",
+                    snapshot.backend(),
+                    snapshot.read_complete(),
                     snapshot.latest_sequence(),
-                    snapshot.listed_through_segment(),
+                    snapshot
+                        .segment()
+                        .map(|source| source.listed_through_segment()),
                     snapshot.corrupt_tail(),
                 );
                 if snapshot.corrupt_tail().is_some() {
