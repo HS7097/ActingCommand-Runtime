@@ -5,11 +5,14 @@
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
     ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
-    EventSeverity, EventType, FrameId, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference,
-    RetentionClass, RunId, SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
+    EventSeverity, EventType, FrameId, ProjectedArtifactReference, RetentionClass, RunId,
+    SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+mod metadata;
+pub(crate) use metadata::{LedgerEventMetadata, LedgerEventRead};
 
 /// A ledger-assigned fact. Consumers can inspect and serialize it, but cannot construct or
 /// deserialize one.
@@ -122,54 +125,7 @@ impl PersistedEvent {
     }
 
     fn validate(&self) -> Result<(), FactValidationError> {
-        if self.schema_version != GLOBAL_EVENT_SCHEMA_VERSION {
-            return Err(FactValidationError {
-                code: "unsupported_event_schema",
-            });
-        }
-        if self.sequence == 0 {
-            return Err(FactValidationError {
-                code: "invalid_sequence",
-            });
-        }
-        if self.timestamp_unix_ms == 0 {
-            return Err(FactValidationError {
-                code: "invalid_timestamp",
-            });
-        }
-        if self.event_type != self.payload.event_type()
-            || self.event_type.family() != self.payload.family()
-        {
-            return Err(FactValidationError {
-                code: "payload_type_mismatch",
-            });
-        }
-        if self.payload_schema != self.payload.schema() {
-            return Err(FactValidationError {
-                code: "payload_schema_mismatch",
-            });
-        }
-        let expected_sensitivity = self
-            .artifacts
-            .iter()
-            .fold(self.payload.sensitivity(), |current, artifact| {
-                current.max(artifact.sensitivity())
-            });
-        if self.sensitivity != expected_sensitivity || self.payload.validate().is_err() {
-            return Err(FactValidationError {
-                code: "invalid_typed_payload",
-            });
-        }
-        if self
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.validate().is_err())
-        {
-            return Err(FactValidationError {
-                code: "invalid_artifact_reference",
-            });
-        }
-        Ok(())
+        metadata::validate(self)
     }
 }
 

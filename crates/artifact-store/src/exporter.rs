@@ -1536,6 +1536,7 @@ mod tests {
         .sanitize(&TestFingerprinter)
         .expect("sanitize capture summary");
         ProjectedEvent {
+            views: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),
@@ -1595,6 +1596,7 @@ mod tests {
         .sanitize(&TestFingerprinter)
         .expect("sanitize terminal");
         ProjectedEvent {
+            views: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),

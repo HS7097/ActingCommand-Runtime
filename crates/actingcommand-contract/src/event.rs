@@ -112,12 +112,14 @@ mod codes;
 mod envelope;
 mod ids;
 mod payload;
+mod views;
 
 pub use artifact::*;
 pub use codes::*;
 pub use envelope::*;
 pub use ids::*;
 pub use payload::*;
+pub use views::*;
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -554,10 +556,18 @@ pub enum EventActor {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<LedgerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_timestamp_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_timestamp_unix_ms: Option<u64>,
     pub from_sequence: Option<u64>,
     pub to_sequence: Option<u64>,
     pub event_type: Option<EventType>,
     pub minimum_severity: Option<EventSeverity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_severity: Option<EventSeverity>,
     pub source: Option<EventSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_module: Option<OriginModule>,
@@ -573,6 +583,26 @@ pub struct EventQuery {
     pub frame_id: Option<FrameId>,
     pub action_id: Option<ActionId>,
     pub recognition_id: Option<RecognitionId>,
+}
+
+impl EventQuery {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        if self
+            .from_timestamp_unix_ms
+            .zip(self.to_timestamp_unix_ms)
+            .is_some_and(|(from, to)| from > to)
+            || self
+                .minimum_severity
+                .zip(self.maximum_severity)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+        {
+            return Err(SanitizationError::new(
+                "invalid_event_query_bounds",
+                "query",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -608,6 +638,8 @@ pub struct ProjectedEvent {
     pub payload_schema: String,
     pub payload: ProjectionPayload,
     pub artifacts: Vec<ProjectedArtifactReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<LedgerView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
