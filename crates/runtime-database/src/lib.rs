@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod maintenance;
+pub use maintenance::*;
 
 pub use error::{RuntimeDatabaseError, RuntimeDatabaseResult};
 
@@ -117,6 +119,91 @@ impl RuntimeDatabase {
         &self.root
     }
 
+    /// Opens existing material without initialization, key creation, or schema writes.
+    pub fn open_existing(root: &Path, read_only: bool) -> RuntimeDatabaseResult<Self> {
+        require_regular_directory(root)?;
+        let database_path = root.join(DATABASE_FILE);
+        require_regular_file(&database_path)?;
+        let key_path = root.join(INTEGRITY_KEY_FILE);
+        require_regular_file(&key_path)?;
+        if fs::metadata(&key_path)
+            .map_err(|error| {
+                RuntimeDatabaseError::io(
+                    "state_integrity_key_read_failed",
+                    "inspect_existing_key",
+                    &error,
+                )
+            })?
+            .len()
+            != 32
+        {
+            return Err(failure(
+                "state_integrity_key_invalid",
+                "open_existing_database",
+            ));
+        }
+        let integrity_key = fs::read(&key_path).map_err(|error| {
+            RuntimeDatabaseError::io(
+                "state_integrity_key_read_failed",
+                "open_existing_database",
+                &error,
+            )
+        })?;
+        if integrity_key.len() != 32 {
+            return Err(failure(
+                "state_integrity_key_invalid",
+                "open_existing_database",
+            ));
+        }
+        let flags = if read_only {
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+        } else {
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        };
+        let connection = Connection::open_with_flags(&database_path, flags)
+            .map_err(|error| RuntimeDatabaseError::sql("open_existing_database", &error))?;
+        connection
+            .busy_timeout(BUSY_TIMEOUT)
+            .map_err(|error| RuntimeDatabaseError::sql("configure_existing_database", &error))?;
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .map_err(|error| RuntimeDatabaseError::sql("configure_existing_database", &error))?;
+        if !read_only {
+            let journal: String = connection
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))
+                .map_err(|error| RuntimeDatabaseError::sql("inspect_existing_journal", &error))?;
+            if journal != "wal" {
+                return Err(failure(
+                    "state_database_journal_invalid",
+                    "open_existing_database",
+                ));
+            }
+            connection
+                .pragma_update(None, "synchronous", "FULL")
+                .map_err(|error| {
+                    RuntimeDatabaseError::sql("configure_existing_database", &error)
+                })?;
+        }
+        let integrity: String = connection
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+            .map_err(|error| RuntimeDatabaseError::sql("verify_existing_database", &error))?;
+        if integrity != "ok" {
+            return Err(failure("state_database_corrupt", "open_existing_database"));
+        }
+        Ok(Self {
+            root: root.canonicalize().map_err(|error| {
+                RuntimeDatabaseError::io(
+                    "state_root_inspect_failed",
+                    "open_existing_database",
+                    &error,
+                )
+            })?,
+            database_path,
+            connection: Mutex::new(connection),
+            integrity_key: integrity_key.into_boxed_slice(),
+        })
+    }
+
     pub fn database_path(&self) -> &Path {
         &self.database_path
     }
@@ -146,8 +233,9 @@ impl RuntimeDatabase {
 }
 
 fn require_regular_directory(path: &Path) -> RuntimeDatabaseResult<()> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| failure("state_root_inspect_failed", "open_runtime_state"))?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        RuntimeDatabaseError::io("state_root_inspect_failed", "open_runtime_state", &error)
+    })?;
     if !metadata.is_dir() || is_link_or_reparse(&metadata) {
         return Err(failure("state_root_unsafe", "open_runtime_state"));
     }

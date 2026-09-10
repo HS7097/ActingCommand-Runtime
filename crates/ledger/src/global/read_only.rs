@@ -428,7 +428,9 @@ pub(super) fn check_read_budget(
     Ok(())
 }
 
-fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<GlobalLedgerWriterMetadataObservation> {
+pub(super) fn read_writer_metadata(
+    root: &Path,
+) -> GlobalLedgerResult<GlobalLedgerWriterMetadataObservation> {
     let path = root.join("writer.lock");
     let mut file = match File::open(path) {
         Ok(file) => file,

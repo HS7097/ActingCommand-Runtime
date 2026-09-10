@@ -15,7 +15,12 @@ mod events;
 mod fact_store;
 mod host;
 mod ipc;
+mod ledger_maintenance;
 mod monitor;
+pub use ledger_maintenance::{
+    LedgerMaintenanceFailure, LedgerMaintenanceOperation, LedgerMaintenanceReceipt,
+    LedgerMaintenanceRequest,
+};
 mod owner;
 mod performance;
 mod performance_control;

@@ -171,8 +171,8 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
-    let ledger = actingcommand_ledger::GlobalLedger::open_read_only(
-        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+    let ledger = actingcommand_ledger::GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
         |reference| {
             Some(
                 actingcommand_artifact_store::verify_projected_read_only(root.path(), reference)
@@ -1234,8 +1234,8 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             );
             thread::sleep(Duration::from_millis(10));
         }
-        let ledger = actingcommand_ledger::GlobalLedger::open_read_only(
-            actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+        let ledger = actingcommand_ledger::GlobalLedger::open_evidence(
+            actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
             |reference| {
                 Some(
                     actingcommand_artifact_store::verify_projected_read_only(
@@ -2039,8 +2039,8 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
             "preserved actingd failure state root: {}",
             root.path().display()
         );
-        let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
-            actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+        let snapshot = actingcommand_ledger::GlobalLedger::open_evidence(
+            actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
             |reference| match actingcommand_artifact_store::verify_projected_read_only(
                 root.path(),
                 reference,

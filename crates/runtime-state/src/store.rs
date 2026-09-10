@@ -242,6 +242,101 @@ impl RuntimeStateStore {
         self.database.database_path()
     }
 
+    /// Binds every State-owned row for offline backup/cutover; Ledger rows are separate.
+    pub fn maintenance_digest(
+        &self,
+        limits: actingcommand_runtime_database::MaintenanceLimits,
+        deadline: std::time::Instant,
+    ) -> RuntimeStateResult<String> {
+        self.validate_all()?;
+        let mut connection = self.connection("snapshot_state_for_maintenance")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| {
+                RuntimeStateError::maintenance_sql("snapshot_state_for_maintenance", &error)
+            })?;
+        let mut digest = Sha256::new();
+        let mut bytes = 0_u64;
+        for table in [
+            "state_meta",
+            "state_document_history",
+            "state_documents",
+            "state_migrations",
+            "projection_entries",
+            "release_generations",
+            "release_pointer_history",
+            "release_pointer",
+            "release_transitions",
+        ] {
+            digest.update(table.as_bytes());
+            let columns = transaction
+                .prepare(&format!("SELECT * FROM {table}"))
+                .map_err(|error| {
+                    RuntimeStateError::maintenance_sql("inspect_state_columns", &error)
+                })?
+                .column_count();
+            let ordering = (1..=columns)
+                .map(|column| column.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut statement = transaction
+                .prepare(&format!("SELECT * FROM {table} ORDER BY {ordering}"))
+                .map_err(|error| {
+                    RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+                })?;
+            let mut rows = statement.query([]).map_err(|error| {
+                RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+            })?;
+            while let Some(row) = rows.next().map_err(|error| {
+                RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+            })? {
+                digest.update(b"row");
+                for index in 0..columns {
+                    use rusqlite::types::ValueRef;
+                    let value = row.get_ref(index).map_err(|error| {
+                        RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+                    })?;
+                    let length = match value {
+                        ValueRef::Null => {
+                            digest.update([0]);
+                            0
+                        }
+                        ValueRef::Integer(value) => {
+                            digest.update([1]);
+                            digest.update(value.to_be_bytes());
+                            8
+                        }
+                        ValueRef::Real(value) => {
+                            digest.update([2]);
+                            digest.update(value.to_bits().to_be_bytes());
+                            8
+                        }
+                        ValueRef::Text(value) => {
+                            digest.update([3]);
+                            digest.update((value.len() as u64).to_be_bytes());
+                            digest.update(value);
+                            value.len() as u64
+                        }
+                        ValueRef::Blob(value) => {
+                            digest.update([4]);
+                            digest.update((value.len() as u64).to_be_bytes());
+                            digest.update(value);
+                            value.len() as u64
+                        }
+                    };
+                    bytes = bytes
+                        .checked_add(length)
+                        .ok_or_else(|| fatal("state_snapshot_too_large", "read_state_snapshot"))?;
+                    limits.check(bytes, 0, deadline)?;
+                }
+            }
+        }
+        transaction.commit().map_err(|error| {
+            RuntimeStateError::maintenance_sql("snapshot_state_for_maintenance", &error)
+        })?;
+        Ok(format!("sha256:{:x}", digest.finalize()))
+    }
+
     pub fn read_json_document(&self, state_key: &str) -> RuntimeStateResult<Option<StateDocument>> {
         validate_state_key(state_key)?;
         let connection = self.connection("read_state_document")?;

@@ -249,6 +249,19 @@ pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
 }
 
 impl ActingdConfigFile {
+    pub(super) fn maintenance_config(self) -> Result<RuntimeHostConfig, &'static str> {
+        if self.schema_version != CONFIG_SCHEMA_VERSION
+            || self.state_root.as_os_str().is_empty()
+            || !(16..=1024).contains(&self.secret_fingerprint_salt.len())
+        {
+            return Err("maintenance_config_invalid");
+        }
+        Ok(RuntimeHostConfig::new(
+            self.state_root,
+            self.secret_fingerprint_salt.as_bytes(),
+        ))
+    }
+
     pub(super) fn assemble(self) -> Result<RuntimeAssembly, &'static str> {
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
@@ -1673,7 +1686,7 @@ mod tests {
             EventActor, EventPayload, EventQuery, EventSource, EventType, InputAction,
             RuntimeErrorCode, RuntimePayload, Sensitivity,
         };
-        use actingcommand_ledger::{GlobalLedger, GlobalLedgerReadOnlyConfig};
+        use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig};
         use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
         use actingcommand_runtime_host::RuntimeHost;
 
@@ -1735,11 +1748,9 @@ mod tests {
             assert!(host.fatal_error().expect("health").is_none());
             drop(client);
             host.close().expect("close host after the request failure");
-            let ledger = GlobalLedger::open_read_only(
-                GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
-                |_| None,
-            )
-            .expect("read closed authoritative ledger");
+            let ledger =
+                GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root.path()), |_| None)
+                    .expect("read closed authoritative ledger");
             assert!(ledger.corrupt_tail().is_none());
             let events = ledger.query(&EventQuery::default());
             let failure_type = if capture {
@@ -2057,7 +2068,7 @@ mod tests {
     #[test]
     fn configured_vision_provider_failure_is_recorded_before_runtime_ready() {
         use actingcommand_contract::{EventPayload, EventType, ProviderStartupObservation};
-        use actingcommand_ledger::{GlobalLedger, GlobalLedgerReadOnlyConfig};
+        use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig};
         use actingcommand_ledger_forensics::{
             ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicReport,
             ForensicRequest,
@@ -2144,11 +2155,9 @@ mod tests {
                     .join(actingcommand_contract::RUNTIME_INFO_FILE)
                     .exists()
             );
-            let snapshot = GlobalLedger::open_read_only(
-                GlobalLedgerReadOnlyConfig::new(state_root.join("ledger")),
-                |_| None,
-            )
-            .expect("startup ledger remains readable");
+            let snapshot =
+                GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(state_root), |_| None)
+                    .expect("startup ledger remains readable");
             let observations = snapshot
                 .events()
                 .iter()

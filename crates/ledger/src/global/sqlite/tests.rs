@@ -355,6 +355,36 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
             .query(EventQuery::default())
             .expect("reference facts")
     );
+    let references = sqlite
+        .query(EventQuery::default())
+        .expect("restorable facts")
+        .iter()
+        .flat_map(|event| {
+            event
+                .artifacts()
+                .iter()
+                .map(|reference| reference.project(true))
+        })
+        .collect::<Vec<_>>();
+    let restored_root = TempDir::new().expect("external artifact restore root");
+    let restored = ArtifactStore::open(restored_root.path()).expect("artifact restore owner");
+    for reference in &references {
+        let verified = restored
+            .restore_recovery_reference(
+                artifacts.root(),
+                reference,
+                1024 * 1024,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .expect("restore original identity");
+        assert_eq!(&verified.reference().project(true), reference);
+        assert_eq!(
+            restored
+                .verify_recovery_reference(reference)
+                .expect("restored bytes"),
+            verified
+        );
+    }
     sqlite.close().expect("close sqlite");
     segment.close().expect("close segment");
     database

@@ -287,7 +287,6 @@ impl SegmentStore {
 }
 
 impl<B: DurableStorage> EventStore<B> {
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     pub(super) fn recovered(
         mut backend: B,
         next_sequence: u64,
@@ -314,6 +313,13 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        if matches!(draft.payload(), EventPayload::Ledger(actingcommand_contract::LedgerPayload::Recovered(payload)) if payload.migration().is_some())
+        {
+            return Err(GlobalLedgerError::request(
+                "migration_requires_import_transaction",
+                "append_event",
+            ));
+        }
         if is_unlinked_scheduled_settlement_draft(&draft) {
             return Err(GlobalLedgerError::fatal(
                 "scheduled_settlement_continuation_required",
@@ -2290,11 +2296,183 @@ pub(super) struct WriterMetadata {
 }
 
 pub(super) struct WriterOwnership {
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     newly_created: bool,
     file: File,
     metadata: WriterMetadata,
     closed: bool,
+    compatibility_lock: Option<LockedWriterFile>,
+}
+
+pub(super) fn verify_completed_repairs(
+    root: &Path,
+    events: &[PersistedEvent],
+) -> GlobalLedgerResult<()> {
+    let journal = RepairJournal::load(root)?;
+    for progress in journal.repairs.values() {
+        if !progress.completed {
+            return Err(GlobalLedgerError::fatal(
+                "repair_state_inconsistent",
+                "validate_import_repairs",
+            ));
+        }
+        let repair = &progress.prepared;
+        let id = repair.event_id()?;
+        let event = events
+            .iter()
+            .find(|event| *event.event_id() == id)
+            .ok_or_else(|| {
+                GlobalLedgerError::fatal("repair_recovery_event_missing", "validate_import_repairs")
+            })?;
+        verify_recovery_event(event, repair)?;
+        let tail = fs::read(root.join(&repair.quarantine_key)).map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "verify_import_quarantine", &error)
+        })?;
+        verify_tail_hash(repair, &tail)?;
+    }
+    Ok(())
+}
+
+/// Acquires the existing OS lock without repairing or appending its journal.
+pub(super) struct LockedWriterFile {
+    file: File,
+    created: bool,
+    previous: Option<WriterMetadata>,
+}
+
+impl LockedWriterFile {
+    pub(super) fn newly_created(&self) -> bool {
+        self.created
+    }
+    pub(super) fn bytes(&self) -> GlobalLedgerResult<Vec<u8>> {
+        let mut file = &self.file;
+        file.rewind().map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "seek_locked_writer_metadata", &error)
+        })?;
+        let mut bytes = Vec::new();
+        file.take(4 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                GlobalLedgerError::io("ledger_io", "read_locked_writer_metadata", &error)
+            })?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(GlobalLedgerError::fatal(
+                "writer_metadata_too_large",
+                "read_locked_writer_metadata",
+            ));
+        }
+        Ok(bytes)
+    }
+    pub(super) fn open(path: &Path, create: bool) -> GlobalLedgerResult<Self> {
+        let existing = match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                #[cfg(windows)]
+                let reparse = {
+                    use std::os::windows::fs::MetadataExt;
+                    metadata.file_attributes() & 0x400 != 0
+                };
+                #[cfg(not(windows))]
+                let reparse = false;
+                if !metadata.is_file() || metadata.file_type().is_symlink() || reparse {
+                    return Err(GlobalLedgerError::fatal(
+                        "writer_lock_unsafe",
+                        "lock_writer_without_metadata_write",
+                    ));
+                }
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => false,
+            Err(error) => {
+                return Err(GlobalLedgerError::io(
+                    "ledger_io",
+                    "inspect_writer_lock",
+                    &error,
+                ));
+            }
+        };
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(!existing)
+            .open(path)
+            .map_err(|error| {
+                GlobalLedgerError::io("ledger_io", "open_maintenance_writer_lock", &error)
+            })?;
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                GlobalLedgerError::fatal("writer_conflict", "lock_writer_without_metadata_write")
+            }
+            std::fs::TryLockError::Error(error) => {
+                GlobalLedgerError::io("ledger_io", "lock_writer_without_metadata_write", &error)
+            }
+        })?;
+        let length = file
+            .metadata()
+            .map_err(|error| {
+                GlobalLedgerError::io("ledger_io", "inspect_locked_writer_metadata", &error)
+            })?
+            .len();
+        if length > 4 * 1024 * 1024 {
+            return Err(GlobalLedgerError::fatal(
+                "writer_metadata_too_large",
+                "read_locked_writer_metadata",
+            ));
+        }
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(length + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                GlobalLedgerError::io("ledger_io", "read_locked_writer_metadata", &error)
+            })?;
+        if bytes.len() as u64 != length {
+            return Err(GlobalLedgerError::fatal(
+                "writer_metadata_changed",
+                "read_locked_writer_metadata",
+            ));
+        }
+        let mut previous = None;
+        if !bytes.is_empty() {
+            if bytes.last() != Some(&b'\n') {
+                return Err(GlobalLedgerError::fatal(
+                    "malformed_owner_metadata",
+                    "read_locked_writer_metadata",
+                ));
+            }
+            for line in bytes[..bytes.len() - 1].split(|byte| *byte == b'\n') {
+                previous = Some(parse_writer_metadata(line)?);
+            }
+        } else if existing {
+            return Err(GlobalLedgerError::fatal(
+                "malformed_owner_metadata",
+                "read_locked_writer_metadata",
+            ));
+        }
+        Ok(Self {
+            file,
+            created: !existing,
+            previous,
+        })
+    }
+
+    pub(super) fn require_closed(&self) -> GlobalLedgerResult<()> {
+        if self
+            .previous
+            .as_ref()
+            .is_some_and(|metadata| metadata.active)
+        {
+            return Err(GlobalLedgerError::fatal(
+                "source_writer_not_closed",
+                "validate_maintenance_writer",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn close(self) -> GlobalLedgerResult<()> {
+        self.file.unlock().map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "unlock_maintenance_writer", &error)
+        })
+    }
 }
 
 impl WriterOwnership {
@@ -2352,19 +2530,49 @@ impl WriterOwnership {
         write_writer_metadata(&mut file, &metadata)?;
         Ok((
             Self {
-                #[cfg(any(test, feature = "sqlite-candidate"))]
                 newly_created: created,
                 file,
                 metadata,
                 closed: false,
+                compatibility_lock: None,
             },
             stale_owner,
         ))
     }
 
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     pub(super) fn is_new(&self) -> bool {
         self.newly_created
+    }
+
+    pub(super) fn from_locked(
+        mut lock: LockedWriterFile,
+        compatibility_lock: Option<LockedWriterFile>,
+        owner_id: &str,
+    ) -> GlobalLedgerResult<(Self, Option<String>)> {
+        let stale = lock
+            .previous
+            .as_ref()
+            .filter(|metadata| metadata.active)
+            .map(|metadata| metadata.owner_id.clone());
+        let metadata = WriterMetadata {
+            schema_version: WRITER_SCHEMA_VERSION.into(),
+            owner_id: owner_id.into(),
+            pid: process::id(),
+            active: true,
+            started_at_unix_ms: unix_ms_now()?,
+            closed_at_unix_ms: None,
+        };
+        write_writer_metadata(&mut lock.file, &metadata)?;
+        Ok((
+            Self {
+                newly_created: lock.created,
+                file: lock.file,
+                metadata,
+                closed: false,
+                compatibility_lock,
+            },
+            stale,
+        ))
     }
 
     pub(super) fn close(&mut self) -> GlobalLedgerResult<()> {
@@ -2378,6 +2586,9 @@ impl WriterOwnership {
             .unlock()
             .map_err(|error| GlobalLedgerError::io("ledger_io", "release_writer_lock", &error))?;
         self.closed = true;
+        if let Some(lock) = self.compatibility_lock.take() {
+            lock.close()?;
+        }
         Ok(())
     }
 }

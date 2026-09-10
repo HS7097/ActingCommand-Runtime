@@ -9,7 +9,7 @@ use actingcommand_contract::{
 use actingcommand_ledger::signatures::{
     SignatureCatalog, SignaturePrefix, registration_ref, replay_signatures,
 };
-use actingcommand_ledger::{GlobalLedgerError, GlobalLedgerReadOnlyConfig};
+use actingcommand_ledger::{GlobalLedgerError, GlobalLedgerEvidenceConfig};
 
 impl HostShared {
     fn current_signature_catalog(&self) -> Result<SignatureCatalog, RequestFailure> {
@@ -95,12 +95,12 @@ impl HostShared {
             .map_err(signature_ledger_error)?;
         let catalog = SignatureCatalog::from_prefix(&catalog_prefix);
         let root = Path::new(&request.input_state_root);
-        let snapshot = GlobalLedger::open_read_only(
-            GlobalLedgerReadOnlyConfig::new(root.join("ledger")),
-            |reference| verify_projected_read_only(root, reference).ok(),
-        )
-        .map_err(|error| signature_request_error(error.code()))?;
-        let input = SignaturePrefix::from_read_only(&snapshot, request.input_through)
+        let snapshot =
+            GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root), |reference| {
+                verify_projected_read_only(root, reference).ok()
+            })
+            .map_err(|error| signature_request_error(error.code()))?;
+        let input = SignaturePrefix::from_evidence(&snapshot, request.input_through)
             .map_err(|error| signature_request_error(error.code()))?;
         let page =
             replay_signatures(&input, &catalog, &request.page).map_err(signature_ledger_error)?;

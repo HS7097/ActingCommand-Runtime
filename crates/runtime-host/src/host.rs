@@ -497,6 +497,18 @@ pub struct RuntimeHost {
 }
 
 impl RuntimeHost {
+    pub fn maintain_ledger(
+        config: RuntimeHostConfig,
+        request: crate::LedgerMaintenanceRequest,
+    ) -> Result<crate::LedgerMaintenanceReceipt, crate::LedgerMaintenanceFailure> {
+        crate::ledger_maintenance::run(
+            &config.state_root,
+            &config.secret_fingerprint_salt,
+            config.clock,
+            request,
+        )
+    }
+
     pub fn start(
         config: RuntimeHostConfig,
         provider: Arc<dyn ExecutionBackendProvider>,
@@ -528,16 +540,115 @@ impl RuntimeHost {
             takeover_instances,
             takeover,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
+        let mut fresh_storage = true;
+        for material in [
+            "runtime-state.sqlite",
+            "runtime-state.key",
+            "ledger",
+            "release-blobs",
+            "artifacts",
+        ] {
+            if config.state_root.join(material).try_exists().map_err(|_| {
+                RuntimeHostError::fatal(
+                    "state_root_inspect_failed",
+                    "select_runtime_storage",
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            })? {
+                fresh_storage = false;
+            }
+        }
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler("start_runtime_host", &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
+        let database = Arc::new(if fresh_storage {
+            RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
+                .map_err(|error| RuntimeHostError::state(&error))?
+        } else {
+            actingcommand_runtime_database::RuntimeDatabase::open_existing(
+                &config.state_root,
+                false,
+            )
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })?
+        });
+        let state = Arc::new(
+            RuntimeStateStore::from_database(Arc::clone(&database))
+                .map_err(|error| RuntimeHostError::state(&error))?,
+        );
         let artifacts =
             ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?;
-        let ledger = GlobalLedger::open_with_artifact_verifier(
-            GlobalLedgerConfig::new(config.state_root.join("ledger"), ledger_owner),
-            |reference| artifacts.verify_recovery_reference(reference).ok(),
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+            &config.state_root,
+            fresh_storage,
+            limits,
+            limits.deadline().map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })?,
         )
-        .map_err(|_| ledger_error("open_global_ledger"))?;
+        .map_err(|error| {
+            RuntimeHostError::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::LedgerFailure,
+            )
+            .with_native_detail(format!("{error:?}"))
+        })?;
+        if fresh_storage {
+            maintenance.initialize_empty(&database).map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })?;
+        }
+        match maintenance
+            .status(&database, |reference| {
+                artifacts.verify_recovery_reference(reference).ok()
+            })
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })? {
+            actingcommand_ledger::LedgerStorageStatus::Ready { .. } => {}
+            _ => {
+                return Err(RuntimeHostError::fatal(
+                    "ledger_migration_required",
+                    "select_runtime_storage",
+                    RuntimeErrorCode::LedgerFailure,
+                ));
+            }
+        }
+        let ledger = maintenance
+            .open_writer(Arc::clone(&database), ledger_owner, |reference| {
+                artifacts.verify_recovery_reference(reference).ok()
+            })
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })?;
         let provider = match assemble(&mut crate::ProviderStartup {
             ledger: &ledger,
             events: &events,
@@ -565,14 +676,6 @@ impl RuntimeHost {
             &ledger,
             &events,
         )?;
-        let database = Arc::new(
-            RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
-                .map_err(|error| RuntimeHostError::state(&error))?,
-        );
-        let state = Arc::new(
-            RuntimeStateStore::from_database(database)
-                .map_err(|error| RuntimeHostError::state(&error))?,
-        );
         let mut policy = PolicyHost::open(
             &config.state_root,
             Arc::clone(&state),
