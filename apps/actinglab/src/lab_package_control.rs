@@ -160,7 +160,18 @@ pub(super) fn run_operation(
 ) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     match sub {
-        "validate" | "inspect" | "explain" => {
+        "validate" => {
+            let repo = flags.required_path("--repo")?;
+            let dir = flags.required_path("--operation-dir")?;
+            let report = crate::resource_declarations::operation(&repo, &dir)?;
+            Ok(json!({
+                "operation_dir": dir.display().to_string(),
+                "status": "valid",
+                "report": report,
+                "mode": sub
+            }))
+        }
+        "inspect" | "explain" => {
             let dir = flags.required_path("--operation-dir")?;
             let report = validate_operation_dir(&dir)?;
             Ok(json!({

@@ -92,6 +92,27 @@ pub(crate) fn sort_diagnostics(diagnostics: &mut [CatalogDiagnostic]) {
     });
 }
 
+pub(crate) fn validate_schema_version(
+    schema_version: &str,
+    descriptor: Option<(&str, u64)>,
+    map: &SourceMap,
+) -> Option<CatalogDiagnostic> {
+    if matches!(
+        schema_version,
+        SCHEDULING_SCHEMA_VERSION | SCHEDULING_SCHEMA_VERSION_V2
+    ) {
+        return None;
+    }
+    let mut diagnostic = map.diagnostic(
+        CatalogDiagnosticCode::UnsupportedSchemaVersion,
+        "/schema_version",
+        format!("unsupported scheduling schema version `{schema_version}`"),
+        descriptor,
+    );
+    diagnostic.schema_version.0 = Some(schema_version.to_owned());
+    Some(diagnostic)
+}
+
 fn validate_descriptors(
     bundle: &CatalogBundle,
     maps: &CatalogSourceMaps<'_>,
@@ -122,17 +143,7 @@ fn validate_descriptors(
 
     for (schema_version, catalog, map) in documents {
         let descriptor = Some((catalog.catalog_id.as_str(), catalog.catalog_version));
-        if !matches!(
-            schema_version,
-            SCHEDULING_SCHEMA_VERSION | SCHEDULING_SCHEMA_VERSION_V2
-        ) {
-            let mut diagnostic = map.diagnostic(
-                CatalogDiagnosticCode::UnsupportedSchemaVersion,
-                "/schema_version",
-                format!("unsupported scheduling schema version `{schema_version}`"),
-                descriptor,
-            );
-            diagnostic.schema_version.0 = Some(schema_version.to_owned());
+        if let Some(diagnostic) = validate_schema_version(schema_version, descriptor, map) {
             diagnostics.push(diagnostic);
         }
         validate_identifier(

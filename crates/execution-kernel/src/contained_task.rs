@@ -1662,9 +1662,7 @@ impl PreparedContainedTask {
             .control()
             .cloned()
             .ok_or_else(|| ContainedTaskError::new("contained_task_control_missing"))?;
-        let control: TaskControl = serde_json::from_value(control)
-            .map_err(|_| ContainedTaskError::new("contained_task_control_invalid"))?;
-        control.validate()?;
+        let control = parse_task_control_declaration(control)?;
         let program: TaskProgram = serde_json::from_value(bundle.operation().clone())
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
         let evaluator = bundle
@@ -3073,6 +3071,20 @@ impl StabilityTracker {
             }
         }
     }
+}
+
+/// Validate the control wire declaration without preparing a task or opening assets.
+pub fn validate_control_declaration(value: serde_json::Value) -> Result<(), ContainedTaskError> {
+    parse_task_control_declaration(value).map(|_| ())
+}
+
+fn parse_task_control_declaration(
+    value: serde_json::Value,
+) -> Result<TaskControl, ContainedTaskError> {
+    let control: TaskControl = serde_json::from_value(value)
+        .map_err(|_| ContainedTaskError::new("contained_task_control_invalid"))?;
+    control.validate()?;
+    Ok(control)
 }
 
 #[derive(Debug, Clone, Deserialize)]
