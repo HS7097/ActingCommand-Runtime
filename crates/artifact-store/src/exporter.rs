@@ -194,9 +194,11 @@ impl EvidenceExporter {
         request: EvidenceExportRequest,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<EvidenceExportReceipt> {
-        match self.export_inner(&request, sink) {
+        let mut write_context = request.archive_context.clone();
+        match self.export_inner(&request, sink, &mut write_context) {
             Ok(receipt) => Ok(receipt),
             Err(mut error) => {
+                error = error.with_capacity(write_context.capacity);
                 match artifact_count(&request.pipeline) {
                     Ok(count) => {
                         if let Err(event_error) = self.append_export_event(
@@ -226,9 +228,11 @@ impl EvidenceExporter {
         &mut self,
         request: &EvidenceExportRequest,
         sink: &mut dyn ArtifactEventSink,
+        write_context: &mut ArtifactWriteContext,
     ) -> ArtifactStoreResult<EvidenceExportReceipt> {
         validate_request(request)?;
-        let output_path = normalize_output_path(&request.output_path)?;
+        let output_path =
+            normalize_output_path(&request.output_path, &self.artifact_store, write_context)?;
         if output_path.exists() {
             return Err(ArtifactStoreError::fatal(
                 "evidence_output_collision",
@@ -246,15 +250,14 @@ impl EvidenceExporter {
             )
         })?;
         let manifest_sha256 = canonical_sha256(&manifest_bytes);
-        let mut write_context = request.archive_context.clone();
         self.artifact_store
-            .admit_new_bytes(&mut write_context, &output_path, 0)?;
+            .admit_new_bytes(write_context, &output_path, 0)?;
         let (temp_path, temp_file) = create_export_temp(&output_path)?;
         if let Err(error) = write_archive(
             temp_file,
             &entries,
             &manifest_bytes,
-            Some((&self.artifact_store, &temp_path, &mut write_context)),
+            Some((&self.artifact_store, &temp_path, write_context)),
         ) {
             return Err(cleanup_file(&temp_path, "cleanup_evidence_temp", error));
         }
@@ -299,7 +302,8 @@ impl EvidenceExporter {
                         "evidence_archive_read_failed",
                         "read_published_evidence",
                         error.to_string(),
-                    ),
+                    )
+                    .with_raw_os_error(error.raw_os_error()),
                 ));
             }
         };
@@ -689,7 +693,11 @@ fn entry_digest(path: &str, bytes: &[u8]) -> ArtifactStoreResult<EvidenceArchive
     })
 }
 
-fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
+fn normalize_output_path(
+    path: &Path,
+    store: &ArtifactStore,
+    context: &mut ArtifactWriteContext,
+) -> ArtifactStoreResult<PathBuf> {
     let file_name = path.file_name().ok_or_else(|| {
         ArtifactStoreError::fatal(
             "evidence_output_invalid",
@@ -714,6 +722,7 @@ fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
                     "resolve_evidence_output",
                     error.to_string(),
                 )
+                .with_raw_os_error(error.raw_os_error())
             })?
             .join(path)
     };
@@ -724,12 +733,14 @@ fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
             "evidence output path has no parent directory",
         )
     })?;
+    store.admit_new_bytes(context, &absolute, 0)?;
     fs::create_dir_all(parent).map_err(|error| {
         ArtifactStoreError::fatal(
             "evidence_output_failed",
             "create_evidence_output_directory",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     let parent = parent.canonicalize().map_err(|error| {
         ArtifactStoreError::fatal(
@@ -737,6 +748,7 @@ fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
             "canonicalize_evidence_output_directory",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     Ok(parent.join(file_name))
 }
@@ -770,7 +782,8 @@ fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)
                     "evidence_archive_write_failed",
                     "create_evidence_temp",
                     error.to_string(),
-                ));
+                )
+                .with_raw_os_error(error.raw_os_error()));
             }
         }
     }
@@ -889,13 +902,15 @@ fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<
             "evidence_archive_publish_failed"
         };
         ArtifactStoreError::fatal(code, "publish_evidence_archive", error.to_string())
+            .with_raw_os_error(error.raw_os_error())
     })?;
     if let Err(error) = fs::remove_file(temp_path) {
         let error = ArtifactStoreError::fatal(
             "evidence_temp_cleanup_failed",
             "publish_evidence_archive",
             error.to_string(),
-        );
+        )
+        .with_raw_os_error(error.raw_os_error());
         return Err(cleanup_file(output_path, "rollback_evidence_output", error));
     }
     OpenOptions::new()
@@ -911,7 +926,8 @@ fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<
                     "evidence_archive_sync_failed",
                     "sync_published_evidence",
                     error.to_string(),
-                ),
+                )
+                .with_raw_os_error(error.raw_os_error()),
             )
         })
 }
@@ -924,11 +940,14 @@ fn cleanup_file(
     match fs::remove_file(path) {
         Ok(()) => error,
         Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => error,
-        Err(remove_error) => error.with_secondary(&ArtifactStoreError::fatal(
-            "evidence_cleanup_failed",
-            operation,
-            remove_error.to_string(),
-        )),
+        Err(remove_error) => error.with_secondary(
+            &ArtifactStoreError::fatal(
+                "evidence_cleanup_failed",
+                operation,
+                remove_error.to_string(),
+            )
+            .with_raw_os_error(remove_error.raw_os_error()),
+        ),
     }
 }
 

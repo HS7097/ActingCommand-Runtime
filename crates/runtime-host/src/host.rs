@@ -6146,11 +6146,9 @@ impl HostShared {
         };
         let mut exporter =
             EvidenceExporter::open_with_admission(&self.artifacts).map_err(|error| {
-                RequestFailure::request(
-                    evidence_request_error(error.code()),
-                    RuntimeReceiptState::Failed,
-                    Some(terminal_from_projected(&terminal_receipt)),
-                )
+                let mut failure = online_observation::observation_artifact_failure(error);
+                failure.terminal = Some(terminal_from_projected(&terminal_receipt));
+                failure
             })?;
         let mut sink = RuntimeArtifactEventSink {
             ledger: &self.ledger,
@@ -6159,21 +6157,25 @@ impl HostShared {
         let receipt = match exporter.export(export_request, &mut sink) {
             Ok(receipt) => receipt,
             Err(error) => {
-                let failure_terminal = self.latest_evidence_export_terminal(
+                let failure_terminal = match self.latest_evidence_export_terminal(
                     validated.correlation_id(),
                     EventType::ArtifactExportFailed,
-                )?;
-                if error.capacity().is_some() {
-                    let mut failure = online_observation::observation_artifact_failure(error);
-                    failure.terminal = failure_terminal
-                        .or_else(|| Some(terminal_from_projected(&terminal_receipt)));
-                    return Err(failure);
-                }
-                return Err(RequestFailure::request(
-                    evidence_request_error(error.code()),
-                    RuntimeReceiptState::Failed,
-                    failure_terminal.or_else(|| Some(terminal_from_projected(&terminal_receipt))),
-                ));
+                ) {
+                    Ok(terminal) => terminal,
+                    Err(query_failure) => {
+                        return Err(RequestFailure::poison(
+                            (*query_failure.error).with_related_failure(
+                                "export_failure",
+                                &RuntimeHostError::artifact(error),
+                            ),
+                            Some(terminal_from_projected(&terminal_receipt)),
+                        ));
+                    }
+                };
+                let mut failure = online_observation::observation_artifact_failure(error);
+                failure.terminal =
+                    failure_terminal.or_else(|| Some(terminal_from_projected(&terminal_receipt)));
+                return Err(failure);
             }
         };
         let response_terminal = self

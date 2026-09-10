@@ -148,7 +148,13 @@ impl ArtifactStoreError {
             .collect::<Vec<_>>();
         let mut text = causes
             .iter()
-            .map(|cause| format!("{} during {}", cause.code, cause.operation))
+            .map(|cause| {
+                let mut identity = format!("{} during {}", cause.code, cause.operation);
+                if let Some(code) = cause.raw_os_error {
+                    identity.push_str(&format!(" (OS error {code})"));
+                }
+                identity
+            })
             .collect::<Vec<_>>()
             .join("; secondary ");
         if self.omitted_secondary_count > 0 {

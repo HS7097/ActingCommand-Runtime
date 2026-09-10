@@ -44,6 +44,11 @@ queued transfer authorization use the same predicate; rejection of a successor
 must still release the previous owner. Lease-free observation and monitor windows
 also require this admission.
 
+If a monitor captures a frame and its subsequent Artifact byte admission is
+refused, the capture remains recorded as performed. The existing monitor failure
+owner records the failed attempt, unperformed recognition and capacity reference,
+then keeps the monitor loop running. Actual Artifact I/O failures remain fatal.
+
 ArtifactStore consumes Runtime's read-only committed projection at stream open,
 each stream write, and prepared-byte commit. Trusted terminal/error/release owners
 select Drain in Rust; there is no client or resource field for it. Sealing already
@@ -56,6 +61,10 @@ fatal even when its primary admission refusal was nonfatal.
 Runtime evidence exports share this projection, including ZIP output writes. A
 target on a volume absent from the committed sample is Unknown. The ZIP writer
 retains its first write refusal/error through finalization and cleanup.
+The same decision accompanies output-directory preparation, temporary-file
+creation, verification, publication and cleanup failures. Primary and secondary
+native OS errors are retained; Host classification follows the original error's
+fatality.
 
 Detachable offline resource tools do not construct a production Runtime capacity
 owner. Formal offline Ledger maintenance retains its existing ownership, inactive
