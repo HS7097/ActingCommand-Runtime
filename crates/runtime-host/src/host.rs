@@ -1470,12 +1470,16 @@ impl RuntimeHost {
         let (request, success) = match shared.run_scheduled_contained_task(context, request) {
             Ok(success) => success,
             Err(failure) => {
+                shared.record_scheduled_policy_failure(context, &failure.error)?;
                 let settlement = shared.complete_scheduled_policy_failure(context, &failure);
                 let error = *failure.error;
                 if failure.poison_runtime {
                     shared.fatal.mark(error.clone())?;
                 }
-                settlement?;
+                if let Err(settlement_error) = settlement {
+                    shared.record_scheduled_policy_failure(context, &settlement_error)?;
+                    return Err(settlement_error);
+                }
                 return Err(error);
             }
         };
@@ -1492,8 +1496,12 @@ impl RuntimeHost {
         PolicyExecutionEventData,
         Option<SchedulingOutcomeProjection>,
     )> {
-        self.work_ref("complete_scheduled_policy_run")?
-            .complete_scheduled_policy_run(context, receipt)
+        let shared = self.work_ref("complete_scheduled_policy_run")?;
+        let result = shared.complete_scheduled_policy_run(context, receipt);
+        if let Err(error) = &result {
+            shared.record_scheduled_policy_failure(context, error)?;
+        }
+        result
     }
 
     pub fn record_policy_planning_signal(
@@ -2566,6 +2574,14 @@ fn reconcile_scheduled_policy_outcomes(
     ledger: &GlobalLedger,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
+    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending)
+}
+
+fn reconcile_scheduled_policy_outcomes_for(
+    policy: &mut PolicyHost,
+    ledger: &GlobalLedger,
+    pending: Vec<String>,
+) -> RuntimeHostResult<()> {
     if pending.is_empty() {
         return Ok(());
     }
@@ -2689,15 +2705,7 @@ fn reconcile_scheduled_policy_outcomes(
             [] => {
                 let releases = persisted
                     .iter()
-                    .filter(|event| {
-                        event.event_type() == EventType::LeaseReleased
-                            && event.links().instance_id() == Some(instance_id)
-                            && event.links().request_id() == Some(request_id)
-                            && event.links().correlation_id() == Some(correlation_id)
-                            && event.links().task_id() == Some(task_id)
-                            && event.links().run_id() == Some(run_id)
-                            && event.links().lease_id() == Some(lease_id)
-                    })
+                    .filter(|event| scheduled_admission_release_matches(event, intent, lease_id))
                     .collect::<Vec<_>>();
                 let release = match releases.as_slice() {
                     [] => continue,
@@ -2754,6 +2762,20 @@ fn reconcile_scheduled_policy_outcomes(
         policy.complete_dispatch(&decision_id, &completion)?;
     }
     Ok(())
+}
+
+fn scheduled_admission_release_matches(
+    event: &PersistedEvent,
+    intent: &PersistedEvent,
+    lease_id: &LeaseId,
+) -> bool {
+    event.event_type() == EventType::LeaseReleased
+        && event.links().instance_id() == intent.links().instance_id()
+        && event.links().request_id() == intent.links().request_id()
+        && event.links().correlation_id() == intent.links().correlation_id()
+        && event.links().task_id() == intent.links().task_id()
+        && event.links().run_id() == intent.links().run_id()
+        && event.links().lease_id() == Some(lease_id)
 }
 
 fn recover_authoritative_policy_outcomes(
@@ -3732,6 +3754,9 @@ impl HostShared {
         trigger: PolicyTrigger,
         observed_monotonic_ms: u64,
     ) -> RuntimeHostResult<PolicyCycle> {
+        if trigger == PolicyTrigger::Reconciliation {
+            self.reconcile_pending_policy_settlements()?;
+        }
         let _detection_gate = lock(&self.detection_write_gate, "plan_policy_detection")?;
         let procedure_manifest = lock(&self.procedure_manifest, "read_procedure_manifest")?
             .clone()
@@ -3786,6 +3811,222 @@ impl HostShared {
         )?
         .record_cycle(&cycle, observed_monotonic_ms)?;
         Ok(cycle)
+    }
+
+    fn reconcile_pending_policy_settlements(&self) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            let _gate = lock(&self.policy_outcome_gate, "reconcile_policy_settlements")?;
+            let mut policy = lock(&self.policy, "reconcile_policy_settlements")?;
+            let missing_outcomes = policy
+                .pending_dispatch_outcomes()
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let mut pending = policy.pending_dispatch_completions();
+            pending.extend(missing_outcomes.iter().cloned());
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let eligible = self.inactive_policy_settlements(&pending, &missing_outcomes)?;
+            if eligible.is_empty() {
+                return Ok(());
+            }
+            reconcile_scheduled_policy_outcomes_for(
+                &mut policy,
+                &self.ledger,
+                eligible
+                    .iter()
+                    .filter(|id| missing_outcomes.contains(*id))
+                    .cloned()
+                    .collect(),
+            )?;
+            let pending_completions = policy
+                .pending_dispatch_completions()
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let mut settled = false;
+            for decision_id in eligible {
+                if pending_completions.contains(&decision_id) {
+                    let execution = policy.execution_data(&decision_id)?;
+                    policy.completion_data(&decision_id)?;
+                    let completion = self
+                        .ledger
+                        .reconcile_scheduled_policy_settlement(execution)
+                        .map_err(|_| ledger_error("reconcile_policy_settlements"))?;
+                    policy.complete_dispatch(&decision_id, &completion)?;
+                }
+                if !policy.dispatch_needs_completion(&decision_id)? {
+                    lock(
+                        &self.policy_dispatch_clocks,
+                        "clear_reconciled_policy_clock",
+                    )?
+                    .remove(&decision_id);
+                    settled = true;
+                }
+            }
+            if settled {
+                *lock(
+                    &self.authoritative_policy_outcomes,
+                    "recover_online_policy_outcomes",
+                )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    // policy_outcome_gate excludes a context committing its outcome while these
+    // exact ledger links are checked against the existing execution owners.
+    fn inactive_policy_settlements(
+        &self,
+        pending: &[String],
+        missing_outcomes: &BTreeSet<String>,
+    ) -> RuntimeHostResult<Vec<String>> {
+        let persisted = self
+            .ledger
+            .query(EventQuery::default())
+            .map_err(|_| ledger_error("select_policy_settlements"))?;
+        let leases = lock(&self.scheduler, "select_policy_settlements")?.active_tokens();
+        let runs = lock(&self.contained_runs, "select_policy_settlements")?;
+        let mut eligible = Vec::new();
+        for decision_id in pending {
+            let intents = persisted
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.payload(),
+                        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                            if payload.decision_id() == decision_id.as_str()
+                    )
+                })
+                .collect::<Vec<_>>();
+            let [intent] = intents.as_slice() else {
+                return Err(policy_admission_fatal(
+                    "policy_dispatch_intent_not_unique",
+                    "select_policy_settlements",
+                ));
+            };
+            let links = intent.links();
+            if links.task_id().is_none() || links.run_id().is_none() {
+                continue;
+            }
+            if links.instance_id().is_none()
+                || links.request_id().is_none()
+                || links.correlation_id().is_none()
+            {
+                return Err(policy_admission_fatal(
+                    "policy_run_identity_missing",
+                    "select_policy_settlements",
+                ));
+            }
+            // The contained request is minted after admission. Its existing owner
+            // retains the instance even before its first task event is appended.
+            if runs
+                .values()
+                .any(|run| Some(run.instance_id) == links.instance_id().copied())
+            {
+                continue;
+            }
+            let grants = persisted
+                .iter()
+                .filter(|event| {
+                    event.event_type() == EventType::LeaseGranted
+                        && event.links().instance_id() == links.instance_id()
+                        && event.links().request_id() == links.request_id()
+                        && event.links().correlation_id() == links.correlation_id()
+                        && event.links().task_id() == links.task_id()
+                        && event.links().run_id() == links.run_id()
+                })
+                .collect::<Vec<_>>();
+            let grant = match grants.as_slice() {
+                [] => continue,
+                [grant] => *grant,
+                _ => {
+                    return Err(policy_admission_fatal(
+                        "policy_run_lease_fact_not_unique",
+                        "select_policy_settlements",
+                    ));
+                }
+            };
+            let Some(lease_id) = grant.links().lease_id() else {
+                return Err(policy_admission_fatal(
+                    "policy_run_identity_missing",
+                    "select_policy_settlements",
+                ));
+            };
+            if leases.iter().any(|token| token.lease_id() == *lease_id) {
+                continue;
+            }
+            let releases = persisted
+                .iter()
+                .filter(|event| {
+                    event.event_type() == EventType::LeaseReleased
+                        && event.links().instance_id() == links.instance_id()
+                        && event.links().request_id().is_some()
+                        && event.links().correlation_id() == links.correlation_id()
+                        && event.links().task_id() == links.task_id()
+                        && event.links().run_id() == links.run_id()
+                        && event.links().lease_id() == Some(lease_id)
+                })
+                .count();
+            if releases > 1 {
+                return Err(policy_admission_fatal(
+                    "policy_run_release_fact_not_unique",
+                    "select_policy_settlements",
+                ));
+            }
+            let terminals = persisted
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.event_type(),
+                        EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+                    ) && event.links().instance_id() == links.instance_id()
+                        && event.links().request_id().is_some()
+                        && event.links().correlation_id() == links.correlation_id()
+                        && event.links().task_id() == links.task_id()
+                        && event.links().run_id() == links.run_id()
+                        && event.links().lease_id() == Some(lease_id)
+                })
+                .count();
+            if terminals > 1 {
+                return Err(policy_admission_fatal(
+                    "policy_run_terminal_not_unique",
+                    "select_policy_settlements",
+                ));
+            }
+            if terminals == 0 {
+                // The accepted recovery consumer can settle a released admission
+                // without a task terminal only when no effect was started.
+                if !missing_outcomes.contains(decision_id)
+                    || !persisted
+                        .iter()
+                        .any(|event| scheduled_admission_release_matches(event, intent, lease_id))
+                    || persisted.iter().any(|event| {
+                        event.links().task_id() == links.task_id()
+                            && event.links().run_id() == links.run_id()
+                            && matches!(
+                                event.event_type(),
+                                EventType::TaskEffectIntent
+                                    | EventType::TaskEffectCompleted
+                                    | EventType::InputIntent
+                                    | EventType::InputCommitted
+                                    | EventType::InputFailed
+                            )
+                    })
+                {
+                    continue;
+                }
+            }
+            if releases == 1 {
+                eligible.push(decision_id.clone());
+            }
+        }
+        Ok(eligible)
     }
 
     #[cfg(test)]
@@ -4725,6 +4966,7 @@ impl HostShared {
         PolicyExecutionEventData,
         Option<SchedulingOutcomeProjection>,
     )> {
+        let _gate = lock(&self.policy_outcome_gate, "complete_scheduled_policy_run")?;
         receipt.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 "policy_run_receipt_invalid",
@@ -4772,12 +5014,16 @@ impl HostShared {
             None,
         )?;
         let execution_input = PolicyExecutionInput::Succeeded;
-        let replayed = lock(&self.policy, "replay_scheduled_policy_completion")?
-            .replay_execution(context.decision_id(), &execution_input)?
-            .is_some();
+        let replayed = {
+            let policy = lock(&self.policy, "replay_scheduled_policy_completion")?;
+            policy
+                .replay_execution(context.decision_id(), &execution_input)?
+                .is_some()
+                && !policy.dispatch_needs_completion(context.decision_id())?
+        };
         let authoritative_outcome =
             self.read_scheduled_policy_outcome(context, terminal, receipt.request_id(), replayed)?;
-        let execution = self.record_policy_dispatch_outcome_with_cache_update(
+        let execution = self.record_policy_dispatch_outcome_under_gate(
             context.decision_id(),
             &execution_input,
             Some(context),
@@ -4973,11 +5219,61 @@ impl HostShared {
         }
     }
 
+    fn record_scheduled_policy_failure(
+        &self,
+        context: &PolicyRunContext,
+        error: &RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
+        // The task terminal or an earlier diagnostic may already carry this exact error.
+        // Retain its recorded identity so retries of completion do not duplicate warnings.
+        if error.projection().code == RuntimeErrorCode::LedgerFailure {
+            return Err(error.clone());
+        }
+        let links = self.policy_run_event_links(context)?;
+        if error.lifecycle.recorded_event.get().is_some() {
+            return self.append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::OperationCleanup,
+                RuntimeLifecycleFailure::Host(error),
+                links,
+                None,
+            );
+        }
+        let failure = self.append_event_raw(
+            if error.is_fatal() {
+                EventSeverity::Fatal
+            } else {
+                EventSeverity::Warning
+            },
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                DiagnosticDetailDraft::new(
+                    "policy_driver",
+                    RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
+                    "runtime_host",
+                    error.operation(),
+                    error.code(),
+                    Sensitivity::Internal,
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        self.record_required_failure(error, &failure, links)
+    }
+
     fn complete_scheduled_policy_failure(
         &self,
         context: &PolicyRunContext,
         failure: &RequestFailure,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        let _gate = lock(
+            &self.policy_outcome_gate,
+            "complete_scheduled_policy_failure",
+        )?;
         if !matches!(
             failure.state,
             RuntimeReceiptState::Denied
@@ -4992,7 +5288,7 @@ impl HostShared {
         }
         self.ensure_scheduled_policy_lease_released(context)?;
         let input = self.scheduled_policy_failure_input(context, failure)?;
-        self.record_policy_dispatch_outcome_with_cache_update(
+        self.record_policy_dispatch_outcome_under_gate(
             context.decision_id(),
             &input,
             Some(context),
@@ -5243,6 +5539,7 @@ impl HostShared {
         )
     }
 
+    #[cfg(test)]
     fn record_policy_dispatch_outcome_with_cache_update(
         &self,
         decision_id: &str,
@@ -5250,8 +5547,18 @@ impl HostShared {
         context: Option<&PolicyRunContext>,
         cache_update: PolicyOutcomeCacheUpdate<'_>,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        let _gate = lock(&self.policy_outcome_gate, "record_policy_dispatch_outcome")?;
+        self.record_policy_dispatch_outcome_under_gate(decision_id, input, context, cache_update)
+    }
+
+    fn record_policy_dispatch_outcome_under_gate(
+        &self,
+        decision_id: &str,
+        input: &PolicyExecutionInput,
+        context: Option<&PolicyRunContext>,
+        cache_update: PolicyOutcomeCacheUpdate<'_>,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let result: RuntimeHostResult<PolicyExecutionEventData> = (|| {
-            let _gate = lock(&self.policy_outcome_gate, "record_policy_dispatch_outcome")?;
             if let Some(context) = context
                 && context.decision_id() != decision_id
             {
@@ -5261,10 +5568,11 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
-            if let Some(existing) = lock(&self.policy, "replay_policy_dispatch_outcome")?
-                .replay_execution(decision_id, input)?
-            {
-                self.apply_policy_outcome_cache_update(cache_update)?;
+            let replay = lock(&self.policy, "replay_policy_dispatch_outcome")?
+                .replay_execution(decision_id, input)?;
+            if let Some(existing) = replay {
+                let mut policy = lock(&self.policy, "finish_replayed_policy_outcome")?;
+                self.finish_policy_dispatch_outcome(&mut policy, &existing, context, cache_update)?;
                 return Ok(existing);
             }
             if let Some(context) = context {
@@ -5349,28 +5657,7 @@ impl HostShared {
                 }
                 PolicyExecutionPreparation::Replay(data) => data,
             };
-            if policy.dispatch_needs_completion(decision_id)? {
-                let (dispatch, admission) = policy.completion_data(decision_id)?;
-                let links = match context {
-                    Some(context) => self.policy_run_event_links(context)?,
-                    None => self.events.system_links()?,
-                };
-                let completion = self.append_event_raw(
-                    EventSeverity::Info,
-                    EventSource::Scheduler,
-                    OriginModule::Policy,
-                    EventActor::Scheduler,
-                    links,
-                    PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
-                )?;
-                #[cfg(test)]
-                policy_crash_test_barrier("after_policy_completion");
-                policy.complete_dispatch(decision_id, &completion)?;
-            }
-            #[cfg(test)]
-            self.wait_policy_outcome_transition_test_hook()?;
-            self.apply_policy_outcome_cache_update(cache_update)?;
-            lock(&self.policy_dispatch_clocks, "clear_policy_dispatch_start")?.remove(decision_id);
+            self.finish_policy_dispatch_outcome(&mut policy, &data, context, cache_update)?;
             Ok(data)
         })();
         if let Err(error) = &result
@@ -5379,6 +5666,65 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    // Caller holds policy_outcome_gate across execution, completion and cache publication.
+    fn finish_policy_dispatch_outcome(
+        &self,
+        policy: &mut PolicyHost,
+        data: &PolicyExecutionEventData,
+        context: Option<&PolicyRunContext>,
+        cache_update: PolicyOutcomeCacheUpdate<'_>,
+    ) -> RuntimeHostResult<()> {
+        let decision_id = &data.decision_id;
+        if policy.dispatch_needs_completion(decision_id)? {
+            let (dispatch, admission) = policy.completion_data(decision_id)?;
+            let completions = self
+                .ledger
+                .query(EventQuery {
+                    event_type: Some(EventType::PolicyDispatchCompleted),
+                    ..EventQuery::default()
+                })
+                .map_err(|_| ledger_error("read_policy_dispatch_completion"))?;
+            let completions = completions
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.payload(),
+                        EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                            if payload.decision_id() == decision_id.as_str()
+                    )
+                })
+                .collect::<Vec<_>>();
+            let completion = match completions.as_slice() {
+                [completion] => (**completion).clone(),
+                [] => self.append_event_raw(
+                    EventSeverity::Info,
+                    EventSource::Scheduler,
+                    OriginModule::Policy,
+                    EventActor::Scheduler,
+                    match context {
+                        Some(context) => self.policy_run_event_links(context)?,
+                        None => self.events.system_links()?,
+                    },
+                    PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
+                )?,
+                _ => {
+                    return Err(policy_admission_fatal(
+                        "policy_dispatch_completion_not_unique",
+                        "complete_policy_dispatch_outcome",
+                    ));
+                }
+            };
+            #[cfg(test)]
+            policy_crash_test_barrier("after_policy_completion");
+            policy.complete_dispatch(decision_id, &completion)?;
+        }
+        #[cfg(test)]
+        self.wait_policy_outcome_transition_test_hook()?;
+        self.apply_policy_outcome_cache_update(cache_update)?;
+        lock(&self.policy_dispatch_clocks, "clear_policy_dispatch_start")?.remove(decision_id);
+        Ok(())
     }
 
     fn policy_run_event_links(

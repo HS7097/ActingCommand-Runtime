@@ -38,6 +38,8 @@ struct FailureStreak {
     class: PolicyFailureClass,
     count: u16,
     escalation_streak: u16,
+    disposition: PolicyFailureDisposition,
+    retry_at_unix_ms: Option<u64>,
 }
 
 #[derive(Default)]
@@ -59,7 +61,10 @@ impl PolicyControlState {
         intent: &DispatchIntent,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
-        match self.preview_admission_at(catalog, intent, now_unix_ms) {
+        let result = self
+            .preview_failure_disposition(intent, now_unix_ms)
+            .and_then(|()| self.preview_admission_at(catalog, intent, now_unix_ms));
+        match result {
             Err(mut error) if is_availability_denial(&error) => {
                 let mut rejection = error.policy_rejection();
                 rejection.next_eligible_unix_ms =
@@ -69,6 +74,29 @@ impl PolicyControlState {
             }
             result => result,
         }
+    }
+
+    fn preview_failure_disposition(
+        &self,
+        intent: &DispatchIntent,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let key = (intent.task_id.clone(), intent.instance_id.clone());
+        if let Some(failure) = self.failure_streaks.get(&key) {
+            if failure.disposition == PolicyFailureDisposition::PausedTask {
+                return Err(request("policy_task_paused", "reserve_policy_budget"));
+            }
+            if failure
+                .retry_at_unix_ms
+                .is_some_and(|retry_at| now_unix_ms < retry_at)
+            {
+                return Err(request(
+                    "policy_retry_backoff_active",
+                    "reserve_policy_budget",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn preview_admission_at(
@@ -187,12 +215,25 @@ impl PolicyControlState {
         now_unix_ms: u64,
     ) -> RuntimeHostResult<Option<u64>> {
         let (_, profile) = task_and_profile(catalog, intent)?;
+        let failure = self
+            .failure_streaks
+            .get(&(intent.task_id.clone(), intent.instance_id.clone()));
+        if failure
+            .is_some_and(|failure| failure.disposition == PolicyFailureDisposition::PausedTask)
+        {
+            return Ok(None);
+        }
         let from = self
             .next_activity_eligible
             .get(&(intent.instance_id.clone(), profile.id.clone()))
             .copied()
             .unwrap_or(now_unix_ms)
-            .max(now_unix_ms);
+            .max(now_unix_ms)
+            .max(
+                failure
+                    .and_then(|failure| failure.retry_at_unix_ms)
+                    .unwrap_or(now_unix_ms),
+            );
         let mut boundaries = BTreeSet::from([from]);
         // Weekly windows repeat. Include one full week and the following day,
         // including overnight ends and full-day resets; test every boundary with
@@ -229,8 +270,10 @@ impl PolicyControlState {
         intent: &DispatchIntent,
         admission: &PolicyAdmissionRecord,
     ) -> RuntimeHostResult<()> {
+        // Replaying an accepted admission validates its original budget receipt.
+        // Live failure disposition is checked by preview_admission under the owner lock.
         let expected =
-            self.preview_admission(catalog, intent, admission.activity.admitted_at_unix_ms)?;
+            self.preview_admission_at(catalog, intent, admission.activity.admitted_at_unix_ms)?;
         if &expected != admission {
             return Err(fatal(
                 "policy_budget_receipt_mismatch",
@@ -471,6 +514,8 @@ impl PolicyControlState {
                         class: failure.original_class,
                         count: failure.consecutive_same_error,
                         escalation_streak: failure.escalation_streak,
+                        disposition: failure.disposition,
+                        retry_at_unix_ms: failure.retry_at_unix_ms,
                     },
                 );
             }
@@ -538,6 +583,8 @@ pub(crate) fn is_availability_denial(error: &RuntimeHostError) -> bool {
             "policy_budget_exhausted"
                 | "policy_activity_interval_active"
                 | "policy_activity_window_closed"
+                | "policy_retry_backoff_active"
+                | "policy_task_paused"
         )
 }
 
@@ -763,10 +810,12 @@ mod tests {
     fn recoverable_failures_back_off_then_escalate_same_error() {
         let catalog = catalog();
         let mut state = PolicyControlState::default();
+        let mut recovered = PolicyControlState::default();
+        let mut now = NOW;
         for attempt in 1_u16..=3 {
             let intent = intent(&catalog, u64::from(attempt));
             let admission = state
-                .preview_admission(&catalog, &intent, NOW)
+                .preview_admission(&catalog, &intent, now)
                 .expect("admission preview");
             let data = state
                 .preview_execution(
@@ -774,14 +823,14 @@ mod tests {
                     &intent,
                     &admission,
                     PolicyExecutionTiming {
-                        observed_at_unix_ms: NOW + 100,
+                        observed_at_unix_ms: now + 100,
                         runtime_ms: 100,
                     },
                     &PolicyExecutionInput::Failed {
                         error_code: "transient.capture".to_owned(),
                         class: PolicyFailureClass::Recoverable,
                     },
-                    &unavailable(NOW + 100),
+                    &unavailable(now + 100),
                 )
                 .expect("failure classification");
             let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -804,6 +853,44 @@ mod tests {
             state
                 .commit_execution(&catalog, &intent, &admission, &data)
                 .expect("commit failure");
+            recovered
+                .commit_execution(&catalog, &intent, &admission, &data)
+                .expect("replay the recorded failure");
+            for control in [&state, &recovered] {
+                let error = control
+                    .preview_admission(&catalog, &intent, data.observed_at_unix_ms)
+                    .expect_err("recorded failure must control admission");
+                if let Some(retry_at) = failure.retry_at_unix_ms {
+                    assert_eq!(error.code(), "policy_retry_backoff_active");
+                    assert_eq!(
+                        error.policy_rejection().next_eligible_unix_ms,
+                        Some(retry_at)
+                    );
+                    assert!(
+                        control
+                            .preview_admission(&catalog, &intent, retry_at)
+                            .is_ok()
+                    );
+                } else {
+                    assert_eq!(error.code(), "policy_task_paused");
+                    assert_eq!(error.policy_rejection().next_eligible_unix_ms, None);
+                    assert_eq!(
+                        control
+                            .preview_admission(&catalog, &intent, NOW + 86_400_000)
+                            .expect_err("pause survives a day boundary")
+                            .code(),
+                        "policy_task_paused"
+                    );
+                }
+                let mut other_instance = intent.clone();
+                other_instance.instance_id = "fixture-instance-b".to_owned();
+                assert!(
+                    control
+                        .preview_admission(&catalog, &other_instance, now)
+                        .is_ok()
+                );
+            }
+            now = failure.retry_at_unix_ms.unwrap_or(now + 100);
         }
     }
 
@@ -817,10 +904,11 @@ mod tests {
             |_| {},
         );
         let mut state = PolicyControlState::default();
+        let mut now = NOW;
         for attempt in 1_u16..=3 {
             let intent = intent(&catalog, u64::from(attempt));
             let admission = state
-                .preview_admission(&catalog, &intent, NOW)
+                .preview_admission(&catalog, &intent, now)
                 .expect("admission preview");
             let data = state
                 .preview_execution(
@@ -828,14 +916,14 @@ mod tests {
                     &intent,
                     &admission,
                     PolicyExecutionTiming {
-                        observed_at_unix_ms: NOW + 100,
+                        observed_at_unix_ms: now + 100,
                         runtime_ms: 100,
                     },
                     &PolicyExecutionInput::Failed {
                         error_code: "transient.capture".to_owned(),
                         class: PolicyFailureClass::Recoverable,
                     },
-                    &pressured(NOW + 100),
+                    &pressured(now + 100),
                 )
                 .expect("performance-associated failure");
             let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -858,6 +946,7 @@ mod tests {
             state
                 .commit_execution(&catalog, &intent, &admission, &data)
                 .expect("commit failure");
+            now = failure.retry_at_unix_ms.unwrap_or(now + 100);
         }
     }
 
@@ -901,6 +990,7 @@ mod tests {
     fn failure_streak_requires_the_same_class_and_error() {
         let catalog = catalog();
         let mut state = PolicyControlState::default();
+        let mut now = NOW;
         for (suffix, error_code, class) in [
             (1, "transient.capture", PolicyFailureClass::Recoverable),
             (2, "transient.network", PolicyFailureClass::Recoverable),
@@ -908,7 +998,7 @@ mod tests {
         ] {
             let intent = intent(&catalog, suffix);
             let admission = state
-                .preview_admission(&catalog, &intent, NOW)
+                .preview_admission(&catalog, &intent, now)
                 .expect("admission preview");
             let data = state
                 .preview_execution(
@@ -916,14 +1006,14 @@ mod tests {
                     &intent,
                     &admission,
                     PolicyExecutionTiming {
-                        observed_at_unix_ms: NOW + 100,
+                        observed_at_unix_ms: now + 100,
                         runtime_ms: 100,
                     },
                     &PolicyExecutionInput::Failed {
                         error_code: error_code.to_owned(),
                         class,
                     },
-                    &unavailable(NOW + 100),
+                    &unavailable(now + 100),
                 )
                 .expect("failure classification");
             let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -933,6 +1023,7 @@ mod tests {
             state
                 .commit_execution(&catalog, &intent, &admission, &data)
                 .expect("commit failure");
+            now = failure.retry_at_unix_ms.unwrap_or(now + 100);
         }
     }
 
@@ -987,10 +1078,11 @@ mod tests {
                 |_| {},
             );
             let mut state = PolicyControlState::default();
+            let mut now = NOW;
             for attempt in 1_u64..=2 {
                 let intent = intent(&catalog, attempt);
                 let admission = state
-                    .preview_admission(&catalog, &intent, NOW)
+                    .preview_admission(&catalog, &intent, now)
                     .expect("admission preview");
                 let data = state
                     .preview_execution(
@@ -998,14 +1090,14 @@ mod tests {
                         &intent,
                         &admission,
                         PolicyExecutionTiming {
-                            observed_at_unix_ms: NOW + 100,
+                            observed_at_unix_ms: now + 100,
                             runtime_ms: 100,
                         },
                         &PolicyExecutionInput::Failed {
                             error_code: "transient.capture".to_owned(),
                             class: PolicyFailureClass::Recoverable,
                         },
-                        &unavailable(NOW + 100),
+                        &unavailable(now + 100),
                     )
                     .expect("failure classification");
                 let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -1024,6 +1116,40 @@ mod tests {
                 state
                     .commit_execution(&catalog, &intent, &admission, &data)
                     .expect("commit failure");
+                now = failure.retry_at_unix_ms.unwrap_or(now + 100);
+                if attempt == 2 {
+                    let next = state.preview_admission(&catalog, &intent, now);
+                    if expected == PolicyFailureDisposition::PausedTask {
+                        assert_eq!(
+                            next.expect_err("declared pause").code(),
+                            "policy_task_paused"
+                        );
+                    } else {
+                        let next = next.expect("declared continue admits the next run");
+                        let success = state
+                            .preview_execution(
+                                &catalog,
+                                &intent,
+                                &next,
+                                PolicyExecutionTiming {
+                                    observed_at_unix_ms: now + 1,
+                                    runtime_ms: 1,
+                                },
+                                &PolicyExecutionInput::Succeeded,
+                                &unavailable(now + 1),
+                            )
+                            .expect("successful execution");
+                        state
+                            .commit_execution(&catalog, &intent, &next, &success)
+                            .expect("success clears the failure disposition");
+                        assert!(
+                            !state.failure_streaks.contains_key(&(
+                                intent.task_id.clone(),
+                                intent.instance_id.clone()
+                            ))
+                        );
+                    }
+                }
             }
         }
     }
