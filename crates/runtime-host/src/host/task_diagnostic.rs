@@ -35,6 +35,9 @@ impl Write for RecordWriter {
                 "task diagnostic record size exceeded",
             ));
         }
+        self.bytes
+            .try_reserve(bytes.len())
+            .map_err(std::io::Error::other)?;
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
     }
@@ -193,18 +196,24 @@ impl RuntimeContainedTask<'_> {
             .diagnostic_stream
             .as_mut()
             .ok_or_else(|| failure("task diagnostic stream missing"))?;
-        if self.diagnostic_records != 0 {
-            stream
-                .append(b",")
-                .map_err(online_observation::observation_artifact_failure)?;
-        }
         let mut writer = RecordWriter { bytes: Vec::new() };
         serde_json::to_writer(&mut writer, &record).map_err(failure)?;
+        let has_separator = self.diagnostic_records != 0;
+        let json_len = writer.bytes.len();
+        let framed_len = json_len
+            .checked_add(usize::from(has_separator))
+            .and_then(|len| len.checked_add(1))
+            .ok_or_else(|| failure("record framing length overflow"))?;
+        writer
+            .bytes
+            .try_reserve_exact(framed_len - json_len)
+            .map_err(failure)?;
+        if has_separator {
+            writer.bytes.insert(0, b',');
+        }
+        writer.bytes.push(b'\n');
         stream
             .append(&writer.bytes)
-            .map_err(online_observation::observation_artifact_failure)?;
-        stream
-            .append(b"\n")
             .map_err(online_observation::observation_artifact_failure)?;
         self.diagnostic_records = index;
         Ok(index)
