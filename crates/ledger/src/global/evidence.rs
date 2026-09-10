@@ -59,6 +59,23 @@ impl GlobalLedgerEvidence {
     pub fn latest_sequence(&self) -> u64 {
         self.events().last().map_or(0, PersistedEvent::sequence)
     }
+
+    /// Projects only the already opened snapshot; this method performs no material I/O.
+    pub fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        projection::EventIndexes::from_events(self.events()).project_view_page(
+            self.events(),
+            query,
+            profile,
+            request,
+            actingcommand_contract::LedgerReadSource::Offline,
+            self.is_complete(),
+        )
+    }
     pub fn segment(&self) -> Option<&GlobalLedgerReadOnly> {
         match &self.source {
             EvidenceSource::Segment(source) => Some(source),

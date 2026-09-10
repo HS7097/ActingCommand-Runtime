@@ -2098,6 +2098,35 @@ fn lab_projection_exposes_full_sanitized_fact() {
         ProjectionPayload::Full(Box::new(persisted.payload().clone()))
     );
     assert!(projected[0].artifacts.is_empty());
+    let drafts = scheduled_recovery_drafts();
+    let result = ledger
+        .append(drafts.task_completed)
+        .expect("Runtime result");
+    let lab_query = EventQuery {
+        view: Some(actingcommand_contract::LedgerView::Lab),
+        ..EventQuery::default()
+    };
+    assert!(
+        ledger
+            .query_page(lab_query.clone(), 0, result.sequence(), 10)
+            .unwrap()
+            .is_empty()
+    );
+    let anchor = ledger
+        .append(drafts.task_request)
+        .expect("Lab request anchor");
+    assert!(
+        ledger
+            .query_page(lab_query.clone(), 0, result.sequence(), 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ledger
+            .query_page(lab_query, 0, anchor.sequence(), 10)
+            .unwrap(),
+        vec![result, anchor]
+    );
 }
 
 #[test]

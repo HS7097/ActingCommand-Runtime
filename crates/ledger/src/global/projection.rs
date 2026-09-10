@@ -4,12 +4,14 @@ use super::GlobalLedgerError;
 use crate::PersistedEvent;
 use actingcommand_contract::{
     ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode, EventId,
-    EventPayload, EventQuery, EventType, FrameId, InstanceId, LeaseId, OriginModule, PolicyPayload,
-    ProjectedEvent, ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
-    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, TaskId, TaskOutcome, TaskPayload,
-    TaskSemanticFact,
+    EventPayload, EventQuery, EventSource, EventType, FrameId, InstanceId, LeaseId, LedgerView,
+    OriginModule, PolicyPayload, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RecognitionId, RequestId, RunId, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
+    TaskId, TaskOutcome, TaskPayload, TaskSemanticFact,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+mod views;
 
 #[derive(Default)]
 pub(super) struct EventIndexes {
@@ -27,6 +29,10 @@ pub(super) struct EventIndexes {
     frame_ids: BTreeMap<FrameId, BTreeSet<usize>>,
     action_ids: BTreeMap<ActionId, BTreeSet<usize>>,
     recognition_ids: BTreeMap<RecognitionId, BTreeSet<usize>>,
+    lab_requests: BTreeMap<RequestId, u64>,
+    lab_correlations: BTreeMap<CorrelationId, u64>,
+    run_requests: BTreeMap<RunId, BTreeMap<RequestId, u64>>,
+    run_correlations: BTreeMap<RunId, BTreeMap<CorrelationId, u64>>,
 }
 
 impl EventIndexes {
@@ -68,6 +74,35 @@ impl EventIndexes {
         insert_link(&mut self.frame_ids, links.frame_id(), position);
         insert_link(&mut self.action_ids, links.action_id(), position);
         insert_link(&mut self.recognition_ids, links.recognition_id(), position);
+        let sequence = event.sequence();
+        if event.origin().source() == EventSource::Lab
+            || event.event_type() == EventType::LabRequest
+        {
+            if let Some(request) = links.request_id() {
+                self.lab_requests.entry(*request).or_insert(sequence);
+            }
+            if let Some(correlation) = links.correlation_id() {
+                self.lab_correlations
+                    .entry(*correlation)
+                    .or_insert(sequence);
+            }
+        }
+        if let Some(run) = links.run_id() {
+            if let Some(request) = links.request_id() {
+                self.run_requests
+                    .entry(*run)
+                    .or_default()
+                    .entry(*request)
+                    .or_insert(sequence);
+            }
+            if let Some(correlation) = links.correlation_id() {
+                self.run_correlations
+                    .entry(*run)
+                    .or_default()
+                    .entry(*correlation)
+                    .or_insert(sequence);
+            }
+        }
     }
 
     pub(super) fn query(
@@ -77,8 +112,9 @@ impl EventIndexes {
     ) -> Vec<PersistedEvent> {
         let minimum_sequence = query.from_sequence.unwrap_or(0);
         let start = events.partition_point(|event| event.sequence() < minimum_sequence);
+        let snapshot = events.last().map_or(0, PersistedEvent::sequence);
         self.candidates_from(events, query, start)
-            .filter(|event| query_matches(query, event))
+            .filter(|event| self.matches(query, event, snapshot))
             .cloned()
             .collect()
     }
@@ -119,7 +155,7 @@ impl EventIndexes {
             .take_while(|event| event.sequence() <= through_sequence)
             .filter(|event| {
                 observe_candidate();
-                event.sequence() > after_sequence && query_matches(query, event)
+                event.sequence() > after_sequence && self.matches(query, event, through_sequence)
             })
             .take(page_events)
             .cloned()
@@ -190,6 +226,45 @@ impl EventIndexes {
             None => Box::new(events[start..].iter()),
         }
     }
+
+    fn matches(&self, query: &EventQuery, event: &PersistedEvent, snapshot: u64) -> bool {
+        query_matches_fields(query, event)
+            && query.view.is_none_or(|view| {
+                view.contains(
+                    event.event_type(),
+                    event.severity(),
+                    event.origin().source(),
+                    self.lab_related(event, snapshot),
+                )
+            })
+    }
+
+    fn lab_related(&self, event: &PersistedEvent, snapshot: u64) -> bool {
+        let links = event.links();
+        let request_matches = |request: &RequestId| {
+            self.lab_requests
+                .get(request)
+                .is_some_and(|sequence| *sequence <= snapshot)
+        };
+        let correlation_matches = |correlation: &CorrelationId| {
+            self.lab_correlations
+                .get(correlation)
+                .is_some_and(|sequence| *sequence <= snapshot)
+        };
+        links.request_id().is_some_and(request_matches)
+            || links.correlation_id().is_some_and(correlation_matches)
+            || links.run_id().is_some_and(|run| {
+                self.run_requests.get(run).is_some_and(|requests| {
+                    requests.iter().any(|(request, sequence)| {
+                        *sequence <= snapshot && request_matches(request)
+                    })
+                }) || self.run_correlations.get(run).is_some_and(|correlations| {
+                    correlations.iter().any(|(correlation, sequence)| {
+                        *sequence <= snapshot && correlation_matches(correlation)
+                    })
+                })
+            })
+    }
 }
 
 pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> ProjectedEvent {
@@ -232,6 +307,8 @@ pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> Pro
             .iter()
             .map(|artifact| artifact.project(include_object_key))
             .collect(),
+        // Snapshot-aware page projection fills the complete overlapping membership.
+        views: Vec::new(),
     }
 }
 
@@ -347,6 +424,18 @@ pub(super) fn project_scheduling_outcomes(
 }
 
 pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
+    query_matches_fields(query, event)
+        && query.view.is_none_or(|view| {
+            view.contains(
+                event.event_type(),
+                event.severity(),
+                event.origin().source(),
+                false,
+            )
+        })
+}
+
+fn query_matches_fields(query: &EventQuery, event: &PersistedEvent) -> bool {
     let links = event.links();
     query
         .from_sequence
@@ -360,6 +449,15 @@ pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool 
         && query
             .minimum_severity
             .is_none_or(|value| event.severity() >= value)
+        && query
+            .maximum_severity
+            .is_none_or(|value| event.severity() <= value)
+        && query
+            .from_timestamp_unix_ms
+            .is_none_or(|value| event.timestamp_unix_ms() >= value)
+        && query
+            .to_timestamp_unix_ms
+            .is_none_or(|value| event.timestamp_unix_ms() < value)
         && query
             .source
             .is_none_or(|value| event.origin().source() == value)
