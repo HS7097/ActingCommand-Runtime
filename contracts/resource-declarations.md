@@ -35,7 +35,8 @@ dependencies requested by the shared declaration parser. MAA pair validation
 uses the first operation's declared game, matching the existing converter.
 
 Repository provenance (`manifest.yaml`), `.github` configuration, upstream and
-archived material, art catalogs, and current authoring/reference files have an
+archived material, art catalogs (including historical equipment metadata), and
+current authoring/reference files have an
 explicit `excluded` result. This includes `task.src.json`, split clicks,
 components, preparation files, generated operation index/primitives, resource
 safety/migration notes, task annotations/catalog, Home-fact templates, recovery

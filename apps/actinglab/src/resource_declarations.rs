@@ -666,9 +666,14 @@ fn exclusion(path: &Path) -> Option<&'static str> {
     if text.starts_with("upstream-derived/") || text.starts_with("packages/") {
         return Some("upstream_or_archived_material");
     }
-    if ["ours/art/", "ours/characters/", "ours/materials/"]
-        .iter()
-        .any(|prefix| text.starts_with(*prefix))
+    if [
+        "ours/art/",
+        "ours/characters/",
+        "ours/equipment/",
+        "ours/materials/",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(*prefix))
     {
         return Some("art_catalog_material");
     }
