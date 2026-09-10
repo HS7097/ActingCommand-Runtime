@@ -26,7 +26,9 @@ and `operation explain` keep their existing behavior.
 | `control.json` | The production task-control parser and declaration validation |
 | `tasks/maa-semantic-mapping.json`, `upstream-sync/maa.tasks.json` | The converter's existing declaration-pair rules |
 
-The named directories describe conventional resource layouts; explicitly selected\npack/pages/navigation/projection filenames also use their native parsers at the\nroot. Paths are relative to their actual repository or resource subroot. Nested self-owned
+The named directories describe conventional resource layouts; explicitly selected
+pack/pages/navigation/projection filenames also use their native parsers at the
+root. Paths are relative to their actual repository or resource subroot. Nested self-owned
 roots are supported without identifying a game in the Runtime. Task validation
 reads the corresponding `operations/resources.json` and only the JSON
 dependencies requested by the shared declaration parser. MAA pair validation

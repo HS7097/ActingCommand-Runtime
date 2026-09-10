@@ -703,7 +703,8 @@ fn validate_relative_path(path: &Path) -> CliOutcome<()> {
         .ok_or_else(|| invalid(path, "path is not UTF-8"))?;
     if text.is_empty()
         || text.len() > MAX_PATH_BYTES
-        || text.contains(['\\', ':'])
+        || text.contains(':')
+        || (!cfg!(windows) && text.contains('\\'))
         || path
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
