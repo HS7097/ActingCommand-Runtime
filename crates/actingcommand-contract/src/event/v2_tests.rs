@@ -439,6 +439,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
                 owned_processes: Vec::new(),
                 third_party_high_load: Vec::new(),
                 ledger_commits: None,
+                capacity: None,
             },
             input(),
         )
@@ -1533,9 +1534,11 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
                 code: "artifact_write_failed".to_owned(),
                 operation: "write_artifact_temp".to_owned(),
                 native_detail: LifecycleNativeDetail::new(secret, false),
+                raw_os_error: None,
             },
             secondary: Vec::new(),
             omitted_secondary_count: 0,
+            capacity: None,
         };
         let payload = sanitize(
             ArtifactPayloadDraft::persistence_failed(failure.clone(), AuditInput::new()).into(),

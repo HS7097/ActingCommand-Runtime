@@ -16,6 +16,9 @@ pub struct ArtifactStoreError {
     detail: String,
     secondary: Vec<ArtifactFailureCause>,
     omitted_secondary_count: u64,
+    fatal: bool,
+    raw_os_error: Option<i32>,
+    capacity: Option<actingcommand_contract::CapacityDecision>,
 }
 
 impl ArtifactStoreError {
@@ -26,6 +29,9 @@ impl ArtifactStoreError {
             detail: detail.into(),
             secondary: Vec::new(),
             omitted_secondary_count: 0,
+            fatal: true,
+            raw_os_error: None,
+            capacity: None,
         }
     }
 
@@ -42,7 +48,41 @@ impl ArtifactStoreError {
     }
 
     pub const fn is_fatal(&self) -> bool {
-        true
+        self.fatal
+    }
+
+    pub(crate) fn capacity_refused(decision: actingcommand_contract::CapacityDecision) -> Self {
+        let mut error = Self::fatal(
+            "capacity_admission_refused",
+            "admit_artifact_bytes",
+            "committed capacity facts do not permit these new bytes",
+        );
+        error.fatal = false;
+        error.capacity = Some(decision);
+        error
+    }
+
+    pub fn with_raw_os_error(mut self, code: Option<i32>) -> Self {
+        self.raw_os_error = code;
+        self
+    }
+
+    pub fn with_capacity(
+        mut self,
+        capacity: Option<actingcommand_contract::CapacityDecision>,
+    ) -> Self {
+        if self.capacity.is_none() {
+            self.capacity = capacity;
+        }
+        self
+    }
+
+    pub fn capacity(&self) -> Option<&actingcommand_contract::CapacityDecision> {
+        self.capacity.as_ref()
+    }
+
+    pub const fn raw_os_error(&self) -> Option<i32> {
+        self.raw_os_error
     }
 
     pub fn usage(detail: impl Into<String>) -> Self {
@@ -58,6 +98,8 @@ impl ArtifactStoreError {
     }
 
     pub(crate) fn with_secondary(mut self, secondary: &Self) -> Self {
+        // A real cleanup/ledger failure remains fatal even if admission was nonfatal.
+        self.fatal |= secondary.fatal;
         for cause in
             std::iter::once(secondary.primary_cause()).chain(secondary.secondary.iter().cloned())
         {
@@ -79,6 +121,7 @@ impl ArtifactStoreError {
             code: self.code.to_owned(),
             operation: self.operation.to_owned(),
             native_detail: LifecycleNativeDetail::new(text, truncated),
+            raw_os_error: self.raw_os_error,
         }
     }
 
@@ -93,6 +136,7 @@ impl ArtifactStoreError {
             primary: self.primary_cause(),
             secondary: self.secondary.clone(),
             omitted_secondary_count: self.omitted_secondary_count,
+            capacity: self.capacity.clone(),
         }
     }
 
@@ -138,8 +182,11 @@ impl fmt::Display for ArtifactStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "artifact store fatal {} during {}: {}",
-            self.code, self.operation, self.detail
+            "artifact store {} {} during {}: {}",
+            if self.fatal { "fatal" } else { "refusal" },
+            self.code,
+            self.operation,
+            self.detail
         )?;
         for cause in &self.secondary {
             write!(

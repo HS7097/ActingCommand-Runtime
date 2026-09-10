@@ -51,6 +51,8 @@ pub(super) struct ActingdConfigFile {
     #[serde(default)]
     device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
     #[serde(default)]
+    capacity_thresholds: actingcommand_contract::CapacityThresholds,
+    #[serde(default)]
     governance_capability: Option<String>,
     #[serde(default)]
     agent_dispatcher: Option<AgentDispatcherConfigFile>,

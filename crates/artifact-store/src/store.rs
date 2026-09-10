@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(1);
 
@@ -21,11 +21,29 @@ pub trait ArtifactEventSink {
     fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()>;
 }
 
+/// Runtime injects its committed B3 projection. This boundary never samples or writes a ledger.
+pub trait ArtifactCapacityAdmission: Send + Sync {
+    fn decide(
+        &self,
+        path: &Path,
+        bytes: u64,
+    ) -> ArtifactStoreResult<actingcommand_contract::CapacityDecision>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum ArtifactWriteClass {
+    #[default]
+    Business,
+    Drain,
+}
+
 #[derive(Debug, Clone)]
 pub struct ArtifactWriteContext {
     artifact_links: ArtifactLinksDraft,
     event_links: EventLinksDraft,
     created_at_unix_ms: u64,
+    write_class: ArtifactWriteClass,
+    capacity: Option<actingcommand_contract::CapacityDecision>,
 }
 
 impl ArtifactWriteContext {
@@ -38,11 +56,19 @@ impl ArtifactWriteContext {
             artifact_links,
             event_links,
             created_at_unix_ms,
+            write_class: ArtifactWriteClass::Business,
+            capacity: None,
         }
     }
 
     pub fn event_links(&self) -> &EventLinksDraft {
         &self.event_links
+    }
+
+    /// For trusted lifecycle/terminal/error owners only; never selected from client/resource input.
+    pub fn for_drain(mut self) -> Self {
+        self.write_class = ArtifactWriteClass::Drain;
+        self
     }
 
     pub const fn created_at_unix_ms(&self) -> u64 {
@@ -115,6 +141,7 @@ pub struct ArtifactStream {
     policy: ArtifactIssuePolicy,
     material: ArtifactMaterialAccumulator,
     failure: Option<ArtifactStoreError>,
+    capacity: Option<Arc<dyn ArtifactCapacityAdmission>>,
 }
 
 impl ArtifactStream {
@@ -156,6 +183,7 @@ impl ArtifactStream {
     }
 
     fn fail(&mut self, error: ArtifactStoreError) -> ArtifactStoreError {
+        let error = error.with_capacity(self.context.capacity.clone());
         self.file.take();
         let error = cleanup_temp(&self.temp_path, error);
         self.failure = Some(error.clone());
@@ -167,6 +195,14 @@ impl Write for ArtifactStream {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if let Some(error) = &self.failure {
             return Err(std::io::Error::other(error.clone()));
+        }
+        if let Err(error) = admit_bytes(
+            self.capacity.as_deref(),
+            &mut self.context,
+            &self.temp_path,
+            bytes.len() as u64,
+        ) {
+            return Err(std::io::Error::other(self.fail(error)));
         }
         let result = self
             .file
@@ -184,11 +220,16 @@ impl Write for ArtifactStream {
                 Ok(count)
             });
         result.map_err(|error| {
-            std::io::Error::other(self.fail(ArtifactStoreError::fatal(
-                "artifact_write_failed",
-                "write_artifact_stream",
-                error.to_string(),
-            )))
+            std::io::Error::other(
+                self.fail(
+                    ArtifactStoreError::fatal(
+                        "artifact_write_failed",
+                        "write_artifact_stream",
+                        error.to_string(),
+                    )
+                    .with_raw_os_error(error.raw_os_error()),
+                ),
+            )
         })
     }
 
@@ -206,6 +247,7 @@ pub struct ArtifactStore {
     artifacts: ArtifactStoreIssuer,
     events: IdentifierIssuer,
     writer: Mutex<()>,
+    capacity: OnceLock<Arc<dyn ArtifactCapacityAdmission>>,
 }
 
 impl ArtifactStore {
@@ -241,6 +283,7 @@ impl ArtifactStore {
                 )
             })?,
             writer: Mutex::new(()),
+            capacity: OnceLock::new(),
         })
     }
 
@@ -248,11 +291,25 @@ impl ArtifactStore {
         &self.root
     }
 
+    /// Installed once before production admission. Detachable offline tooling has no Runtime owner.
+    pub fn install_capacity_admission(
+        &self,
+        admission: Arc<dyn ArtifactCapacityAdmission>,
+    ) -> ArtifactStoreResult<()> {
+        self.capacity.set(admission).map_err(|_| {
+            ArtifactStoreError::fatal(
+                "capacity_admission_already_installed",
+                "install_capacity_admission",
+                "capacity owner cannot be replaced",
+            )
+        })
+    }
+
     /// Opens a task-owned staging stream without publishing an identity or ledger event.
     pub fn begin_stream(
         &self,
         kind: ArtifactKind,
-        context: ArtifactWriteContext,
+        mut context: ArtifactWriteContext,
         policy: ArtifactIssuePolicy,
     ) -> ArtifactStoreResult<ArtifactStream> {
         if context.created_at_unix_ms == 0 {
@@ -263,6 +320,12 @@ impl ArtifactStore {
             ));
         }
         let temp_path = temporary_path(&self.root.join("artifact-stream"))?;
+        admit_bytes(
+            self.capacity.get().map(Arc::as_ref),
+            &mut context,
+            &temp_path,
+            0,
+        )?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -274,6 +337,8 @@ impl ArtifactStore {
                     "create_artifact_temp",
                     error.to_string(),
                 )
+                .with_raw_os_error(error.raw_os_error())
+                .with_capacity(context.capacity.clone())
             })?;
         Ok(ArtifactStream {
             root: self.root.clone(),
@@ -284,6 +349,7 @@ impl ArtifactStore {
             policy,
             material: ArtifactMaterialAccumulator::default(),
             failure: None,
+            capacity: self.capacity.get().cloned(),
         })
     }
 
@@ -367,6 +433,15 @@ impl ArtifactStore {
             })?;
         let path = safe_object_path(&self.root, issued.reference().object_key())
             .map_err(|error| stream.fail(error))?;
+        // Sealing is a trusted drain of already-written bytes; retain the current
+        // decision for a real publication error without blocking normal completion.
+        if let Some(admission) = self.capacity.get() {
+            stream.context.capacity = Some(
+                admission
+                    .decide(&path, 0)
+                    .map_err(|error| stream.fail(error))?,
+            );
+        }
         stream.file.take();
         let publication = (|| {
             let parent = path.parent().ok_or_else(|| {
@@ -450,7 +525,7 @@ impl ArtifactStore {
     /// Publishes bytes and ledger events for one previously prepared artifact.
     pub fn commit_prepared(
         &self,
-        prepared: PreparedArtifact,
+        mut prepared: PreparedArtifact,
         bytes: &[u8],
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<StoredArtifact> {
@@ -462,6 +537,13 @@ impl ArtifactStore {
             )
         })?;
         verify_bytes(bytes, prepared.issued.reference())?;
+
+        admit_bytes(
+            self.capacity.get().map(Arc::as_ref),
+            &mut prepared.context,
+            &prepared.path,
+            bytes.len() as u64,
+        )?;
 
         let result = self.write_and_verify(bytes, &prepared.path, prepared.issued.reference());
         if let Err(error) = result {
@@ -667,6 +749,7 @@ impl ArtifactStore {
         issued: &StoreIssuedArtifact,
         stage: ArtifactFailureStage,
     ) -> ArtifactStoreError {
+        let error = error.with_capacity(context.capacity.clone());
         let payload = ArtifactPayloadDraft::persistence_failed(
             error.failure_record(*issued.reference().artifact_id(), stage),
             AuditInput::new(),
@@ -676,6 +759,24 @@ impl ArtifactStore {
             Err(event_error) => error.with_secondary(&event_error),
         }
     }
+}
+
+fn admit_bytes(
+    admission: Option<&dyn ArtifactCapacityAdmission>,
+    context: &mut ArtifactWriteContext,
+    path: &Path,
+    bytes: u64,
+) -> ArtifactStoreResult<()> {
+    if let Some(admission) = admission {
+        let decision = admission.decide(path, bytes)?;
+        let allowed =
+            decision.outcome.allows() || matches!(context.write_class, ArtifactWriteClass::Drain);
+        context.capacity = Some(decision.clone());
+        if !allowed {
+            return Err(ArtifactStoreError::capacity_refused(decision));
+        }
+    }
+    Ok(())
 }
 
 /// A bounded reader whose bytes remain provisional until `finish` verifies the entire object.
@@ -936,6 +1037,7 @@ fn write_synced_with(
                 "create_artifact_temp",
                 error.to_string(),
             )
+            .with_raw_os_error(error.raw_os_error())
         })?;
     file.write_all(bytes).map_err(|error| {
         ArtifactStoreError::fatal(
@@ -943,6 +1045,7 @@ fn write_synced_with(
             "write_artifact_temp",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     sync(&file).map_err(|error| {
         ArtifactStoreError::fatal(
@@ -950,6 +1053,7 @@ fn write_synced_with(
             "sync_artifact_temp",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })
 }
 
@@ -977,6 +1081,7 @@ fn publish_temp_with(
             "publish_artifact",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })
 }
 

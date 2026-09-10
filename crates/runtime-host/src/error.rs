@@ -24,6 +24,8 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
+    pub(crate) raw_os_error: Option<i32>,
     pub(crate) adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
@@ -79,12 +81,22 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
-        let mut result = Self::fatal(
-            error.code(),
-            error.operation(),
-            RuntimeErrorCode::RuntimeFatal,
-        );
+        let mut result = if error.is_fatal() {
+            Self::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        } else {
+            Self::request(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::InvalidRequest,
+            )
+        };
         result.lifecycle.native_detail = Some(Box::new(error.native_detail()));
+        result.lifecycle.capacity = error.capacity().cloned();
+        result.lifecycle.raw_os_error = error.raw_os_error();
         result
     }
     pub const fn code(&self) -> &'static str {

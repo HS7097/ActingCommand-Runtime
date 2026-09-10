@@ -307,6 +307,7 @@ pub struct RuntimeHostConfig {
     maximum_frame_bytes: usize,
     io_timeout: Duration,
     performance_monitor: Option<PerformanceMonitorConfig>,
+    capacity_thresholds: actingcommand_contract::CapacityThresholds,
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -328,6 +329,7 @@ impl RuntimeHostConfig {
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             performance_monitor: None,
+            capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
@@ -388,6 +390,14 @@ impl RuntimeHostConfig {
         self
     }
 
+    pub fn with_capacity_thresholds(
+        mut self,
+        thresholds: actingcommand_contract::CapacityThresholds,
+    ) -> Self {
+        self.capacity_thresholds = thresholds;
+        self
+    }
+
     pub fn with_agent_dispatcher(mut self, agent_dispatcher: AgentDispatcherConfig) -> Self {
         self.agent_dispatcher = Some(agent_dispatcher);
         self
@@ -431,6 +441,13 @@ impl RuntimeHostConfig {
             .validate()
             .map_err(|error| RuntimeHostError::scheduler("validate_runtime_config", &error))?;
         self.policy_cadence.validate()?;
+        self.capacity_thresholds.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "invalid_capacity_thresholds",
+                "validate_runtime_config",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
         if let Some(performance_monitor) = &self.performance_monitor {
             performance_monitor.validate()?;
         }
@@ -465,6 +482,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
             .field("io_timeout", &self.io_timeout)
             .field("performance_monitor", &self.performance_monitor)
+            .field("capacity_thresholds", &self.capacity_thresholds)
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
