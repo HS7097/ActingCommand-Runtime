@@ -136,16 +136,23 @@ impl Declaration<'_> {
         let fields: &[&str] = match kind {
             Some("point") => &["kind", "point", "x", "y"],
             Some("rect") | None => &["kind", "x", "y", "width", "height"],
-            Some("target" | "target_center") => &["kind", "target_id", "offset"],
+            Some("target" | "target_center") => {
+                if value.get("offset").is_some() {
+                    return Err(self.error(
+                        &child(pointer, "offset"),
+                        ResourceDeclarationReason::UnconsumedField,
+                    ));
+                }
+                &["kind", "target_id"]
+            }
             Some("drag") => &["kind", "from", "to", "duration_ms"],
             // Generated task metadata preserves this supported contained-task action.
-            Some(
-                "single_touch_drag_with_vertical_brake_v1"
-                | "long_press"
-                | "long_tap"
-                | "offset"
-                | "specific_rect",
-            ) => return self.click(value, pointer, false),
+            Some("single_touch_drag_with_vertical_brake_v1") => {
+                return self.click(value, pointer, true);
+            }
+            Some("long_press" | "long_tap" | "offset" | "specific_rect") => {
+                return self.click(value, pointer, false);
+            }
             _ => {
                 return Err(self.error(
                     &child(pointer, "kind"),
@@ -159,7 +166,6 @@ impl Declaration<'_> {
             match field.as_str() {
                 "kind" | "target_id" => self.string(value, &pointer)?,
                 "point" => self.point(value, &pointer)?,
-                "offset" if !value.is_null() => self.rect(value, &pointer)?,
                 "from" | "to" => self.navigation_click(value, &pointer)?,
                 "duration_ms" => self.unsigned(value, &pointer)?,
                 "x" | "y" | "width" | "height" if value.as_i64().is_none() => {

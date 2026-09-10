@@ -236,13 +236,11 @@ pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
             "converter_schema_version",
             "generated",
             "generated_by",
-            "game",
-            "server",
             "pages",
         ],
     )?;
     // Generator provenance is part of the declared format even though detection uses only pages.
-    for field in ["converter_schema_version", "generated_by", "game", "server"] {
+    for field in ["converter_schema_version", "generated_by"] {
         if value.get(field).is_some_and(|value| !value.is_string()) {
             return Err(PageDetectorError::fatal(format!(
                 "/{field} must be a string"
