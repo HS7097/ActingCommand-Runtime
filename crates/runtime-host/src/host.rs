@@ -163,7 +163,7 @@ mod task_diagnostic;
 
 use agent_control::append_agent_wake;
 use monitor_control::monitor_probe_loop;
-use performance::performance_monitor_loop;
+use performance::{CapacityUse, performance_monitor_loop};
 use planning::planning_request_failure;
 
 #[derive(Clone, Copy)]
@@ -4569,7 +4569,7 @@ impl HostShared {
             now_unix_ms,
         };
         let context = &authoritative_context;
-        let gate_error = match lock(
+        let mut gate_error = match lock(
             &self.performance_control,
             "gate_policy_performance_dispatch",
         )?
@@ -4603,6 +4603,14 @@ impl HostShared {
                 ))
             }
         };
+        if gate_error.is_none()
+            && let Err(error) = self.admit_capacity()
+        {
+            if error.is_fatal() {
+                return Err(error);
+            }
+            gate_error = Some(error);
+        }
         let resolved = self
             .resolve_instance(&intent.instance_id)
             .map_err(|failure| *failure.error)?;
@@ -4928,7 +4936,19 @@ impl HostShared {
                     )?),
                 })
             }
-            Err(CriticalExecutionError::Action { error, .. }) => {
+            Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                if error.error.lifecycle.capacity.is_some() {
+                    self.record_required_failure(
+                        &error.error,
+                        &outcome,
+                        self.events.request_links(
+                            &validated,
+                            Some(resolved.instance_id()),
+                            None,
+                            None,
+                        ),
+                    )?;
+                }
                 if error.poison_runtime {
                     self.fatal.mark((*error.error).clone())?;
                 }
@@ -6656,7 +6676,7 @@ impl HostShared {
         if let Some(run_links) = run_links {
             links = run_links.apply(links);
         }
-        self.grant_prepared_lease_with_links(resolved, preparation, links)
+        self.grant_prepared_lease_with_links(resolved, preparation, links, CapacityUse::Business)
     }
 
     fn grant_prepared_lease_with_links(
@@ -6664,7 +6684,11 @@ impl HostShared {
         resolved: &RegisteredInstance,
         preparation: LeasePreparation,
         links: EventLinksDraft,
+        capacity_use: CapacityUse,
     ) -> Result<OperationSuccess, RequestFailure> {
+        if matches!(capacity_use, CapacityUse::Business) && !preparation.is_existing() {
+            self.require_business_capacity(links.clone())?;
+        }
         let intent = self.lease_intent(
             EventAction::LeaseAcquire,
             links.clone(),
@@ -7913,6 +7937,16 @@ impl HostShared {
         };
         match transfer {
             TransferPreparation::Ready(prepared) => {
+                if !self.capacity_allows_transfer(prepared.from_token())? {
+                    self.cleanup_token_inner(
+                        prepared.from_token(),
+                        prepared.from_connection_id(),
+                        LeaseReleaseReason::Preempted,
+                        None,
+                        Some(_admission),
+                    )?;
+                    return Ok(None);
+                }
                 let token = prepared.to_token().clone();
                 self.perform_transfer(prepared)
                     .map(|event| Some((token, event)))
@@ -8100,7 +8134,10 @@ impl HostShared {
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
         match transfer {
             TransferPreparation::Ready(prepared) => {
-                return self.release_via_transfer(request, token, &resolved, prepared, run_links);
+                if self.capacity_allows_transfer(token)? {
+                    return self
+                        .release_via_transfer(request, token, &resolved, prepared, run_links);
+                }
             }
             TransferPreparation::Deferred => {
                 return Err(self.scheduler_denied_error(
@@ -8313,6 +8350,7 @@ impl HostShared {
         artifact_links: ArtifactLinksDraft,
         admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
+        self.require_business_capacity(links.clone())?;
         self.append_event(
             EventSeverity::Info,
             EventSource::Device,
@@ -8818,6 +8856,12 @@ impl HostShared {
         {
             return Ok(recovered);
         }
+        self.require_business_capacity(self.events.request_links(
+            request,
+            Some(resolved.instance_id()),
+            None,
+            None,
+        ))?;
         let active_run =
             self.begin_contained_run(original.request_id(), resolved.instance_id(), true)?;
         active_run
@@ -9083,6 +9127,12 @@ impl HostShared {
                 &error,
             ))
         })?;
+        self.require_business_capacity(self.events.request_links(
+            &validated,
+            Some(resolved.instance_id()),
+            Some(token.lease_id()),
+            None,
+        ))?;
         let source_deadline = matches!(
             task_request.expected_sha256(),
             actingcommand_contract::PackageRef::GitSourceTree(_)
@@ -9311,7 +9361,12 @@ impl HostShared {
             || matches!(&execution,
                 Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
                     if failure.poison_runtime || failure.error.is_fatal());
-        let diagnostic_result = if fatal {
+        let capacity_refused = matches!(&execution,
+            Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
+                if failure.error.code() == "capacity_admission_refused" && !failure.error.is_fatal());
+        // The refusal already carries its Ledger fact reference. Abort the unpublished
+        // diagnostic if its new bytes were refused; task terminal/settlement still run.
+        let diagnostic_result = if fatal || capacity_refused {
             runtime.abort_diagnostic()
         } else {
             runtime.finish_diagnostic(&execution)
@@ -9506,7 +9561,9 @@ impl HostShared {
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
-                    if task_failure.is_none_or(|evidence| evidence.code == failure.error.code()) {
+                    if failure.error.lifecycle.capacity.is_none()
+                        && task_failure.is_none_or(|evidence| evidence.code == failure.error.code())
+                    {
                         let _ = failure
                             .error
                             .lifecycle
@@ -11592,8 +11649,13 @@ impl HostShared {
                 .events
                 .synthetic_links(&token, self.events.action_id()?)?
                 .with_request_id(request_id);
-            self.grant_prepared_lease_with_links(&resolved, preparation, grant_links)
-                .map_err(|failure| *failure.error)?;
+            self.grant_prepared_lease_with_links(
+                &resolved,
+                preparation,
+                grant_links,
+                CapacityUse::Drain,
+            )
+            .map_err(|failure| *failure.error)?;
             (token, connection_id, true)
         };
         let result = self
@@ -11732,7 +11794,19 @@ impl HostShared {
             })?;
         match transfer {
             TransferPreparation::NoCandidate => Ok(false),
-            TransferPreparation::Ready(prepared) => self.perform_transfer(prepared).map(|_| true),
+            TransferPreparation::Ready(prepared) => {
+                if !self.capacity_allows_transfer(token)? {
+                    self.cleanup_token_inner(
+                        token,
+                        connection_id,
+                        LeaseReleaseReason::Preempted,
+                        None,
+                        Some(_admission),
+                    )?;
+                    return Ok(true);
+                }
+                self.perform_transfer(prepared).map(|_| true)
+            }
             TransferPreparation::Deferred => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
                     "preempted_transfer_remained_destructive",
@@ -11933,8 +12007,10 @@ impl HostShared {
                 .map_err(|error| RuntimeHostError::scheduler("prepare_cleanup_transfer", &error))?;
             match transfer {
                 TransferPreparation::Ready(prepared) => {
-                    self.cleanup_via_transfer(token, &resolved, reason, prepared)?;
-                    return Ok(());
+                    if self.capacity_allows_transfer(token)? {
+                        self.cleanup_via_transfer(token, &resolved, reason, prepared)?;
+                        return Ok(());
+                    }
                 }
                 TransferPreparation::Deferred if reason == LeaseReleaseReason::Expired => {
                     return Ok(());
@@ -12957,6 +13033,8 @@ impl HostShared {
             .with_native_detail(
                 host_error.and_then(|error| error.lifecycle.native_detail.as_deref().cloned()),
             )
+            .with_capacity(host_error.and_then(|error| error.lifecycle.capacity.clone()))
+            .with_raw_os_error(host_error.and_then(|error| error.lifecycle.raw_os_error))
             .with_cleanup_cause(host_error.and_then(|error| error.cleanup_cause().cloned()))
             .with_cause(cause.cloned());
             let cause_fatal = cause.map_or(fatal == Some(true), |cause| {
@@ -13072,7 +13150,7 @@ impl HostShared {
         outcome: &PersistedEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
-        if error.lifecycle.native_detail.is_none() {
+        if error.lifecycle.native_detail.is_none() && error.lifecycle.capacity.is_none() {
             let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
         }
         self.append_lifecycle_failure(
@@ -14113,15 +14191,19 @@ impl RuntimeContainedTask<'_> {
         frame_id: IssuedFrameId,
         bytes: &[u8],
         personal: bool,
+        capacity_use: CapacityUse,
     ) -> Result<(), RequestFailure> {
         let event_links = self.links().with_frame_id(frame_id);
-        let write_context = ArtifactWriteContext::new(
+        let mut write_context = ArtifactWriteContext::new(
             self.request
                 .task_artifact_links(self.run_id)
                 .with_frame_id(frame_id),
             event_links,
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
+        if matches!(capacity_use, CapacityUse::Drain) {
+            write_context = write_context.for_drain();
+        }
         let mut sink = RuntimeArtifactEventSink {
             ledger: &self.host.ledger,
             events: &self.host.events,
@@ -14213,7 +14295,7 @@ impl RuntimeContainedTask<'_> {
                 artifact_store_error("persist_contained_task_post_admission_ocr_failure"),
             ));
         }
-        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes, false)
+        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes, false, CapacityUse::Drain)
     }
 
     fn record_post_admission_ocr_observation(
@@ -14272,6 +14354,7 @@ impl RuntimeContainedTask<'_> {
             frame_id,
             &bytes,
             observation.contains_personal_fields(),
+            CapacityUse::Business,
         )?;
         self.post_admission_ocr_observations = self
             .post_admission_ocr_observations
@@ -14328,7 +14411,12 @@ impl RuntimeContainedTask<'_> {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes, personal)?;
+        self.persist_post_admission_ocr_diagnostic(
+            frame_id,
+            &bytes,
+            personal,
+            CapacityUse::Business,
+        )?;
         self.post_admission_ocr_comparison_recorded = true;
         Ok(())
     }
@@ -14475,13 +14563,16 @@ impl RuntimeContainedTask<'_> {
             .links()
             .with_frame_id(current_frame_id)
             .with_action_id(action_id);
-        let write_context = ArtifactWriteContext::new(
+        let mut write_context = ArtifactWriteContext::new(
             self.request
                 .task_artifact_links(self.run_id)
                 .with_frame_id(current_frame_id),
             event_links,
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
+        if terminal_reason.is_some() {
+            write_context = write_context.for_drain();
+        }
         #[cfg(test)]
         let persistence_failure = self
             .host
@@ -15502,6 +15593,11 @@ impl RequestFailure {
     }
 
     fn replace_with_poison(self, error: RuntimeHostError) -> Self {
+        let error = if self.error.lifecycle.capacity.is_some() {
+            error.with_related_failure("prior_capacity_admission", &self.error)
+        } else {
+            error
+        };
         Self {
             state: RuntimeReceiptState::Failed,
             terminal: self.terminal,

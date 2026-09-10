@@ -147,6 +147,11 @@ pub struct ArtifactStream {
 }
 
 impl ArtifactStream {
+    /// Called only once execution has reached its trusted terminal/error path.
+    pub fn for_drain(&mut self) {
+        self.context.write_class = ArtifactWriteClass::Drain;
+    }
+
     pub fn append(&mut self, bytes: &[u8]) -> ArtifactStoreResult<()> {
         if let Some(error) = &self.failure {
             return Err(error.clone());

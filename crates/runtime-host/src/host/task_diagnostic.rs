@@ -572,6 +572,9 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         result: &Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,
     ) -> Result<(), RequestFailure> {
+        if let Some(stream) = &mut self.diagnostic_stream {
+            stream.for_drain();
+        }
         let terminal_step_action_id = self.diagnostic_step.as_ref().map(|step| step.action_id);
         self.end_diagnostic_step(
             self.host

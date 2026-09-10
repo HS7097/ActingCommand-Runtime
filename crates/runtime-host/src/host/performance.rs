@@ -2,6 +2,11 @@
 
 use super::*;
 
+pub(super) enum CapacityUse {
+    Business,
+    Drain,
+}
+
 impl HostShared {
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
@@ -40,6 +45,57 @@ impl HostShared {
         &self,
     ) -> RuntimeHostResult<actingcommand_contract::CapacityDecision> {
         lock(&self.performance, "admit_capacity")?.admit_capacity()
+    }
+
+    pub(super) fn require_business_capacity(
+        &self,
+        links: EventLinksDraft,
+    ) -> Result<(), RequestFailure> {
+        if let Err(error) = self.admit_capacity() {
+            if error.is_fatal() {
+                return Err(RequestFailure::poison_without_terminal(error));
+            }
+            let event = self
+                .append_event_raw(
+                    EventSeverity::Warning,
+                    EventSource::Scheduler,
+                    OriginModule::Scheduler,
+                    EventActor::Scheduler,
+                    links.clone(),
+                    SchedulerPayloadDraft::denied(
+                        EventAction::ScheduleAdmit,
+                        DiagnosticCode::RuntimeDiagnostic,
+                        AuditInput::new(),
+                    ),
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+            self.record_required_failure(&error, &event, links)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            return Err(RequestFailure::request(
+                error,
+                RuntimeReceiptState::Denied,
+                Some(terminal(&event)),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Select a successor only on fresh capacity; refusing it does not refuse the old owner's drain.
+    pub(super) fn capacity_allows_transfer(&self, token: &LeaseToken) -> RuntimeHostResult<bool> {
+        let Err(error) = self.admit_capacity() else {
+            return Ok(true);
+        };
+        if error.is_fatal() {
+            return Err(error);
+        }
+        self.append_lifecycle_failure(
+            RuntimeLifecycleFailureStage::OperationCleanup,
+            RuntimeLifecycleFailure::Host(&error),
+            self.events
+                .synthetic_links(token, self.events.action_id()?)?,
+            None,
+        )?;
+        Ok(false)
     }
 
     pub(super) fn reconcile_performance_control(

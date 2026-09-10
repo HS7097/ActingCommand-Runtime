@@ -188,6 +188,8 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                capacity: None,
+                raw_os_error: None,
                 adb_recovery: error.adb_recovery().cloned().map(Box::new),
                 incomplete_device_diagnostic_summary: None,
                 diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
@@ -235,6 +237,9 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        if self.lifecycle.capacity.is_none() {
+            self.lifecycle.capacity = other.lifecycle.capacity.clone();
+        }
         if self.code == other.code
             && self.operation == other.operation
             && self.lifecycle.native_detail == other.lifecycle.native_detail
