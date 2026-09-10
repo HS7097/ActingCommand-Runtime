@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,33 +27,97 @@ fn semantic_caller_row(path: &str, line: &str) -> String {
     format!("{path}:{}\n", line.trim())
 }
 
-const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
-    "apps/actingctl",
-    "apps/actingd",
-    "apps/ledger-forensics",
-    "benchmarks/workloads",
-    "contracts",
-    "crates/actingcommand-contract",
-    "crates/artifact-store",
-    "crates/device",
-    "crates/execution-kernel",
-    "crates/host-metrics",
-    "crates/ledger",
-    "crates/ledger-forensics",
-    "crates/onnx-provider-support",
-    "crates/pack-containment",
-    "crates/page-detector",
-    "crates/policy",
-    "crates/recognition",
-    "crates/recognition-pack",
-    "crates/runtime-client",
-    "crates/runtime-database",
-    "crates/runtime-host",
-    "crates/runtime-state",
-    "crates/scheduler",
-    "crates/vision-ffi",
-    "tests",
+const GENERIC_NON_CARGO_ROOTS: &[&str] = &["benchmarks/workloads", "contracts", "tests"];
+
+const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] = &[
+    "apps/actinglab",
+    "apps/device-test",
+    "crates/lab",
+    "crates/resource-tooling",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenericityDomain {
+    Runtime,
+    Authoring,
+    Architecture,
+}
+
+fn workspace_genericity_roots(root: &Path) -> BTreeMap<PathBuf, GenericityDomain> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata for genericity");
+    let canonical_root = root
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("resolve workspace root {}: {error}", root.display()));
+    let declared_root = metadata["workspace_root"]
+        .as_str()
+        .expect("cargo metadata workspace_root");
+    let declared_root = Path::new(declared_root)
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("resolve metadata workspace root: {error}"));
+    assert_eq!(
+        declared_root, canonical_root,
+        "cargo metadata belongs to another workspace"
+    );
+    let members = metadata["workspace_members"]
+        .as_array()
+        .expect("cargo metadata workspace_members");
+    assert!(!members.is_empty(), "cargo workspace has no members");
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata packages");
+    let mut member_ids = BTreeSet::new();
+    let mut roots = BTreeMap::new();
+    for member in members {
+        let id = member.as_str().expect("cargo workspace member id");
+        assert!(!id.is_empty(), "cargo workspace member id is empty");
+        assert!(member_ids.insert(id), "duplicate workspace member {id}");
+        let mut matching = packages
+            .iter()
+            .filter(|package| package["id"].as_str().expect("cargo package id") == id);
+        let package = matching
+            .next()
+            .unwrap_or_else(|| panic!("workspace member {id} has no package"));
+        assert!(
+            matching.next().is_none(),
+            "workspace member {id} resolves to multiple packages"
+        );
+        let manifest = Path::new(
+            package["manifest_path"]
+                .as_str()
+                .expect("workspace member manifest_path"),
+        );
+        assert!(
+            manifest.is_absolute(),
+            "member {id} manifest is not absolute"
+        );
+        let manifest = manifest
+            .canonicalize()
+            .unwrap_or_else(|error| panic!("resolve member {id} manifest: {error}"));
+        assert!(manifest.is_file(), "member {id} manifest is not a file");
+        let directory = manifest.parent().expect("member manifest has a parent");
+        let relative = directory
+            .strip_prefix(&canonical_root)
+            .unwrap_or_else(|_| panic!("member {id} directory is outside the workspace"))
+            .to_path_buf();
+        let domain = if GENERIC_AUTHORING_MEMBER_ROOTS
+            .iter()
+            .any(|known| relative == Path::new(known))
+        {
+            GenericityDomain::Authoring
+        } else if relative == Path::new("tools/actinglab-architecture") {
+            GenericityDomain::Architecture
+        } else {
+            GenericityDomain::Runtime
+        };
+        assert!(
+            roots.insert(relative.clone(), domain).is_none(),
+            "multiple workspace members share directory {}",
+            relative.display()
+        );
+    }
+    roots
+}
 
 #[test]
 fn a7_interface_amendment_matches_declared_freeze() {
@@ -161,7 +226,12 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
 fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
     let root = workspace_root();
     let mut files = Vec::new();
-    for owned_root in GENERIC_RUNTIME_OWNED_ROOTS {
+    for (owned_root, domain) in workspace_genericity_roots(&root) {
+        if domain == GenericityDomain::Runtime {
+            collect_generic_runtime_files(&root.join(owned_root), &mut files);
+        }
+    }
+    for owned_root in GENERIC_NON_CARGO_ROOTS {
         collect_generic_runtime_files(&root.join(owned_root), &mut files);
     }
 
@@ -186,24 +256,44 @@ fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
 
 #[test]
 fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
+    let roots = workspace_genericity_roots(&workspace_root());
     for required_root in [
         "crates/host-metrics",
         "crates/policy",
         "crates/runtime-database",
         "crates/runtime-state",
     ] {
-        assert!(
-            GENERIC_RUNTIME_OWNED_ROOTS.contains(&required_root),
+        assert_eq!(
+            roots.get(Path::new(required_root)),
+            Some(&GenericityDomain::Runtime),
             "C2 generic Runtime guard does not cover {required_root}"
         );
+    }
+    for required_root in GENERIC_AUTHORING_MEMBER_ROOTS {
+        assert_eq!(
+            roots.get(Path::new(required_root)),
+            Some(&GenericityDomain::Authoring),
+            "R2-F generic authoring guard does not cover {required_root}"
+        );
+    }
+    assert_eq!(
+        roots.get(Path::new("tools/actinglab-architecture")),
+        Some(&GenericityDomain::Architecture),
+        "the architecture member owns the policy counterexamples"
+    );
+    for (member_root, domain) in roots {
+        if domain != GenericityDomain::Runtime {
+            continue;
+        }
         let counterexample = "const SERVER_BA: &str = \"neutral\";";
         let violations = inspect_generic_runtime_identity(
-            &format!("{required_root}/src/lib.rs"),
+            &format!("{}/src/lib.rs", member_root.display()),
             counterexample,
         );
         assert!(
             !violations.is_empty(),
-            "C2 counterexample escaped in {required_root}"
+            "C2 counterexample escaped in {}",
+            member_root.display()
         );
     }
 }
@@ -211,15 +301,11 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
 #[test]
 fn r2f_product_and_authoring_paths_have_no_builtin_game_identity() {
     let root = workspace_root();
-    let owned_roots = [
-        "apps/actinglab/src",
-        "apps/device-test/src",
-        "crates/lab/src",
-        "crates/resource-tooling/src",
-    ];
     let mut files = Vec::new();
-    for owned_root in owned_roots {
-        collect_rust_files(&root.join(owned_root), &mut files);
+    for (owned_root, domain) in workspace_genericity_roots(&root) {
+        if domain == GenericityDomain::Authoring {
+            collect_rust_files(&root.join(owned_root).join("src"), &mut files);
+        }
     }
 
     let mut violations = Vec::new();
