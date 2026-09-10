@@ -1675,8 +1675,7 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
                     }
                 }
                 EffectiveConfigurationFacts::EntryRecovery { package_sha256, .. } => {
-                    if package_sha256.len() != 64
-                        || !package_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    if package_sha256.validate().is_err()
                         || record.source_sequence.is_some()
                         || record.frame_id.is_some()
                         || record.action_id.is_some()

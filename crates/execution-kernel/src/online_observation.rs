@@ -77,6 +77,27 @@ pub struct EvaluatedPageObservation {
 }
 
 impl PreparedPageObservation {
+    pub fn load_path(
+        instance: &str,
+        locator: &std::path::Path,
+        expected: &actingcommand_contract::PackageRef,
+        targets: &[String],
+        provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, OnlineObservationError> {
+        let bundle = ExternallyVerifiedBundle::load_path(
+            instance, locator, expected, true, provider, deadline,
+        )
+        .map_err(|error| {
+            OnlineObservationError::new(
+                "observation_containment_failed",
+                "admit_contained_observation",
+                error,
+            )
+        })?;
+        Self::from_bundle(bundle, targets)
+    }
+
     pub fn load(
         instance: &str,
         bytes: &[u8],
@@ -93,6 +114,13 @@ impl PreparedPageObservation {
                         error,
                     )
                 })?;
+        Self::from_bundle(bundle, targets)
+    }
+
+    fn from_bundle(
+        bundle: ExternallyVerifiedBundle,
+        targets: &[String],
+    ) -> Result<Self, OnlineObservationError> {
         let loaded = bundle.loaded_bundle();
         let invalid = |cause: &str| {
             OnlineObservationError::new(
@@ -188,8 +216,8 @@ impl PreparedPageObservation {
         })
     }
 
-    pub fn package_sha256(&self) -> String {
-        self.bundle.loaded_bundle().verified_hash().to_string()
+    pub fn package_sha256(&self) -> actingcommand_contract::PackageRef {
+        self.bundle.loaded_bundle().package_ref().clone()
     }
 
     pub fn contains_page(&self, page_id: &str) -> bool {

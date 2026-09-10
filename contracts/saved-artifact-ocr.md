@@ -57,3 +57,5 @@ historical frame. Recognition confidence does not certify the displayed value's
 accuracy, and the result is not a current balance.
 
 Task: [Workflow #269, SAVED-ARTIFACT-OCR-v1](https://github.com/HS7097/ActingCommand-Workflow/issues/269).
+
+`expected_sha256` accepts the complete [package reference](package-reference.md). A source reference locates an exact local bundle directory through `package_path`; the original frozen-frame provenance and OCR deadline also bound source admission.

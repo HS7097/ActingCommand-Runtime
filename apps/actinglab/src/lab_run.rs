@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::contained_resources::finish_package_use;
+use super::contained_resources::{PackageInput, finish_package_use};
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, read_user_config, resolve_instance_id,
     runtime_slice_cli, runtime_state_root,
@@ -8,7 +8,6 @@ use super::{
 use actingcommand_contract::{ContainedTaskRequest, EventActor, EventSource};
 use actingcommand_lab::LabValidateRequest;
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
-use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -28,23 +27,16 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let flags = FlagArgs::parse(args)?;
     flags.expect_positionals("lab run", 0)?;
     reject_client_execution_overrides(global, &flags)?;
-    let package = flags
-        .optional_path("--zip")
-        .or_else(|| flags.optional_path("--package"))
-        .ok_or_else(|| CliError::usage("lab run requires --zip <input.zip>"))?;
-    let package_reader = open_published_package(&package)?;
-    let package = fs::canonicalize(package_reader.path()).map_err(|error| {
-        CliError::package_invalid(format!(
-            "failed to canonicalize contained task package {}: {error}",
-            package_reader.path().display()
-        ))
-    })?;
-    let expected_sha256 = required_expected_sha256(&flags)?;
+    let reference = required_package_reference(&flags)?;
+    let package_reader = PackageInput::open_declared(&flags, reference)?;
     let output_path = flags.required_path("--out")?;
     let config = read_user_config()?;
     let instance = resolve_instance_id(global, &config)?;
-    let request = ContainedTaskRequest::new(package.display().to_string(), expected_sha256)
-        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let request = ContainedTaskRequest::new(
+        package_reader.path().display().to_string(),
+        package_reader.reference.clone(),
+    )
+    .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         runtime_state_root()?,
         EventActor::Lab,
@@ -94,17 +86,18 @@ fn reject_client_execution_overrides(global: &GlobalOptions, flags: &FlagArgs) -
     Ok(())
 }
 
-fn required_expected_sha256(flags: &FlagArgs) -> CliOutcome<String> {
-    let value = flags
-        .optional("--expected-sha256")
-        .filter(|value| value != "true")
-        .ok_or_else(|| {
-            CliError::usage(
-                "lab run requires --expected-sha256 <sha256> from an external trust source",
-            )
-        })?;
-    Sha256Hash::parse_hex(&value).map_err(containment_error)?;
-    Ok(value)
+fn required_package_reference(flags: &FlagArgs) -> CliOutcome<actingcommand_contract::PackageRef> {
+    if flags.optional("--package-ref").is_none()
+        && flags
+            .optional("--expected-sha256")
+            .filter(|value| value != "true")
+            .is_none()
+    {
+        return Err(CliError::usage(
+            "lab run requires a package reference from an external trust source (--expected-sha256 or --package-ref)",
+        ));
+    }
+    PackageInput::declared_reference(flags)
 }
 
 fn write_projection_package(path: &Path, projection: &Value) -> CliOutcome<()> {
@@ -187,7 +180,7 @@ mod tests {
         ])
         .expect("flags");
 
-        let error = required_expected_sha256(&flags).expect_err("missing external hash");
+        let error = required_package_reference(&flags).expect_err("missing external hash");
 
         assert_eq!(error.code, "validation_failed");
         assert!(error.message.contains("external trust source"));

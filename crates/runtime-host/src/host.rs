@@ -137,12 +137,10 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const LEASE_SWEEP_INTERVAL: Duration = Duration::from_millis(50);
-const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const ACCEPT_IDLE_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_AUTHORITATIVE_POLICY_OUTCOMES: usize = 16_384;
-const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
@@ -153,7 +151,9 @@ mod client_events;
 mod device_diagnostic;
 mod governance;
 mod lab_operation;
+mod monitor_control;
 mod online_observation;
+mod performance;
 mod planning;
 mod read_events;
 mod requests;
@@ -163,6 +163,8 @@ mod state_control;
 mod task_diagnostic;
 
 use agent_control::append_agent_wake;
+use monitor_control::monitor_probe_loop;
+use performance::performance_monitor_loop;
 use planning::planning_request_failure;
 
 #[derive(Clone, Copy)]
@@ -2184,23 +2186,12 @@ impl QueueOperationTestControl {
     }
 }
 
-struct MonitorRecoveryAdmission {
-    reason: MonitorRecoveryCoordinationReason,
-    lease_id: Option<LeaseId>,
-}
-
 struct CompletedReadonlyObservation {
     observation: ReadonlyObservation,
     terminal: PersistedEvent,
     verified: TerminalEvent,
     links: EventLinksDraft,
     artifact_links: ArtifactLinksDraft,
-}
-
-impl MonitorRecoveryAdmission {
-    fn admitted(&self) -> bool {
-        self.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable
-    }
 }
 
 /// Bounded process-local replay cache; durable terminal history remains in the ledger.
@@ -3464,173 +3455,6 @@ impl HostShared {
         }
     }
 
-    fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
-        let (tick, control_observation) = {
-            let mut performance = lock(&self.performance, "sample_performance")?;
-            let mut tick = performance.tick(observed_at_unix_ms)?;
-            performance.attach_ledger_sample(&mut tick, &self.ledger)?;
-            let observation = performance.control_observation(observed_at_unix_ms)?;
-            (tick, observation)
-        };
-        let PerformanceTick {
-            events,
-            stop_sampling,
-        } = tick;
-        self.record_performance_events(&events)?;
-        if let Some(observation) = control_observation {
-            self.reconcile_performance_control(observation)?;
-        }
-        Ok(stop_sampling)
-    }
-
-    fn reconcile_performance_control(
-        &self,
-        observation: crate::PerformanceControlObservation,
-    ) -> RuntimeHostResult<()> {
-        let workloads =
-            lock(&self.policy, "read_performance_workloads")?.active_performance_workloads()?;
-        let control_events = lock(&self.performance_control, "reconcile_performance_control")?
-            .observe(observation, &workloads)?
-            .into_iter()
-            .map(PerformanceSemanticEvent::BalanceChanged)
-            .collect::<Vec<_>>();
-        self.record_performance_events(&control_events)
-    }
-
-    fn record_pipeline_performance(
-        &self,
-        signal: PipelinePerformanceSignal,
-    ) -> RuntimeHostResult<()> {
-        let events = lock(&self.performance, "record_pipeline_performance")?
-            .record_pipeline_signal(signal)?;
-        self.record_performance_events(&events)
-    }
-
-    fn performance_context(
-        &self,
-        instance_id: &str,
-        observed_at_unix_ms: u64,
-    ) -> RuntimeHostResult<PerformanceContext> {
-        lock(&self.performance, "read_performance_context")?
-            .context(instance_id, observed_at_unix_ms)
-    }
-
-    fn performance_control_directive(
-        &self,
-        instance_id: &str,
-    ) -> RuntimeHostResult<PerformanceControlDirective> {
-        lock(
-            &self.performance_control,
-            "read_performance_control_directive",
-        )?
-        .directive(instance_id)
-    }
-
-    fn record_performance_events(
-        &self,
-        events: &[PerformanceSemanticEvent],
-    ) -> RuntimeHostResult<()> {
-        for event in events {
-            let payload = match event {
-                PerformanceSemanticEvent::PressureStarted(data) => {
-                    PerformancePayloadDraft::pressure_started(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::PressureEnded(data) => {
-                    PerformancePayloadDraft::pressure_ended(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::StutterDetected(data) => {
-                    PerformancePayloadDraft::stutter_detected(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::Summary(data) => {
-                    PerformancePayloadDraft::summary(data.as_ref().clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::MonitorDegraded(data) => {
-                    PerformancePayloadDraft::monitor_degraded(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::MonitorRecovered(data) => {
-                    PerformancePayloadDraft::monitor_recovered(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::BalanceChanged(data) => {
-                    PerformancePayloadDraft::balance_changed(data.clone(), AuditInput::new())
-                }
-            };
-            let persisted = self.append_event_raw(
-                event.severity(),
-                EventSource::Runtime,
-                OriginModule::PerformanceMonitor,
-                EventActor::Runtime,
-                self.events.system_links()?,
-                payload,
-            )?;
-            let mut performance = lock(&self.performance, "record_performance_event_reference")?;
-            if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
-                || performance.sample_interval().is_some()
-            {
-                performance.record_event_reference(event, *persisted.event_id())?;
-            }
-        }
-        Ok(())
-    }
-
-    fn observe_pipeline_event(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
-        if !is_pipeline_event(event.event_type())
-            || !lock(&self.performance, "read_performance_monitor_state")?.accepts_pipeline_events()
-        {
-            return Ok(());
-        }
-        let result: RuntimeHostResult<Vec<PerformanceSemanticEvent>> = (|| {
-            let instance_id = event.links().instance_id().ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "performance_pipeline_instance_missing",
-                    "observe_performance_pipeline_event",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-            let instance_alias = lock(
-                &self.registered_instances,
-                "resolve_performance_pipeline_instance",
-            )?
-            .get(instance_id)
-            .map(|instance| instance.instance_alias.clone())
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "performance_pipeline_instance_unknown",
-                    "observe_performance_pipeline_event",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-            let observation = PipelineEventObservation {
-                event_type: event.event_type(),
-                instance_id: instance_alias,
-                observed_at_unix_ms: event.timestamp_unix_ms(),
-                frame_id: event.links().frame_id().copied(),
-                recognition_id: event.links().recognition_id().copied(),
-                action_id: event.links().action_id().copied(),
-            };
-            lock(&self.performance, "observe_performance_pipeline_event")?
-                .observe_pipeline_event(observation)
-        })();
-        let semantic_events = match result {
-            Ok(mut events) => {
-                let mut recovered =
-                    lock(&self.performance, "recover_performance_pipeline_monitor")?
-                        .record_pipeline_success(event.timestamp_unix_ms())?;
-                events.append(&mut recovered);
-                events
-            }
-            Err(error) => {
-                let tick = lock(&self.performance, "degrade_performance_pipeline_monitor")?
-                    .record_monitor_failure(
-                        event.timestamp_unix_ms(),
-                        error.code(),
-                        Some(*event.event_id()),
-                    )?;
-                tick.events
-            }
-        };
-        self.record_performance_events(&semantic_events)
-    }
-
     fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
         Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
     }
@@ -4672,12 +4496,7 @@ impl HostShared {
                                 None,
                             )
                         })?;
-                        if intent
-                            .package_digest
-                            .as_deref()
-                            .and_then(|digest| digest.strip_prefix("sha256:"))
-                            != Some(task_request.expected_sha256())
-                        {
+                        if intent.package_digest.as_ref() != Some(task_request.expected_sha256()) {
                             return Err(RequestFailure::request(
                                 policy_admission_request(
                                     "procedure_package_digest_mismatch",
@@ -6350,533 +6169,6 @@ impl HostShared {
                 response: Box::new(response),
             },
         })
-    }
-
-    fn configure_monitor(
-        &self,
-        original: &RuntimeRequest,
-        request: &ValidatedRuntimeRequest<'_>,
-        instance_alias: &str,
-        policy: RuntimeMonitorPolicy,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let resolved = self.resolve_instance(instance_alias)?;
-        let links = self.append_client_command_intent(
-            original,
-            request,
-            resolved.instance_id(),
-            EventAction::MonitorConfigure,
-            None,
-        )?;
-        let mut registry = lock(&self.monitor_registry, "configure_monitor_registry")?;
-        let update = match registry.prepare_configure(
-            instance_alias,
-            policy,
-            unix_ms_now().map_err(RequestFailure::from)?,
-        ) {
-            Ok(update) => update,
-            Err(error) => {
-                return Err(self.monitor_mutation_failure(
-                    links,
-                    EventAction::MonitorConfigure,
-                    error,
-                )?);
-            }
-        };
-        self.monitor_mutation_success(
-            &mut registry,
-            links,
-            EventAction::MonitorConfigure,
-            update,
-            |status| RuntimeResult::MonitorConfigured { status },
-        )
-    }
-
-    fn clear_monitor(
-        &self,
-        original: &RuntimeRequest,
-        request: &ValidatedRuntimeRequest<'_>,
-        instance_alias: &str,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let resolved = self.resolve_instance(instance_alias)?;
-        let links = self.append_client_command_intent(
-            original,
-            request,
-            resolved.instance_id(),
-            EventAction::MonitorClear,
-            None,
-        )?;
-        let mut registry = lock(&self.monitor_registry, "clear_monitor_registry")?;
-        let update = match registry.prepare_clear(instance_alias) {
-            Ok(update) => update,
-            Err(error) => {
-                return Err(self.monitor_mutation_failure(
-                    links,
-                    EventAction::MonitorClear,
-                    error,
-                )?);
-            }
-        };
-        self.monitor_mutation_success(
-            &mut registry,
-            links,
-            EventAction::MonitorClear,
-            update,
-            |status| RuntimeResult::MonitorCleared { status },
-        )
-    }
-
-    fn monitor_mutation_success(
-        &self,
-        registry: &mut MonitorRegistry,
-        links: EventLinksDraft,
-        action: EventAction,
-        update: MonitorUpdate,
-        result: impl FnOnce(actingcommand_contract::RuntimeMonitorInstanceStatus) -> RuntimeResult,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let effect = if update.changed {
-            EffectDisposition::Performed
-        } else {
-            EffectDisposition::NotPerformed
-        };
-        let event = self.append_event(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links,
-            CommandPayloadDraft::validated_runtime_state(
-                action,
-                effect,
-                update.fact,
-                AuditInput::new(),
-            ),
-        )?;
-        registry
-            .apply(&event)
-            .map_err(RequestFailure::poison_without_terminal)?;
-        let Some(actingcommand_contract::RuntimeStateFact::MonitorChanged { change, .. }) =
-            event.payload().runtime_state()
-        else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "monitor_committed_state_missing",
-                    "commit_monitor_update",
-                    RuntimeErrorCode::LedgerFailure,
-                ),
-            ));
-        };
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: Some(terminal(&event)),
-            result: result(change.status.clone()),
-        })
-    }
-
-    fn monitor_mutation_failure(
-        &self,
-        links: EventLinksDraft,
-        action: EventAction,
-        error: RuntimeHostError,
-    ) -> Result<RequestFailure, RequestFailure> {
-        let event = self.append_event(
-            EventSeverity::Error,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links,
-            CommandPayloadDraft::rejected(
-                action,
-                DiagnosticCode::RuntimeDiagnostic,
-                EffectDisposition::Indeterminate,
-                AuditInput::new(),
-            ),
-        )?;
-        Ok(RequestFailure::poison(error, Some(terminal(&event))))
-    }
-
-    fn run_monitor_probe(&self, probe: &DueMonitorProbe) -> RuntimeHostResult<()> {
-        let started_at_unix_ms = unix_ms_now()?;
-        let instance = self.monitor_instance(&probe.instance_alias)?;
-        let instance_guard = self
-            .instance_guard(instance.instance_id())
-            .map_err(|failure| *failure.error)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        if instance.provenance() != ExecutionBackendProvenance::PhysicalDevice {
-            return Err(RuntimeHostError::fatal(
-                "fixture_monitor_scope_forbidden",
-                "run_monitor_probe",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
-        let issued = self
-            .events
-            .issuer()
-            .issue_monitor_probe(instance.instance_id())
-            .map_err(|_| {
-                RuntimeHostError::fatal(
-                    "monitor_probe_id_issue_failed",
-                    "run_monitor_probe",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-        let links = issued.event_links();
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links.clone(),
-            MonitorPayloadDraft::requested(AuditInput::new()),
-        )?;
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links.clone(),
-            MonitorPayloadDraft::started(AuditInput::new()),
-        )?;
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Device,
-            OriginModule::Capture,
-            EventActor::Runtime,
-            links.clone(),
-            CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
-        )?;
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Recognition,
-            EventActor::Runtime,
-            links.clone(),
-            RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
-        )?;
-
-        let registration = self.mark_resources_in_use()?;
-        let frame = match self
-            .execution
-            .capture_retained_with_registration_guard(&probe.instance_alias, registration)
-        {
-            Ok(frame) => frame,
-            Err(error) => {
-                let error =
-                    self.finish_capture_failure_while_guarded(error, links.clone(), &admission)?;
-                let error = RuntimeHostError::execution("run_monitor_capture", &error);
-                if self.retain_unconfirmed_resources(&error, links.clone())? {
-                    return Err(error);
-                }
-                return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
-            }
-        };
-        let artifact_png = match frame.png_for_artifact() {
-            Ok(png) => png,
-            Err(_) => {
-                let error = RuntimeHostError::request(
-                    "capture_frame_invalid",
-                    "run_monitor_capture",
-                    RuntimeErrorCode::CaptureFailed,
-                );
-                return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
-            }
-        };
-        let write_context =
-            ArtifactWriteContext::new(issued.artifact_links(), links.clone(), unix_ms_now()?);
-        let mut sink = RuntimeArtifactEventSink {
-            ledger: &self.ledger,
-            events: &self.events,
-        };
-        self.artifacts
-            .put(
-                ArtifactWriteRequest::new(
-                    ArtifactKind::CaptureFrame,
-                    &artifact_png,
-                    write_context,
-                    ArtifactIssuePolicy::new(
-                        ArtifactProducer::CaptureStore,
-                        RetentionClass::Adaptive,
-                        ArtifactRedactionState::NotRequired,
-                    ),
-                ),
-                &mut sink,
-            )
-            .map_err(RuntimeHostError::artifact)?;
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Device,
-            OriginModule::Capture,
-            EventActor::Runtime,
-            links.clone(),
-            CapturePayloadDraft::completed(
-                EventAction::CaptureObserve,
-                EffectDisposition::Performed,
-                frame.width,
-                frame.height,
-                AuditInput::new(),
-            ),
-        )?;
-
-        let observation = match self.execution.observe_monitor(
-            &probe.instance_alias,
-            probe.policy.expected_page(),
-            &frame,
-        ) {
-            Ok(observation) => observation,
-            Err(error) => {
-                let error = RuntimeHostError::execution("classify_monitor_observation", &error);
-                return self.finish_monitor_failure(
-                    probe,
-                    &links,
-                    started_at_unix_ms,
-                    error,
-                    false,
-                );
-            }
-        };
-        let decision =
-            decide_monitor(probe.policy.decision_policy(), &observation).map_err(|_| {
-                RuntimeHostError::fatal(
-                    "monitor_decision_invalid",
-                    "run_monitor_probe",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Recognition,
-            EventActor::Runtime,
-            links.clone(),
-            RecognitionPayloadDraft::completed(
-                EventAction::RecognitionObserve,
-                EffectDisposition::Performed,
-                frame.width,
-                frame.height,
-                RecognitionVerdict::FrameDecoded,
-                AuditInput::new(),
-            ),
-        )?;
-        let mut registry = lock(&self.monitor_registry, "complete_monitor_probe")?;
-        let update = registry.prepare_completion(
-            probe,
-            started_at_unix_ms,
-            unix_ms_now()?,
-            decision.clone(),
-        )?;
-        let completed = self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links,
-            MonitorPayloadDraft::completed(
-                EffectDisposition::Performed,
-                observation,
-                decision.clone(),
-                AuditInput::new(),
-            )
-            .with_runtime_state(update.fact)
-            .map_err(|_| {
-                RuntimeHostError::fatal(
-                    "monitor_state_invalid",
-                    "complete_monitor_probe",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?,
-        )?;
-        registry.apply(&completed)?;
-        drop(registry);
-        if update.changed {
-            self.record_monitor_recovery_coordination(&instance, &issued, &decision)?;
-        }
-        Ok(())
-    }
-
-    fn record_monitor_recovery_coordination(
-        &self,
-        instance: &RegisteredInstance,
-        issued: &IssuedMonitorProbe,
-        decision: &actingcommand_contract::MonitorDecision,
-    ) -> RuntimeHostResult<()> {
-        let Some(recovery) = decision.recovery() else {
-            return Ok(());
-        };
-        let admission = self.monitor_recovery_admission(instance.instance_id())?;
-        let links = admission.lease_id.map_or_else(
-            || issued.event_links(),
-            |lease_id| issued.event_links_with_lease(lease_id),
-        );
-        let (severity, payload) = if admission.admitted() {
-            (
-                EventSeverity::Info,
-                MonitorPayloadDraft::recovery_admitted(recovery, AuditInput::new()),
-            )
-        } else {
-            (
-                EventSeverity::Warning,
-                MonitorPayloadDraft::recovery_deferred(
-                    recovery,
-                    admission.reason,
-                    AuditInput::new(),
-                ),
-            )
-        };
-        self.append_event_raw(
-            severity,
-            EventSource::Scheduler,
-            OriginModule::Scheduler,
-            EventActor::Scheduler,
-            links,
-            payload,
-        )?;
-        Ok(())
-    }
-
-    fn monitor_recovery_admission(
-        &self,
-        instance_id: InstanceId,
-    ) -> RuntimeHostResult<MonitorRecoveryAdmission> {
-        let now = self.monotonic_ms()?;
-        let scheduler = lock(&self.scheduler, "coordinate_monitor_recovery")?;
-        if let Some(active) = scheduler.active_lease(instance_id) {
-            let token = active.token();
-            if token.owner_epoch() != self.owner_epoch || token.instance_id() != instance_id {
-                return Err(RuntimeHostError::fatal(
-                    "monitor_recovery_fencing_state_invalid",
-                    "coordinate_monitor_recovery",
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
-            let reason = if token.expires_at_monotonic_ms() <= now {
-                MonitorRecoveryCoordinationReason::LeaseExpired
-            } else if active.destructive_step_active() {
-                MonitorRecoveryCoordinationReason::DestructiveStepActive
-            } else if active.preempt_requested() {
-                MonitorRecoveryCoordinationReason::PreemptionPending
-            } else {
-                MonitorRecoveryCoordinationReason::ActiveLease
-            };
-            return Ok(MonitorRecoveryAdmission {
-                reason,
-                lease_id: Some(token.lease_id()),
-            });
-        }
-        let reason = if scheduler.cooldown_active(instance_id, now) {
-            MonitorRecoveryCoordinationReason::TakeoverCooldown
-        } else if scheduler.queued_count(instance_id) > 0 {
-            MonitorRecoveryCoordinationReason::QueuedLeaseRequests
-        } else {
-            MonitorRecoveryCoordinationReason::SchedulerAvailable
-        };
-        Ok(MonitorRecoveryAdmission {
-            reason,
-            lease_id: None,
-        })
-    }
-
-    fn finish_monitor_failure(
-        &self,
-        probe: &DueMonitorProbe,
-        links: &EventLinksDraft,
-        started_at_unix_ms: u64,
-        error: RuntimeHostError,
-        capture_failed: bool,
-    ) -> RuntimeHostResult<()> {
-        let runtime_code = error.projection().code;
-        let diagnostic = if capture_failed {
-            DiagnosticCode::CaptureFailed
-        } else {
-            DiagnosticCode::RecognitionFailed
-        };
-        if capture_failed {
-            let payload = CapturePayloadDraft::failed_with_causes(
-                EventAction::CaptureObserve,
-                diagnostic,
-                EffectDisposition::NotPerformed,
-                error.diagnostic_detail().cloned(),
-                error.cleanup_cause().cloned(),
-                AuditInput::new(),
-            );
-            let failed = self.append_event_raw(
-                EventSeverity::Error,
-                EventSource::Device,
-                OriginModule::Capture,
-                EventActor::Runtime,
-                links.clone(),
-                payload,
-            )?;
-            self.record_required_failure(&error, &failed, links.clone())?;
-        }
-        self.append_event_raw(
-            EventSeverity::Error,
-            EventSource::Runtime,
-            OriginModule::Recognition,
-            EventActor::Runtime,
-            links.clone(),
-            RecognitionPayloadDraft::failed(
-                EventAction::RecognitionObserve,
-                diagnostic,
-                EffectDisposition::NotPerformed,
-                AuditInput::new(),
-            ),
-        )?;
-        let mut registry = lock(&self.monitor_registry, "fail_monitor_probe")?;
-        let update =
-            registry.prepare_failure(probe, started_at_unix_ms, unix_ms_now()?, runtime_code)?;
-        let failed = self.append_event_raw(
-            EventSeverity::Error,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links.clone(),
-            MonitorPayloadDraft::failed(
-                diagnostic,
-                EffectDisposition::NotPerformed,
-                AuditInput::new(),
-            )
-            .with_runtime_state(update.fact)
-            .map_err(|_| {
-                RuntimeHostError::fatal(
-                    "monitor_state_invalid",
-                    "fail_monitor_probe",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?,
-        )?;
-        registry.apply(&failed)?;
-        if error.code() == "monitor_observation_invalid" {
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    fn monitor_instance(&self, instance_alias: &str) -> RuntimeHostResult<RegisteredInstance> {
-        let registered = lock(&self.registered_instances, "resolve_monitor_instance")?
-            .values()
-            .find(|instance| instance.instance_alias == instance_alias)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "monitor_instance_unknown",
-                    "resolve_monitor_instance",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-        let resolved = self
-            .execution
-            .resolve(instance_alias)
-            .map_err(|error| RuntimeHostError::execution("resolve_monitor_instance", &error))?;
-        if resolved.instance_id() != registered.instance_id
-            || resolved.audit_endpoint() != registered.audit_endpoint
-            || resolved.provenance() != registered.provenance
-        {
-            return Err(RuntimeHostError::fatal(
-                "runtime_instance_identity_mismatch",
-                "resolve_monitor_instance",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
-        Ok(registered)
     }
 
     fn acquire_lease(
@@ -9150,6 +8442,7 @@ impl HostShared {
             instance_alias,
             task_request,
             self.execution.vision_provider(),
+            self.package_material_deadline(active_run.control.deadline())?,
         )?;
         self.append_request_lifecycle(
             original,
@@ -9211,6 +8504,20 @@ impl HostShared {
             None,
             active_run.control(),
         )
+    }
+
+    fn package_material_deadline(
+        &self,
+        deadline_monotonic_ms: u64,
+    ) -> Result<Instant, RequestFailure> {
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Instant::now()
+            .checked_add(Duration::from_millis(
+                deadline_monotonic_ms.saturating_sub(now),
+            ))
+            .ok_or_else(|| contained_task_package_failure("contained_task_deadline_overflow"))
     }
 
     fn contained_task_deadline(
@@ -9305,16 +8612,14 @@ impl HostShared {
                 ),
             ));
         };
-        let expected_sha256 = context
-            .package_digest()
-            .strip_prefix("sha256:")
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "policy_run_package_digest_invalid",
-                    "run_scheduled_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
+        context.package_digest().validate().map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "policy_run_package_digest_invalid",
+                "run_scheduled_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let expected_sha256 = context.package_digest();
         if context.correlation_id() != context.request().correlation_id()
             || context.instance_alias() != instance_alias
             || context.lease_token().owner_epoch() != self.owner_epoch
@@ -9379,11 +8684,22 @@ impl HostShared {
                 &error,
             ))
         })?;
+        let source_deadline = matches!(
+            task_request.expected_sha256(),
+            actingcommand_contract::PackageRef::GitSourceTree(_)
+        )
+        .then(|| self.contained_task_deadline(task_request, token))
+        .transpose()?;
+        let material_deadline = source_deadline
+            .map(|deadline| self.package_material_deadline(deadline))
+            .transpose()?
+            .unwrap_or_else(Instant::now);
         let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
             Some(prepare_contained_task(
                 instance_alias,
                 task_request,
                 self.execution.vision_provider(),
+                material_deadline,
             )?)
         } else {
             None
@@ -9422,12 +8738,19 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+        if let Some(deadline) = source_deadline {
+            active_run
+                .control
+                .set_deadline(deadline)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
         let prepared = match prepared {
             Some(prepared) => prepared,
             None => prepare_contained_task(
                 instance_alias,
                 task_request,
                 self.execution.vision_provider(),
+                material_deadline,
             )?,
         };
         let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
@@ -10002,6 +9325,8 @@ impl HostShared {
             instance_alias,
             &recovery_request,
             self.execution.vision_provider(),
+            self.package_material_deadline(runtime.control.deadline())
+                .map_err(ContainedTaskRunError::Boundary)?,
         ) {
             Ok(recovery) => recovery,
             Err(failure) => {
@@ -10198,11 +9523,7 @@ impl HostShared {
                     package_sha256,
                     response_deadline_monotonic_ms,
                     ..
-                } => Some((
-                    *event,
-                    package_sha256.as_str(),
-                    *response_deadline_monotonic_ms,
-                )),
+                } => Some((*event, package_sha256, *response_deadline_monotonic_ms)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -10215,7 +9536,7 @@ impl HostShared {
             .iter()
             .filter_map(|(_, fact)| match fact {
                 TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } => {
-                    Some(package_sha256.as_str())
+                    Some(package_sha256)
                 }
                 _ => None,
             })
@@ -16356,71 +15677,6 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     Ok(())
 }
 
-fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
-    while !shared.fatal.is_shutdown_requested() {
-        let now_unix_ms = unix_ms_now()?;
-        let due = lock(&shared.monitor_registry, "read_due_monitors")?
-            .due(now_unix_ms, MAX_MONITOR_PROBES_PER_TICK)?;
-        for probe in due {
-            if shared.fatal.is_shutdown_requested() {
-                return Ok(());
-            }
-            let Some(_work) = shared.begin_work()? else {
-                return Ok(());
-            };
-            if let Err(error) = shared.run_monitor_probe(&probe) {
-                shared.fatal.mark(error.clone())?;
-                return Err(error);
-            }
-        }
-        thread::sleep(MONITOR_POLL_INTERVAL);
-    }
-    Ok(())
-}
-
-const fn is_pipeline_event(event_type: EventType) -> bool {
-    matches!(
-        event_type,
-        EventType::CaptureRequested
-            | EventType::CaptureCompleted
-            | EventType::CaptureFailed
-            | EventType::RecognitionRequested
-            | EventType::RecognitionCompleted
-            | EventType::RecognitionFailed
-            | EventType::TaskEffectIntent
-            | EventType::TaskEffectCompleted
-            | EventType::TaskStepFinished
-            | EventType::TaskCompleted
-            | EventType::TaskFailed
-            | EventType::TaskCancelled
-    )
-}
-
-fn performance_monitor_loop(
-    shared: Arc<HostShared>,
-    sample_interval: Duration,
-) -> RuntimeHostResult<()> {
-    while !shared.fatal.is_shutdown_requested() {
-        thread::sleep(sample_interval);
-        if shared.fatal.is_shutdown_requested() {
-            break;
-        }
-        let Some(_work) = shared.begin_work()? else {
-            break;
-        };
-        let observed_at_unix_ms = unix_ms_now()?;
-        match shared.sample_performance(observed_at_unix_ms) {
-            Ok(true) => break,
-            Ok(false) => {}
-            Err(error) => {
-                shared.fatal.mark(error.clone())?;
-                return Err(error);
-            }
-        }
-    }
-    Ok(())
-}
-
 fn append_runtime_start_event(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
@@ -16537,32 +15793,43 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
     if !path.is_absolute() {
         return Err(debug_package_error("debug_package_path_not_absolute"));
     }
-    let file =
-        fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
-    if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
-        return Err(debug_package_error("debug_package_file_invalid"));
-    }
-    let mut bytes = Vec::new();
-    file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| debug_package_error("debug_package_read_failed"))?;
-    if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-        return Err(debug_package_error("debug_package_file_too_large"));
-    }
-    let expected = Sha256Hash::parse_hex(request.expected_sha256())
-        .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
     let instance = ContainmentInstanceId::new("runtime-debug-package")
         .map_err(|_| debug_package_error("debug_package_instance_invalid"))?;
     let mut containment = Containment::new();
-    let bundle = containment
-        .load(&instance, &bytes, &expected)
-        .map_err(|_| debug_package_error("debug_package_containment_failed"))?;
+    let bundle = if let Some(hash) = request.expected_sha256().legacy_sha256() {
+        let file =
+            fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
+        if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
+            return Err(debug_package_error("debug_package_file_invalid"));
+        }
+        let mut bytes = Vec::new();
+        file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| debug_package_error("debug_package_read_failed"))?;
+        if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
+            return Err(debug_package_error("debug_package_file_too_large"));
+        }
+        let expected = Sha256Hash::parse_hex(hash)
+            .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
+        containment
+            .load(&instance, &bytes, &expected)
+            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
+    } else {
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(
+                ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+            ))
+            .ok_or_else(|| debug_package_error("debug_package_deadline_overflow"))?;
+        containment
+            .load_path(&instance, path, request.expected_sha256(), false, deadline)
+            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
+    };
     PackageDebugSummary::new(
         bundle.task_id().as_str(),
-        bundle.verified_hash().to_string(),
+        bundle.package_ref().clone(),
         match bundle.layout() {
             PackageLayout::Lab => PackageDebugLayout::Lab,
             PackageLayout::Module => PackageDebugLayout::Module,
@@ -16583,12 +15850,26 @@ fn prepare_contained_task(
     instance_alias: &str,
     request: &ContainedTaskRequest,
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
+    deadline: Instant,
 ) -> Result<PreparedContainedTask, RequestFailure> {
     let path = Path::new(request.package_path());
     if !path.is_absolute() {
         return Err(contained_task_package_failure(
             "contained_task_path_not_absolute",
         ));
+    }
+    if matches!(
+        request.expected_sha256(),
+        actingcommand_contract::PackageRef::GitSourceTree(_)
+    ) {
+        return PreparedContainedTask::load_path(
+            instance_alias,
+            path,
+            request.expected_sha256(),
+            vision_provider,
+            deadline,
+        )
+        .map_err(|error| contained_task_package_failure(error.code()));
     }
     let path = fs::canonicalize(path)
         .map_err(|_| contained_task_package_failure("contained_task_package_open_failed"))?;
@@ -16601,7 +15882,10 @@ fn prepare_contained_task(
     }
     let bytes = fs::read(&path)
         .map_err(|_| contained_task_package_failure("contained_task_package_read_failed"))?;
-    let expected = ExternalExpectedSha256::parse_hex(request.expected_sha256())
+    let expected =
+        ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256().ok_or_else(
+            || contained_task_package_failure("contained_task_package_hash_invalid"),
+        )?)
         .map_err(|_| contained_task_package_failure("contained_task_package_hash_invalid"))?;
     match vision_provider {
         Some(provider) => PreparedContainedTask::load_with_vision_provider(

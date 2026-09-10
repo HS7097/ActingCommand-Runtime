@@ -155,7 +155,7 @@ pub struct LabProjectionHint {
 #[serde(deny_unknown_fields)]
 pub struct ContainedLabOperationRequest {
     pub package_path: String,
-    pub expected_sha256: String,
+    pub expected_sha256: crate::PackageRef,
     pub selection: LabOperationSelection,
     pub projection_hint: LabProjectionHint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -222,8 +222,8 @@ pub struct LabOperationPrepared {
     pub request_id: RequestId,
     pub correlation_id: CorrelationId,
     pub instance_id: InstanceId,
-    pub expected_package_sha256: String,
-    pub actual_package_sha256: String,
+    pub expected_package_sha256: crate::PackageRef,
+    pub actual_package_sha256: crate::PackageRef,
     pub lease_id: Option<LeaseId>,
     pub selection: LabOperationSelection,
     pub projection_hint: LabProjectionHint,
@@ -318,7 +318,7 @@ impl ContainedLabOperationResult {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         let record = &self.record;
         let prepared = &record.prepared;
-        validate_sha256_hex(&prepared.expected_package_sha256)?;
+        prepared.expected_package_sha256.validate()?;
         prepared.selection.validate()?;
         record.prepared_artifact.validate()?;
         self.terminal_artifact.validate()?;

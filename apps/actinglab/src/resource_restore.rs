@@ -12,10 +12,10 @@ use actingcommand_contract::{
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig, project_subscription_event,
 };
-use actingcommand_pack_containment::{Containment, InstanceId, Sha256Hash};
+use actingcommand_pack_containment::{Containment, InstanceId};
 use actingcommand_resource_tooling::{
     ResourceRestoreRecord, ResourceRestoreRequest, materialize_authoring_draft,
-    open_published_package, restore_authoring_draft,
+    restore_authoring_draft,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +34,8 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
                 | "--through-sequence"
                 | "--zip"
                 | "--expected-sha256"
+                | "--package"
+                | "--package-ref"
                 | "--task-id"
                 | "--entry-page"
                 | "--target-page"
@@ -81,21 +83,27 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             return Err(CliError::usage("duplicate --request-id"));
         }
     }
-    let expected = Sha256Hash::parse_hex(&flags.required("--expected-sha256")?)
-        .map_err(|_| CliError::usage("invalid --expected-sha256"))?;
-    let package = open_published_package(&flags.required_path("--zip")?)?;
-    let bytes = package.read_all()?;
+    let package = crate::contained_resources::PackageInput::open(&flags)?;
+    let expected = package.reference.clone();
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_millis(
+            actingcommand_contract::ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+        ))
+        .ok_or_else(|| restore_error("source admission deadline overflow"))?;
     let mut containment = Containment::for_metadata_validation();
-    let bundle = containment
-        .load_observation(
+    let admitted = containment
+        .load_path(
             &InstanceId::new("resource-restore")
                 .map_err(|_| restore_error("invalid containment identity"))?,
-            &bytes,
+            package.path(),
             &expected,
+            true,
+            deadline,
         )
         .map_err(|error| {
             CliError::package_invalid(format!("resource restore package admission: {error}"))
-        })?;
+        });
+    let bundle = crate::contained_resources::finish_package_use(admitted, package.close())?;
 
     let mut artifact_failure = None;
     let snapshot = GlobalLedger::open_read_only(
@@ -200,8 +208,8 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             .as_ref()
             .ok_or_else(|| restore_error("native Lab package identity is unavailable"))?;
         if prepared.request_id != request_id
-            || prepared.expected_package_sha256 != expected.to_string()
-            || prepared.actual_package_sha256 != expected.to_string()
+            || prepared.expected_package_sha256 != expected
+            || prepared.actual_package_sha256 != expected
             || instance.is_some_and(|value| value != prepared.instance_id)
             || events
                 .iter()

@@ -571,9 +571,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
-        host.contains("ExternalExpectedSha256::parse_hex(request.expected_sha256())")
+        host.contains(
+            "ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256()"
+        ) && host.contains("PreparedContainedTask::load_path(")
+            && host.contains("request.expected_sha256(),")
             && host.contains("PreparedContainedTask::load(instance_alias, &bytes, expected)"),
-        "Runtime host must bind the client hash to contained package admission"
+        "Runtime host must bind the client package reference to contained package admission"
     );
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
@@ -582,10 +585,13 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        cli.contains("required_expected_sha256")
+        cli.contains("required_package_reference")
+            && cli.contains("PackageInput::open_declared(&flags, reference)")
+            && cli.contains("PackageInput::declared_reference(flags)")
+            && cli.contains("package_reader.reference.clone()")
             && cli.contains("ContainedTaskRequest::new")
             && cli.contains("run_contained_task(&instance, request)"),
-        "ActingLab production run CLI does not require an external expected hash"
+        "ActingLab production run CLI does not require an external package reference"
     );
 }
 
@@ -1368,6 +1374,9 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
         .expect("read Runtime monitor registry");
     let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
         .expect("read Runtime host");
+    let monitor_control =
+        fs::read_to_string(root.join("crates/runtime-host/src/host/monitor_control.rs"))
+            .expect("read Runtime host monitor control");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
     let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
@@ -1380,10 +1389,10 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(registry.contains("prepare_failure"));
     assert!(registry.contains("MONITOR_FILE_NAME"));
     assert!(host.contains("monitor_registry: Mutex<MonitorRegistry>"));
-    assert!(host.contains("fn monitor_probe_loop"));
-    assert!(host.contains("fn run_monitor_probe"));
-    assert!(host.contains("MonitorPayloadDraft::completed"));
-    let monitor_probe = host
+    assert!(monitor_control.contains("fn monitor_probe_loop"));
+    assert!(monitor_control.contains("fn run_monitor_probe"));
+    assert!(monitor_control.contains("MonitorPayloadDraft::completed"));
+    let monitor_probe = monitor_control
         .split("fn run_monitor_probe(")
         .nth(1)
         .expect("monitor probe body")
@@ -1394,18 +1403,18 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(monitor_probe.contains("ArtifactWriteRequest::new"));
     assert!(monitor_probe.contains("ArtifactProducer::CaptureStore"));
     assert!(monitor_probe.contains(".map_err(RuntimeHostError::artifact)"));
-    assert!(host.contains("fn record_monitor_recovery_coordination"));
-    assert!(host.contains("fn monitor_recovery_admission"));
-    assert!(host.contains("MonitorPayloadDraft::recovery_admitted"));
-    assert!(host.contains("MonitorPayloadDraft::recovery_deferred"));
-    let coordination_start = host
+    assert!(monitor_control.contains("fn record_monitor_recovery_coordination"));
+    assert!(monitor_control.contains("fn monitor_recovery_admission"));
+    assert!(monitor_control.contains("MonitorPayloadDraft::recovery_admitted"));
+    assert!(monitor_control.contains("MonitorPayloadDraft::recovery_deferred"));
+    let coordination_start = monitor_control
         .find("    fn record_monitor_recovery_coordination(")
         .expect("monitor recovery coordination start");
-    let coordination_end = host[coordination_start..]
+    let coordination_end = monitor_control[coordination_start..]
         .find("    fn finish_monitor_failure(")
         .map(|offset| coordination_start + offset)
         .expect("monitor recovery coordination end");
-    let coordination = &host[coordination_start..coordination_end];
+    let coordination = &monitor_control[coordination_start..coordination_end];
     for forbidden in [
         "RuntimeOperation::",
         "TaskPayloadDraft",
@@ -2479,7 +2488,7 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
         .and_then(|(_, tail)| tail.split_once("}\n\nimpl ContainedTaskRequest"))
         .map(|(body, _)| body)
         .expect("locate ContainedTaskRequest fields");
-    for required in ["package_path: String", "expected_sha256: String"] {
+    for required in ["package_path: String", "expected_sha256: crate::PackageRef"] {
         assert!(
             request.contains(required),
             "contained task request lost {required}"
