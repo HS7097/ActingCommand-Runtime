@@ -308,13 +308,18 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         projected.read_scope().unwrap().material_read,
         actingcommand_contract::LedgerMaterialReadState::NotRequested
     );
-    assert!(
-        GlobalLedger::open_metadata(
-            GlobalLedgerEvidenceConfig::new(imported_root.path()).with_budget(1, 1, deadline)
-        )
-        .err()
-        .expect("bounded metadata read")
-        .is_fatal()
+    let bounded_metadata = GlobalLedger::open_metadata(
+        GlobalLedgerEvidenceConfig::new(imported_root.path()).with_budget(1, 1, deadline),
+    )
+    .err()
+    .expect("bounded metadata read");
+    assert_eq!(
+        (
+            bounded_metadata.code(),
+            bounded_metadata.operation(),
+            bounded_metadata.is_fatal(),
+        ),
+        ("ledger_read_budget_exceeded", "read_only_snapshot", false)
     );
     imported.close().expect("formal writer close");
     let reopened = LedgerMaintenance::acquire(imported_root.path(), false, limits, deadline)
