@@ -109,7 +109,6 @@ fn definitions() -> GlobalLedgerResult<Vec<(String, String)>> {
         ("source", "origin_source"),
         ("time", "timestamp_unix_ms"),
         ("severity", "severity"),
-        ("family", FAMILY),
     ] {
         let name = format!("ledger_view_index_{suffix}_v1");
         definitions.push((

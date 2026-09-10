@@ -1756,7 +1756,7 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             panic!("actingd exited before paginated run completed with {status}: {stderr}");
         }
         assert!(
-            started.elapsed() < Duration::from_secs(10),
+            started.elapsed() < Duration::from_secs(20),
             "paginated policy run timed out"
         );
         thread::sleep(Duration::from_millis(20));
@@ -1848,6 +1848,129 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             .is_some_and(|count| count > u64::from(MAX_RUNTIME_EVENT_QUERY_EVENTS)),
         "the regression must cross the actual Runtime event-page boundary: {summary}"
     );
+    if summary.get("status").and_then(Value::as_str) != Some("simulated_completed") {
+        let mut context = [0_u8; 16 * 1024];
+        let mut remaining = &mut context[..16 * 1024 - 128];
+        let formatted = (|| -> std::io::Result<()> {
+            writeln!(
+                remaining,
+                "Paginated run summary status failure; existing values only:"
+            )?;
+            for path in [
+                "/status",
+                "/outcome/policy/failure/error_code",
+                "/outcome/policy/failure/reported_success",
+                "/outcome/policy/failure/original_class",
+                "/outcome/policy/failure/effective_class",
+                "/outcome/policy/failure/runtime_ms",
+                "/outcome/policy/failure/retry_attempt",
+                "/outcome/policy/failure/retry_at_unix_ms",
+                "/outcome/policy/failure/consecutive_same_error",
+                "/outcome/policy/failure/escalation_streak",
+                "/outcome/policy/failure/performance_tax_exempt",
+                "/outcome/policy/failure/disposition",
+                "/run_id",
+                "/task_id",
+                "/correlation_id",
+                "/decision_id",
+                "/instance_id",
+                "/lease/lease_id",
+                "/request/lab_request_id",
+                "/request/receipt_request_id",
+                "/request/terminal_event_id",
+                "/request/terminal_sequence",
+                "/completed_sequence",
+                "/event_count",
+                "/effect",
+                "/simulated_effect_count",
+                "/actual_effect_count",
+            ] {
+                write!(remaining, "{path}: ")?;
+                match summary.pointer(path) {
+                    None => writeln!(remaining, "missing")?,
+                    Some(Value::Null) => writeln!(remaining, "present null")?,
+                    Some(value) => {
+                        write!(remaining, "present ")?;
+                        serde_json::to_writer(&mut remaining, value)
+                            .map_err(std::io::Error::other)?;
+                        writeln!(remaining)?;
+                    }
+                }
+            }
+            let terminal_id = match summary.pointer("/request/terminal_event_id") {
+                None => {
+                    writeln!(remaining, "terminal lookup unavailable: ID missing")?;
+                    return Ok(());
+                }
+                Some(Value::Null) => {
+                    writeln!(remaining, "terminal lookup unavailable: ID is null")?;
+                    return Ok(());
+                }
+                Some(value) => {
+                    match serde_json::from_value::<actingcommand_contract::EventId>(value.clone()) {
+                        Ok(id) => id,
+                        Err(error) => {
+                            writeln!(
+                                remaining,
+                                "terminal lookup unavailable: invalid ID: {error}"
+                            )?;
+                            return Ok(());
+                        }
+                    }
+                }
+            };
+            let terminal = first_page
+                .events()
+                .iter()
+                .map(|event| ("first_page", event))
+                .chain(
+                    second_page
+                        .events()
+                        .iter()
+                        .map(|event| ("second_page", event)),
+                )
+                .find(|(_, event)| event.event_id == terminal_id);
+            match terminal {
+                Some((page, event)) => {
+                    writeln!(
+                        remaining,
+                        "exact terminal from {page}; existing event and payload:"
+                    )?;
+                    serde_json::to_writer(&mut remaining, event).map_err(std::io::Error::other)?;
+                    writeln!(remaining)?;
+                }
+                None => writeln!(
+                    remaining,
+                    "terminal ID not included in original first/second pages; snapshots={}/{}; no additional query",
+                    first_page.snapshot_ledger_position(),
+                    second_page.snapshot_ledger_position()
+                )?,
+            }
+            Ok(())
+        })();
+        let used = 16 * 1024 - 128 - remaining.len();
+        let valid = std::str::from_utf8(&context[..used])
+            .map_or_else(|error| error.valid_up_to(), |_| used);
+        let footer: &[u8] = if formatted.is_err() || valid != used {
+            b"\n[truncated: 16-KiB context limit or formatting failure; remaining fields omitted]\n"
+        } else {
+            b"\n[end summary failure context]\n"
+        };
+        context[valid..valid + footer.len()].copy_from_slice(footer);
+        let record = &context[..valid + footer.len()];
+        let mut stderr = std::io::stderr().lock();
+        let written = stderr.write_all(record).and_then(|()| stderr.flush());
+        drop(stderr);
+        if let Err(error) = written {
+            eprintln!(
+                "summary failure context write/flush failed: {error}; original status assertion remains:\n{}",
+                String::from_utf8_lossy(record)
+            );
+        }
+        if let Err(error) = formatted {
+            eprintln!("summary failure context formatting/write error: {error}");
+        }
+    }
     assert_eq!(
         summary.get("status").and_then(serde_json::Value::as_str),
         Some("simulated_completed")

@@ -128,7 +128,7 @@ without granting material access. CLI metadata pagination uses this entry rather
 than a material-verifying evidence open.
 
 SQLite page selection uses the six `ledger_view_*_v1` SQL views generated from
-`LedgerView::definition()`, with indexes for type, family, source, module, severity
+`LedgerView::definition()`, with indexes for type, source, module, severity
 and time. Their versioned definitions are checked as one derived schema. Initial
 creation, import and the existing writer's schema upgrade deploy them in one
 transaction; the authenticated fact format, marker and ordered-u64 encoding stay
