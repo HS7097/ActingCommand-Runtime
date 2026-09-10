@@ -12,6 +12,23 @@ use actingcommand_contract::{
 use std::collections::{BTreeMap, BTreeSet};
 
 mod views;
+pub(super) use views::{PageSelection, page_bounds};
+
+/// The closed Lab link paths are shared by the in-memory and SQLite selectors.
+#[derive(Clone, Copy)]
+pub(super) enum LabAxis {
+    Request,
+    Correlation,
+}
+
+pub(super) const LAB_ANCHOR_SOURCE: EventSource = EventSource::Lab;
+pub(super) const LAB_ANCHOR_TYPE: EventType = EventType::LabRequest;
+pub(super) const LAB_RELATIONS: [(LabAxis, bool); 4] = [
+    (LabAxis::Request, false),
+    (LabAxis::Correlation, false),
+    (LabAxis::Request, true),
+    (LabAxis::Correlation, true),
+];
 
 #[derive(Default)]
 pub(super) struct EventIndexes {
@@ -75,9 +92,7 @@ impl EventIndexes {
         insert_link(&mut self.action_ids, links.action_id(), position);
         insert_link(&mut self.recognition_ids, links.recognition_id(), position);
         let sequence = event.sequence();
-        if event.origin().source() == EventSource::Lab
-            || event.event_type() == EventType::LabRequest
-        {
+        if event.origin().source() == LAB_ANCHOR_SOURCE || event.event_type() == LAB_ANCHOR_TYPE {
             if let Some(request) = links.request_id() {
                 self.lab_requests.entry(*request).or_insert(sequence);
             }
@@ -247,18 +262,27 @@ impl EventIndexes {
                 .get(correlation)
                 .is_some_and(|sequence| *sequence <= snapshot)
         };
-        links.request_id().is_some_and(request_matches)
-            || links.correlation_id().is_some_and(correlation_matches)
-            || links.run_id().is_some_and(|run| {
-                self.run_requests.get(run).is_some_and(|requests| {
-                    requests.iter().any(|(request, sequence)| {
-                        *sequence <= snapshot && request_matches(request)
+        LAB_RELATIONS
+            .into_iter()
+            .any(|(axis, via_run)| match (axis, via_run) {
+                (LabAxis::Request, false) => links.request_id().is_some_and(request_matches),
+                (LabAxis::Correlation, false) => {
+                    links.correlation_id().is_some_and(correlation_matches)
+                }
+                (LabAxis::Request, true) => links.run_id().is_some_and(|run| {
+                    self.run_requests.get(run).is_some_and(|requests| {
+                        requests.iter().any(|(request, sequence)| {
+                            *sequence <= snapshot && request_matches(request)
+                        })
                     })
-                }) || self.run_correlations.get(run).is_some_and(|correlations| {
-                    correlations.iter().any(|(correlation, sequence)| {
-                        *sequence <= snapshot && correlation_matches(correlation)
+                }),
+                (LabAxis::Correlation, true) => links.run_id().is_some_and(|run| {
+                    self.run_correlations.get(run).is_some_and(|correlations| {
+                        correlations.iter().any(|(correlation, sequence)| {
+                            *sequence <= snapshot && correlation_matches(correlation)
+                        })
                     })
-                })
+                }),
             })
     }
 }

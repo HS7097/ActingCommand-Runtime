@@ -2074,59 +2074,91 @@ fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
 
 #[test]
 fn lab_projection_exposes_full_sanitized_fact() {
-    let temp = TempDir::new().expect("temp");
-    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
-    let persisted = ledger
-        .append(event_with_links(
-            "evt-lab",
-            EventLinksDraft::default().with_run_id(run_id()),
-            AuditInput::new(),
-        ))
-        .expect("append");
+    for open in [GlobalLedger::open, sqlite_contract::open] {
+        let temp = TempDir::new().expect("temp");
+        let ledger = open(config(&temp, "writer-one")).expect("ledger");
+        let persisted = ledger
+            .append(event_with_links(
+                "evt-lab",
+                EventLinksDraft::default().with_run_id(run_id()),
+                AuditInput::new(),
+            ))
+            .expect("append");
 
-    let projected = ledger
-        .project(EventQuery::default(), ProjectionProfile::Lab)
-        .expect("project");
+        let projected = ledger
+            .project(EventQuery::default(), ProjectionProfile::Lab)
+            .expect("project");
 
-    assert_eq!(projected.len(), 1);
-    assert_eq!(projected[0].sequence, persisted.sequence());
-    assert_eq!(projected[0].schema_version, persisted.schema_version());
-    assert_eq!(projected[0].sensitivity, persisted.sensitivity());
-    assert_eq!(&projected[0].links, persisted.links());
-    assert_eq!(
-        projected[0].payload,
-        ProjectionPayload::Full(Box::new(persisted.payload().clone()))
-    );
-    assert!(projected[0].artifacts.is_empty());
-    let drafts = scheduled_recovery_drafts();
-    let result = ledger
-        .append(drafts.task_completed)
-        .expect("Runtime result");
-    let lab_query = EventQuery {
-        view: Some(actingcommand_contract::LedgerView::Lab),
-        ..EventQuery::default()
-    };
-    assert!(
-        ledger
-            .query_page(lab_query.clone(), 0, result.sequence(), 10)
-            .unwrap()
-            .is_empty()
-    );
-    let anchor = ledger
-        .append(drafts.task_request)
-        .expect("Lab request anchor");
-    assert!(
-        ledger
-            .query_page(lab_query.clone(), 0, result.sequence(), 10)
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        ledger
-            .query_page(lab_query, 0, anchor.sequence(), 10)
-            .unwrap(),
-        vec![result, anchor]
-    );
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].sequence, persisted.sequence());
+        assert_eq!(projected[0].schema_version, persisted.schema_version());
+        assert_eq!(projected[0].sensitivity, persisted.sensitivity());
+        assert_eq!(&projected[0].links, persisted.links());
+        assert_eq!(
+            projected[0].payload,
+            ProjectionPayload::Full(Box::new(persisted.payload().clone()))
+        );
+        assert!(projected[0].artifacts.is_empty());
+        let drafts = scheduled_recovery_drafts();
+        let result = ledger
+            .append(drafts.task_completed)
+            .expect("Runtime result");
+        let lab_query = EventQuery {
+            view: Some(actingcommand_contract::LedgerView::Lab),
+            ..EventQuery::default()
+        };
+        assert!(
+            ledger
+                .query_page(lab_query.clone(), 0, result.sequence(), 10)
+                .unwrap()
+                .is_empty()
+        );
+        let anchor = ledger
+            .append(drafts.task_request)
+            .expect("Lab request anchor");
+        assert!(
+            ledger
+                .query_page(lab_query.clone(), 0, result.sequence(), 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            ledger
+                .query_page(lab_query.clone(), 0, anchor.sequence(), 10)
+                .unwrap(),
+            vec![result.clone(), anchor.clone()]
+        );
+        for (snapshot, expected) in [
+            (result.sequence(), Vec::new()),
+            (
+                anchor.sequence(),
+                vec![*result.event_id(), *anchor.event_id()],
+            ),
+        ] {
+            let page = ledger
+                .project_view_page(
+                    lab_query.clone(),
+                    ProjectionProfile::Lab,
+                    actingcommand_contract::RuntimeEventQueryPageRequest::default()
+                        .at_snapshot(snapshot)
+                        .unwrap(),
+                )
+                .unwrap();
+            assert_eq!(
+                page.events()
+                    .iter()
+                    .map(|event| event.event_id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(page.snapshot_ledger_position(), snapshot);
+            assert_eq!(
+                page.read_scope().unwrap().scanned_through_position,
+                snapshot
+            );
+        }
+        ledger.close().unwrap();
+    }
 }
 
 #[test]

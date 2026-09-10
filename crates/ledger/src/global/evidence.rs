@@ -94,6 +94,7 @@ impl GlobalLedgerEvidence {
 /// An immutable, authenticated ledger snapshot with reference metadata only.
 /// This type exposes projected pages and cannot issue artifact material authority.
 pub struct GlobalLedgerMetadata {
+    sqlite: Option<sqlite::SqliteViewSnapshot>,
     events: Vec<LedgerEventMetadata>,
     indexes: projection::EventIndexes,
     through_sequence: u64,
@@ -110,6 +111,9 @@ impl GlobalLedgerMetadata {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        if let Some(sqlite) = &self.sqlite {
+            return sqlite.project_view_page(query, profile, request);
+        }
         self.indexes.project_view_page(
             &self.events,
             query,
@@ -122,7 +126,7 @@ impl GlobalLedgerMetadata {
                 read_complete: self.read_complete,
                 limits: Vec::new(),
             },
-            self.through_sequence,
+            self.through_sequence.into(),
         )
     }
     pub fn latest_sequence(&self) -> u64 {
@@ -163,9 +167,11 @@ impl GlobalLedger {
         if database_exists || key_exists {
             let database = RuntimeDatabase::open_existing(&config.root, true)?;
             if sqlite::has_schema(&database)? {
-                let (events, through_sequence) = sqlite::open_metadata(&database, config.budget)?;
+                let (events, sqlite) = sqlite::open_metadata(Arc::new(database), config.budget)?;
+                let through_sequence = sqlite.through_sequence;
                 let writer = read_only::read_writer_metadata(&ledger_root)?;
                 return Ok(GlobalLedgerMetadata {
+                    sqlite: Some(sqlite),
                     indexes: projection::EventIndexes::from_events(&events),
                     events,
                     through_sequence,
@@ -180,6 +186,7 @@ impl GlobalLedger {
         segment_config.budget = config.budget;
         let source = read_only::open_metadata(segment_config)?;
         Ok(GlobalLedgerMetadata {
+            sqlite: None,
             through_sequence: source
                 .events
                 .last()

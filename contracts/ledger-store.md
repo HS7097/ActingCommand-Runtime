@@ -127,6 +127,28 @@ incompleteness is separate from count/byte pagination. The snapshot also exposes
 without granting material access. CLI metadata pagination uses this entry rather
 than a material-verifying evidence open.
 
+SQLite page selection uses the six `ledger_view_*_v1` SQL views generated from
+`LedgerView::definition()`, with indexes for type, family, source, module, severity
+and time. Their versioned definitions are checked as one derived schema. Initial
+creation, import and the existing writer's schema upgrade deploy them in one
+transaction; the authenticated fact format, marker and ordered-u64 encoding stay
+unchanged. Supported offline roots predating this read schema execute the same
+definitions as read-only CTEs. Partial or conflicting derived definitions fail
+closed. Offline opening and pagination never create schema objects.
+
+The physical `RuntimeDatabase` owner supplies one read transaction for full
+record/index/marker verification, SQL filtering, Lab links and page context. All
+typed query conditions are conjoined through bindings. Diagnostic-code selection
+uses the original typed payload projection from that verified snapshot. Lab's
+closed request/correlation paths, directly or through the same run, share their
+definition with the neutral selector; the earliest valid relation position keeps
+future anchors and run links outside an older snapshot. Offline pages retain the
+opened prefix hash and boundary while revalidating the current complete ledger.
+An excluded corrupt row or changed prefix fails the read. A terminal online read
+failure reaches subscribers and terminates the writer through its existing error
+path. SQL candidate rows do not replace the full related-run recovery context or
+its 1024-event bound. An empty match retains the verified global snapshot position.
+
 Segment recovery validates strict typed records, schemas, sequence continuity,
 unique EventIds and payload/link/reference consistency before rebuilding indexes.
 A dangling final segment tail is quarantined and repaired through the persisted

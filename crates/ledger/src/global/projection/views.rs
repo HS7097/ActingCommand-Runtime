@@ -11,6 +11,49 @@ use actingcommand_contract::{
 // The existing query bound also caps recovery context. Truncation is an explicit Unknown.
 const MAX_RECOVERY_CONTEXT_EVENTS: usize = super::super::MAX_QUERY_PAGE_EVENTS;
 
+pub(in crate::global) struct PageSelection<'a> {
+    pub through_sequence: u64,
+    pub sequences: Option<&'a [u64]>,
+}
+
+impl From<u64> for PageSelection<'_> {
+    fn from(through_sequence: u64) -> Self {
+        Self {
+            through_sequence,
+            sequences: None,
+        }
+    }
+}
+
+pub(in crate::global) fn page_bounds(
+    query: &EventQuery,
+    profile: ProjectionProfile,
+    request: &RuntimeEventQueryPageRequest,
+    latest: u64,
+) -> Result<(u64, u64), GlobalLedgerError> {
+    let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
+    query
+        .validate()
+        .map_err(|_| invalid("invalid_event_query_bounds"))?;
+    request.validate().map_err(|error| invalid(error.code()))?;
+    let (snapshot, after) = match request.cursor() {
+        Some(cursor) => {
+            if !cursor
+                .matches(query, profile)
+                .map_err(|error| invalid(error.code()))?
+            {
+                return Err(invalid("runtime_event_query_cursor_invalid"));
+            }
+            (cursor.snapshot_ledger_position(), cursor.after_sequence())
+        }
+        None => (request.snapshot_position().unwrap_or(latest), 0),
+    };
+    if snapshot > latest {
+        return Err(invalid("invalid_runtime_event_query_snapshot"));
+    }
+    Ok((snapshot, after))
+}
+
 impl EventIndexes {
     pub(in crate::global) fn project_view_page<E: LedgerEventRead>(
         &self,
@@ -19,42 +62,54 @@ impl EventIndexes {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         scope: LedgerReadScope,
-        through_sequence: u64,
+        selection: PageSelection<'_>,
     ) -> Result<RuntimeEventQueryPage, GlobalLedgerError> {
         let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
-        query
-            .validate()
-            .map_err(|_| invalid("invalid_event_query_bounds"))?;
-        request.validate().map_err(|error| invalid(error.code()))?;
-        let latest = through_sequence;
+        let latest = selection.through_sequence;
+        let (snapshot, after) = page_bounds(query, profile, request, latest)?;
         if events.last().map_or(0, E::sequence) != latest {
             return Err(GlobalLedgerError::fatal(
                 "ledger_snapshot_boundary_mismatch",
                 "project_ledger_view_page",
             ));
         }
-        let (snapshot, after) = match request.cursor() {
-            Some(cursor) => {
-                if !cursor
-                    .matches(query, profile)
-                    .map_err(|error| invalid(error.code()))?
-                {
-                    return Err(invalid("runtime_event_query_cursor_invalid"));
-                }
-                (cursor.snapshot_ledger_position(), cursor.after_sequence())
+        let mut selected = if let Some(sequences) = selection.sequences {
+            let mut previous = after;
+            let mut selected = Vec::with_capacity(sequences.len());
+            for sequence in sequences {
+                let event = events
+                    .binary_search_by_key(sequence, E::sequence)
+                    .ok()
+                    .map(|index| &events[index]);
+                let Some(event) = event.filter(|event| {
+                    *sequence > previous
+                        && *sequence <= snapshot
+                        && self.matches(query, *event, snapshot)
+                }) else {
+                    return Err(GlobalLedgerError::fatal(
+                        "ledger_sql_selection_mismatch",
+                        "project_ledger_view_page",
+                    ));
+                };
+                previous = *sequence;
+                selected.push(event.clone());
             }
-            None => (request.snapshot_position().unwrap_or(latest), 0),
+            if selected.len() > usize::from(request.limit()) + 1 {
+                return Err(GlobalLedgerError::fatal(
+                    "ledger_sql_selection_mismatch",
+                    "project_ledger_view_page",
+                ));
+            }
+            selected
+        } else {
+            self.query_page(
+                events,
+                query,
+                after,
+                snapshot,
+                usize::from(request.limit()) + 1,
+            )
         };
-        if snapshot > latest {
-            return Err(invalid("invalid_runtime_event_query_snapshot"));
-        }
-        let mut selected = self.query_page(
-            events,
-            query,
-            after,
-            snapshot,
-            usize::from(request.limit()) + 1,
-        );
         let count_limited = selected.len() > usize::from(request.limit());
         let scanned_through = if count_limited {
             selected.pop().expect("lookahead exists").sequence()

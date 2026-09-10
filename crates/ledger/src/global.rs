@@ -1188,6 +1188,12 @@ fn writer_loop<S: LedgerStore>(
                 response,
             } => {
                 let result = store.project_view_page(&query, profile, &request);
+                if result.as_ref().is_err_and(GlobalLedgerError::terminal) {
+                    let error = result.expect_err("terminal view query must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
                 let _ = response.send(result);
             }
             WriterCommand::ProjectSchedulingOutcomes {

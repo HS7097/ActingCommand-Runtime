@@ -74,11 +74,54 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
     let expected = segment
         .query(EventQuery::default())
         .expect("reference facts");
+    assert!(views::installed(&database.connection("derived schema").unwrap()).unwrap());
+    for view in LedgerView::ALL {
+        for from in values {
+            let query = EventQuery {
+                view: Some(view),
+                from_timestamp_unix_ms: Some(from),
+                to_timestamp_unix_ms: Some(u64::MAX),
+                ..EventQuery::default()
+            };
+            let request = RuntimeEventQueryPageRequest::new(2, None).unwrap();
+            assert_eq!(
+                sqlite
+                    .project_view_page(query.clone(), ProjectionProfile::Ui, request.clone())
+                    .unwrap(),
+                segment
+                    .project_view_page(query, ProjectionProfile::Ui, request)
+                    .unwrap()
+            );
+        }
+    }
     sqlite.close().expect("close sqlite");
     segment.close().expect("close segment");
-    let reopened =
-        GlobalLedger::open_sqlite_candidate(config(root.path(), "integer-reopened"), database)
-            .expect("reopen");
+    {
+        let connection = database
+            .connection("pre-view schema specification")
+            .unwrap();
+        let objects = connection
+            .prepare("SELECT type,name FROM sqlite_schema WHERE name GLOB 'ledger_view_*'")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for (kind, name) in objects {
+            connection
+                .execute_batch(&format!("DROP {kind} {name}"))
+                .unwrap();
+        }
+        assert!(!views::installed(&connection).unwrap());
+    }
+    let reopened = GlobalLedger::open_sqlite_candidate(
+        config(root.path(), "integer-reopened"),
+        Arc::clone(&database),
+    )
+    .expect("reopen");
+    assert!(views::installed(&database.connection("writer schema upgrade").unwrap()).unwrap());
     assert_eq!(
         reopened.query(EventQuery::default()).expect("facts"),
         expected
@@ -130,6 +173,11 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             "UPDATE ledger_meta SET integrity_tag='token-secret-invalid-meta'",
         ),
         ("missing metadata", "DELETE FROM ledger_meta"),
+        ("partial view schema", "DROP VIEW ledger_view_health_v1"),
+        (
+            "changed view schema",
+            "DROP VIEW ledger_view_health_v1; CREATE VIEW ledger_view_health_v1 AS SELECT * FROM ledger_events",
+        ),
         (
             "missing schema",
             "DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta",
@@ -144,12 +192,34 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
         .expect("writer");
         ledger.append(draft(1)).expect("first");
         ledger.append(draft(2)).expect("second");
-        ledger.close().expect("close");
+        let mut subscription = ledger
+            .subscribe(SubscriptionCursor { after_sequence: 2 })
+            .unwrap();
         database
             .connection("mutate assigned matrix")
             .expect("connection")
             .execute_batch(sql)
             .expect("mutate fixture");
+        let query_error = ledger
+            .project_view_page(
+                EventQuery {
+                    view: Some(LedgerView::Health),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Ui,
+                RuntimeEventQueryPageRequest::default(),
+            )
+            .expect_err("an empty view must still reject a corrupt full snapshot");
+        assert!(query_error.is_fatal(), "{label}: {query_error}");
+        assert_eq!(
+            subscription
+                .recv_timeout(Duration::from_secs(1))
+                .expect_err("query fatal reaches subscribers"),
+            query_error
+        );
+        ledger
+            .close()
+            .expect_err("query failure terminates the writer");
         let error =
             GlobalLedger::open_sqlite_candidate(config(root.path(), "matrix-reopen"), database)
                 .expect_err(label);
@@ -357,7 +427,7 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
                 profile,
                 &request,
                 scope.clone(),
-                through_sequence,
+                through_sequence.into(),
             )
             .expect("SQLite metadata projection");
         let reference = segment_indexes
@@ -367,7 +437,7 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
                 profile,
                 &request,
                 scope,
-                through_sequence,
+                through_sequence.into(),
             )
             .expect("Segment metadata projection");
         assert_eq!(page, reference);

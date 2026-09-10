@@ -16,8 +16,9 @@ use crate::{
     fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
 };
 use actingcommand_contract::{
-    EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference, RecoveryReason,
-    VerifiedArtifactReference,
+    EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState, LedgerReadScope,
+    LedgerReadSource, ProjectedArtifactReference, ProjectionProfile, RecoveryReason,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, VerifiedArtifactReference,
 };
 use actingcommand_runtime_database::{RuntimeDatabase, RuntimeDatabaseError};
 use rusqlite::{
@@ -29,6 +30,8 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
+
+mod views;
 
 const FORMAL_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";
@@ -254,6 +257,7 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
         transaction
             .execute_batch(include_str!("sqlite/schema.sql"))
             .map_err(|error| sql_error(error, "create_runtime_ledger"))?;
+        views::deploy(&transaction)?;
         mark_formal_format(&transaction)?;
         insert_row(
             &transaction,
@@ -291,6 +295,7 @@ where
     }
     let (events, head_hash) = verify_snapshot(&database, raw, &mut Some(&mut verifier))?;
     let head = events.last().map_or(0, PersistedEvent::sequence);
+    upgrade_views(&database, head, head_hash.as_deref())?;
     let next = increment_sequence(head)?;
     let (ownership, stale) = WriterOwnership::from_locked(lock, compatibility, &config.owner_id)?;
     let backend = SqliteStorage {
@@ -359,6 +364,7 @@ pub(super) fn import_source(
         transaction
             .execute_batch(include_str!("sqlite/schema.sql"))
             .map_err(|error| sql_error(error, "create_import_schema"))?;
+        views::deploy(&transaction)?;
         mark_formal_format(&transaction)?;
         let mut head_hash = None;
         for (index, event) in expected.iter().enumerate() {
@@ -504,7 +510,13 @@ impl SqliteLedgerStore {
                     "open_sqlite_candidate",
                 ));
             }
-            verify_snapshot(&database, raw, &mut verifier)
+            let (events, hash) = verify_snapshot(&database, raw, &mut verifier)?;
+            upgrade_views(
+                &database,
+                events.last().map_or(0, PersistedEvent::sequence),
+                hash.as_deref(),
+            )?;
+            Ok((events, hash))
         })();
         let (events, head_hash) = match recovered {
             Ok(recovered) => recovered,
@@ -533,6 +545,24 @@ impl SqliteLedgerStore {
 }
 
 impl DurableStorage for SqliteStorage {
+    fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> Option<GlobalLedgerResult<RuntimeEventQueryPage>> {
+        Some(
+            SqliteViewSnapshot {
+                database: Arc::clone(&self.database),
+                through_sequence: self.head,
+                head_hash: self.head_hash.clone(),
+                budget: None,
+                source: LedgerReadSource::Runtime,
+            }
+            .project_view_page(query, profile, request),
+        )
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
         let next = increment_sequence(event.sequence())?;
         if event.sequence() != increment_sequence(self.head)? {
@@ -601,13 +631,13 @@ impl DurableStorage for SqliteStorage {
 }
 
 pub(super) fn open_metadata(
-    database: &RuntimeDatabase,
+    database: Arc<RuntimeDatabase>,
     budget: ReadBudget,
-) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, u64)> {
-    let raw = read_snapshot(database, budget)?;
+) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, SqliteViewSnapshot)> {
+    let raw = read_snapshot(&database, budget)?;
     let bytes = raw.bytes;
     let marker = SqliteMarker::parse(&raw.meta)?;
-    let (records, _) = verify_snapshot_records(database, raw)?;
+    let (records, head_hash) = verify_snapshot_records(&database, raw)?;
     if marker.state != "ready" {
         return Err(failure(
             "ledger_candidate_not_production",
@@ -625,7 +655,152 @@ pub(super) fn open_metadata(
         );
     }
     check_read_budget(budget, bytes, events.len())?;
-    Ok((events, through_sequence))
+    Ok((
+        events,
+        SqliteViewSnapshot {
+            database,
+            through_sequence,
+            head_hash,
+            budget,
+            source: LedgerReadSource::Offline,
+        },
+    ))
+}
+
+/// Retains the physical owner and authenticates the opened prefix on each read transaction.
+pub(super) struct SqliteViewSnapshot {
+    database: Arc<RuntimeDatabase>,
+    pub(super) through_sequence: u64,
+    head_hash: Option<String>,
+    budget: ReadBudget,
+    source: LedgerReadSource,
+}
+
+impl SqliteViewSnapshot {
+    pub(super) fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        let (snapshot, after) =
+            super::projection::page_bounds(query, profile, request, self.through_sequence)?;
+        check_read_budget(self.budget, 0, 0)?;
+        let mut connection = self.database.connection("query_ledger_view")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| sql_error(error, "begin_ledger_view_snapshot"))?;
+        let result = (|| {
+            let raw = read_snapshot_connection(&transaction, self.budget)?;
+            let bytes = raw.bytes;
+            let prefix_hash = raw
+                .events
+                .iter()
+                .find(|row| row.first() == Some(&SqlValue::Integer(encode(self.through_sequence))))
+                .and_then(|row| row.get(11))
+                .cloned();
+            let (records, _) = verify_snapshot_records(&self.database, raw)?;
+            if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
+                || records.last().map_or(0, StoredEventRecord::sequence) < self.through_sequence
+            {
+                return Err(failure(
+                    "ledger_snapshot_boundary_mismatch",
+                    "query_ledger_view",
+                ));
+            }
+            let mut events = Vec::new();
+            for record in records
+                .into_iter()
+                .take_while(|record| record.sequence() <= self.through_sequence)
+            {
+                check_read_budget(self.budget, bytes, events.len() + 1)?;
+                events.push(
+                    record
+                        .into_metadata()
+                        .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
+                );
+            }
+            let sequences = views::select_sequences(
+                &transaction,
+                &events,
+                query,
+                after,
+                snapshot,
+                usize::from(request.limit()) + 1,
+                self.budget,
+            )?;
+            let indexes = EventIndexes::from_events(&events);
+            let page = indexes.project_view_page(
+                &events,
+                query,
+                profile,
+                request,
+                LedgerReadScope {
+                    source: self.source,
+                    material_read: LedgerMaterialReadState::NotRequested,
+                    scanned_through_position: self.through_sequence,
+                    read_complete: true,
+                    limits: Vec::new(),
+                },
+                super::projection::PageSelection {
+                    through_sequence: self.through_sequence,
+                    sequences: Some(&sequences),
+                },
+            )?;
+            check_read_budget(self.budget, bytes, events.len())?;
+            Ok(page)
+        })();
+        match result {
+            Ok(page) => {
+                transaction
+                    .commit()
+                    .map_err(|error| sql_error(error, "close_ledger_view_snapshot"))?;
+                Ok(page)
+            }
+            Err(error) => Err(error.with_close_result(
+                transaction
+                    .rollback()
+                    .map_err(|error| sql_error(error, "rollback_ledger_view_snapshot")),
+            )),
+        }
+    }
+}
+
+fn upgrade_views(
+    database: &RuntimeDatabase,
+    head: u64,
+    hash: Option<&str>,
+) -> GlobalLedgerResult<()> {
+    let mut connection = database.connection("upgrade_ledger_views")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| sql_error(error, "begin_ledger_view_upgrade"))?;
+    let result = (|| {
+        if !views::installed(&transaction)? {
+            let raw = read_snapshot_connection(&transaction, None)?;
+            let (records, actual_hash) = verify_snapshot_records(database, raw)?;
+            if records.last().map_or(0, StoredEventRecord::sequence) != head
+                || actual_hash.as_deref() != hash
+            {
+                return Err(failure(
+                    "ledger_snapshot_boundary_mismatch",
+                    "upgrade_ledger_views",
+                ));
+            }
+            views::deploy(&transaction)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => transaction
+            .commit()
+            .map_err(|error| sql_error(error, "commit_ledger_view_upgrade")),
+        Err(error) => Err(error.with_close_result(
+            transaction
+                .rollback()
+                .map_err(|error| sql_error(error, "rollback_ledger_view_upgrade")),
+        )),
+    }
 }
 
 /// Verified immutable candidate facts. Physical observations belong to their backend.
@@ -731,32 +906,43 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| sql_error(error, "begin_ledger_schema"))?;
-    let tables: i64 = transaction.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0))
+    let result = (|| {
+        let tables: i64 = transaction.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0))
         .map_err(|error| sql_error(error, "inspect_ledger_schema"))?;
-    match tables {
-        0 if first_use => {
-            require_empty_format(&transaction)?;
+        match tables {
+            0 if first_use => {
+                require_empty_format(&transaction)?;
+                transaction
+                    .execute_batch(include_str!("sqlite/schema.sql"))
+                    .map_err(|error| sql_error(error, "initialize_ledger_schema"))?;
+                views::deploy(&transaction)?;
+                insert_row(
+                    &transaction,
+                    "ledger_meta",
+                    META_COLUMNS,
+                    &meta_row(database, 1, 0, None),
+                )?;
+            }
+            4 => {}
+            _ => {
+                return Err(failure(
+                    "ledger_schema_incomplete",
+                    "initialize_sqlite_ledger",
+                ));
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => transaction
+            .commit()
+            .map_err(|error| sql_error(error, "commit_ledger_schema")),
+        Err(error) => Err(error.with_close_result(
             transaction
-                .execute_batch(include_str!("sqlite/schema.sql"))
-                .map_err(|error| sql_error(error, "initialize_ledger_schema"))?;
-            insert_row(
-                &transaction,
-                "ledger_meta",
-                META_COLUMNS,
-                &meta_row(database, 1, 0, None),
-            )?;
-        }
-        4 => {}
-        _ => {
-            return Err(failure(
-                "ledger_schema_incomplete",
-                "initialize_sqlite_ledger",
-            ));
-        }
+                .rollback()
+                .map_err(|error| sql_error(error, "rollback_ledger_schema")),
+        )),
     }
-    transaction
-        .commit()
-        .map_err(|error| sql_error(error, "commit_ledger_schema"))
 }
 
 struct RawSnapshot {
@@ -789,6 +975,7 @@ fn read_snapshot_connection(
     connection: &Connection,
     budget: ReadBudget,
 ) -> GlobalLedgerResult<RawSnapshot> {
+    views::installed(connection)?;
     let mut bytes = 0;
     let meta = read_meta_with_budget(connection, budget, &mut bytes)?;
     let events = read_rows(
