@@ -137,12 +137,16 @@ impl RuntimeDatabase {
                     RuntimeDatabaseError::sql("configure_backup_destination", &error)
                 })?;
             let connection = self.connection("backup_database")?;
-            let page_size: u64 = connection
+            let page_size: i64 = connection
                 .pragma_query_value(None, "page_size", |row| row.get(0))
                 .map_err(|error| RuntimeDatabaseError::sql("read_backup_page_size", &error))?;
-            let page_count: u64 = connection
+            let page_count: i64 = connection
                 .pragma_query_value(None, "page_count", |row| row.get(0))
                 .map_err(|error| RuntimeDatabaseError::sql("read_backup_page_count", &error))?;
+            let page_size = u64::try_from(page_size)
+                .map_err(|_| failure("backup_page_size_invalid", "read_backup_page_size"))?;
+            let page_count = u64::try_from(page_count)
+                .map_err(|_| failure("backup_page_count_invalid", "read_backup_page_count"))?;
             limits.check(
                 page_count
                     .checked_mul(page_size)

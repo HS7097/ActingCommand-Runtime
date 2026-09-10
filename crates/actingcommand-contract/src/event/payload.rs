@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-pub mod ledger_migration;
+mod ledger_migration;
 mod signature;
 pub use ledger_migration::*;
 
-use signature::*;
+pub use signature::*;
 mod vendor_stdio;
 pub use vendor_stdio::*;
 mod adb_recovery;
