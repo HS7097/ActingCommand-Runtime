@@ -525,8 +525,8 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
     drop(session);
     drop(client);
     host.close().unwrap();
-    let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
-        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(runtime_root.join("ledger")),
+    let snapshot = actingcommand_ledger::GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(&runtime_root),
         |reference| {
             Some(
                 actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
@@ -743,8 +743,8 @@ fn resource_restore_uses_native_evidence_and_existing_package_chain() {
         fs::read(restored.join("ours/operations/restored/task.json")).unwrap(),
         task_bytes
     );
-    let after = actingcommand_ledger::GlobalLedger::open_read_only(
-        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(runtime_root.join("ledger")),
+    let after = actingcommand_ledger::GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(&runtime_root),
         |reference| {
             Some(
                 actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
