@@ -367,7 +367,8 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
         })
         .collect::<Vec<_>>();
     let restored_root = TempDir::new().expect("external artifact restore root");
-    let restored = ArtifactStore::open(restored_root.path()).expect("artifact restore owner");
+    let restored = actingcommand_artifact_store::ArtifactStore::open(restored_root.path())
+        .expect("artifact restore owner");
     for reference in &references {
         let verified = restored
             .restore_recovery_reference(
