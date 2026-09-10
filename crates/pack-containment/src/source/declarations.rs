@@ -822,11 +822,7 @@ fn child(pointer: &str, field: &str) -> String {
 /// Source trees have already passed the same operation checks before canonicalization.
 pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutcome<()> {
     if let Some(control) = bundle.control() {
-        Declaration {
-            file: Path::new("control.json"),
-            schema: control.get("schema_version").and_then(Value::as_str),
-        }
-        .control(control)?;
+        validate_control_declarations(Path::new("control.json"), control)?;
     }
     let path = Path::new(bundle.operation_path());
     let declaration = Declaration {
@@ -899,13 +895,18 @@ pub fn validate_navigation_declarations(path: &Path, navigation: &Value) -> CliO
     .navigation(navigation)
 }
 
+/// The same control declaration grammar used before contained execution, without IO.
+pub fn validate_control_declarations(path: &Path, value: &Value) -> CliOutcome<()> {
+    Declaration {
+        file: path,
+        schema: value.get("schema_version").and_then(Value::as_str),
+    }
+    .control(value)
+}
+
 pub(crate) fn validate_loaded_declarations(metadata: &crate::PackageMetadata) -> CliOutcome<()> {
     if let Some(control) = &metadata.control {
-        Declaration {
-            file: Path::new("control.json"),
-            schema: control.get("schema_version").and_then(Value::as_str),
-        }
-        .control(control)?;
+        validate_control_declarations(Path::new("control.json"), control)?;
     }
     Declaration {
         file: Path::new(&metadata.manifest_path),
