@@ -1165,8 +1165,14 @@ impl<B: DurableStorage> EventStore<B> {
             query,
             profile,
             request,
-            actingcommand_contract::LedgerReadSource::Runtime,
-            true,
+            actingcommand_contract::LedgerReadScope {
+                source: actingcommand_contract::LedgerReadSource::Runtime,
+                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
+                scanned_through_position: self.latest_sequence(),
+                read_complete: true,
+                limits: Vec::new(),
+            },
+            self.latest_sequence(),
         )
     }
 

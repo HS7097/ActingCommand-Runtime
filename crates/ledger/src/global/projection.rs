@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::GlobalLedgerError;
-use crate::PersistedEvent;
+use crate::{PersistedEvent, fact::LedgerEventRead};
 use actingcommand_contract::{
     ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode, EventId,
     EventPayload, EventQuery, EventSource, EventType, FrameId, InstanceId, LeaseId, LedgerView,
@@ -36,7 +36,7 @@ pub(super) struct EventIndexes {
 }
 
 impl EventIndexes {
-    pub(super) fn from_events(events: &[PersistedEvent]) -> Self {
+    pub(super) fn from_events<E: LedgerEventRead>(events: &[E]) -> Self {
         let mut indexes = Self::default();
         for (position, event) in events.iter().enumerate() {
             indexes.insert(event, position);
@@ -48,7 +48,7 @@ impl EventIndexes {
         self.event_ids.contains_key(event_id)
     }
 
-    pub(super) fn insert(&mut self, event: &PersistedEvent, position: usize) {
+    pub(super) fn insert<E: LedgerEventRead>(&mut self, event: &E, position: usize) {
         self.event_ids.insert(*event.event_id(), position);
         self.event_types
             .entry(event_type_index(event.event_type()))
@@ -105,28 +105,24 @@ impl EventIndexes {
         }
     }
 
-    pub(super) fn query(
-        &self,
-        events: &[PersistedEvent],
-        query: &EventQuery,
-    ) -> Vec<PersistedEvent> {
+    pub(super) fn query<E: LedgerEventRead>(&self, events: &[E], query: &EventQuery) -> Vec<E> {
         let minimum_sequence = query.from_sequence.unwrap_or(0);
         let start = events.partition_point(|event| event.sequence() < minimum_sequence);
-        let snapshot = events.last().map_or(0, PersistedEvent::sequence);
+        let snapshot = events.last().map_or(0, E::sequence);
         self.candidates_from(events, query, start)
-            .filter(|event| self.matches(query, event, snapshot))
+            .filter(|event| self.matches(query, *event, snapshot))
             .cloned()
             .collect()
     }
 
-    pub(super) fn query_page(
+    pub(super) fn query_page<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
-    ) -> Vec<PersistedEvent> {
+    ) -> Vec<E> {
         self.query_page_with_observer(
             events,
             query,
@@ -137,15 +133,15 @@ impl EventIndexes {
         )
     }
 
-    fn query_page_with_observer(
+    fn query_page_with_observer<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
         observe_candidate: &mut impl FnMut(),
-    ) -> Vec<PersistedEvent> {
+    ) -> Vec<E> {
         let minimum_sequence = query
             .from_sequence
             .unwrap_or(0)
@@ -155,7 +151,7 @@ impl EventIndexes {
             .take_while(|event| event.sequence() <= through_sequence)
             .filter(|event| {
                 observe_candidate();
-                event.sequence() > after_sequence && self.matches(query, event, through_sequence)
+                event.sequence() > after_sequence && self.matches(query, *event, through_sequence)
             })
             .take(page_events)
             .cloned()
@@ -163,14 +159,14 @@ impl EventIndexes {
     }
 
     #[cfg(test)]
-    pub(super) fn query_page_with_visit_count(
+    pub(super) fn query_page_with_visit_count<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
-    ) -> (Vec<PersistedEvent>, usize) {
+    ) -> (Vec<E>, usize) {
         let mut visited = 0;
         let page = self.query_page_with_observer(
             events,
@@ -183,12 +179,12 @@ impl EventIndexes {
         (page, visited)
     }
 
-    fn candidates_from<'a>(
+    fn candidates_from<'a, E: LedgerEventRead>(
         &'a self,
-        events: &'a [PersistedEvent],
+        events: &'a [E],
         query: &EventQuery,
         start: usize,
-    ) -> Box<dyn Iterator<Item = &'a PersistedEvent> + 'a> {
+    ) -> Box<dyn Iterator<Item = &'a E> + 'a> {
         let event_type = query.event_type.map(event_type_index);
         let candidates = [
             indexed_filter(&self.event_types, event_type.as_ref()),
@@ -227,7 +223,7 @@ impl EventIndexes {
         }
     }
 
-    fn matches(&self, query: &EventQuery, event: &PersistedEvent, snapshot: u64) -> bool {
+    fn matches<E: LedgerEventRead>(&self, query: &EventQuery, event: &E, snapshot: u64) -> bool {
         query_matches_fields(query, event)
             && query.view.is_none_or(|view| {
                 view.contains(
@@ -239,7 +235,7 @@ impl EventIndexes {
             })
     }
 
-    fn lab_related(&self, event: &PersistedEvent, snapshot: u64) -> bool {
+    fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
         let links = event.links();
         let request_matches = |request: &RequestId| {
             self.lab_requests
@@ -267,7 +263,7 @@ impl EventIndexes {
     }
 }
 
-pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> ProjectedEvent {
+pub(super) fn project<E: LedgerEventRead>(event: &E, profile: ProjectionProfile) -> ProjectedEvent {
     let (payload, include_object_key) = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => (ProjectionPayload::Omitted, false),
         ProjectionProfile::Lab | ProjectionProfile::Verbose
@@ -302,18 +298,14 @@ pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> Pro
         links: event.links().clone(),
         payload_schema: event.payload_schema().to_string(),
         payload,
-        artifacts: event
-            .artifacts()
-            .iter()
-            .map(|artifact| artifact.project(include_object_key))
-            .collect(),
+        artifacts: event.projected_artifacts(include_object_key),
         // Snapshot-aware page projection fills the complete overlapping membership.
         views: Vec::new(),
     }
 }
 
-pub(super) fn project_if_matches(
-    event: &PersistedEvent,
+pub(super) fn project_if_matches<E: LedgerEventRead>(
+    event: &E,
     query: &EventQuery,
     profile: ProjectionProfile,
 ) -> Option<ProjectedEvent> {
@@ -423,7 +415,7 @@ pub(super) fn project_scheduling_outcomes(
     })
 }
 
-pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
+pub(crate) fn query_matches<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bool {
     query_matches_fields(query, event)
         && query.view.is_none_or(|view| {
             view.contains(
@@ -435,7 +427,7 @@ pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool 
         })
 }
 
-fn query_matches_fields(query: &EventQuery, event: &PersistedEvent) -> bool {
+fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bool {
     let links = event.links();
     query
         .from_sequence

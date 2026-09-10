@@ -321,6 +321,74 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
             .project(EventQuery::default(), ProjectionProfile::Lab)
             .expect("reference projection")
     );
+    let (records, _) = verify_snapshot_records(
+        &database,
+        read_snapshot(&database, None).expect("same SQLite snapshot"),
+    )
+    .expect("metadata verifies canonical rows and indexes");
+    let metadata = records
+        .into_iter()
+        .map(StoredEventRecord::into_metadata)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("typed reference metadata");
+    let metadata_indexes = EventIndexes::from_events(&metadata);
+    let segment_metadata = super::super::read_only::open_metadata(GlobalLedgerReadOnlyConfig::new(
+        segment_root.path(),
+    ))
+    .expect("Segment metadata with original material kept in the artifact owner root");
+    let segment_indexes = EventIndexes::from_events(&segment_metadata.events);
+    let through_sequence = sqlite.latest_sequence().expect("verified committed head");
+    for profile in [ProjectionProfile::Lab, ProjectionProfile::Ui] {
+        let request = RuntimeEventQueryPageRequest::default();
+        let online = sqlite
+            .project_view_page(EventQuery::default(), profile, request.clone())
+            .expect("writer view page");
+        let scope = LedgerReadScope {
+            source: LedgerReadSource::Offline,
+            material_read: LedgerMaterialReadState::NotRequested,
+            scanned_through_position: through_sequence,
+            read_complete: true,
+            limits: Vec::new(),
+        };
+        let page = metadata_indexes
+            .project_view_page(
+                &metadata,
+                &EventQuery::default(),
+                profile,
+                &request,
+                scope.clone(),
+                through_sequence,
+            )
+            .expect("SQLite metadata projection");
+        let reference = segment_indexes
+            .project_view_page(
+                &segment_metadata.events,
+                &EventQuery::default(),
+                profile,
+                &request,
+                scope,
+                through_sequence,
+            )
+            .expect("Segment metadata projection");
+        assert_eq!(page, reference);
+        assert_eq!(page.events(), online.events());
+        let projected_references = page
+            .events()
+            .iter()
+            .flat_map(|event| &event.artifacts)
+            .collect::<Vec<_>>();
+        assert!(!projected_references.is_empty());
+        assert!(
+            projected_references
+                .iter()
+                .all(|reference| reference.object_key.is_some()
+                    == (profile == ProjectionProfile::Lab))
+        );
+        assert_eq!(
+            page.read_scope().unwrap().material_read,
+            LedgerMaterialReadState::NotRequested
+        );
+    }
     sqlite.close().expect("close sqlite");
     segment.close().expect("close segment");
     let missing = GlobalLedger::open_sqlite_candidate(
@@ -396,6 +464,16 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
             [encode(2), encode(0)],
         )
         .expect("mutate ordinal");
+    assert_eq!(
+        verify_snapshot_records(
+            &database,
+            read_snapshot(&database, None).expect("mutated snapshot")
+        )
+        .err()
+        .expect("metadata preserves artifact index integrity")
+        .code(),
+        "ledger_index_mismatch"
+    );
     let error = GlobalLedger::open_sqlite_candidate_with_artifact_verifier(
         config(sqlite_root.path(), "order-check"),
         database,

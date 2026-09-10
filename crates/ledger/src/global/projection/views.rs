@@ -3,8 +3,8 @@
 use super::*;
 use actingcommand_contract::{
     EventSeverity, InputPayload, LedgerEventPosition, LedgerFailureResolution, LedgerPageLimit,
-    LedgerReadScope, LedgerReadSource, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery,
-    RecognitionPayload, RecognitionVerdict, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    LedgerReadScope, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, RecognitionPayload,
+    RecognitionVerdict, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest,
 };
 
@@ -12,21 +12,27 @@ use actingcommand_contract::{
 const MAX_RECOVERY_CONTEXT_EVENTS: usize = super::super::MAX_QUERY_PAGE_EVENTS;
 
 impl EventIndexes {
-    pub(in crate::global) fn project_view_page(
+    pub(in crate::global) fn project_view_page<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
-        source: LedgerReadSource,
-        read_complete: bool,
+        scope: LedgerReadScope,
+        through_sequence: u64,
     ) -> Result<RuntimeEventQueryPage, GlobalLedgerError> {
         let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
         query
             .validate()
             .map_err(|_| invalid("invalid_event_query_bounds"))?;
         request.validate().map_err(|error| invalid(error.code()))?;
-        let latest = events.last().map_or(0, PersistedEvent::sequence);
+        let latest = through_sequence;
+        if events.last().map_or(0, E::sequence) != latest {
+            return Err(GlobalLedgerError::fatal(
+                "ledger_snapshot_boundary_mismatch",
+                "project_ledger_view_page",
+            ));
+        }
         let (snapshot, after) = match request.cursor() {
             Some(cursor) => {
                 if !cursor
@@ -68,7 +74,7 @@ impl EventIndexes {
                 row
             })
             .collect();
-        let mut groups = self.run_recovery(events, &rows, snapshot, read_complete);
+        let mut groups = self.run_recovery(events, &rows, snapshot, scope.read_complete);
         let mut byte_limited = false;
         loop {
             let has_more = count_limited || byte_limited;
@@ -90,7 +96,7 @@ impl EventIndexes {
             if byte_limited {
                 limits.push(LedgerPageLimit::ResponseBytes);
             }
-            if !read_complete {
+            if !scope.read_complete {
                 limits.push(LedgerPageLimit::SourceIncomplete);
             }
             let page = RuntimeEventQueryPage::new(
@@ -103,12 +109,9 @@ impl EventIndexes {
             .and_then(|page| {
                 page.with_projection_context(
                     LedgerReadScope {
-                        source,
-                        material_read:
-                            actingcommand_contract::LedgerMaterialReadState::NotRequested,
                         scanned_through_position: scanned_through,
-                        read_complete,
                         limits,
+                        ..scope.clone()
                     },
                     groups.clone(),
                 )
@@ -131,9 +134,9 @@ impl EventIndexes {
         }
     }
 
-    fn run_recovery(
+    fn run_recovery<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         rows: &[ProjectedEvent],
         snapshot: u64,
         complete: bool,
@@ -157,7 +160,7 @@ impl EventIndexes {
                     .iter()
                     .copied()
                     .filter(|event| {
-                        event.severity() >= EventSeverity::Warning || failure_kind(event).is_some()
+                        event.severity() >= EventSeverity::Warning || failure_kind(*event).is_some()
                     })
                     .collect();
                 if failures.is_empty() && !context_limited && complete {
@@ -186,7 +189,7 @@ impl EventIndexes {
                             context.iter().copied().find(|candidate| {
                                 candidate.sequence() > failure.sequence()
                                     && same_recovery_relation(failure, candidate)
-                                    && success_kind(candidate) == kind
+                                    && success_kind(*candidate) == kind
                             })
                         })
                         .flatten();
@@ -229,7 +232,7 @@ enum RecoveryKind {
     EntryRecovery,
 }
 
-fn failure_kind(event: &PersistedEvent) -> Option<RecoveryKind> {
+fn failure_kind<E: LedgerEventRead>(event: &E) -> Option<RecoveryKind> {
     match event.payload() {
         EventPayload::Input(InputPayload::Failed(_)) => Some(RecoveryKind::Input),
         EventPayload::Recognition(RecognitionPayload::Failed(_)) => Some(RecoveryKind::Recognition),
@@ -242,7 +245,7 @@ fn failure_kind(event: &PersistedEvent) -> Option<RecoveryKind> {
     }
 }
 
-fn success_kind(event: &PersistedEvent) -> Option<RecoveryKind> {
+fn success_kind<E: LedgerEventRead>(event: &E) -> Option<RecoveryKind> {
     match event.payload() {
         EventPayload::Input(InputPayload::Completed(_)) => Some(RecoveryKind::Input),
         EventPayload::Recognition(RecognitionPayload::Completed(payload))
@@ -262,13 +265,13 @@ fn success_kind(event: &PersistedEvent) -> Option<RecoveryKind> {
     }
 }
 
-fn has_recovery_relation(event: &PersistedEvent) -> bool {
+fn has_recovery_relation<E: LedgerEventRead>(event: &E) -> bool {
     event.links().action_id().is_some()
         || event.links().recognition_id().is_some()
         || failure_kind(event) == Some(RecoveryKind::EntryRecovery)
 }
 
-fn same_recovery_relation(failure: &PersistedEvent, candidate: &PersistedEvent) -> bool {
+fn same_recovery_relation<E: LedgerEventRead>(failure: &E, candidate: &E) -> bool {
     if failure.links().run_id().is_none() || failure.links().run_id() != candidate.links().run_id()
     {
         return false;
@@ -304,7 +307,7 @@ fn same_recovery_relation(failure: &PersistedEvent, candidate: &PersistedEvent) 
     }
 }
 
-fn position(event: &PersistedEvent) -> LedgerEventPosition {
+fn position<E: LedgerEventRead>(event: &E) -> LedgerEventPosition {
     LedgerEventPosition {
         event_id: *event.event_id(),
         sequence: event.sequence(),

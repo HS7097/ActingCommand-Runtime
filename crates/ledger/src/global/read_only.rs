@@ -6,7 +6,10 @@ use super::storage::{
     list_segments, parse_writer_metadata,
 };
 use super::{GlobalLedgerError, GlobalLedgerResult, MAX_QUERY_PAGE_EVENTS};
-use crate::PersistedEvent;
+use crate::{
+    PersistedEvent,
+    fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
+};
 use actingcommand_contract::{
     EventId, EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference,
     VerifiedArtifactReference,
@@ -199,6 +202,110 @@ pub struct GlobalLedgerStorageSnapshot {
     pub atomic: bool,
 }
 
+pub(super) struct ReadOnlySnapshot<E> {
+    pub(super) events: Vec<E>,
+    pub(super) writer_metadata: GlobalLedgerWriterMetadataObservation,
+    pub(super) listed_through_segment: Option<u64>,
+    pub(super) repairs: Vec<GlobalLedgerRepairRecord>,
+    pub(super) corrupt_tail: Option<GlobalLedgerCorruptTail>,
+    pub(super) storage_snapshot: GlobalLedgerStorageSnapshot,
+}
+
+pub(super) fn open_metadata(
+    config: GlobalLedgerReadOnlyConfig,
+) -> GlobalLedgerResult<ReadOnlySnapshot<LedgerEventMetadata>> {
+    open_snapshot(config, |line| {
+        parse_record(line)?.into_metadata().map_err(|error| {
+            GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
+        })
+    })
+}
+
+fn open_snapshot<E: LedgerEventRead>(
+    config: GlobalLedgerReadOnlyConfig,
+    mut parse: impl FnMut(&[u8]) -> GlobalLedgerResult<E>,
+) -> GlobalLedgerResult<ReadOnlySnapshot<E>> {
+    if config.root.as_os_str().is_empty() {
+        return Err(GlobalLedgerError::fatal(
+            "invalid_ledger_config",
+            "validate_read_only_root",
+        ));
+    }
+    let root = config.root.canonicalize().map_err(|error| {
+        GlobalLedgerError::io("ledger_io", "canonicalize_read_only_root", &error)
+    })?;
+    let root_metadata = fs::metadata(&root)
+        .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_read_only_root", &error))?;
+    if !root_metadata.is_dir() {
+        return Err(GlobalLedgerError::fatal(
+            "invalid_ledger_config",
+            "validate_read_only_root",
+        ));
+    }
+
+    let segments = list_segments(&root.join("segments"))?;
+    let listed_through_segment = segments.last().map(|(index, _)| *index);
+    let (segment_snapshots, mut storage_snapshot) =
+        read_segment_snapshots(&segments, config.budget)?;
+    let writer_metadata = read_writer_metadata(&root)?;
+    let repairs = RepairJournal::load(&root)?
+        .snapshots()
+        .into_iter()
+        .map(|repair| GlobalLedgerRepairRecord {
+            schema_version: repair.schema_version,
+            repair_id: repair.repair_id,
+            completed: repair.completed,
+            segment_index: repair.segment_index,
+            original_len: repair.original_len,
+            repaired_len: repair.repaired_len,
+            tail_sha256: repair.tail_sha256,
+            quarantine_key: repair.quarantine_key,
+        })
+        .collect();
+
+    let mut events = Vec::new();
+    let mut event_ids = BTreeSet::new();
+    let mut next_sequence = 1_u64;
+    let mut corrupt_tail = None;
+    for snapshot in &segment_snapshots {
+        check_read_budget(config.budget, storage_snapshot.read_bytes, events.len())?;
+        if let Some(corruption) = scan_segment(
+            snapshot,
+            &mut next_sequence,
+            &mut event_ids,
+            &mut events,
+            &mut parse,
+            config.budget,
+        )? {
+            storage_snapshot.verified_prefix_bytes = storage_snapshot
+                .verified_prefix_bytes
+                .checked_add(corruption.byte_offset)
+                .ok_or_else(|| {
+                    GlobalLedgerError::fatal(
+                        "ledger_snapshot_overflow",
+                        "count_verified_prefix_bytes",
+                    )
+                })?;
+            corrupt_tail = Some(corruption);
+            break;
+        }
+        storage_snapshot.verified_prefix_bytes = storage_snapshot
+            .verified_prefix_bytes
+            .checked_add(snapshot.bytes.len() as u64)
+            .ok_or_else(|| {
+                GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_verified_prefix_bytes")
+            })?;
+    }
+    Ok(ReadOnlySnapshot {
+        events,
+        writer_metadata,
+        listed_through_segment,
+        repairs,
+        corrupt_tail,
+        storage_snapshot,
+    })
+}
+
 impl GlobalLedgerReadOnly {
     pub(super) fn open<F>(
         config: GlobalLedgerReadOnlyConfig,
@@ -207,89 +314,15 @@ impl GlobalLedgerReadOnly {
     where
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
     {
-        if config.root.as_os_str().is_empty() {
-            return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
-                "validate_read_only_root",
-            ));
-        }
-        let root = config.root.canonicalize().map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "canonicalize_read_only_root", &error)
-        })?;
-        let root_metadata = fs::metadata(&root)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_read_only_root", &error))?;
-        if !root_metadata.is_dir() {
-            return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
-                "validate_read_only_root",
-            ));
-        }
-
-        let segments = list_segments(&root.join("segments"))?;
-        let listed_through_segment = segments.last().map(|(index, _)| *index);
-        let (segment_snapshots, mut storage_snapshot) =
-            read_segment_snapshots(&segments, config.budget)?;
-        let writer_metadata = read_writer_metadata(&root)?;
-        let repairs = RepairJournal::load(&root)?
-            .snapshots()
-            .into_iter()
-            .map(|repair| GlobalLedgerRepairRecord {
-                schema_version: repair.schema_version,
-                repair_id: repair.repair_id,
-                completed: repair.completed,
-                segment_index: repair.segment_index,
-                original_len: repair.original_len,
-                repaired_len: repair.repaired_len,
-                tail_sha256: repair.tail_sha256,
-                quarantine_key: repair.quarantine_key,
-            })
-            .collect();
-
-        let mut events = Vec::new();
-        let mut event_ids = BTreeSet::new();
-        let mut next_sequence = 1_u64;
-        let mut corrupt_tail = None;
-        for snapshot in &segment_snapshots {
-            check_read_budget(config.budget, storage_snapshot.read_bytes, events.len())?;
-            if let Some(corruption) = scan_segment(
-                snapshot,
-                &mut next_sequence,
-                &mut event_ids,
-                &mut events,
-                &mut verify_artifact,
-                config.budget,
-            )? {
-                storage_snapshot.verified_prefix_bytes = storage_snapshot
-                    .verified_prefix_bytes
-                    .checked_add(corruption.byte_offset)
-                    .ok_or_else(|| {
-                        GlobalLedgerError::fatal(
-                            "ledger_snapshot_overflow",
-                            "count_verified_prefix_bytes",
-                        )
-                    })?;
-                corrupt_tail = Some(corruption);
-                break;
-            }
-            storage_snapshot.verified_prefix_bytes = storage_snapshot
-                .verified_prefix_bytes
-                .checked_add(snapshot.bytes.len() as u64)
-                .ok_or_else(|| {
-                    GlobalLedgerError::fatal(
-                        "ledger_snapshot_overflow",
-                        "count_verified_prefix_bytes",
-                    )
-                })?;
-        }
-        let indexes = EventIndexes::from_events(&events);
+        let snapshot = open_snapshot(config, |line| parse_event(line, &mut verify_artifact))?;
         Ok(Self {
-            events,
-            indexes,
-            writer_metadata,
-            listed_through_segment,
-            repairs,
-            corrupt_tail,
-            storage_snapshot,
+            indexes: EventIndexes::from_events(&snapshot.events),
+            events: snapshot.events,
+            writer_metadata: snapshot.writer_metadata,
+            listed_through_segment: snapshot.listed_through_segment,
+            repairs: snapshot.repairs,
+            corrupt_tail: snapshot.corrupt_tail,
+            storage_snapshot: snapshot.storage_snapshot,
         })
     }
 
@@ -505,17 +538,14 @@ fn writer_metadata_is_locked(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::WouldBlock || error.raw_os_error() == Some(33)
 }
 
-fn scan_segment<F>(
+fn scan_segment<E: LedgerEventRead>(
     snapshot: &ReadOnlySegmentSnapshot,
     next_sequence: &mut u64,
     event_ids: &mut BTreeSet<EventId>,
-    events: &mut Vec<PersistedEvent>,
-    verify_artifact: &mut F,
+    events: &mut Vec<E>,
+    parse: &mut impl FnMut(&[u8]) -> GlobalLedgerResult<E>,
     budget: Option<(u64, usize, Instant)>,
-) -> GlobalLedgerResult<Option<GlobalLedgerCorruptTail>>
-where
-    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
-{
+) -> GlobalLedgerResult<Option<GlobalLedgerCorruptTail>> {
     let complete_len = complete_record_len(&snapshot.bytes);
     let mut record_start = 0_usize;
     while record_start < complete_len {
@@ -529,7 +559,7 @@ where
         if line.is_empty() {
             return corrupt_tail("corrupt_segment", snapshot, record_start).map(Some);
         }
-        let event = match parse_event(line, verify_artifact) {
+        let event = match parse(line) {
             Ok(event) => event,
             Err(error) => {
                 return corrupt_tail(corruption_code(error.code()), snapshot, record_start)
@@ -559,6 +589,14 @@ fn parse_event<F>(line: &[u8], verify_artifact: &mut F) -> GlobalLedgerResult<Pe
 where
     F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
 {
+    parse_record(line)?
+        .into_event_with_artifact_verifier(verify_artifact)
+        .map_err(|error| {
+            GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
+        })
+}
+
+fn parse_record(line: &[u8]) -> GlobalLedgerResult<StoredEventRecord> {
     let unique = serde_json::from_slice::<UniqueJsonValue>(line).map_err(|error| {
         GlobalLedgerError::json("corrupt_segment", "parse_read_only_segment", &error)
     })?;
@@ -582,12 +620,7 @@ where
             "validate_read_only_line_type",
         ));
     }
-    stored
-        .event
-        .into_event_with_artifact_verifier(verify_artifact)
-        .map_err(|error| {
-            GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
-        })
+    Ok(stored.event)
 }
 
 fn corruption_code(code: &'static str) -> &'static str {

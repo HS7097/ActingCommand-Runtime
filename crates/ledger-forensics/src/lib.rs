@@ -701,7 +701,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
 /// Reads an already opened evidence snapshot with the Runtime page contract.
 /// Opening/validating the source remains the ledger owner's responsibility.
 pub fn query_view_page(
-    snapshot: &GlobalLedgerEvidence,
+    snapshot: &actingcommand_ledger::GlobalLedgerMetadata,
     query: &EventQuery,
     profile: actingcommand_contract::ProjectionProfile,
     page: &actingcommand_contract::RuntimeEventQueryPageRequest,
