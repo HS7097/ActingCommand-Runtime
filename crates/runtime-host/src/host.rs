@@ -1087,16 +1087,24 @@ impl RuntimeHost {
         &self,
         sources: &CatalogSources,
         expected: CatalogGeneration,
-    ) -> RuntimeHostResult<CatalogGeneration> {
+    ) -> RuntimeHostResult<(
+        RuntimeHostResult<CatalogGeneration>,
+        Option<actingcommand_runtime_state::StateDocument>,
+    )> {
         let shared = self.shared_ref("activate_policy_catalog_with_expected_for_test")?;
         let catalog = lock(&shared.policy, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
-        shared.switch_policy_catalog(
+        let result = shared.switch_policy_catalog(
             catalog,
             Some(expected),
             EventAction::CatalogActivate,
             CatalogTransitionTarget::Activated,
             None,
-        )
+        );
+        let document = shared
+            .state
+            .read_json_document(actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY)
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok((result, document))
     }
 
     pub fn rollback_policy_catalog(
