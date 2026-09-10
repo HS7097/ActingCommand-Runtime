@@ -16,7 +16,6 @@ path = "src/main.rs"
 actingcommand-contract = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
-actingcommand-execution-kernel = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-lab = { workspace = true }
 actingcommand-ledger = { workspace = true }

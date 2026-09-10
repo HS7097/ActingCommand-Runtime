@@ -24,7 +24,7 @@ and `operation explain` keep their existing behavior.
 | `scheduling/{tasks,pools,activity,timeline}.json` | The production scheduling document parser and schema-version check |
 | `scheduling/procedure-manifest.*.json` | Shared `ProcedureBindingConfigFile` / `ScheduledExecutionConfigFile` serde declarations |
 | `control.json` | The source control declaration validator and production task-control parser |
-| `tasks/maa-semantic-mapping.json`, `upstream-sync/maa.tasks.json` | The converter's existing declaration-pair rules |
+| Converter semantic-mapping and task-facts declarations | The converter's existing declaration-pair rules |
 
 The named directories describe conventional resource layouts; explicitly selected
 pack/pages/navigation/projection filenames also use their native parsers at the

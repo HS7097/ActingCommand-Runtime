@@ -163,7 +163,8 @@ pub(super) fn run_operation(
         "validate" => {
             let repo = flags.required_path("--repo")?;
             let dir = flags.required_path("--operation-dir")?;
-            let report = crate::resource_declarations::operation(&repo, &dir)?;
+            let report =
+                crate::resource_runtime_support::resource_declarations::operation(&repo, &dir)?;
             Ok(json!({
                 "operation_dir": dir.display().to_string(),
                 "status": "valid",

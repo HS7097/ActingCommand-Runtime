@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#[path = "resource_declarations.rs"]
+pub(crate) mod resource_declarations;
+
 use super::runtime_endpoint::{
     runtime_endpoint_policy, runtime_endpoint_policy_json, runtime_tcp_available,
 };
@@ -31,7 +34,7 @@ pub(super) fn run_resource(
     let resource_root = resolve_resource_root(&repo);
     match sub {
         "restore" => crate::resource_restore::run_resource_restore(args),
-        "validate" => crate::resource_declarations::run(&repo, &flags),
+        "validate" => resource_declarations::run_resource_validation(&repo, &flags),
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
         "import-alas" | "drift-alas" => {

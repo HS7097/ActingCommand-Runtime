@@ -62,7 +62,6 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
- "actingcommand-execution-kernel",
  "actingcommand-lab",
  "actingcommand-ledger",
  "actingcommand-pack-containment",

@@ -33,7 +33,7 @@ pub(super) fn help_data() -> Value {
             "--version"
         ],
         "command_options": {
-            "resource validate": crate::resource_declarations::options(),
+            "resource validate": crate::resource_runtime_support::resource_declarations::options(),
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
             "lab signatures register": crate::signature_cli::options("register"),

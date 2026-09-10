@@ -7,7 +7,7 @@ use actingcommand_contract::{
     LabErrorClass, ResourceDeclarationIssue, page_projection::ProjectionMetadata,
     resource_declaration::ProcedureBindingConfigFile,
 };
-use actingcommand_execution_kernel::{
+use actingcommand_lab::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,
 };
 use actingcommand_pack_containment::source::{
@@ -31,7 +31,7 @@ const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PATH_LIST_BYTES: u64 = 1024 * 1024;
 
-pub(super) fn options() -> [&'static str; 3] {
+pub(crate) fn options() -> [&'static str; 3] {
     [
         "--repo <repository root>",
         "--changed-path <repository-relative path> (repeatable)",
@@ -39,7 +39,7 @@ pub(super) fn options() -> [&'static str; 3] {
     ]
 }
 
-pub(super) fn run(repo: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
+pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
     for flag in flags.flags.keys() {
         if !matches!(
             flag.as_str(),
@@ -137,7 +137,7 @@ pub(super) fn run(repo: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
     }))
 }
 
-pub(super) fn operation(repo: &Path, operation_dir: &Path) -> CliOutcome<Value> {
+pub(crate) fn operation(repo: &Path, operation_dir: &Path) -> CliOutcome<Value> {
     let mut reader = DeclarationReader::new(repo)?;
     validate_relative_path(operation_dir)?;
     let path = operation_dir.join("task.json");

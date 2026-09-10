@@ -183,7 +183,6 @@ mod readonly_cli;
 pub mod recovery_exec;
 mod resource_authoring;
 mod resource_convert;
-mod resource_declarations;
 mod resource_restore;
 mod resource_runtime_support;
 mod run_summary;
