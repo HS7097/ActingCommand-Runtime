@@ -37,6 +37,7 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
             _ => unreachable!(),
         }
         let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
         let request = client.request_with_correlation(
