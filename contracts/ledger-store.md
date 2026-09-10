@@ -1,11 +1,10 @@
 # GlobalLedger storage contract
 
-S0 freezes the existing behavior behind the private `global::store::LedgerStore`
-boundary. `GlobalLedger` remains the public fact owner and single writer; its
-production constructors open `SegmentStore`. The explicit feature-gated
-[SQLite candidate](sqlite-ledger-candidate.md) uses the same writer and shared
-semantic core. Its database assembly and read-only adapter retain the S0 behavior
-and approved S2 differential boundary.
+`GlobalLedger` is the public fact owner and single writer behind the private
+`global::store::LedgerStore` boundary. RuntimeHost opens the formal SQLite medium
+through [Ledger maintenance and cutover](ledger-maintenance.md). The explicit
+[SQLite candidate](sqlite-ledger-candidate.md) and Segment corpus share the same
+semantic core, query, projection and subscription behavior.
 
 ## Open, ownership and durable append
 

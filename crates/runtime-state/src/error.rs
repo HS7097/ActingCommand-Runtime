@@ -14,6 +14,7 @@ pub struct RuntimeStateError {
     code: &'static str,
     operation: &'static str,
     class: RuntimeStateErrorClass,
+    detail: Option<String>,
 }
 
 impl RuntimeStateError {
@@ -22,6 +23,7 @@ impl RuntimeStateError {
             code,
             operation,
             class: RuntimeStateErrorClass::Request,
+            detail: None,
         }
     }
 
@@ -30,7 +32,16 @@ impl RuntimeStateError {
             code,
             operation,
             class: RuntimeStateErrorClass::Fatal,
+            detail: None,
         }
+    }
+
+    pub(crate) fn maintenance_sql(operation: &'static str, error: &rusqlite::Error) -> Self {
+        let mut result = Self::fatal("state_snapshot_failed", operation);
+        result.detail = error
+            .sqlite_error()
+            .map(|error| format!("sqlite={}", error.extended_code));
+        result
     }
 
     pub const fn code(&self) -> &'static str {
@@ -52,7 +63,11 @@ impl RuntimeStateError {
 
 impl fmt::Display for RuntimeStateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} during {}", self.code, self.operation)
+        write!(formatter, "{} during {}", self.code, self.operation)?;
+        if let Some(detail) = &self.detail {
+            write!(formatter, ": {detail}")?;
+        }
+        Ok(())
     }
 }
 

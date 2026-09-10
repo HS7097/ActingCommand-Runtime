@@ -1350,6 +1350,7 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
         )
         .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
         let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
         let request = client.request_with_correlation(
@@ -1362,68 +1363,95 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
             ),
         );
 
-        let receipt = client.send(&request);
-        assert_eq!(receipt.state(), RuntimeReceiptState::Completed, "{case}");
-        assert!(matches!(
-            receipt.result(),
-            Some(RuntimeResult::ContainedTaskCompleted {
-                outcome: TaskOutcome::Success,
-                final_page: Some(page),
-                ..
-            }) if page == "neutral/terminal"
-        ));
-        let events = projected_events(
-            &mut client,
-            EventQuery {
-                correlation_id: Some(correlation_id),
-                ..EventQuery::default()
-            },
-        );
-        let terminals = events
-            .iter()
-            .filter_map(projected_task_semantic_fact)
-            .filter_map(|fact| match fact {
-                TaskSemanticFact::TerminalCommitted {
-                    outcome,
-                    scheduling_disposition,
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let receipt = client.send(&request);
+            assert_eq!(receipt.state(), RuntimeReceiptState::Completed, "{case}");
+            assert!(matches!(
+                receipt.result(),
+                Some(RuntimeResult::ContainedTaskCompleted {
+                    outcome: TaskOutcome::Success,
+                    final_page: Some(page),
                     ..
-                } => Some((*outcome, scheduling_disposition.as_ref())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let [(TaskOutcome::Success, Some(disposition))] = terminals.as_slice() else {
-            panic!("{case}: mapped direct task must commit one typed disposition: {terminals:?}");
-        };
-        assert_eq!(disposition.outcome_key(), expected_outcome_key, "{case}");
-        assert_eq!(
-            matches!(
-                disposition.effect(),
-                SchedulingEffectEvidence::DesignatedEffectCompleted { .. }
-            ),
-            performs_effect,
-            "{case}"
-        );
-        assert_eq!(
-            matches!(
-                disposition.effect(),
-                SchedulingEffectEvidence::NoDesignatedEffect
-            ),
-            !performs_effect,
-            "{case}"
-        );
-        assert_eq!(
-            state.input_count.load(Ordering::Acquire),
-            usize::from(performs_effect),
-            "{case}"
-        );
-        assert_eq!(
-            events
+                }) if page == "neutral/terminal"
+            ));
+            let events = projected_events(
+                &mut client,
+                EventQuery {
+                    correlation_id: Some(correlation_id),
+                    ..EventQuery::default()
+                },
+            );
+            let terminals = events
                 .iter()
-                .filter(|event| event.event_type == EventType::TaskCompleted)
-                .count(),
-            1,
-            "{case}: direct mapped task must commit one terminal"
-        );
+                .filter_map(projected_task_semantic_fact)
+                .filter_map(|fact| match fact {
+                    TaskSemanticFact::TerminalCommitted {
+                        outcome,
+                        scheduling_disposition,
+                        ..
+                    } => Some((*outcome, scheduling_disposition.as_ref())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [(TaskOutcome::Success, Some(disposition))] = terminals.as_slice() else {
+                panic!(
+                    "{case}: mapped direct task must commit one typed disposition: {terminals:?}"
+                );
+            };
+            assert_eq!(disposition.outcome_key(), expected_outcome_key, "{case}");
+            assert_eq!(
+                matches!(
+                    disposition.effect(),
+                    SchedulingEffectEvidence::DesignatedEffectCompleted { .. }
+                ),
+                performs_effect,
+                "{case}"
+            );
+            assert_eq!(
+                matches!(
+                    disposition.effect(),
+                    SchedulingEffectEvidence::NoDesignatedEffect
+                ),
+                !performs_effect,
+                "{case}"
+            );
+            assert_eq!(
+                state.input_count.load(Ordering::Acquire),
+                usize::from(performs_effect),
+                "{case}"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == EventType::TaskCompleted)
+                    .count(),
+                1,
+                "{case}: direct mapped task must commit one terminal"
+            );
+        }));
+        if let Err(original) = result {
+            let mut output = [0_u8; 60 * 1024];
+            let mut remaining = &mut output[..];
+            let formatted = write!(
+                remaining,
+                "mapped case={case}; task operation={:?}; task request_id_json={:?}; task correlation_id_json={:?}\nHost fatal: {:#?}\nLedger evidence gap: query_persisted_events_for_test materializes all matches before a 32-event limit can be applied; open_evidence opens and checks the whole database before its snapshot budget. No unbounded read or new IPC query attempted.\n",
+                request.operation(),
+                serde_json::to_string(&request.request_id()),
+                serde_json::to_string(&request.correlation_id()),
+                host.fatal_error(),
+            );
+            let used = 60 * 1024 - remaining.len();
+            let text = match std::str::from_utf8(&output[..used]) {
+                Ok(text) => text,
+                Err(error) => std::str::from_utf8(&output[..error.valid_up_to()])
+                    .expect("valid diagnostic prefix"),
+            };
+            eprint!("{text}");
+            if formatted.is_err() {
+                eprintln!("\nFailure output incomplete: 60-KiB diagnostic limit reached.");
+            }
+            std::panic::resume_unwind(original);
+        }
         drop(client);
         host.close()
             .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));

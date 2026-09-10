@@ -61,8 +61,7 @@ use actingcommand_recognition_pack::{
     VisionProviderError, VisionProviderErrorCode,
 };
 use actingcommand_runtime_state::{
-    RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, ReleaseArtifactSources,
-    RuntimeStateStore,
+    RUNTIME_STATE_DATABASE_FILE, ReleaseArtifactSources, RuntimeStateStore,
 };
 use actingcommand_scheduler::{
     ConnectionId, DEFAULT_LEASE_TTL_MS, DEFAULT_MAX_CLIENT_HEARTBEAT_INTERVAL_MS, SchedulerConfig,

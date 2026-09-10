@@ -18,6 +18,8 @@ actingcommand-runtime-client = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+actingcommand-ledger = { workspace = true }
+actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-runtime-host = { workspace = true }

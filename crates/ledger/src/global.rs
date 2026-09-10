@@ -2,13 +2,15 @@
 
 //! Recoverable single-writer storage for the global Runtime event ledger.
 
+mod evidence;
+mod migration;
+pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
 mod projection;
 mod read_only;
-#[cfg(any(test, feature = "sqlite-candidate"))]
 mod sqlite;
 mod storage;
 mod store;
-#[cfg(any(test, feature = "sqlite-candidate"))]
+pub use migration::*;
 pub use sqlite::SqliteLedgerReadOnly;
 
 pub(crate) use projection::query_matches;
@@ -118,7 +120,6 @@ impl GlobalLedgerError {
         }
     }
 
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     fn with_close_result(mut self, result: GlobalLedgerResult<()>) -> Self {
         if let Err(secondary) = result {
             let context = format!(
@@ -710,7 +711,6 @@ impl GlobalLedger {
     }
 
     /// Explicit candidate assembly; the production constructors retain Segment storage.
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     pub fn open_sqlite_candidate(
         config: GlobalLedgerConfig,
         database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
@@ -724,7 +724,6 @@ impl GlobalLedger {
         })
     }
 
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     pub fn open_sqlite_candidate_with_artifact_verifier<F>(
         config: GlobalLedgerConfig,
         database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
@@ -738,7 +737,6 @@ impl GlobalLedger {
         })
     }
 
-    #[cfg(any(test, feature = "sqlite-candidate"))]
     pub fn open_sqlite_candidate_read_only<F>(
         config: GlobalLedgerReadOnlyConfig,
         database: Arc<actingcommand_runtime_database::RuntimeDatabase>,
