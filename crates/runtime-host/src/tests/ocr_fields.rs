@@ -156,8 +156,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         };
         drop(source_client);
         source_host.close().unwrap();
-        let original_ledger =
-            fs::read(original.path().join("ledger/segments/segment-000001.jsonl")).unwrap();
+        let original_ledger = fs::read(original.path().join("runtime-state.sqlite")).unwrap();
         let original_image =
             fs::read(original.path().join(binding.artifact.object_key().unwrap())).unwrap();
         let package = neutral_post_admission_ocr_contained_task_package();
@@ -275,8 +274,8 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
             assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
             assert_eq!(state.input_count.load(Ordering::Acquire), 0);
-            let ledger = GlobalLedger::open_read_only(
-                actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(target.path().join("ledger")),
+            let ledger = GlobalLedger::open_evidence(
+                actingcommand_ledger::GlobalLedgerEvidenceConfig::new(target.path()),
                 |reference| {
                     actingcommand_artifact_store::verify_projected_read_only(
                         target.path(),
@@ -306,7 +305,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             );
         }
         assert_eq!(
-            fs::read(original.path().join("ledger/segments/segment-000001.jsonl")).unwrap(),
+            fs::read(original.path().join("runtime-state.sqlite")).unwrap(),
             original_ledger
         );
         assert_eq!(

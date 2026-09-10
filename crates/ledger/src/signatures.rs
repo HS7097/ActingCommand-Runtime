@@ -60,6 +60,21 @@ impl SignaturePrefix {
     pub fn identity(&self) -> &SignaturePrefixIdentity {
         &self.identity
     }
+
+    pub fn from_evidence(
+        snapshot: &crate::GlobalLedgerEvidence,
+        through: u64,
+    ) -> GlobalLedgerResult<Self> {
+        let mut prefix = PrefixBuilder::new(through)?;
+        for event in snapshot
+            .events()
+            .iter()
+            .take_while(|event| event.sequence() <= through)
+        {
+            prefix.push(event.clone())?;
+        }
+        Ok(prefix.finish(snapshot.is_complete()))
+    }
 }
 
 struct PrefixBuilder {

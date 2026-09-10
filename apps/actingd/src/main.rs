@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod ledger_maintenance;
 
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
@@ -47,6 +48,12 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "ledger-maintenance")
+    {
+        return ledger_maintenance::run(arguments);
+    }
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {
         host,
@@ -1236,10 +1243,17 @@ struct ActingdError {
     code: &'static str,
     runtime: Option<Box<RuntimeHostError>>,
     client: Option<Box<RuntimeClientError>>,
+    maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
     recorded: std::sync::atomic::AtomicBool,
 }
 
 impl ActingdError {
+    fn maintenance(error: actingcommand_runtime_host::LedgerMaintenanceFailure) -> Self {
+        let mut result = Self::process("ledger_maintenance_failed");
+        result.maintenance = Some(Box::new(error));
+        result
+    }
+
     fn record_lifecycle_failure(
         &self,
         host: &RuntimeHost,
@@ -1272,6 +1286,7 @@ impl ActingdError {
             code,
             runtime: None,
             client: None,
+            maintenance: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1281,6 +1296,7 @@ impl ActingdError {
             code,
             runtime: None,
             client: None,
+            maintenance: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1290,6 +1306,7 @@ impl ActingdError {
             code: error.code(),
             runtime: Some(Box::new(error)),
             client: None,
+            maintenance: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1299,6 +1316,7 @@ impl ActingdError {
             code: error.code(),
             runtime: None,
             client: Some(Box::new(error)),
+            maintenance: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1306,6 +1324,9 @@ impl ActingdError {
 
 impl fmt::Display for ActingdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(error) = &self.maintenance {
+            return error.fmt(formatter);
+        }
         match &self.runtime {
             Some(error) => error.fmt(formatter),
             None => match &self.client {
@@ -1351,7 +1372,7 @@ mod tests {
     #[test]
     fn policy_closeout_records_unrecorded_results_before_close() {
         use actingcommand_contract::{EventPayload, EventType, RuntimePayload};
-        use actingcommand_ledger::{GlobalLedger, GlobalLedgerReadOnlyConfig};
+        use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig};
         let root = TempDir::new().expect("tempdir");
         let ids = IdentifierIssuer::new().expect("issuer");
         let host = Arc::new(
@@ -1384,11 +1405,9 @@ mod tests {
             result.expect_err("driver primary").code,
             "policy_driver_panicked"
         );
-        let ledger = GlobalLedger::open_read_only(
-            GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
-            |_| None,
-        )
-        .expect("read-only before final close");
+        let ledger =
+            GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root.path()), |_| None)
+                .expect("read-only before final close");
         let events = ledger.query(&EventQuery::default());
         let failures = events
             .iter()
@@ -1425,11 +1444,9 @@ mod tests {
             .expect("sole retained host")
             .close()
             .expect("final close");
-        let ledger = GlobalLedger::open_read_only(
-            GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
-            |_| None,
-        )
-        .expect("read-only after close");
+        let ledger =
+            GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root.path()), |_| None)
+                .expect("read-only after close");
         assert_eq!(
             ledger
                 .events()

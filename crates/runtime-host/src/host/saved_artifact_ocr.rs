@@ -7,7 +7,7 @@ use actingcommand_contract::{
     SavedArtifactOcrSource,
 };
 use actingcommand_execution_kernel::{ExternallyVerifiedBundle, evaluate_saved_artifact_ocr};
-use actingcommand_ledger::{GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig};
+use actingcommand_ledger::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
 use std::time::{Duration, Instant};
 
 impl HostShared {
@@ -90,12 +90,8 @@ impl HostShared {
         check_deadline(deadline)?;
         let mut verification_error = None;
         let mut verified_bytes = 0_u64;
-        let snapshot = GlobalLedger::open_read_only(
-            GlobalLedgerReadOnlyConfig::new(&source_ledger).with_budget(
-                64 * 1024 * 1024,
-                100_000,
-                deadline,
-            ),
+        let snapshot = GlobalLedger::open_evidence(
+            GlobalLedgerEvidenceConfig::new(&root).with_budget(64 * 1024 * 1024, 100_000, deadline),
             |reference| {
                 let result = (|| {
                     check_deadline(deadline)?;
@@ -131,7 +127,7 @@ impl HostShared {
             return Err(error);
         }
         if snapshot.corrupt_tail().is_some()
-            || !snapshot.storage_snapshot().read_complete
+            || !snapshot.read_complete()
             || snapshot
                 .writer_metadata()
                 .readable()
@@ -198,7 +194,9 @@ impl HostShared {
                 "writer_owner_id": snapshot.writer_metadata().readable().map(|writer| writer.owner_id()),
                 "through_event_id": snapshot.events()[usize::try_from(input.source.through_sequence - 1)
                     .map_err(|error| source_error("saved_source_position_invalid", error))?].event_id(),
-                "storage_snapshot": snapshot.storage_snapshot(),
+                "storage_backend": snapshot.backend(),
+                "read_complete": snapshot.read_complete(),
+                "storage_snapshot": snapshot.segment().map(|source| source.storage_snapshot()),
             },
             "package_sha256": input.expected_sha256, "target_id": input.target_id,
             "observation": observation,
@@ -267,7 +265,7 @@ impl HostShared {
 }
 
 fn prove_source<'a>(
-    snapshot: &'a GlobalLedgerReadOnly,
+    snapshot: &'a GlobalLedgerEvidence,
     source: &SavedArtifactOcrSource,
 ) -> RuntimeHostResult<&'a PersistedEvent> {
     let locate = |position: TerminalEvent, kind: EventType| {

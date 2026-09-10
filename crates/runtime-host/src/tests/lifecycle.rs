@@ -52,8 +52,8 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
     for state in &states {
         assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     }
-    let ledger = GlobalLedger::open_read_only(
-        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+    let ledger = GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
         |_| None,
     )
     .expect("authoritative read-only ledger");
@@ -518,6 +518,95 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     second.close().expect("close second host");
+
+    // S3 extends the existing owner/startup specification through the formal offline entry.
+    let source_root = TempDir::new().expect("legacy runtime root");
+    drop(
+        RuntimeStateStore::open(source_root.path(), b"runtime-host-test-salt")
+            .expect("existing State material"),
+    );
+    let segment = GlobalLedger::open(GlobalLedgerConfig::new(
+        source_root.path().join("ledger"),
+        "legacy-source",
+    ))
+    .expect("legacy source");
+    segment.close().expect("source closed");
+    let original_writer =
+        std::fs::read(source_root.path().join("ledger/writer.lock")).expect("source writer bytes");
+    let external = TempDir::new().expect("maintenance destinations");
+    let backup = external.path().join("backup");
+    let maintenance = |operation, target| {
+        RuntimeHost::maintain_ledger(
+            config(&source_root),
+            crate::LedgerMaintenanceRequest {
+                operation,
+                backup: Some(backup.clone()),
+                target,
+                artifact_root: None,
+                limits: Default::default(),
+            },
+        )
+    };
+    let refused = RuntimeHost::start(
+        config(&source_root),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .err()
+    .expect("legacy startup requires migration");
+    assert_eq!(refused.code(), "ledger_migration_required");
+    let frozen =
+        maintenance(crate::LedgerMaintenanceOperation::Backup, None).expect("formal frozen backup");
+    assert_eq!(frozen.status, "backed-up");
+    let preview =
+        maintenance(crate::LedgerMaintenanceOperation::DryRun, None).expect("formal dry-run");
+    assert_eq!(preview.status, "dry-run");
+    assert_eq!(
+        preview.ledger,
+        actingcommand_ledger::LedgerStorageStatus::Missing
+    );
+    assert!(!preview.activated);
+    let delivered =
+        maintenance(crate::LedgerMaintenanceOperation::Import, None).expect("formal import");
+    assert_eq!(delivered.status, "imported");
+    assert_eq!(delivered.backup_id, frozen.backup_id);
+    let repeated = maintenance(crate::LedgerMaintenanceOperation::Import, None)
+        .expect("formal idempotent import");
+    assert_eq!(repeated.status, "already-imported");
+    assert_eq!(repeated.ledger, delivered.ledger);
+    assert_eq!(
+        std::fs::read(source_root.path().join("ledger/writer.lock")).unwrap(),
+        original_writer
+    );
+    let restore_target = external.path().join("restored");
+    let restored = maintenance(
+        crate::LedgerMaintenanceOperation::Restore,
+        Some(restore_target.clone()),
+    )
+    .expect("exact pre-cutover restore before later events");
+    assert_eq!(restored.status, "restored");
+    assert!(!restored.activated);
+    assert_eq!(
+        restored.ledger,
+        actingcommand_ledger::LedgerStorageStatus::Missing
+    );
+    let migrated = host_with_state(&source_root, "node.a", Arc::new(FakeState::default()));
+    migrated
+        .close()
+        .expect("normal SQLite startup after cutover");
+    let refused = maintenance(
+        crate::LedgerMaintenanceOperation::Restore,
+        Some(external.path().join("discard-forbidden")),
+    )
+    .expect_err("new Runtime facts cannot be lost");
+    assert!(matches!(
+        refused.code.as_str(),
+        "restore_would_discard_new_events" | "restore_state_has_advanced"
+    ));
+    assert!(!external.path().join("discard-forbidden").exists());
 }
 
 #[test]

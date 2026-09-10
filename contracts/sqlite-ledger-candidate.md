@@ -1,9 +1,10 @@
 # SQLite Ledger candidate
 
-The `actingcommand-ledger` feature `sqlite-candidate` exposes explicit candidate
-constructors. `GlobalLedger::open` and `open_with_artifact_verifier` retain the
-Segment backend. RuntimeHost production assembly and consumer protocols keep
-their existing route.
+RuntimeHost selects the formal SQLite medium through [Ledger maintenance and
+cutover](ledger-maintenance.md). Explicit candidate constructors use the same
+semantic core for the bounded storage corpus. `GlobalLedger::open` and
+`open_with_artifact_verifier` serve explicit Segment fixtures; production startup
+uses the formal marker and continuous Ledger lock handoff.
 
 `open_sqlite_candidate` and `open_sqlite_candidate_with_artifact_verifier` take a
 `GlobalLedgerConfig` and the assembly's `Arc<RuntimeDatabase>`. The configuration

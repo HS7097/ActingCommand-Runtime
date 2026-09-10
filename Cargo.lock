@@ -22,6 +22,8 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 name = "actingcommand-actingctl"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
+ "actingcommand-ledger",
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-pack-containment",
@@ -337,6 +339,8 @@ name = "actingcommand-runtime-database"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 
@@ -355,6 +359,7 @@ dependencies = [
  "actingcommand-policy",
  "actingcommand-recognition-pack",
  "actingcommand-runtime-client",
+ "actingcommand-runtime-database",
  "actingcommand-runtime-state",
  "actingcommand-scheduler",
  "serde",

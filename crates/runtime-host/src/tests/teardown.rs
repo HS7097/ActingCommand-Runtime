@@ -120,8 +120,8 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
             state.unfenced_capture_close_count.load(Ordering::Acquire),
             0
         );
-        let ledger = GlobalLedger::open_read_only(
-            actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+        let ledger = GlobalLedger::open_evidence(
+            actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
             |reference| {
                 Some(
                     actingcommand_artifact_store::verify_projected_read_only(

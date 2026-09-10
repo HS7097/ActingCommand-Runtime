@@ -305,6 +305,121 @@ impl ArtifactStore {
         })
     }
 
+    /// Restores the exact external bytes of an already persisted Ledger reference.
+    /// The enclosing offline maintenance owner controls activation of the target root.
+    pub fn restore_recovery_reference(
+        &self,
+        source_root: &Path,
+        reference: &ProjectedArtifactReference,
+        max_bytes: u64,
+        deadline: std::time::Instant,
+    ) -> ArtifactStoreResult<VerifiedArtifactReference> {
+        if reference.byte_count > max_bytes || std::time::Instant::now() >= deadline {
+            return Err(ArtifactStoreError::fatal(
+                "artifact_restore_budget_exceeded",
+                "restore_recovery_artifact",
+                "bounded restore budget exhausted",
+            ));
+        }
+        let _writer = self.writer.lock().map_err(|_| {
+            ArtifactStoreError::fatal(
+                "artifact_writer_poisoned",
+                "restore_recovery_artifact",
+                "artifact writer lock is poisoned",
+            )
+        })?;
+        let mut source = open_projected_stream(source_root, reference)?;
+        let path = safe_object_path(
+            &self.root,
+            reference.object_key().ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "artifact_object_key_missing",
+                    "restore_recovery_artifact",
+                    "object key missing",
+                )
+            })?,
+        )?;
+        if path.exists() {
+            let mut buffer = [0; 65_536];
+            loop {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ArtifactStoreError::fatal(
+                        "artifact_restore_budget_exceeded",
+                        "restore_recovery_artifact",
+                        "restore deadline exhausted",
+                    ));
+                }
+                if source.read_chunk(&mut buffer)? == 0 {
+                    break;
+                }
+            }
+            source.finish()?;
+            return self.verify_recovery_reference(reference);
+        }
+        let parent = path.parent().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "artifact_path_invalid",
+                "restore_recovery_artifact",
+                "object parent missing",
+            )
+        })?;
+        fs::create_dir_all(parent).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_directory_failed",
+                "restore_recovery_artifact",
+                error.to_string(),
+            )
+        })?;
+        let temporary = temporary_path(&path)?;
+        let result = (|| {
+            let mut destination = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        "artifact_write_failed",
+                        "restore_recovery_artifact",
+                        error.to_string(),
+                    )
+                })?;
+            let mut buffer = [0; 65_536];
+            loop {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ArtifactStoreError::fatal(
+                        "artifact_restore_budget_exceeded",
+                        "restore_recovery_artifact",
+                        "restore deadline exhausted",
+                    ));
+                }
+                let read = source.read_chunk(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                destination.write_all(&buffer[..read]).map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        "artifact_write_failed",
+                        "restore_recovery_artifact",
+                        error.to_string(),
+                    )
+                })?;
+            }
+            let verified = source.finish()?;
+            destination.sync_all().map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_sync_failed",
+                    "restore_recovery_artifact",
+                    error.to_string(),
+                )
+            })?;
+            drop(destination);
+            verify_file(&temporary, verified.reference())?;
+            publish_temp(&temporary, &path)?;
+            self.verify_recovery_reference(reference)
+        })();
+        result.map_err(|error| cleanup_temp(&temporary, error))
+    }
+
     /// Opens a task-owned staging stream without publishing an identity or ledger event.
     pub fn begin_stream(
         &self,

@@ -158,24 +158,15 @@ fn policy_dispatch_crash_child_process() {
 
 fn exact_checkpoint_prefix_events(root: &Path, run_id: RunId) -> Vec<PersistedEvent> {
     let artifacts = ArtifactStore::open(root).expect("open prefix artifact store");
-    let ledger = GlobalLedger::open_with_artifact_verifier(
-        GlobalLedgerConfig::new(
-            root.join("ledger"),
-            format!("exact-checkpoint-prefix-reader-{}", std::process::id()),
-        ),
+    let ledger = GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root),
         |reference| artifacts.verify_recovery_reference(reference).ok(),
     )
     .expect("open exact checkpoint prefix ledger");
-    let events = ledger
-        .query(EventQuery {
-            run_id: Some(run_id),
-            ..EventQuery::default()
-        })
-        .expect("query exact checkpoint prefix");
-    ledger
-        .close()
-        .expect("close exact checkpoint prefix ledger");
-    events
+    ledger.query(&EventQuery {
+        run_id: Some(run_id),
+        ..EventQuery::default()
+    })
 }
 
 #[test]

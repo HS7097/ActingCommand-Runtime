@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+pub mod ledger_migration;
 mod signature;
-pub use signature::*;
+pub use ledger_migration::*;
+
+use signature::*;
 mod vendor_stdio;
 pub use vendor_stdio::*;
 mod adb_recovery;
@@ -3829,6 +3832,8 @@ fn validate_task_step(step_index: u32) -> Result<(), SanitizationError> {
 #[serde(deny_unknown_fields)]
 pub struct RecoveryPayload {
     reason: RecoveryReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    migration: Option<Box<LedgerMigrationRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     segment_index: Option<u64>,
     affected_bytes: u64,
@@ -4777,6 +4782,9 @@ impl PayloadDetail for ResourceAuthoringPayload {
 }
 
 impl RecoveryPayload {
+    pub fn migration(&self) -> Option<&LedgerMigrationRecord> {
+        self.migration.as_deref()
+    }
     pub const fn reason(&self) -> RecoveryReason {
         self.reason
     }
@@ -4955,6 +4963,7 @@ struct ArtifactExportFailureDraft {
 
 struct RecoveryDraft {
     reason: RecoveryReason,
+    migration: Option<Box<LedgerMigrationRecord>>,
     segment_index: Option<u64>,
     affected_bytes: u64,
     audit: AuditInput,
@@ -6702,8 +6711,12 @@ impl RecoveryDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<RecoveryPayload, SanitizationError> {
+        if let Some(record) = &self.migration {
+            record.validate()?;
+        }
         Ok(RecoveryPayload {
             reason: self.reason,
+            migration: self.migration,
             segment_index: self.segment_index,
             affected_bytes: self.affected_bytes,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -7757,6 +7770,15 @@ enum LedgerDraftKind {
 pub struct LedgerPayloadDraft(LedgerDraftKind);
 
 impl LedgerPayloadDraft {
+    pub fn migrated(record: LedgerMigrationRecord, audit: AuditInput) -> Self {
+        Self(LedgerDraftKind::Recovered(RecoveryDraft {
+            reason: RecoveryReason::StorageCutover,
+            migration: Some(Box::new(record)),
+            segment_index: None,
+            affected_bytes: 0,
+            audit,
+        }))
+    }
     pub fn signature(event: LedgerSignatureEvent, audit: AuditInput) -> Self {
         Self(LedgerDraftKind::Signature(event, audit))
     }
@@ -7769,6 +7791,7 @@ impl LedgerPayloadDraft {
     ) -> Self {
         Self(LedgerDraftKind::Recovered(RecoveryDraft {
             reason,
+            migration: None,
             segment_index,
             affected_bytes,
             audit,
@@ -9497,6 +9520,23 @@ impl EventPayload {
         }
         if let Self::Agent(value) = self {
             validate_agent_payload(value)?;
+        }
+        if let Self::Ledger(LedgerPayload::Recovered(recovery)) = self {
+            if (recovery.reason == RecoveryReason::StorageCutover) != recovery.migration.is_some() {
+                return Err(SanitizationError::new(
+                    "invalid_ledger_migration",
+                    "ledger_migration",
+                ));
+            }
+            if let Some(record) = &recovery.migration {
+                record.validate()?;
+                if recovery.segment_index.is_some() || recovery.affected_bytes != 0 {
+                    return Err(SanitizationError::new(
+                        "invalid_ledger_migration",
+                        "ledger_migration",
+                    ));
+                }
+            }
         }
         if let Self::Input(InputPayload::Intent(intent)) = self {
             intent.validate()?;

@@ -27,14 +27,420 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
+const FORMAL_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";
 const INTEGER_ENCODING: &str = "ordered-u64-v1";
 const EVENT_COLUMNS: &str = "sequence,event_id,timestamp_unix_ms,event_type,severity,sensitivity,origin_source,origin_module,origin_actor,payload_schema,canonical_record,record_sha256,previous_record_sha256,integrity_tag";
 const LINK_COLUMNS: &str = "sequence,instance_id,request_id,correlation_id,causation_id,task_id,run_id,lease_id,frame_id,action_id,recognition_id";
 const ARTIFACT_COLUMNS: &str = "sequence,ordinal,artifact_id,kind,run_id,frame_id,correlation_id,object_key,media_type,byte_count,sha256,created_at_unix_ms,producer,retention_class,redaction_state";
-const META_COLUMNS: &str = "singleton,schema_version,next_sequence,head_sequence,head_record_sha256,storage_backend,migration_id,cutover_state,integer_encoding,integrity_tag";
+const META_COLUMNS: &str = "singleton,schema_version,next_sequence,head_sequence,head_record_sha256,storage_backend,migration_id,cutover_state,integer_encoding,integrity_tag,migration_record";
 type SqlRow = Vec<SqlValue>;
 type ReadBudget = Option<(u64, usize, Instant)>;
+
+#[derive(Clone)]
+struct SqliteMarker {
+    state: &'static str,
+    migration: Option<Box<actingcommand_contract::LedgerMigrationRecord>>,
+    material: Option<String>,
+}
+
+impl SqliteMarker {
+    fn candidate() -> Self {
+        Self {
+            state: "candidate",
+            migration: None,
+            material: None,
+        }
+    }
+    fn empty() -> Self {
+        Self {
+            state: "ready",
+            migration: None,
+            material: None,
+        }
+    }
+    fn migrated(
+        record: &actingcommand_contract::LedgerMigrationRecord,
+    ) -> GlobalLedgerResult<Self> {
+        record
+            .validate()
+            .map_err(|error| failure(error.code(), "validate_cutover_marker"))?;
+        Ok(Self {
+            state: "ready",
+            migration: Some(Box::new(record.clone())),
+            material: Some(serde_json::to_string(record).map_err(|error| {
+                GlobalLedgerError::json("invalid_cutover_marker", "encode_cutover_marker", &error)
+            })?),
+        })
+    }
+    fn parse(row: &SqlRow) -> GlobalLedgerResult<Self> {
+        let marker = match (row.get(7), row.get(10)) {
+            (Some(SqlValue::Text(state)), Some(SqlValue::Null)) if state == "candidate" => {
+                Self::candidate()
+            }
+            (Some(SqlValue::Text(state)), Some(SqlValue::Null)) if state == "ready" => {
+                Self::empty()
+            }
+            (Some(SqlValue::Text(state)), Some(SqlValue::Text(material))) if state == "ready" => {
+                let unique: UniqueJsonValue = serde_json::from_str(material).map_err(|error| {
+                    GlobalLedgerError::json("invalid_cutover_marker", "read_cutover_marker", &error)
+                })?;
+                let record = serde_json::from_value(unique.0).map_err(|error| {
+                    GlobalLedgerError::json(
+                        "invalid_cutover_marker",
+                        "decode_cutover_marker",
+                        &error,
+                    )
+                })?;
+                let marker = Self::migrated(&record)?;
+                if marker.material.as_ref() != Some(material) {
+                    return Err(failure(
+                        "invalid_cutover_marker",
+                        "verify_cutover_marker_bytes",
+                    ));
+                }
+                marker
+            }
+            _ => return Err(failure("invalid_cutover_marker", "read_cutover_marker")),
+        };
+        if row.get(6)
+            != Some(&optional_text(
+                marker
+                    .migration
+                    .as_ref()
+                    .map(|record| record.migration_id.as_str()),
+            ))
+        {
+            return Err(failure(
+                "migration_identity_mismatch",
+                "read_cutover_marker",
+            ));
+        }
+        Ok(marker)
+    }
+    fn verify_events(&self, events: &[PersistedEvent]) -> GlobalLedgerResult<()> {
+        if let Some(record) = &self.migration {
+            let prefix_length = usize::try_from(record.source_event_count)
+                .map_err(|_| failure("migration_prefix_invalid", "verify_cutover_prefix"))?;
+            let prefix = events
+                .get(..prefix_length)
+                .ok_or_else(|| failure("migration_prefix_missing", "verify_cutover_prefix"))?;
+            let completion = events
+                .get(prefix_length)
+                .ok_or_else(|| failure("migration_completion_missing", "verify_cutover_prefix"))?;
+            let payload_record = match completion.payload() {
+                actingcommand_contract::EventPayload::Ledger(
+                    actingcommand_contract::LedgerPayload::Recovered(payload),
+                ) => payload.migration(),
+                _ => None,
+            };
+            let head = prefix
+                .last()
+                .map(super::migration::canonical_record)
+                .transpose()?
+                .map_or_else(
+                    || actingcommand_runtime_database::digest(&[]),
+                    |bytes| actingcommand_runtime_database::digest(&bytes),
+                );
+            if completion.sequence() != record.cutover_sequence
+                || payload_record != Some(record.as_ref())
+                || super::migration::canonical_digest(prefix)? != record.imported_content_sha256
+                || head != record.source_head_sha256
+            {
+                return Err(failure(
+                    "migration_prefix_mismatch",
+                    "verify_cutover_prefix",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn status(
+        &self,
+        events: &[PersistedEvent],
+        hash: Option<String>,
+    ) -> super::LedgerStorageStatus {
+        if self.state == "candidate" {
+            super::LedgerStorageStatus::Candidate
+        } else {
+            super::LedgerStorageStatus::Ready {
+                head_sequence: events.last().map_or(0, PersistedEvent::sequence),
+                head_sha256: hash,
+                migration: self.migration.clone(),
+            }
+        }
+    }
+}
+
+fn table_count(connection: &Connection) -> GlobalLedgerResult<i64> {
+    connection.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0)).map_err(|error| sql_error(error, "inspect_ledger_schema"))
+}
+
+fn format_version(connection: &Connection) -> GlobalLedgerResult<i64> {
+    connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| sql_error(error, "read_database_format"))
+}
+
+fn require_empty_format(connection: &Connection) -> GlobalLedgerResult<()> {
+    if table_count(connection)? != 0 || format_version(connection)? != 0 {
+        return Err(failure(
+            "ledger_initialization_conflict",
+            "verify_empty_ledger_format",
+        ));
+    }
+    Ok(())
+}
+
+fn mark_formal_format(connection: &Connection) -> GlobalLedgerResult<()> {
+    connection
+        .pragma_update(None, "user_version", FORMAL_FORMAT_VERSION)
+        .map_err(|error| sql_error(error, "mark_database_format"))
+}
+
+pub(super) fn has_schema(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
+    let connection = database.connection("inspect_runtime_ledger")?;
+    match (format_version(&connection)?, table_count(&connection)?) {
+        (0, 0) => Ok(false),
+        (0 | FORMAL_FORMAT_VERSION, 4) => Ok(true),
+        _ => Err(failure(
+            "ledger_schema_incomplete",
+            "inspect_runtime_ledger",
+        )),
+    }
+}
+
+pub(super) fn storage_status<F>(
+    database: &RuntimeDatabase,
+    verifier: &mut F,
+    budget: ReadBudget,
+) -> GlobalLedgerResult<super::LedgerStorageStatus>
+where
+    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+{
+    if !has_schema(database)? {
+        return Ok(super::LedgerStorageStatus::Missing);
+    }
+    let raw = read_snapshot(database, budget)?;
+    let marker = SqliteMarker::parse(&raw.meta)?;
+    let (events, hash) = verify_snapshot(database, raw, &mut Some(verifier))?;
+    Ok(marker.status(&events, hash))
+}
+
+pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
+    let mut connection = database.connection("initialize_runtime_ledger")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| sql_error(error, "begin_runtime_ledger"))?;
+    let result = (|| {
+        if table_count(&transaction)? != 0 || format_version(&transaction)? != 0 {
+            return Err(failure(
+                "ledger_initialization_conflict",
+                "initialize_runtime_ledger",
+            ));
+        }
+        transaction
+            .execute_batch(include_str!("sqlite/schema.sql"))
+            .map_err(|error| sql_error(error, "create_runtime_ledger"))?;
+        mark_formal_format(&transaction)?;
+        insert_row(
+            &transaction,
+            "ledger_meta",
+            META_COLUMNS,
+            &meta_row_with_marker(database, 1, 0, None, &SqliteMarker::empty()),
+        )
+    })();
+    match result {
+        Ok(()) => transaction
+            .commit()
+            .map_err(|error| sql_error(error, "commit_runtime_ledger")),
+        Err(error) => Err(error.with_close_result(
+            transaction
+                .rollback()
+                .map_err(|error| sql_error(error, "rollback_runtime_ledger")),
+        )),
+    }
+}
+
+pub(super) fn open_formal<F>(
+    config: GlobalLedgerConfig,
+    database: Arc<RuntimeDatabase>,
+    lock: super::storage::LockedWriterFile,
+    compatibility: Option<super::storage::LockedWriterFile>,
+    mut verifier: F,
+) -> GlobalLedgerResult<SqliteLedgerStore>
+where
+    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+{
+    let raw = read_snapshot(&database, None)?;
+    let marker = SqliteMarker::parse(&raw.meta)?;
+    if marker.state != "ready" {
+        return Err(failure("ledger_migration_required", "open_runtime_ledger"));
+    }
+    let (events, head_hash) = verify_snapshot(&database, raw, &mut Some(&mut verifier))?;
+    let head = events.last().map_or(0, PersistedEvent::sequence);
+    let next = increment_sequence(head)?;
+    let (ownership, stale) = WriterOwnership::from_locked(lock, compatibility, &config.owner_id)?;
+    let backend = SqliteStorage {
+        database,
+        ownership,
+        head,
+        head_hash,
+        marker,
+    };
+    let mut store = EventStore::recovered(backend, next, events)?;
+    if let Some(owner) = stale
+        && let Err(error) =
+            store.append_recovery(RecoveryReason::StaleOwner, Some(owner), None, None)
+    {
+        return Err(error.with_close_result(store.backend.close()));
+    }
+    Ok(store)
+}
+
+pub(super) fn import_source(
+    database: &RuntimeDatabase,
+    source: &super::FrozenLedgerSource,
+    record: &actingcommand_contract::LedgerMigrationRecord,
+    completion: actingcommand_contract::SanitizedEventDraft,
+    dry_run: bool,
+    budget: ReadBudget,
+) -> GlobalLedgerResult<super::LedgerStorageStatus> {
+    // This lookup only reuses ArtifactStore proofs acquired outside the database mutex.
+    let mut cached = |reference: &ProjectedArtifactReference| {
+        source
+            .verified
+            .iter()
+            .find(|(projected, _)| projected == reference)
+            .map(|(_, verified)| verified.clone())
+    };
+    match storage_status(database, &mut cached, budget)? {
+        super::LedgerStorageStatus::Ready {
+            migration: Some(existing),
+            ..
+        } if existing.as_ref() == record => return storage_status(database, &mut cached, budget),
+        super::LedgerStorageStatus::Missing => {}
+        _ => {
+            return Err(failure(
+                "ledger_migration_conflict",
+                "import_segment_ledger",
+            ));
+        }
+    }
+    let completion = PersistedEvent::from_sanitized(record.cutover_sequence, completion)
+        .map_err(|error| failure(error.code(), "validate_migration_completion"))?;
+    let marker = SqliteMarker::migrated(record)?;
+    let mut expected = source.events.clone();
+    expected.push(completion);
+    marker.verify_events(&expected)?;
+    let mut connection = database.connection("import_segment_ledger")?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| sql_error(error, "begin_segment_import"))?;
+    let prepared = (|| {
+        if table_count(&transaction)? != 0 || format_version(&transaction)? != 0 {
+            return Err(failure(
+                "ledger_migration_conflict",
+                "import_segment_ledger",
+            ));
+        }
+        transaction
+            .execute_batch(include_str!("sqlite/schema.sql"))
+            .map_err(|error| sql_error(error, "create_import_schema"))?;
+        mark_formal_format(&transaction)?;
+        let mut head_hash = None;
+        for (index, event) in expected.iter().enumerate() {
+            check_read_budget(budget, 0, index + 1)?;
+            if event.sequence() != (index as u64) + 1 {
+                return Err(failure("sequence_discontinuity", "import_segment_ledger"));
+            }
+            let projected = project_record(database, event, head_hash.as_deref())?;
+            insert_row(
+                &transaction,
+                "ledger_events",
+                EVENT_COLUMNS,
+                &projected.event,
+            )?;
+            insert_row(&transaction, "ledger_links", LINK_COLUMNS, &projected.links)?;
+            for artifact in &projected.artifacts {
+                insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
+            }
+            head_hash = Some(projected.hash);
+        }
+        insert_row(
+            &transaction,
+            "ledger_meta",
+            META_COLUMNS,
+            &meta_row_with_marker(
+                database,
+                increment_sequence(record.cutover_sequence)?,
+                record.cutover_sequence,
+                head_hash.as_deref(),
+                &marker,
+            ),
+        )?;
+        let raw = read_snapshot_connection(&transaction, budget)?;
+        let (actual, hash) = verify_snapshot(database, raw, &mut Some(&mut cached))?;
+        if actual != expected {
+            return Err(failure(
+                "migration_canonical_mismatch",
+                "verify_import_transaction",
+            ));
+        }
+        let expected_index = EventIndexes::from_events(&expected);
+        let actual_index = EventIndexes::from_events(&actual);
+        if actual_index.query(&actual, &EventQuery::default())
+            != expected_index.query(&expected, &EventQuery::default())
+        {
+            return Err(failure(
+                "migration_projection_mismatch",
+                "verify_import_transaction",
+            ));
+        }
+        Ok(marker.status(&actual, hash))
+    })();
+    let status = match prepared {
+        Ok(status) => status,
+        Err(error) => {
+            return Err(error.with_close_result(
+                transaction
+                    .rollback()
+                    .map_err(|error| sql_error(error, "rollback_segment_import")),
+            ));
+        }
+    };
+    if dry_run {
+        transaction
+            .rollback()
+            .map_err(|error| sql_error(error, "rollback_import_dry_run"))?;
+        return Ok(status);
+    }
+    match transaction.commit() {
+        Ok(()) => Ok(status),
+        Err(error) => {
+            let mut original = sql_error(error, "commit_segment_import");
+            drop(connection);
+            let observed = storage_status(database, &mut cached, budget);
+            original.detail = Some(format!(
+                "{}; commit_readback={}",
+                original.detail.as_deref().unwrap_or("sqlite_error"),
+                match observed {
+                    Ok(super::LedgerStorageStatus::Ready {
+                        migration: Some(observed),
+                        ..
+                    }) if observed.as_ref() == record => "matching_committed_marker".to_owned(),
+                    Ok(super::LedgerStorageStatus::Missing) => "not_committed".to_owned(),
+                    Ok(_) => "conflicting_material".to_owned(),
+                    Err(error) => format!(
+                        "unavailable: {error}; {}",
+                        error.detail().unwrap_or("no_additional_detail")
+                    ),
+                }
+            ));
+            Err(original)
+        }
+    }
+}
 
 pub(super) type SqliteLedgerStore = EventStore<SqliteStorage>;
 
@@ -43,11 +449,14 @@ pub(super) struct SqliteStorage {
     ownership: WriterOwnership,
     head: u64,
     head_hash: Option<String>,
+    marker: SqliteMarker,
 }
 
 impl From<RuntimeDatabaseError> for GlobalLedgerError {
     fn from(error: RuntimeDatabaseError) -> Self {
-        Self::fatal(error.code(), error.operation())
+        let mut converted = Self::fatal(error.code(), error.operation());
+        converted.detail = error.detail().map(str::to_owned);
+        converted
     }
 }
 
@@ -61,12 +470,28 @@ impl SqliteLedgerStore {
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
     {
         validate_root(&config.root, &database)?;
+        let format = {
+            let connection = database.connection("inspect_candidate_format")?;
+            format_version(&connection)?
+        };
+        if format == FORMAL_FORMAT_VERSION {
+            return Err(failure(
+                "candidate_production_conflict",
+                "open_sqlite_candidate",
+            ));
+        }
         // Same physical database, same existing OS writer lock, including separate Arcs.
         let (mut ownership, stale_owner) =
             WriterOwnership::acquire(database.root(), &config.owner_id)?;
         let recovered = (|| {
             initialize(&database, ownership.is_new())?;
             let raw = read_snapshot(&database, None)?;
+            if SqliteMarker::parse(&raw.meta)?.state != "candidate" {
+                return Err(failure(
+                    "candidate_production_conflict",
+                    "open_sqlite_candidate",
+                ));
+            }
             verify_snapshot(&database, raw, &mut verifier)
         })();
         let (events, head_hash) = match recovered {
@@ -82,6 +507,7 @@ impl SqliteLedgerStore {
             ownership,
             head,
             head_hash,
+            marker: SqliteMarker::candidate(),
         };
         let mut store = Self::recovered(backend, next, events)?;
         if let Some(previous_owner) = stale_owner
@@ -108,11 +534,12 @@ impl DurableStorage for SqliteStorage {
             .map_err(|error| sql_error(error, "begin_sqlite_append"))?;
         let current = read_meta(&transaction)?;
         if current
-            != meta_row(
+            != meta_row_with_marker(
                 &self.database,
                 event.sequence(),
                 self.head,
                 self.head_hash.as_deref(),
+                &self.marker,
             )
         {
             return Err(failure("ledger_meta_mismatch", "append_sqlite_event"));
@@ -127,14 +554,15 @@ impl DurableStorage for SqliteStorage {
         for artifact in &projected.artifacts {
             insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
         }
-        let meta = meta_row(
+        let meta = meta_row_with_marker(
             &self.database,
             next,
             event.sequence(),
             Some(&projected.hash),
+            &self.marker,
         );
         let changed = transaction.execute(
-            "UPDATE ledger_meta SET schema_version=?2,next_sequence=?3,head_sequence=?4,head_record_sha256=?5,storage_backend=?6,migration_id=?7,cutover_state=?8,integer_encoding=?9,integrity_tag=?10 WHERE singleton=?1",
+            "UPDATE ledger_meta SET schema_version=?2,next_sequence=?3,head_sequence=?4,head_record_sha256=?5,storage_backend=?6,migration_id=?7,cutover_state=?8,integer_encoding=?9,integrity_tag=?10,migration_record=?11 WHERE singleton=?1",
             params_from_iter(meta.iter()),
         ).map_err(|error| sql_error(error, "update_sqlite_head"))?;
         if changed != 1 {
@@ -178,6 +606,29 @@ impl SqliteLedgerReadOnly {
         validate_root(&config.root, &database)?;
         let raw = read_snapshot(&database, config.budget)?;
         let (events, _) = verify_snapshot(&database, raw, &mut Some(&mut verifier))?;
+        Ok(Self {
+            indexes: EventIndexes::from_events(&events),
+            events,
+        })
+    }
+
+    pub(super) fn open_formal<F>(
+        database: &RuntimeDatabase,
+        budget: ReadBudget,
+        mut verifier: F,
+    ) -> GlobalLedgerResult<Self>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        let raw = read_snapshot(database, budget)?;
+        let marker = SqliteMarker::parse(&raw.meta)?;
+        let (events, _) = verify_snapshot(database, raw, &mut Some(&mut verifier))?;
+        if marker.state != "ready" {
+            return Err(failure(
+                "ledger_candidate_not_production",
+                "open_runtime_evidence",
+            ));
+        }
         Ok(Self {
             indexes: EventIndexes::from_events(&events),
             events,
@@ -244,6 +695,7 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
         .map_err(|error| sql_error(error, "inspect_ledger_schema"))?;
     match tables {
         0 if first_use => {
+            require_empty_format(&transaction)?;
             transaction
                 .execute_batch(include_str!("sqlite/schema.sql"))
                 .map_err(|error| sql_error(error, "initialize_ledger_schema"))?;
@@ -268,6 +720,7 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
 }
 
 struct RawSnapshot {
+    format_version: i64,
     events: Vec<SqlRow>,
     links: Vec<SqlRow>,
     artifacts: Vec<SqlRow>,
@@ -285,34 +738,42 @@ fn read_snapshot(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
         .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+    let raw = read_snapshot_connection(&transaction, budget)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+    Ok(raw)
+}
+
+fn read_snapshot_connection(
+    connection: &Connection,
+    budget: ReadBudget,
+) -> GlobalLedgerResult<RawSnapshot> {
     let mut bytes = 0;
-    let meta = read_meta_with_budget(&transaction, budget, &mut bytes)?;
+    let meta = read_meta_with_budget(connection, budget, &mut bytes)?;
     let events = read_rows(
-        &transaction,
+        connection,
         &format!("SELECT {EVENT_COLUMNS} FROM ledger_events ORDER BY sequence"),
         budget,
         &mut bytes,
         true,
     )?;
     let links = read_rows(
-        &transaction,
+        connection,
         &format!("SELECT {LINK_COLUMNS} FROM ledger_links ORDER BY sequence"),
         budget,
         &mut bytes,
         false,
     )?;
     let artifacts = read_rows(
-        &transaction,
+        connection,
         &format!("SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts ORDER BY sequence,ordinal"),
         budget,
         &mut bytes,
         false,
     )?;
-    transaction
-        .commit()
-        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
-    // Release the connection before typed reconstruction invokes the artifact owner.
     Ok(RawSnapshot {
+        format_version: format_version(connection)?,
         events,
         links,
         artifacts,
@@ -379,9 +840,23 @@ fn read_meta_with_budget(
     budget: ReadBudget,
     bytes: &mut u64,
 ) -> GlobalLedgerResult<SqlRow> {
+    let has_marker = connection
+        .prepare("PRAGMA table_info(ledger_meta)")
+        .and_then(|mut statement| {
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(columns.iter().any(|column| column == "migration_record"))
+        })
+        .map_err(|error| sql_error(error, "inspect_ledger_marker_schema"))?;
+    let columns = if has_marker {
+        META_COLUMNS
+    } else {
+        META_COLUMNS.trim_end_matches(",migration_record")
+    };
     let mut rows = read_rows(
         connection,
-        &format!("SELECT {META_COLUMNS} FROM ledger_meta ORDER BY singleton"),
+        &format!("SELECT {columns} FROM ledger_meta ORDER BY singleton"),
         budget,
         bytes,
         false,
@@ -389,7 +864,11 @@ fn read_meta_with_budget(
     if rows.len() != 1 {
         return Err(failure("ledger_meta_missing", "read_sqlite_meta"));
     }
-    Ok(rows.remove(0))
+    let mut row = rows.remove(0);
+    if !has_marker {
+        row.push(SqlValue::Null);
+    }
+    Ok(row)
 }
 
 fn verify_snapshot<F>(
@@ -400,6 +879,18 @@ fn verify_snapshot<F>(
 where
     F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
 {
+    let marker = SqliteMarker::parse(&raw.meta)?;
+    let expected_format = if marker.state == "ready" {
+        FORMAL_FORMAT_VERSION
+    } else {
+        0
+    };
+    if raw.format_version != expected_format {
+        return Err(failure(
+            "ledger_format_marker_mismatch",
+            "verify_database_format",
+        ));
+    }
     let mut events = Vec::with_capacity(raw.events.len());
     let mut ids = BTreeSet::new();
     let mut next = 1;
@@ -455,15 +946,17 @@ where
         return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
     }
     if raw.meta
-        != meta_row(
+        != meta_row_with_marker(
             database,
             next,
             events.last().map_or(0, PersistedEvent::sequence),
             head_hash.as_deref(),
+            &marker,
         )
     {
         return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
     }
+    marker.verify_events(&events)?;
     Ok((events, head_hash))
 }
 
@@ -559,18 +1052,37 @@ fn project_record(
 }
 
 fn meta_row(database: &RuntimeDatabase, next: u64, head: u64, hash: Option<&str>) -> SqlRow {
-    let tag = database.integrity_tag(
-        "ledger-meta-v1",
-        &[
-            SCHEMA.as_bytes(),
-            &next.to_be_bytes(),
-            &head.to_be_bytes(),
-            hash.unwrap_or("").as_bytes(),
-            b"sqlite",
-            b"candidate",
-            INTEGER_ENCODING.as_bytes(),
-        ],
-    );
+    meta_row_with_marker(database, next, head, hash, &SqliteMarker::candidate())
+}
+fn meta_row_with_marker(
+    database: &RuntimeDatabase,
+    next: u64,
+    head: u64,
+    hash: Option<&str>,
+    marker: &SqliteMarker,
+) -> SqlRow {
+    let next_bytes = next.to_be_bytes();
+    let head_bytes = head.to_be_bytes();
+    let mut fields: Vec<&[u8]> = vec![
+        SCHEMA.as_bytes(),
+        &next_bytes,
+        &head_bytes,
+        hash.unwrap_or("").as_bytes(),
+        b"sqlite",
+        marker.state.as_bytes(),
+        INTEGER_ENCODING.as_bytes(),
+    ];
+    if marker.state != "candidate" {
+        fields.push(
+            marker
+                .migration
+                .as_ref()
+                .map_or("", |record| record.migration_id.as_str())
+                .as_bytes(),
+        );
+        fields.push(marker.material.as_deref().unwrap_or("").as_bytes());
+    }
+    let tag = database.integrity_tag("ledger-meta-v1", &fields);
     vec![
         SqlValue::Integer(1),
         SqlValue::Text(SCHEMA.into()),
@@ -578,10 +1090,16 @@ fn meta_row(database: &RuntimeDatabase, next: u64, head: u64, hash: Option<&str>
         SqlValue::Integer(encode(head)),
         optional_text(hash),
         SqlValue::Text("sqlite".into()),
-        SqlValue::Null,
-        SqlValue::Text("candidate".into()),
+        optional_text(
+            marker
+                .migration
+                .as_ref()
+                .map(|record| record.migration_id.as_str()),
+        ),
+        SqlValue::Text(marker.state.into()),
         SqlValue::Text(INTEGER_ENCODING.into()),
         SqlValue::Text(tag),
+        optional_text(marker.material.as_deref()),
     ]
 }
 

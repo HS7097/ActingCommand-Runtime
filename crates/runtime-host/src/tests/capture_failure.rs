@@ -217,8 +217,8 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     let epoch = host.runtime_info().owner_epoch();
     drop(client);
     host.close().expect("close host");
-    let ledger = GlobalLedger::open_read_only(
-        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+    let ledger = GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
         |_| None,
     )
     .expect("read closed authoritative ledger");
