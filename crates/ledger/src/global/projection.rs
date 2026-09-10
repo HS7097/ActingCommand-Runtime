@@ -1,15 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::GlobalLedgerError;
-use crate::PersistedEvent;
+use crate::{PersistedEvent, fact::LedgerEventRead};
 use actingcommand_contract::{
     ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode, EventId,
-    EventPayload, EventQuery, EventType, FrameId, InstanceId, LeaseId, OriginModule, PolicyPayload,
-    ProjectedEvent, ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
-    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, TaskId, TaskOutcome, TaskPayload,
-    TaskSemanticFact,
+    EventPayload, EventQuery, EventSource, EventType, FrameId, InstanceId, LeaseId, LedgerView,
+    OriginModule, PolicyPayload, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RecognitionId, RequestId, RunId, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
+    TaskId, TaskOutcome, TaskPayload, TaskSemanticFact,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+mod views;
+pub(super) use views::{PageSelection, page_bounds};
+
+/// The closed Lab link paths are shared by the in-memory and SQLite selectors.
+#[derive(Clone, Copy)]
+pub(super) enum LabAxis {
+    Request,
+    Correlation,
+}
+
+pub(super) const LAB_ANCHOR_SOURCE: EventSource = EventSource::Lab;
+pub(super) const LAB_ANCHOR_TYPE: EventType = EventType::LabRequest;
+pub(super) const LAB_RELATIONS: [(LabAxis, bool); 4] = [
+    (LabAxis::Request, false),
+    (LabAxis::Correlation, false),
+    (LabAxis::Request, true),
+    (LabAxis::Correlation, true),
+];
 
 #[derive(Default)]
 pub(super) struct EventIndexes {
@@ -27,10 +46,14 @@ pub(super) struct EventIndexes {
     frame_ids: BTreeMap<FrameId, BTreeSet<usize>>,
     action_ids: BTreeMap<ActionId, BTreeSet<usize>>,
     recognition_ids: BTreeMap<RecognitionId, BTreeSet<usize>>,
+    lab_requests: BTreeMap<RequestId, u64>,
+    lab_correlations: BTreeMap<CorrelationId, u64>,
+    run_requests: BTreeMap<RunId, BTreeMap<RequestId, u64>>,
+    run_correlations: BTreeMap<RunId, BTreeMap<CorrelationId, u64>>,
 }
 
 impl EventIndexes {
-    pub(super) fn from_events(events: &[PersistedEvent]) -> Self {
+    pub(super) fn from_events<E: LedgerEventRead>(events: &[E]) -> Self {
         let mut indexes = Self::default();
         for (position, event) in events.iter().enumerate() {
             indexes.insert(event, position);
@@ -42,7 +65,7 @@ impl EventIndexes {
         self.event_ids.contains_key(event_id)
     }
 
-    pub(super) fn insert(&mut self, event: &PersistedEvent, position: usize) {
+    pub(super) fn insert<E: LedgerEventRead>(&mut self, event: &E, position: usize) {
         self.event_ids.insert(*event.event_id(), position);
         self.event_types
             .entry(event_type_index(event.event_type()))
@@ -68,29 +91,53 @@ impl EventIndexes {
         insert_link(&mut self.frame_ids, links.frame_id(), position);
         insert_link(&mut self.action_ids, links.action_id(), position);
         insert_link(&mut self.recognition_ids, links.recognition_id(), position);
+        let sequence = event.sequence();
+        if event.origin().source() == LAB_ANCHOR_SOURCE || event.event_type() == LAB_ANCHOR_TYPE {
+            if let Some(request) = links.request_id() {
+                self.lab_requests.entry(*request).or_insert(sequence);
+            }
+            if let Some(correlation) = links.correlation_id() {
+                self.lab_correlations
+                    .entry(*correlation)
+                    .or_insert(sequence);
+            }
+        }
+        if let Some(run) = links.run_id() {
+            if let Some(request) = links.request_id() {
+                self.run_requests
+                    .entry(*run)
+                    .or_default()
+                    .entry(*request)
+                    .or_insert(sequence);
+            }
+            if let Some(correlation) = links.correlation_id() {
+                self.run_correlations
+                    .entry(*run)
+                    .or_default()
+                    .entry(*correlation)
+                    .or_insert(sequence);
+            }
+        }
     }
 
-    pub(super) fn query(
-        &self,
-        events: &[PersistedEvent],
-        query: &EventQuery,
-    ) -> Vec<PersistedEvent> {
+    pub(super) fn query<E: LedgerEventRead>(&self, events: &[E], query: &EventQuery) -> Vec<E> {
         let minimum_sequence = query.from_sequence.unwrap_or(0);
         let start = events.partition_point(|event| event.sequence() < minimum_sequence);
+        let snapshot = events.last().map_or(0, E::sequence);
         self.candidates_from(events, query, start)
-            .filter(|event| query_matches(query, event))
+            .filter(|event| self.matches(query, *event, snapshot))
             .cloned()
             .collect()
     }
 
-    pub(super) fn query_page(
+    pub(super) fn query_page<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
-    ) -> Vec<PersistedEvent> {
+    ) -> Vec<E> {
         self.query_page_with_observer(
             events,
             query,
@@ -101,15 +148,15 @@ impl EventIndexes {
         )
     }
 
-    fn query_page_with_observer(
+    fn query_page_with_observer<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
         observe_candidate: &mut impl FnMut(),
-    ) -> Vec<PersistedEvent> {
+    ) -> Vec<E> {
         let minimum_sequence = query
             .from_sequence
             .unwrap_or(0)
@@ -119,7 +166,7 @@ impl EventIndexes {
             .take_while(|event| event.sequence() <= through_sequence)
             .filter(|event| {
                 observe_candidate();
-                event.sequence() > after_sequence && query_matches(query, event)
+                event.sequence() > after_sequence && self.matches(query, *event, through_sequence)
             })
             .take(page_events)
             .cloned()
@@ -127,14 +174,14 @@ impl EventIndexes {
     }
 
     #[cfg(test)]
-    pub(super) fn query_page_with_visit_count(
+    pub(super) fn query_page_with_visit_count<E: LedgerEventRead>(
         &self,
-        events: &[PersistedEvent],
+        events: &[E],
         query: &EventQuery,
         after_sequence: u64,
         through_sequence: u64,
         page_events: usize,
-    ) -> (Vec<PersistedEvent>, usize) {
+    ) -> (Vec<E>, usize) {
         let mut visited = 0;
         let page = self.query_page_with_observer(
             events,
@@ -147,12 +194,12 @@ impl EventIndexes {
         (page, visited)
     }
 
-    fn candidates_from<'a>(
+    fn candidates_from<'a, E: LedgerEventRead>(
         &'a self,
-        events: &'a [PersistedEvent],
+        events: &'a [E],
         query: &EventQuery,
         start: usize,
-    ) -> Box<dyn Iterator<Item = &'a PersistedEvent> + 'a> {
+    ) -> Box<dyn Iterator<Item = &'a E> + 'a> {
         let event_type = query.event_type.map(event_type_index);
         let candidates = [
             indexed_filter(&self.event_types, event_type.as_ref()),
@@ -190,9 +237,57 @@ impl EventIndexes {
             None => Box::new(events[start..].iter()),
         }
     }
+
+    fn matches<E: LedgerEventRead>(&self, query: &EventQuery, event: &E, snapshot: u64) -> bool {
+        query_matches_fields(query, event)
+            && query.view.is_none_or(|view| {
+                view.contains(
+                    event.event_type(),
+                    event.severity(),
+                    event.origin().source(),
+                    self.lab_related(event, snapshot),
+                )
+            })
+    }
+
+    fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
+        let links = event.links();
+        let request_matches = |request: &RequestId| {
+            self.lab_requests
+                .get(request)
+                .is_some_and(|sequence| *sequence <= snapshot)
+        };
+        let correlation_matches = |correlation: &CorrelationId| {
+            self.lab_correlations
+                .get(correlation)
+                .is_some_and(|sequence| *sequence <= snapshot)
+        };
+        LAB_RELATIONS
+            .into_iter()
+            .any(|(axis, via_run)| match (axis, via_run) {
+                (LabAxis::Request, false) => links.request_id().is_some_and(request_matches),
+                (LabAxis::Correlation, false) => {
+                    links.correlation_id().is_some_and(correlation_matches)
+                }
+                (LabAxis::Request, true) => links.run_id().is_some_and(|run| {
+                    self.run_requests.get(run).is_some_and(|requests| {
+                        requests.iter().any(|(request, sequence)| {
+                            *sequence <= snapshot && request_matches(request)
+                        })
+                    })
+                }),
+                (LabAxis::Correlation, true) => links.run_id().is_some_and(|run| {
+                    self.run_correlations.get(run).is_some_and(|correlations| {
+                        correlations.iter().any(|(correlation, sequence)| {
+                            *sequence <= snapshot && correlation_matches(correlation)
+                        })
+                    })
+                }),
+            })
+    }
 }
 
-pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> ProjectedEvent {
+pub(super) fn project<E: LedgerEventRead>(event: &E, profile: ProjectionProfile) -> ProjectedEvent {
     let (payload, include_object_key) = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => (ProjectionPayload::Omitted, false),
         ProjectionProfile::Lab | ProjectionProfile::Verbose
@@ -227,11 +322,9 @@ pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> Pro
         links: event.links().clone(),
         payload_schema: event.payload_schema().to_string(),
         payload,
-        artifacts: event
-            .artifacts()
-            .iter()
-            .map(|artifact| artifact.project(include_object_key))
-            .collect(),
+        artifacts: event.projected_artifacts(include_object_key),
+        // Snapshot-aware page projection fills the complete overlapping membership.
+        views: Vec::new(),
     }
 }
 
@@ -347,6 +440,18 @@ pub(super) fn project_scheduling_outcomes(
 }
 
 pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
+    query_matches_fields(query, event)
+        && query.view.is_none_or(|view| {
+            view.contains(
+                event.event_type(),
+                event.severity(),
+                event.origin().source(),
+                false,
+            )
+        })
+}
+
+fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bool {
     let links = event.links();
     query
         .from_sequence
@@ -360,6 +465,15 @@ pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool 
         && query
             .minimum_severity
             .is_none_or(|value| event.severity() >= value)
+        && query
+            .maximum_severity
+            .is_none_or(|value| event.severity() <= value)
+        && query
+            .from_timestamp_unix_ms
+            .is_none_or(|value| event.timestamp_unix_ms() >= value)
+        && query
+            .to_timestamp_unix_ms
+            .is_none_or(|value| event.timestamp_unix_ms() < value)
         && query
             .source
             .is_none_or(|value| event.origin().source() == value)

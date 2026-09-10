@@ -150,6 +150,15 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
 }
 
 pub(super) trait DurableStorage: Send + 'static {
+    fn project_view_page(
+        &self,
+        _query: &actingcommand_contract::EventQuery,
+        _profile: actingcommand_contract::ProjectionProfile,
+        _request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+    ) -> Option<GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>> {
+        None
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>>;
     fn close(&mut self) -> GlobalLedgerResult<()>;
 }
@@ -1152,6 +1161,31 @@ impl<B: DurableStorage> EventStore<B> {
 
     pub(super) fn latest_sequence(&self) -> u64 {
         self.events.last().map_or(0, PersistedEvent::sequence)
+    }
+
+    pub(super) fn project_view_page(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        if let Some(page) = self.backend.project_view_page(query, profile, request) {
+            return page;
+        }
+        self.indexes.project_view_page(
+            &self.events,
+            query,
+            profile,
+            request,
+            actingcommand_contract::LedgerReadScope {
+                source: actingcommand_contract::LedgerReadSource::Runtime,
+                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
+                scanned_through_position: self.latest_sequence(),
+                read_complete: true,
+                limits: Vec::new(),
+            },
+            self.latest_sequence().into(),
+        )
     }
 
     pub(super) fn replay_page(

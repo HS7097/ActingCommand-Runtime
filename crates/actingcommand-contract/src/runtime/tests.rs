@@ -2198,6 +2198,22 @@ fn runtime_event_query_pages_are_bounded_and_cursor_bound_to_the_query() {
             diagnostic_code: Some(crate::DiagnosticCode::RuntimeDiagnostic),
             ..query.clone()
         },
+        EventQuery {
+            view: Some(crate::LedgerView::Errors),
+            ..query.clone()
+        },
+        EventQuery {
+            maximum_severity: Some(crate::EventSeverity::Error),
+            ..query.clone()
+        },
+        EventQuery {
+            from_timestamp_unix_ms: Some(10),
+            ..query.clone()
+        },
+        EventQuery {
+            to_timestamp_unix_ms: Some(20),
+            ..query.clone()
+        },
     ] {
         assert!(!cursor.matches(&added, ProjectionProfile::Forensic).unwrap());
         assert_eq!(
@@ -2222,7 +2238,48 @@ fn runtime_event_query_pages_are_bounded_and_cursor_bound_to_the_query() {
     );
     assert!(RuntimeEventQueryCursor::new(0, 0, &query, ProjectionProfile::Forensic).is_err());
     assert!(RuntimeEventQueryCursor::new(10, 11, &query, ProjectionProfile::Forensic).is_err());
+    assert!(
+        RuntimeEventQueryPageRequest::new(8, Some(cursor.clone()))
+            .unwrap()
+            .at_snapshot(49)
+            .is_err()
+    );
+    assert_eq!(
+        RuntimeEventQueryPageRequest::new(8, Some(cursor.clone()))
+            .unwrap()
+            .at_snapshot(50)
+            .unwrap()
+            .snapshot_position(),
+        Some(50)
+    );
     assert!(RuntimeEventQueryPage::new(Vec::new(), 50, 8, true, Some(cursor)).is_err());
+    assert!(
+        EventQuery {
+            from_timestamp_unix_ms: Some(20),
+            to_timestamp_unix_ms: Some(10),
+            ..query.clone()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        EventQuery {
+            minimum_severity: Some(crate::EventSeverity::Error),
+            maximum_severity: Some(crate::EventSeverity::Warning),
+            ..query.clone()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        EventQuery {
+            from_timestamp_unix_ms: Some(10),
+            to_timestamp_unix_ms: Some(10),
+            ..query
+        }
+        .validate()
+        .is_ok()
+    );
 }
 
 #[test]
