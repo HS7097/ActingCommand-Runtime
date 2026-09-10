@@ -27,10 +27,12 @@ use std::path::{Path, PathBuf};
 
 mod signatures;
 mod task_records;
+mod views;
 pub use signatures::{
     ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,
 };
 pub use task_records::{TaskDiagnosticGap, TaskDiagnosticPage, TaskRecordsRequest};
+pub use views::{ForensicViewOptions, ForensicViewRequest, run_views};
 
 pub const MAX_FORENSIC_EVENTS: usize = 1_024;
 pub const MAX_FORENSIC_REPAIRS: usize = 1_024;
@@ -229,6 +231,7 @@ impl ForensicRequest {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
+    Views(Box<actingcommand_contract::RuntimeEventQueryPage>),
     Signatures(Box<SignatureReplayReport>),
     Open(Box<OpenReport>),
     Events(EventsReport),
@@ -701,7 +704,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
 /// Reads an already opened evidence snapshot with the Runtime page contract.
 /// Opening/validating the source remains the ledger owner's responsibility.
 pub fn query_view_page(
-    snapshot: &GlobalLedgerEvidence,
+    snapshot: &actingcommand_ledger::GlobalLedgerMetadata,
     query: &EventQuery,
     profile: actingcommand_contract::ProjectionProfile,
     page: &actingcommand_contract::RuntimeEventQueryPageRequest,

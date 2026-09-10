@@ -83,8 +83,10 @@ facts.
 ## Shared view and snapshot types
 
 `LedgerView::definition()` is the closed classification source for event stream,
-observation, changes, errors, health and Lab. `ProjectedEvent.views` records
-overlapping memberships. The storage owner derives SQL predicates from these
+observation, changes, errors, health and Lab. Snapshot page projection populates
+`ProjectedEvent.views` with overlapping memberships. An omitted membership list
+means that the projection has no snapshot membership context. The storage owner
+derives SQL predicates from these
 typed definitions; adding these interfaces does not install SQL views.
 
 The errors view selects Warning, Error and Fatal without changing the original
@@ -112,6 +114,12 @@ cannot skip facts. An empty match can exhaust the requested snapshot even when
 the source itself is incomplete. The existing 256-row and 768-KiB response limits
 remain in force, and a single oversized result is rejected.
 
+The Host delegates an event page to one `GlobalLedger::project_view_page` call,
+so the writer's read branch freezes the position and derives the page together.
+Subscriptions retain their receive limits and resume cursor. A Lab-filtered
+subscription resolves the candidate against the ledger at that event's sequence;
+run recovery groups are available through the fixed-snapshot page operation.
+
 `run_recovery` contains derived groups, not changes to persisted events. Each
 group includes the run, state, gaps and failure/success event IDs and positions.
 Context comes from the complete related run through the snapshot, independently
@@ -127,3 +135,35 @@ An unrelated task completion does not resolve a failure. Profiles retain their
 existing sanitized payload and artifact-key behavior; sensitivity and actor
 remain provenance. The page projection reads no material bytes. Material access
 and evidence of authorized eviction belong to the material reader.
+
+## Offline view entry
+
+`actingledger --state-root <root> views` uses `GlobalLedger::open_metadata` and
+`GlobalLedgerMetadata::project_view_page`. `LedgerEventMetadata` contains the
+validated event fields, typed payload and original artifact references. Source
+validation verifies the ledger structure and integrity before exposing those
+fields; material state remains `not_requested`.
+
+The executable delegates typed parsing and reading to `ledger-forensics`:
+
+- `--query <EventQuery JSON>` selects any combination of the shared conditions;
+- `--profile <profile>` uses the existing projection profiles and defaults to `ui`;
+- `--snapshot <position>` selects a first-page position or agrees with the cursor;
+- `--cursor <next_cursor JSON>` continues the same query, profile and snapshot;
+- `--limit <count>` uses the existing page default and maximum.
+
+For example, the query object for exact Error events in one time interval is:
+
+```json
+{"view":"errors","minimum_severity":"error","maximum_severity":"error","from_timestamp_unix_ms":1000,"to_timestamp_unix_ms":2000}
+```
+
+Query and cursor arguments are bounded at 16 KiB and 2 KiB respectively.
+Malformed, duplicate or unknown options fail before opening the root. The result
+is the shared page under `command: views`. Source-incomplete pages are printed
+with their explicit scope and then return a nonzero CLI exit; ordinary pagination
+alone is not an error. The library entry is `run_views(ForensicViewRequest)`;
+callers that already own the metadata snapshot can use `query_view_page`.
+
+Changing the offline root starts a new query. Material verification for existing
+chain, export and recovery operations retains its original meaning.
