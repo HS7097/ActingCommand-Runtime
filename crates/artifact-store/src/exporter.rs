@@ -1062,7 +1062,11 @@ mod tests {
         );
         let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
         let receipt = exporter.export(request, &mut sink).expect("export");
-        let mut mismatched_hash = receipt.zip_sha256().to_owned();
+        let mut mismatched_hash = receipt
+            .zip_sha256()
+            .strip_prefix("sha256:")
+            .expect("canonical receipt hash")
+            .to_owned();
         let replacement = if mismatched_hash.starts_with('0') {
             "1"
         } else {
