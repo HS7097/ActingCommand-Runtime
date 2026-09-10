@@ -218,6 +218,8 @@ pub struct TaskDiagnosticRecognitionError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<Box<crate::OcrRegionEvidence>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<super::TemplateMatchTimingObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

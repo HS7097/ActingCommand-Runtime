@@ -87,7 +87,8 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
-    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
+    ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
+    ContainedTaskTimingContext,
     ContainedTaskRuntimeErrorClass, ContainedTaskTrace, ExecutionBackendProvenance,
     ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
     PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider,
@@ -158,6 +159,7 @@ mod saved_artifact_ocr;
 mod signatures;
 mod state_control;
 mod task_diagnostic;
+mod task_timing;
 
 use agent_control::append_agent_wake;
 use monitor_control::monitor_probe_loop;
@@ -9360,6 +9362,11 @@ impl HostShared {
             configuration_input_recorded: false,
             diagnostic_stream: None,
             diagnostic_records: 0,
+            task_timing: task_timing::TaskTimingObserver::new(
+                control.request_id,
+                *task_id.transport(),
+                *run_id.transport(),
+            ),
             diagnostic_step: None,
             diagnostic_physical: None,
         };
@@ -9382,6 +9389,10 @@ impl HostShared {
             let execution = prepared.run(&mut runtime);
             execution
         };
+        if let Err(ContainedTaskRunError::Task(error)) = &execution {
+            runtime.task_timing.task_failure(error.timing());
+        }
+        runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
                 runtime.record_post_admission_ocr_failure(error.code(), error.detail())
@@ -9451,6 +9462,14 @@ impl HostShared {
                 );
             }
             execution = Err(ContainedTaskRunError::Boundary(failure));
+        }
+        let task_timing = runtime.task_timing.snapshot();
+        if let Err(
+            ContainedTaskRunError::Boundary(failure)
+            | ContainedTaskRunError::NonfatalOperation(failure),
+        ) = &mut execution
+        {
+            failure.error.lifecycle.task_timing = Some(task_timing.clone());
         }
         let finalizing = runtime.finalizing;
         let executed_steps = runtime.executed_steps;
@@ -9839,6 +9858,7 @@ impl HostShared {
                 package_sha256: recovery_sha256.clone(),
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        let previous_timing = runtime.task_timing.context();
         let recovery_execution = {
             if runtime.configuration_records > 0 {
                 runtime
@@ -9856,6 +9876,10 @@ impl HostShared {
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
             recovery.run_entry_recovery(&mut recovery_runtime)
         };
+        if let Err(ContainedTaskRunError::Task(error)) = &recovery_execution {
+            runtime.task_timing.task_failure(error.timing());
+        }
+        runtime.task_timing.replace_context(previous_timing);
         let nonfatal_operation = matches!(
             &recovery_execution,
             Err(ContainedTaskRunError::NonfatalOperation(_))
@@ -13428,6 +13452,7 @@ struct ContainedTaskTerminalDraft {
     scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
     selected_scheduling_outcome: Option<String>,
     capture_summary: Option<CapturePipelineSummary>,
+    task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
 }
 
 struct ContainedRunControl {
@@ -13736,6 +13761,7 @@ struct RuntimeContainedTask<'a> {
     configuration_input_recorded: bool,
     diagnostic_stream: Option<actingcommand_artifact_store::ArtifactStream>,
     diagnostic_records: u64,
+    task_timing: task_timing::TaskTimingObserver,
     diagnostic_step: Option<task_diagnostic::DiagnosticStep>,
     diagnostic_physical: Option<ActionId>,
 }
@@ -13751,11 +13777,23 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.update_run_progress(executed_steps);
     }
 
+    fn observe_task_timing(&mut self, context: ContainedTaskTimingContext) {
+        self.inner.task_timing.replace_context(Some(context));
+    }
+
     fn record_page_evaluations(
         &mut self,
         phase: &'static str,
         results: &actingcommand_page_detector::PageBatchResult,
+        timing: Option<ContainedTaskEvaluationTiming>,
     ) -> Result<(), Self::Error> {
+        if let Some(timing) = timing {
+            self.inner.task_timing.record_evaluation(
+                timing,
+                self.inner.last_frame_id.map(|id| *id.transport()),
+                self.inner.current_recognition_id.map(|id| *id.transport()),
+            );
+        }
         self.inner.diagnostic_pages(phase, results)
     }
     fn record_guard_evaluation(
@@ -14793,11 +14831,23 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.executed_steps = self.step_index_offset.checked_add(executed_steps);
     }
 
+    fn observe_task_timing(&mut self, context: ContainedTaskTimingContext) {
+        self.task_timing.begin_execution(context);
+    }
+
     fn record_page_evaluations(
         &mut self,
         phase: &'static str,
         results: &actingcommand_page_detector::PageBatchResult,
+        timing: Option<ContainedTaskEvaluationTiming>,
     ) -> Result<(), Self::Error> {
+        if let Some(timing) = timing {
+            self.task_timing.record_evaluation(
+                timing,
+                self.last_frame_id.map(|id| *id.transport()),
+                self.current_recognition_id.map(|id| *id.transport()),
+            );
+        }
         self.diagnostic_pages(phase, results)
     }
     fn record_guard_evaluation(

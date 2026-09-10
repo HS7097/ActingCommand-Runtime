@@ -95,6 +95,7 @@ fn recognition_error(
         .to_owned(),
         message: error.message().to_owned(),
         region: error.region().cloned().map(Box::new),
+        timing: error.timing().copied(),
     }
 }
 
