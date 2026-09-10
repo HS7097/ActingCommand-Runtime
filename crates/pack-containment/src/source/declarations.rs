@@ -291,13 +291,20 @@ impl Declaration<'_> {
                 "retryable",
                 "max_attempts",
                 "retry_interval_ms",
+                "timeout_ms",
+                "pre_delay_ms",
                 "post_delay_ms",
+                "pre_wait_freezes_ms",
+                "post_wait_freezes_ms",
+                "effect",
+                "destructive",
                 "guard",
                 "unguarded_trusted_coordinate",
                 "verify_template",
                 "consumes",
                 "produces",
                 "purpose",
+                "verified_live",
                 "provenance",
                 "threshold",
                 "method",
@@ -354,20 +361,38 @@ impl Declaration<'_> {
                         }
                     }
                 }
-                "on_error" | "verify_template" | "purpose" | "maa_task" | "maa_task_id"
+                "on_error" | "effect" | "verify_template" | "purpose" | "maa_task"
+                | "maa_task_id"
                     if !value.is_null() =>
                 {
                     self.string(value, &pointer)?
                 }
-                "retryable" if !value.is_null() => self.boolean(value, &pointer)?,
+                "retryable" | "verified_live" if !value.is_null() => {
+                    self.boolean(value, &pointer)?
+                }
                 "unguarded_trusted_coordinate" => self.boolean(value, &pointer)?,
-                "max_attempts" | "retry_interval_ms" | "post_delay_ms" if !value.is_null() => {
+                "max_attempts"
+                | "retry_interval_ms"
+                | "timeout_ms"
+                | "pre_delay_ms"
+                | "post_delay_ms"
+                | "pre_wait_freezes_ms"
+                | "post_wait_freezes_ms"
+                    if !value.is_null() =>
+                {
                     self.unsigned(value, &pointer)?
+                }
+                "destructive" => {
+                    return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "consumes" | "produces" => self.strings(value, &pointer)?,
                 "guard" if !value.is_null() => self.guard(value, &pointer)?,
                 "provenance" if !value.is_null() => {
-                    let provenance = self.object(value, &pointer, &["navigation_ref"])?;
+                    // Authoring/package output and Lab records preserve the original JSON;
+                    // navigation_ref also feeds the generated navigation source.
+                    let provenance = value.as_object().ok_or_else(|| {
+                        self.error(&pointer, ResourceDeclarationReason::InvalidType)
+                    })?;
                     if let Some(value) = provenance.get("navigation_ref") {
                         self.string(value, &child(&pointer, "navigation_ref"))?;
                     }
@@ -599,6 +624,7 @@ impl Declaration<'_> {
                 "color_check",
                 "maa_task",
                 "maa_task_id",
+                "provenance",
             ],
             "verify_templates" => &[
                 "id",
@@ -611,8 +637,9 @@ impl Declaration<'_> {
                 "rect_move",
                 "maa_task",
                 "maa_task_id",
+                "provenance",
             ],
-            "color_probes" => &["id", "region", "expected"],
+            "color_probes" => &["id", "region", "expected", "provenance"],
             "ocr_targets" => &[
                 "id",
                 "region",
@@ -650,6 +677,9 @@ impl Declaration<'_> {
                 "threshold" | "minimum_confidence" => self.number(value, &pointer)?,
                 "timeout_ms" => self.unsigned(value, &pointer)?,
                 "case_sensitive" => self.boolean(value, &pointer)?,
+                "provenance" if !value.is_null() && !value.is_object() => {
+                    return Err(self.error(&pointer, ResourceDeclarationReason::InvalidType));
+                }
                 "languages" => self.strings(value, &pointer)?,
                 "expected" if family == "ocr_targets" => self.strings(value, &pointer)?,
                 "expected" => self.color(value, &pointer)?,
@@ -850,6 +880,53 @@ pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutco
             .get("schema_version")
             .and_then(Value::as_str),
     };
+    // Runtime task preparation does not consume the Lab recovery settings.
+    for field in ["max_task_retries", "on_exhausted"] {
+        if bundle.operation().get(field).is_some() {
+            return Err(declaration.error(
+                &child("", field),
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+    }
+    if let Some(defaults) = bundle.operation().get("defaults") {
+        for field in [
+            "timeout_ms",
+            "pre_delay_ms",
+            "post_delay_ms",
+            "pre_wait_freezes_ms",
+            "post_wait_freezes_ms",
+        ] {
+            if defaults.get(field).is_some() {
+                return Err(declaration.error(
+                    &child("/defaults", field),
+                    ResourceDeclarationReason::UnconsumedField,
+                ));
+            }
+        }
+    }
+    if let Some(operations) = bundle
+        .operation()
+        .get("operations")
+        .and_then(Value::as_array)
+    {
+        for (index, operation) in operations.iter().enumerate() {
+            for field in [
+                "timeout_ms",
+                "pre_delay_ms",
+                "pre_wait_freezes_ms",
+                "post_wait_freezes_ms",
+                "effect",
+            ] {
+                if operation.get(field).is_some() {
+                    return Err(declaration.error(
+                        &child(&format!("/operations/{index}"), field),
+                        ResourceDeclarationReason::UnconsumedField,
+                    ));
+                }
+            }
+        }
+    }
     declaration.bundle(bundle.operation(), true)?;
     let operation = Bundle {
         task_id: bundle.task_id().as_str().to_owned(),
@@ -982,11 +1059,25 @@ pub fn validate_resource_declarations(path: &Path, resources: &Value) -> CliOutc
         .enumerate()
     {
         let pointer = format!("/resources/{index}");
-        let resource = declaration.object(resource, &pointer, &["id"])?;
+        let resource = declaration.object(resource, &pointer, &["id", "name"])?;
         declaration.string(
             declaration.required(resource, &pointer, "id")?,
             &child(&pointer, "id"),
         )?;
+        // Full and selected package output retain the resource table's localized names.
+        if let Some(name) = resource.get("name") {
+            let pointer = child(&pointer, "name");
+            if name.is_string() {
+                declaration.string(name, &pointer)?;
+            } else {
+                let names = name.as_object().ok_or_else(|| {
+                    declaration.error(&pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+                for (locale, name) in names {
+                    declaration.string(name, &child(&pointer, locale))?;
+                }
+            }
+        }
     }
     if let Some(points) = object.get("control_points") {
         for (index, point) in declaration
@@ -1417,6 +1508,7 @@ impl Declaration<'_> {
                 "server_scope",
                 "locale",
                 "goal",
+                "provenance",
                 "coordinate_space",
                 "defaults",
                 "entry_page",
@@ -1495,6 +1587,9 @@ impl Declaration<'_> {
                 }
                 "on_exhausted" if !value.is_null() => self.string(value, &pointer)?,
                 "max_task_retries" if !value.is_null() => self.unsigned(value, &pointer)?,
+                "provenance" if !value.is_null() && !value.is_object() => {
+                    return Err(self.error(&pointer, ResourceDeclarationReason::InvalidType));
+                }
                 "target_page" if !value.is_null() => self.page(value, &pointer)?,
                 "error_pages" => self.strings(value, &pointer)?,
                 "timeout_ms" | "max_steps" => self.unsigned(value, &pointer)?,
@@ -1544,6 +1639,11 @@ impl Declaration<'_> {
                 "match_metric",
                 "max_attempts",
                 "retry_interval_ms",
+                "timeout_ms",
+                "pre_delay_ms",
+                "post_delay_ms",
+                "pre_wait_freezes_ms",
+                "post_wait_freezes_ms",
             ],
         )?;
         for (field, value) in object {
