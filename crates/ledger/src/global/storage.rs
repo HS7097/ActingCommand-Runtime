@@ -1154,6 +1154,22 @@ impl<B: DurableStorage> EventStore<B> {
         self.events.last().map_or(0, PersistedEvent::sequence)
     }
 
+    pub(super) fn project_view_page(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        self.indexes.project_view_page(
+            &self.events,
+            query,
+            profile,
+            request,
+            actingcommand_contract::LedgerReadSource::Runtime,
+            true,
+        )
+    }
+
     pub(super) fn replay_page(
         &self,
         after_sequence: u64,
