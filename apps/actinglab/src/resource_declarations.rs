@@ -68,13 +68,14 @@ pub(super) fn run(repo: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
             .strip_suffix(&[0])
             .map(|bytes| bytes.split(|byte| *byte == 0).collect::<Vec<_>>())
             .unwrap_or_default();
-        if !fields.chunks_exact(2).remainder().is_empty() || fields.len() / 2 > MAX_PATHS {
+        let (pairs, remainder) = fields.as_chunks::<2>();
+        if !remainder.is_empty() || pairs.len() > MAX_PATHS {
             return Err(invalid(
                 Path::new(&list),
                 "Git name-status list must contain at most 4096 status/path pairs",
             ));
         }
-        for pair in fields.chunks_exact(2) {
+        for pair in pairs {
             let deleted = match pair[0] {
                 b"D" => true,
                 b"A" | b"M" | b"T" => false,
