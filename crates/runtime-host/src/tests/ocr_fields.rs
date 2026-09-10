@@ -189,7 +189,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             let mut request = SavedArtifactOcrRequest {
                 source: binding.clone(),
                 package_path: package_path.to_str().unwrap().into(),
-                expected_sha256: format!("{:x}", Sha256::digest(&package)),
+                expected_sha256: format!("{:x}", Sha256::digest(&package)).into(),
                 target_id: "fixture/ocr".into(),
             };
             if mode == 1 {
@@ -896,7 +896,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         else {
             unreachable!()
         };
-        assert_eq!(package_sha256, &format!("{:x}", Sha256::digest(&recovery)));
+        assert_eq!(
+            package_sha256,
+            &actingcommand_contract::PackageRef::from(format!("{:x}", Sha256::digest(&recovery)))
+        );
         assert_eq!(timing.task_timeout.milliseconds, 60_000);
         assert_eq!(timing.step_timeout.milliseconds, 5_000);
         assert_eq!(timing.capture_interval.milliseconds, 50);

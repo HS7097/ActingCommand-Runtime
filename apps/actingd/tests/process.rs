@@ -269,7 +269,7 @@ fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
     assert_eq!(payload.operation_id(), "operation.observe");
     assert_eq!(
         payload.package_digest(),
-        format!("sha256:{}", "c".repeat(64))
+        &format!("sha256:{}", "c".repeat(64)).into()
     );
     assert!(!payload.procedure_binding_digest().is_empty());
     assert!(child.0.try_wait().expect("process state").is_none());
@@ -866,7 +866,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                         if matches!(
                             payload.fact(),
                             TaskSemanticFact::PackageAdmitted { package_sha256, .. }
-                                if package_sha256 == &expected_package_sha256
+                                if package_sha256 == &actingcommand_contract::PackageRef::from(&expected_package_sha256)
                         )
                 )
         ));

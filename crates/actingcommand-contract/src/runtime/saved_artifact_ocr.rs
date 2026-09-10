@@ -22,7 +22,7 @@ pub struct SavedArtifactOcrSource {
 pub struct SavedArtifactOcrRequest {
     pub source: SavedArtifactOcrSource,
     pub package_path: String,
-    pub expected_sha256: String,
+    pub expected_sha256: crate::PackageRef,
     pub target_id: String,
 }
 
@@ -37,11 +37,12 @@ impl SavedArtifactOcrRequest {
             || !std::path::Path::new(&source.state_root).is_absolute()
             || self.target_id.trim().is_empty()
             || self.target_id.len() > 4096
-            || self.expected_sha256.len() != 64
-            || !self
-                .expected_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
+            || match &self.expected_sha256 {
+                crate::PackageRef::LegacyZipSha256(hash) => {
+                    hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }
+                source => source.validate().is_err(),
+            }
             || source.artifact.validate().is_err()
             || source.artifact.kind != ArtifactKind::CaptureFrame
             || source.artifact.frame_id != Some(source.frame_id)

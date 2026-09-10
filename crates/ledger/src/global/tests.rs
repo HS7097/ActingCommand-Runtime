@@ -329,7 +329,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         task_id: "task:recovery-fixture".to_owned(),
         instance_id: "instance:recovery-fixture".to_owned(),
         operation_id: "operation:recovery-fixture".to_owned(),
-        package_digest: format!("sha256:{}", "1".repeat(64)),
+        package_digest: format!("sha256:{}", "1".repeat(64)).into(),
         procedure_binding_digest: format!("sha256:{}", "2".repeat(64)),
         reason_chain_id: "reason:recovery-fixture".to_owned(),
         reasons: vec![PolicyReasonRecord {

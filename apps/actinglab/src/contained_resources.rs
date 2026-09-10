@@ -3,11 +3,12 @@
 //! Production semantic commands admit resources only through an externally hashed in-memory bundle.
 
 use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, parse_navigation_graph_value};
+use actingcommand_contract::{ContainedTaskRequest, PackageRef};
 use actingcommand_lab::{ExternalExpectedSha256, ExternallyVerifiedBundle};
 use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::RecognitionEvaluator;
-use actingcommand_resource_tooling::open_published_package;
+use actingcommand_resource_tooling::{PublishedPackageReader, open_published_package};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -122,6 +123,26 @@ pub(super) fn observation_resources(
 }
 
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
+    if flags.optional("--package-ref").is_some() {
+        let input = PackageInput::open(flags)?;
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+            ))
+            .ok_or_else(|| CliError::package_invalid("package admission deadline overflow"))?;
+        let instance = format!("semantic_{}", command.replace('-', "_"));
+        let admitted = ExternallyVerifiedBundle::load_path(
+            &instance,
+            input.path(),
+            &input.reference,
+            false,
+            None,
+            deadline,
+        )
+        .map(Arc::new)
+        .map_err(|error| CliError::package_invalid(error.to_string()));
+        return finish_package_use(admitted, input.close());
+    }
     let logical_zip = explicit_path(flags, "--zip")?;
     let zip = open_published_package(&logical_zip)?;
     let expected = explicit_hash(flags)?;
@@ -139,6 +160,95 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     ExternallyVerifiedBundle::load(&instance, &bytes, expected)
         .map(Arc::new)
         .map_err(|error| CliError::package_invalid(error.to_string()))
+}
+
+/// Retains the existing publication pin for ZIP material throughout an RPC.
+/// Source directories are located here and verified exclusively by containment.
+pub(super) struct PackageInput {
+    pub reference: PackageRef,
+    path: PathBuf,
+    reader: Option<PublishedPackageReader>,
+}
+
+impl PackageInput {
+    pub fn declared_reference(flags: &FlagArgs) -> CliOutcome<PackageRef> {
+        let source = flags.optional("--package-ref");
+        if source.is_some() && flags.optional("--expected-sha256").is_some() {
+            return Err(CliError::usage("provide one package reference"));
+        }
+        match source {
+            Some(value) => PackageRef::parse_argument(&value)
+                .map_err(|error| CliError::package_invalid(error.to_string())),
+            None => Ok(PackageRef::LegacyZipSha256(
+                explicit_hash(flags)?.hash().to_string(),
+            )),
+        }
+    }
+
+    pub fn open(flags: &FlagArgs) -> CliOutcome<Self> {
+        // Locator validation owns the pre-capture loose-resource rejection.
+        explicit_path(
+            flags,
+            if flags.optional("--package").is_some() {
+                "--package"
+            } else {
+                "--zip"
+            },
+        )?;
+        Self::open_declared(flags, Self::declared_reference(flags)?)
+    }
+
+    pub fn open_declared(flags: &FlagArgs, reference: PackageRef) -> CliOutcome<Self> {
+        reference
+            .validate()
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        if flags.optional("--package").is_some() && flags.optional("--zip").is_some() {
+            return Err(CliError::usage("provide one package locator"));
+        }
+        let logical = explicit_path(
+            flags,
+            if flags.optional("--package").is_some() {
+                "--package"
+            } else {
+                "--zip"
+            },
+        )?;
+        let reader = match &reference {
+            PackageRef::LegacyZipSha256(_) => Some(open_published_package(&logical)?),
+            PackageRef::GitSourceTree(_) => None,
+        };
+        let located = reader
+            .as_ref()
+            .map(|reader| reader.path())
+            .unwrap_or(&logical);
+        let path = if reader.is_some() {
+            located
+                .canonicalize()
+                .map_err(|error| CliError::package_invalid(error.to_string()))?
+        } else if located.is_absolute() {
+            located.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|error| CliError::package_invalid(error.to_string()))?
+                .join(located)
+        };
+        Ok(Self {
+            reference,
+            path,
+            reader,
+        })
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn close(self) -> CliOutcome<()> {
+        match self.reader {
+            Some(reader) => reader.close(),
+            None => Ok(()),
+        }
+    }
 }
 
 pub(super) fn recognition_pipeline(

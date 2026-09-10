@@ -199,7 +199,7 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     assert!(semantic.iter().any(|fact| matches!(
         fact,
         TaskSemanticFact::PackageAdmitted { package_sha256, .. }
-            if package_sha256 == &expected
+            if package_sha256 == &actingcommand_contract::PackageRef::from(&expected)
     )));
     assert_eq!(
         semantic

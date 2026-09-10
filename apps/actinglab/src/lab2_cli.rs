@@ -126,20 +126,15 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "observe")?;
     let instance = lab2_instance(global, flags);
-    let logical_path = super::contained_resources::explicit_path(flags, "--zip")?;
-    let expected = super::contained_resources::explicit_hash(flags)?;
+    let reader = super::contained_resources::PackageInput::open(flags)?;
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
-    let reader = actingcommand_resource_tooling::open_published_package(&logical_path)?;
     let result = (|| -> CliOutcome<Value> {
-        let path = reader
-            .path()
-            .canonicalize()
-            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        let path = reader.path();
         let request = actingcommand_contract::ContainedObservationRequest::new(
             path.to_str()
                 .ok_or_else(|| CliError::package_invalid("package path is not UTF-8"))?,
-            expected.hash().to_string(),
+            reader.reference.clone(),
             target_list(flags),
         )
         .map_err(|error| CliError::package_invalid(error.to_string()))?;

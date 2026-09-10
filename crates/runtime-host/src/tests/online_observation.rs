@@ -111,7 +111,10 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
                 format!("sha256:{:x}", Sha256::digest(verified.png())),
                 observation.frame.artifact().sha256
             );
-            assert_eq!(observation.actual_package_sha256, expected);
+            assert_eq!(
+                observation.actual_package_sha256,
+                actingcommand_contract::PackageRef::from(expected)
+            );
             assert!(
                 verified.receipt().terminal().unwrap().sequence > observation.projection_sequence
             );
