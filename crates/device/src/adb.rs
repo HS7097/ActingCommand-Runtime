@@ -767,11 +767,9 @@ fn aggregate_child_close_errors(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ENV_LOCK;
     use std::fs;
     use std::path::Path;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // Defect regression D14: PR298 review 5120590779, Workflow #257 C1B9 v16.
     #[test]
@@ -1115,16 +1113,17 @@ mod tests {
         let program_files_x86 = temp.join("program-files-x86");
         fs::create_dir_all(&program_files).unwrap();
         fs::create_dir_all(&program_files_x86).unwrap();
-        unsafe {
-            std::env::set_var("PATH", &temp);
-            std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
-            std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
-            std::env::set_var("ProgramFiles", &program_files);
-            std::env::set_var("ProgramFiles(x86)", &program_files_x86);
-        }
+        let outcome = std::panic::catch_unwind(|| {
+            unsafe {
+                std::env::set_var("PATH", &temp);
+                std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
+                std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
+                std::env::set_var("ProgramFiles", &program_files);
+                std::env::set_var("ProgramFiles(x86)", &program_files_x86);
+            }
 
-        let resolved = resolve_adb_path_after_discovery(None, path_adb_candidate())
-            .expect("PATH adb baseline");
+            resolve_adb_path_after_discovery(None, path_adb_candidate()).expect("PATH adb baseline")
+        });
 
         unsafe {
             match original_path {
@@ -1150,6 +1149,7 @@ mod tests {
         }
         let _ = fs::remove_file(&adb);
         let _ = fs::remove_dir(&temp);
+        let resolved = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 
         assert_eq!(resolved.source, AdbPathSource::PathBaseline);
         assert_eq!(Path::new(&resolved.path), adb.as_path());
@@ -1182,26 +1182,30 @@ mod tests {
             "failed to enumerate Windows processes: injected process discovery failure",
         );
 
-        unsafe {
-            std::env::set_var("PATH", &temp);
-            std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
-            std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
-        }
-        TEST_MUMU_DISCOVERY_ERROR.with(|slot| {
-            *slot.borrow_mut() = Some(discovery_error.clone());
+        let outcome = std::panic::catch_unwind(|| {
+            unsafe {
+                std::env::set_var("PATH", &temp);
+                std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
+                std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
+            }
+            TEST_MUMU_DISCOVERY_ERROR.with(|slot| {
+                *slot.borrow_mut() = Some(discovery_error.clone());
+            });
+            let fallback = resolve_adb_path(None).expect("PATH fallback through public entry");
+
+            unsafe {
+                std::env::set_var("PATH", "");
+            }
+            let no_path_error = resolve_adb_path(None).expect_err("missing PATH must stay fatal");
+
+            unsafe {
+                std::env::set_var("PATH", &temp);
+                std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, &missing_mumu);
+            }
+            let explicit_error =
+                resolve_adb_path(None).expect_err("explicit MuMu root must be strict");
+            (fallback, no_path_error, explicit_error)
         });
-        let fallback = resolve_adb_path(None).expect("PATH fallback through public entry");
-
-        unsafe {
-            std::env::set_var("PATH", "");
-        }
-        let no_path_error = resolve_adb_path(None).expect_err("missing PATH must stay fatal");
-
-        unsafe {
-            std::env::set_var("PATH", &temp);
-            std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, &missing_mumu);
-        }
-        let explicit_error = resolve_adb_path(None).expect_err("explicit MuMu root must be strict");
 
         TEST_MUMU_DISCOVERY_ERROR.with(|slot| {
             *slot.borrow_mut() = None;
@@ -1221,6 +1225,8 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(&temp);
+        let (fallback, no_path_error, explicit_error) =
+            outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 
         assert_eq!(fallback.source, AdbPathSource::PathBaseline);
         assert_eq!(Path::new(&fallback.path), adb.as_path());
@@ -1253,11 +1259,13 @@ mod tests {
         let original_path = std::env::var_os("PATH");
         let path = std::env::join_paths([PathBuf::new(), temp.clone(), PathBuf::from("relative")])
             .expect("test PATH should join");
-        unsafe {
-            std::env::set_var("PATH", path);
-        }
+        let outcome = std::panic::catch_unwind(|| {
+            unsafe {
+                std::env::set_var("PATH", path);
+            }
 
-        let candidate = path_adb_candidate();
+            path_adb_candidate()
+        });
 
         unsafe {
             match original_path {
@@ -1267,6 +1275,7 @@ mod tests {
         }
         let _ = fs::remove_file(&adb);
         let _ = fs::remove_dir(&temp);
+        let candidate = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 
         if cfg!(windows) {
             assert!(candidate.is_none());

@@ -3040,6 +3040,9 @@ mod tests {
 
     #[test]
     fn capture_autotune_caches_probe() {
+        let _env_guard = crate::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _guard = capture_probe_cache_test_guard();
         clear_capture_probe_cache_for_tests();
 
@@ -3628,6 +3631,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn explicit_nemu_capture_public_entry_keeps_configured_adb_version() {
+        let _env_guard = crate::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = std::env::temp_dir().join(format!(
             "actingcommand-capture-version-identity-{}",
             std::process::id()
