@@ -769,6 +769,14 @@ impl OperationConverter {
     }
 
     pub fn build_pack(&self, files: &ConversionFiles) -> CliOutcome<Value> {
+        self.build_pack_with_dependencies(&[], files)
+    }
+
+    fn build_pack_with_dependencies(
+        &self,
+        dependencies: &[Bundle],
+        files: &ConversionFiles,
+    ) -> CliOutcome<Value> {
         let recognition_defaults = self
             .defaults
             .as_object()
@@ -782,14 +790,6 @@ impl OperationConverter {
             })
             .map(|(field, value)| (field.clone(), value.clone()))
             .collect();
-        self.build_pack_with_dependencies(&[], files)
-    }
-
-    fn build_pack_with_dependencies(
-        &self,
-        dependencies: &[Bundle],
-        files: &ConversionFiles,
-    ) -> CliOutcome<Value> {
         let mut targets = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in self.bundles.iter().chain(dependencies) {

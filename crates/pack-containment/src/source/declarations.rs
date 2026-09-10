@@ -874,7 +874,7 @@ pub fn validate_contained_declarations(bundle: &crate::LoadedBundle) -> CliOutco
         let value: Value = serde_json::from_slice(bytes)
             .map_err(|_| dependency.error("", ResourceDeclarationReason::InvalidValue))?;
         dependency.schema = value.get("schema_version").and_then(Value::as_str);
-        dependency.truth_set(&value, declaration.schema == Some("0.8"))?;
+        dependency.truth_set(&value, true)?;
     }
     Declaration {
         file: Path::new(bundle.manifest_path()),
@@ -1067,6 +1067,12 @@ impl Declaration<'_> {
                 &child(&pointer, "terminal_pages"),
             )?;
         }
+        let declaration: actingcommand_contract::SchedulingOutcomeDeclaration =
+            serde_json::from_value(value.clone())
+                .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
+        declaration
+            .validate()
+            .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
         Ok(())
     }
 
@@ -1100,6 +1106,12 @@ impl Declaration<'_> {
             self.required(comparison, &child(pointer, "comparison"), "mode")?,
             &child(&child(pointer, "comparison"), "mode"),
         )?;
+        if comparison["mode"].as_str() != Some("exact_pixels_v1") {
+            return Err(self.error(
+                &child(&child(pointer, "comparison"), "mode"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
+        }
         self.object(
             self.required(comparison, &child(pointer, "comparison"), "parameters")?,
             &child(&child(pointer, "comparison"), "parameters"),
@@ -1501,7 +1513,12 @@ impl Declaration<'_> {
             let pointer = child(pointer, field);
             match field.as_str() {
                 "template_threshold" | "color_max_distance" => self.number(value, &pointer)?,
-                "match_metric" => self.string(value, &pointer)?,
+                "match_metric" => {
+                    self.string(value, &pointer)?;
+                    if !matches!(value.as_str(), Some("ccorr_normed" | "ccoeff_normed")) {
+                        return Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue));
+                    }
+                }
                 _ if value.is_null() => {}
                 _ => self.unsigned(value, &pointer)?,
             }
@@ -1592,6 +1609,18 @@ impl Declaration<'_> {
             self.required(object, "", "schema_version")?,
             "/schema_version",
         )?;
+        match self.schema {
+            Some("actingcommand.ocr-truth-set.v1") => {
+                if object
+                    .get("aliases")
+                    .is_some_and(|aliases| !nullable_aliases || !aliases.is_null())
+                {
+                    return Err(self.error("/aliases", ResourceDeclarationReason::UnconsumedField));
+                }
+            }
+            Some("actingcommand.ocr-truth-set.v2") => {}
+            _ => return Err(self.error("/schema_version", ResourceDeclarationReason::InvalidValue)),
+        }
         self.strings(self.required(object, "", "items")?, "/items")?;
         if let Some(aliases) = object
             .get("aliases")
