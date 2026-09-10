@@ -187,7 +187,10 @@ dependencies = [
 name = "actingcommand-ledger"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
+ "actingcommand-runtime-database",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
