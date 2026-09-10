@@ -24,6 +24,95 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    // #97 P5: the same production ingress must reject an unconsumed nested declaration
+    // before lease/device work and return the exact native rejection fact.
+    let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut invalid_task: serde_json::Value = serde_json::from_reader(
+        archive
+            .by_name("resources/operations/task/task.json")
+            .unwrap(),
+    )
+    .unwrap();
+    invalid_task["operations"][0]["click"]["unused_field"] = serde_json::json!("private-value");
+    let invalid_bytes =
+        neutral_contained_task_package_with_task(&serde_json::to_vec(&invalid_task).unwrap());
+    let invalid_path = root.path().join("unconsumed-task.zip");
+    fs::write(&invalid_path, &invalid_bytes).unwrap();
+    let invalid_hash =
+        actingcommand_pack_containment::Sha256Hash::digest(&invalid_bytes).to_string();
+    let rejected_request = client.request(RuntimeOperation::run_contained_task(
+        "neutral.instance",
+        client.ids.mint_holder_id().unwrap(),
+        ContainedTaskRequest::new(invalid_path.display().to_string(), invalid_hash.clone())
+            .unwrap(),
+    ));
+    let rejected = client.send(&rejected_request);
+    assert_eq!(rejected.state(), RuntimeReceiptState::Denied);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+    let refusal = rejected
+        .resource_declaration()
+        .expect("typed declaration refusal");
+    assert_eq!(
+        refusal.declared_package.legacy_sha256(),
+        Some(invalid_hash.as_str())
+    );
+    assert_eq!(
+        refusal.verified_package.as_ref(),
+        Some(&refusal.declared_package)
+    );
+    assert_eq!(
+        refusal.issue.declaration_file,
+        "resources/operations/task/task.json"
+    );
+    assert_eq!(refusal.issue.field_path, "/operations/0/click/unused_field");
+    assert_eq!(
+        refusal.issue.reason,
+        actingcommand_contract::ResourceDeclarationReason::UnknownField
+    );
+    let rejected_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(rejected_request.request_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [event] = rejected_events.as_slice() else {
+        panic!("only one pre-execution rejection fact");
+    };
+    assert_eq!(event.event_type, EventType::RuntimeFailed);
+    assert_eq!(
+        event.sequence,
+        rejected.resource_declaration_event().unwrap().sequence
+    );
+    assert_eq!(
+        event.event_id,
+        rejected.resource_declaration_event().unwrap().event_id
+    );
+    assert_eq!(
+        event.links.correlation_id(),
+        Some(&rejected_request.correlation_id())
+    );
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        panic!("full rejection payload");
+    };
+    let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record)) =
+        payload.as_ref()
+    else {
+        panic!("native Runtime failure");
+    };
+    assert_eq!(record.resource_declaration(), Some(refusal));
+    assert_eq!(record.effect_disposition(), EffectDisposition::NotPerformed);
+    assert!(
+        !serde_json::to_string(&rejected)
+            .unwrap()
+            .contains("private-value")
+    );
+    assert!(
+        !serde_json::to_string(event)
+            .unwrap()
+            .contains("private-value")
+    );
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(

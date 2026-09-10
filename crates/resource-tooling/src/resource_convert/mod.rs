@@ -450,8 +450,10 @@ impl OperationConverter {
         let root = root.to_path_buf();
         let ops_dir = root.join("operations");
         let resources = read_json_value(&ops_dir.join("resources.json"))?;
+        source::validate_resource_declarations(&ops_dir.join("resources.json"), &resources)?;
         let resource_ids = resource_ids(&resources)?;
         let bundles = load_bundles(&ops_dir)?;
+        source::declaration_file_requests(&bundles)?;
         let first = bundles.first().ok_or_else(|| {
             CliError::package_invalid(format!(
                 "no Operation Bundles found under {}",
@@ -500,7 +502,9 @@ impl OperationConverter {
             .join("navigation")
             .join(format!("{game}.{server}.navigation.json"));
         let existing_navigation = if existing_navigation_path.exists() {
-            Some(read_json_value(&existing_navigation_path)?)
+            let value = read_json_value(&existing_navigation_path)?;
+            source::validate_navigation_declarations(&existing_navigation_path, &value)?;
+            Some(value)
         } else {
             None
         };

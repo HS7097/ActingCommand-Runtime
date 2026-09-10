@@ -1605,6 +1605,8 @@ pub struct DiagnosticOutcomePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     artifact_failure: Option<Box<ArtifactFailureRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: SanitizedAudit,
 }
@@ -3833,6 +3835,9 @@ pub struct RecoveryPayload {
 }
 
 trait PayloadDetail {
+    fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {
+        None
+    }
     fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
         None
     }
@@ -4119,6 +4124,9 @@ impl OutcomePayload {
 }
 
 impl DiagnosticOutcomePayload {
+    pub fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {
+        self.resource_declaration.as_deref()
+    }
     pub fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
         self.artifact_failure.as_deref()
     }
@@ -4415,6 +4423,9 @@ impl PayloadDetail for OutcomePayload {
 }
 
 impl PayloadDetail for DiagnosticOutcomePayload {
+    fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {
+        self.resource_declaration.as_deref()
+    }
     fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
         self.artifact_failure.as_deref()
     }
@@ -4846,6 +4857,7 @@ struct DiagnosticOutcomeDraft {
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureDraft>>,
     artifact_failure: Option<Box<ArtifactFailureRecord>>,
+    resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
     audit: AuditInput,
 }
@@ -6359,6 +6371,7 @@ impl DiagnosticOutcomeDraft {
             cleanup_cause: None,
             lifecycle_failure: None,
             artifact_failure: None,
+            resource_declaration: None,
             runtime_state: None,
             audit,
         }
@@ -6379,6 +6392,7 @@ impl DiagnosticOutcomeDraft {
             cleanup_cause: None,
             lifecycle_failure: None,
             artifact_failure: None,
+            resource_declaration: None,
             runtime_state: None,
             audit,
         }
@@ -6400,6 +6414,7 @@ impl DiagnosticOutcomeDraft {
             cleanup_cause: cleanup_cause.map(Box::new),
             lifecycle_failure: None,
             artifact_failure: None,
+            resource_declaration: None,
             runtime_state: None,
             audit,
         }
@@ -6415,6 +6430,7 @@ impl DiagnosticOutcomeDraft {
             effect_disposition: self.effect_disposition,
             runtime_state: self.runtime_state,
             artifact_failure: self.artifact_failure,
+            resource_declaration: self.resource_declaration,
             detail: self
                 .detail
                 .map(DiagnosticDetailDraft::sanitize)
@@ -6758,6 +6774,25 @@ impl RuntimeLifecycleDraft {
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
 
 impl RuntimePayloadDraft {
+    pub fn resource_declaration_rejected(rejection: crate::ResourceDeclarationRejection) -> Self {
+        let mut outcome = DiagnosticOutcomeDraft::new_with_detail(
+            EventAction::RuntimeAction,
+            DiagnosticCode::RuntimeDiagnostic,
+            EffectDisposition::NotPerformed,
+            DiagnosticDetailDraft::new(
+                "resource_declaration",
+                "resource.declaration.prepare",
+                "pack_containment",
+                "run_contained_task",
+                "resource_declaration_invalid",
+                Sensitivity::Internal,
+            ),
+            AuditInput::new(),
+        );
+        outcome.resource_declaration = Some(Box::new(rejection));
+        Self(RuntimeDraftKind::Failed(outcome))
+    }
+
     pub fn start_with_device_diagnostics(
         takeover: bool,
         mode: DeviceDiagnosticMode,
@@ -9330,8 +9365,25 @@ impl EventPayload {
         self.family_payload().detail().artifact_failure()
     }
 
+    pub fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {
+        self.family_payload().detail().resource_declaration()
+    }
+
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(rejection) = self.resource_declaration() {
+            if self.event_type() != EventType::RuntimeFailed
+                || detail.effect_disposition() != Some(EffectDisposition::NotPerformed)
+            {
+                return Err(SanitizationError::new(
+                    "invalid_resource_declaration_owner",
+                    "resource_declaration",
+                ));
+            }
+            rejection
+                .validate()
+                .map_err(|code| SanitizationError::new(code, "resource_declaration"))?;
+        }
         if let Some(failure) = self.artifact_failure() {
             if !matches!(
                 self.event_type(),
