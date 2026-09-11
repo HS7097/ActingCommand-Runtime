@@ -1939,7 +1939,7 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
-        let timing = ContainedTaskTimingContext::new(
+        let observation_timing = ContainedTaskTimingContext::new(
             started,
             task_deadline,
             match entry {
@@ -1951,19 +1951,24 @@ impl PreparedContainedTask {
                 }
             },
         );
-        runtime.observe_task_timing(timing);
+        runtime.observe_task_timing(observation_timing);
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
-            self.capture_page(runtime, ocr_collector, Some(required_page), timing)?
-                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
+            self.capture_page(
+                runtime,
+                ocr_collector,
+                Some(required_page),
+                observation_timing,
+            )?
+            .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
         } else {
             self.capture_until_page(
                 runtime,
                 ocr_collector,
                 step_timeout,
                 capture_interval,
-                timing,
+                observation_timing,
             )?
         };
         if Instant::now() >= task_deadline {
@@ -2034,7 +2039,7 @@ impl PreparedContainedTask {
                         ocr_collector,
                         step_timeout,
                         capture_interval,
-                        timing,
+                        observation_timing,
                     )?;
                     machine
                         .observe_page(Some(observation.page_label.clone()))
@@ -2160,7 +2165,7 @@ impl PreparedContainedTask {
                                 ocr_collector,
                                 step_timeout,
                                 capture_interval,
-                                timing,
+                                observation_timing,
                             )?;
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
@@ -2191,7 +2196,7 @@ impl PreparedContainedTask {
                             operation,
                             confirmation_timeout,
                             confirmation_interval,
-                            timing,
+                            observation_timing,
                         )?;
                         let (failed_observation, hit_error_page, timing_failure) = match resolution
                         {
@@ -2272,7 +2277,7 @@ impl PreparedContainedTask {
                                     operation,
                                     confirmation_timeout,
                                     confirmation_interval,
-                                    timing,
+                                    observation_timing,
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = reached;
