@@ -15,7 +15,11 @@ mod sqlite;
 mod storage;
 mod store;
 pub use migration::*;
-pub use sqlite::SqliteLedgerReadOnly;
+pub use sqlite::{
+    RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
+    VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
+    verify_release_source_reference, verify_transaction_event,
+};
 
 pub(crate) use projection::query_matches;
 
@@ -69,9 +73,53 @@ pub struct GlobalLedgerError {
     operation: &'static str,
     detail: Option<String>,
     terminal: bool,
+    rolled_back_work: Option<Box<TransactionWorkError>>,
+}
+
+/// Error from a named Runtime business owner; only a confirmed SQL rollback exposes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionWorkError {
+    pub code: &'static str,
+    pub operation: &'static str,
+    pub fatal: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionStateObservation {
+    Applied,
+    Unchanged,
+    Unknown,
+}
+
+/// Trusted crate adapter. No RPC, CLI, resource or SQL-text callback entry exists.
+pub trait LedgerTransactionWork: Send + 'static {
+    fn apply(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+        event: &PersistedEvent,
+    ) -> Result<(), TransactionWorkError>;
+    fn observe(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> Result<TransactionStateObservation, TransactionWorkError>;
 }
 
 impl GlobalLedgerError {
+    pub fn rolled_back_work(&self) -> Option<&TransactionWorkError> {
+        self.rolled_back_work.as_deref()
+    }
+
+    fn work_failure(error: TransactionWorkError) -> Self {
+        Self {
+            code: error.code,
+            operation: error.operation,
+            detail: Some(error.detail.clone()),
+            terminal: false,
+            rolled_back_work: Some(Box::new(error)),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         self.code
     }
@@ -94,6 +142,7 @@ impl GlobalLedgerError {
             operation,
             detail: None,
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -103,6 +152,7 @@ impl GlobalLedgerError {
             operation,
             detail: None,
             terminal: false,
+            rolled_back_work: None,
         }
     }
 
@@ -112,6 +162,7 @@ impl GlobalLedgerError {
             operation,
             detail: Some(error.to_string()),
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -121,6 +172,7 @@ impl GlobalLedgerError {
             operation,
             detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -327,6 +379,11 @@ enum WriterCommand {
         permit: Box<ArtifactEvictionPermit>,
         disposition: actingcommand_contract::ArtifactEvictionDisposition,
         io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
+    AppendTransaction {
+        draft: Box<SanitizedEventDraft>,
+        work: Box<dyn LedgerTransactionWork>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
     Append {
@@ -824,6 +881,29 @@ impl GlobalLedger {
         }
     }
 
+    /// Commits one fact and its named internal database work on the existing writer.
+    pub fn append_transaction(
+        &self,
+        draft: SanitizedEventDraft,
+        work: Box<dyn LedgerTransactionWork>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_transaction"))?;
+        send_command(
+            sender,
+            WriterCommand::AppendTransaction {
+                draft: Box::new(draft),
+                work,
+                response,
+            },
+            "append_transaction",
+        )?;
+        receive_response(receiver, "append_transaction")?
+    }
+
     pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
@@ -1193,6 +1273,27 @@ fn writer_loop<S: LedgerStore>(
             }
             WriterCommand::Append { draft, response } => {
                 let result = store.append(*draft);
+                let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
+                if let Ok(event) = &result {
+                    let _ = response.send(Ok(event.clone()));
+                    deliver_live_event(&mut subscribers, event);
+                }
+                if terminal {
+                    let error = result.expect_err("terminal append result must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
+                if let Err(error) = result {
+                    let _ = response.send(Err(error));
+                }
+            }
+            WriterCommand::AppendTransaction {
+                draft,
+                response,
+                work,
+            } => {
+                let result = store.append_transaction(*draft, work.as_ref());
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
                 if let Ok(event) = &result {
                     let _ = response.send(Ok(event.clone()));

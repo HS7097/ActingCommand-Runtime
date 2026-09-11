@@ -113,21 +113,11 @@ fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
     let (release, sources) = release_set(root.path(), "1.0.0", 'c');
-    let host = RuntimeHost::start(
-        config(&root),
-        Arc::new(FakeProvider::one(
-            "neutral-release",
-            runtime_instance_id,
-            Arc::new(FakeState::default()),
-        )),
-    )
-    .expect("runtime host");
-    host.stage_release_set(release.clone(), &sources)
-        .expect("stage release");
-    host.close().expect("close host");
-
     let state =
         RuntimeStateStore::open(root.path(), b"different-bootstrap-seed").expect("runtime state");
+    state
+        .stage_release(release.clone(), &sources)
+        .expect("stage legacy release");
     let preview = state
         .preview_release_transition(ReleaseTransitionKind::Activate, release.release_id())
         .expect("transition preview");
@@ -248,7 +238,14 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
             event_type: Some(EventType::StateMigrated),
             ..EventQuery::default()
         },
-    );
+    )
+    .into_iter()
+    .filter(|event| {
+        matches!(&event.payload, ProjectionPayload::Full(payload)
+        if matches!(payload.as_ref(), EventPayload::State(StatePayload::Migrated(value))
+            if value.migration().state_key() == "policy.catalog.active"))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(events.len(), 1);
     let ProjectionPayload::Full(payload) = &events[0].payload else {
         panic!("expected forensic state payload")
@@ -258,5 +255,37 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
     };
     assert_eq!(payload.migration().state_key(), "policy.catalog.active");
     drop(client);
+    reopened
+        .activate_policy_catalog(&policy_sources(2))
+        .expect("activate later catalog");
     reopened.close().expect("close reopened host");
+
+    // Workflow #109: a valid older pointer cannot authorize the latest catalog state.
+    let database =
+        actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
+            .expect("existing fixture database");
+    database.connection("prepare older verified catalog pointer").expect("connection")
+        .execute_batch("BEGIN IMMEDIATE;
+            DELETE FROM state_documents WHERE state_key='policy.catalog.active';
+            DELETE FROM state_document_history WHERE state_key='policy.catalog.active' AND revision>1;
+            INSERT INTO state_documents SELECT * FROM state_document_history WHERE state_key='policy.catalog.active' AND revision=1;
+            COMMIT;")
+        .expect("retain older valid State material with unchanged later Ledger facts");
+    drop(database);
+    let error = match RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    ) {
+        Err(error) => error,
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("an older source must not authorize current State");
+        }
+    };
+    assert_eq!(error.code(), "catalog_active_source_mismatch");
+    assert!(error.is_fatal());
 }

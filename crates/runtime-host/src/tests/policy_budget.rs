@@ -149,6 +149,8 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
             }
             clock.set_unix_ms(completion_unix_ms);
             clock.set_monotonic_ms(1_000 + elapsed_ms);
+            let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
+            sample_capacity().expect("capacity sample at completion time");
             state.block_input.store(false, Ordering::Release);
             run.join().unwrap().expect("scheduled task completed");
         });

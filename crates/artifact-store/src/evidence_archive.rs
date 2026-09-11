@@ -188,6 +188,7 @@ pub(crate) fn inspect_evidence_archive(
             "read_evidence_archive",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     let zip_byte_count = u64::try_from(bytes.len()).map_err(|_| {
         ArtifactStoreError::fatal(
@@ -217,6 +218,7 @@ pub(crate) fn inspect_evidence_archive(
                 "read_evidence_entry",
                 error.to_string(),
             )
+            .with_raw_os_error(error.raw_os_error())
         })?;
         if archived.insert(name, entry_bytes).is_some() {
             return Err(ArtifactStoreError::fatal(
@@ -754,9 +756,14 @@ fn is_sha256(value: &str) -> bool {
 }
 
 fn zip_read_error(error: zip::result::ZipError) -> ArtifactStoreError {
+    let raw_os_error = match &error {
+        zip::result::ZipError::Io(error) => error.raw_os_error(),
+        _ => None,
+    };
     ArtifactStoreError::fatal(
         "evidence_archive_invalid",
         "read_evidence_archive",
         error.to_string(),
     )
+    .with_raw_os_error(raw_os_error)
 }

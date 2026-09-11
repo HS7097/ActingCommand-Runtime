@@ -21,7 +21,7 @@ use actingcommand_contract::{
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use zip::write::FileOptions;
@@ -170,6 +170,12 @@ pub struct EvidenceExporter {
 }
 
 impl EvidenceExporter {
+    /// Production exports share Runtime's existing committed capacity view.
+    pub fn open_with_admission(source: &ArtifactStore) -> ArtifactStoreResult<Self> {
+        let exporter = Self::open(source.root())?;
+        exporter.artifact_store.inherit_capacity(source)?;
+        Ok(exporter)
+    }
     pub fn open(artifact_root: impl AsRef<Path>) -> ArtifactStoreResult<Self> {
         Ok(Self {
             artifact_store: ArtifactStore::open(artifact_root)?,
@@ -188,9 +194,11 @@ impl EvidenceExporter {
         request: EvidenceExportRequest,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<EvidenceExportReceipt> {
-        match self.export_inner(&request, sink) {
+        let mut write_context = request.archive_context.clone();
+        match self.export_inner(&request, sink, &mut write_context) {
             Ok(receipt) => Ok(receipt),
             Err(mut error) => {
+                error = error.with_capacity(write_context.capacity);
                 match artifact_count(&request.pipeline) {
                     Ok(count) => {
                         if let Err(event_error) = self.append_export_event(
@@ -220,9 +228,11 @@ impl EvidenceExporter {
         &mut self,
         request: &EvidenceExportRequest,
         sink: &mut dyn ArtifactEventSink,
+        write_context: &mut ArtifactWriteContext,
     ) -> ArtifactStoreResult<EvidenceExportReceipt> {
         validate_request(request)?;
-        let output_path = normalize_output_path(&request.output_path)?;
+        let output_path =
+            normalize_output_path(&request.output_path, &self.artifact_store, write_context)?;
         if output_path.exists() {
             return Err(ArtifactStoreError::fatal(
                 "evidence_output_collision",
@@ -240,8 +250,15 @@ impl EvidenceExporter {
             )
         })?;
         let manifest_sha256 = canonical_sha256(&manifest_bytes);
+        self.artifact_store
+            .admit_new_bytes(write_context, &output_path, 0)?;
         let (temp_path, temp_file) = create_export_temp(&output_path)?;
-        if let Err(error) = write_archive(temp_file, &entries, &manifest_bytes) {
+        if let Err(error) = write_archive(
+            temp_file,
+            &entries,
+            &manifest_bytes,
+            Some((&self.artifact_store, &temp_path, write_context)),
+        ) {
             return Err(cleanup_file(&temp_path, "cleanup_evidence_temp", error));
         }
         let temp_verification = match inspect_evidence_archive(&temp_path) {
@@ -285,7 +302,8 @@ impl EvidenceExporter {
                         "evidence_archive_read_failed",
                         "read_published_evidence",
                         error.to_string(),
-                    ),
+                    )
+                    .with_raw_os_error(error.raw_os_error()),
                 ));
             }
         };
@@ -703,7 +721,11 @@ fn entry_digest(path: &str, bytes: &[u8]) -> ArtifactStoreResult<EvidenceArchive
     })
 }
 
-fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
+fn normalize_output_path(
+    path: &Path,
+    store: &ArtifactStore,
+    context: &mut ArtifactWriteContext,
+) -> ArtifactStoreResult<PathBuf> {
     let file_name = path.file_name().ok_or_else(|| {
         ArtifactStoreError::fatal(
             "evidence_output_invalid",
@@ -728,6 +750,7 @@ fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
                     "resolve_evidence_output",
                     error.to_string(),
                 )
+                .with_raw_os_error(error.raw_os_error())
             })?
             .join(path)
     };
@@ -738,12 +761,14 @@ fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
             "evidence output path has no parent directory",
         )
     })?;
+    store.admit_new_bytes(context, &absolute, 0)?;
     fs::create_dir_all(parent).map_err(|error| {
         ArtifactStoreError::fatal(
             "evidence_output_failed",
             "create_evidence_output_directory",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     let parent = parent.canonicalize().map_err(|error| {
         ArtifactStoreError::fatal(
@@ -751,6 +776,7 @@ fn normalize_output_path(path: &Path) -> ArtifactStoreResult<PathBuf> {
             "canonicalize_evidence_output_directory",
             error.to_string(),
         )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     Ok(parent.join(file_name))
 }
@@ -784,7 +810,8 @@ fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)
                     "evidence_archive_write_failed",
                     "create_evidence_temp",
                     error.to_string(),
-                ));
+                )
+                .with_raw_os_error(error.raw_os_error()));
             }
         }
     }
@@ -795,41 +822,102 @@ fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)
     ))
 }
 
+struct CapacityArchiveWriter<'a> {
+    file: File,
+    admission: Option<(&'a ArtifactStore, &'a Path, &'a mut ArtifactWriteContext)>,
+    failure: Option<ArtifactStoreError>,
+}
+
+impl CapacityArchiveWriter<'_> {
+    fn io_error(&mut self, error: std::io::Error, operation: &'static str) -> std::io::Error {
+        let error = ArtifactStoreError::fatal(
+            "evidence_archive_write_failed",
+            operation,
+            error.to_string(),
+        )
+        .with_raw_os_error(error.raw_os_error())
+        .with_capacity(
+            self.admission
+                .as_ref()
+                .and_then(|(_, _, context)| context.capacity.clone()),
+        );
+        self.failure = Some(error.clone());
+        std::io::Error::other(error)
+    }
+}
+
+impl Write for CapacityArchiveWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if let Some(error) = &self.failure {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        if let Some((store, path, context)) = &mut self.admission
+            && let Err(error) = store.admit_new_bytes(context, path, bytes.len() as u64)
+        {
+            self.failure = Some(error.clone());
+            return Err(std::io::Error::other(error));
+        }
+        self.file
+            .write(bytes)
+            .map_err(|error| self.io_error(error, "write_evidence_archive"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(error) = &self.failure {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        self.file
+            .flush()
+            .map_err(|error| self.io_error(error, "flush_evidence_archive"))
+    }
+}
+
+impl Seek for CapacityArchiveWriter<'_> {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        if let Some(error) = &self.failure {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        self.file
+            .seek(position)
+            .map_err(|error| self.io_error(error, "seek_evidence_archive"))
+    }
+}
+
 fn write_archive(
     file: File,
     entries: &BTreeMap<String, Vec<u8>>,
     manifest: &[u8],
+    admission: Option<(&ArtifactStore, &Path, &mut ArtifactWriteContext)>,
 ) -> ArtifactStoreResult<()> {
     let options = FileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o644);
-    let mut zip = ZipWriter::new(file);
+    let mut zip = ZipWriter::new(CapacityArchiveWriter {
+        file,
+        admission,
+        failure: None,
+    });
     for (path, bytes) in entries {
         validate_archive_path(path)?;
         zip.start_file(path, options).map_err(zip_write_error)?;
-        zip.write_all(bytes).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "evidence_archive_write_failed",
-                "write_evidence_entry",
-                error.to_string(),
-            )
-        })?;
+        zip.write_all(bytes)
+            .map_err(|error| archive_io_error(error, "write_evidence_entry"))?;
     }
     zip.start_file(EVIDENCE_MANIFEST_PATH, options)
         .map_err(zip_write_error)?;
-    zip.write_all(manifest).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_archive_write_failed",
-            "write_evidence_manifest",
-            error.to_string(),
-        )
-    })?;
+    zip.write_all(manifest)
+        .map_err(|error| archive_io_error(error, "write_evidence_manifest"))?;
     let file = zip.finish().map_err(zip_write_error)?;
-    file.sync_all().map_err(|error| {
+    file.file.sync_all().map_err(|error| {
         ArtifactStoreError::fatal(
             "evidence_archive_sync_failed",
             "sync_evidence_temp",
             error.to_string(),
+        )
+        .with_raw_os_error(error.raw_os_error())
+        .with_capacity(
+            file.admission
+                .as_ref()
+                .and_then(|(_, _, context)| context.capacity.clone()),
         )
     })
 }
@@ -842,13 +930,15 @@ fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<
             "evidence_archive_publish_failed"
         };
         ArtifactStoreError::fatal(code, "publish_evidence_archive", error.to_string())
+            .with_raw_os_error(error.raw_os_error())
     })?;
     if let Err(error) = fs::remove_file(temp_path) {
         let error = ArtifactStoreError::fatal(
             "evidence_temp_cleanup_failed",
             "publish_evidence_archive",
             error.to_string(),
-        );
+        )
+        .with_raw_os_error(error.raw_os_error());
         return Err(cleanup_file(output_path, "rollback_evidence_output", error));
     }
     OpenOptions::new()
@@ -864,7 +954,8 @@ fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<
                     "evidence_archive_sync_failed",
                     "sync_published_evidence",
                     error.to_string(),
-                ),
+                )
+                .with_raw_os_error(error.raw_os_error()),
             )
         })
 }
@@ -877,20 +968,41 @@ fn cleanup_file(
     match fs::remove_file(path) {
         Ok(()) => error,
         Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => error,
-        Err(remove_error) => error.with_secondary(&ArtifactStoreError::fatal(
-            "evidence_cleanup_failed",
-            operation,
-            remove_error.to_string(),
-        )),
+        Err(remove_error) => error.with_secondary(
+            &ArtifactStoreError::fatal(
+                "evidence_cleanup_failed",
+                operation,
+                remove_error.to_string(),
+            )
+            .with_raw_os_error(remove_error.raw_os_error()),
+        ),
     }
 }
 
 fn zip_write_error(error: zip::result::ZipError) -> ArtifactStoreError {
+    if let zip::result::ZipError::Io(error) = error {
+        return archive_io_error(error, "write_evidence_archive");
+    }
     ArtifactStoreError::fatal(
         "evidence_archive_write_failed",
         "write_evidence_archive",
         error.to_string(),
     )
+}
+
+fn archive_io_error(error: std::io::Error, operation: &'static str) -> ArtifactStoreError {
+    if let Some(typed) = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<ArtifactStoreError>())
+    {
+        return typed.clone();
+    }
+    ArtifactStoreError::fatal(
+        "evidence_archive_write_failed",
+        operation,
+        error.to_string(),
+    )
+    .with_raw_os_error(error.raw_os_error())
 }
 
 #[cfg(test)]
@@ -1389,7 +1501,7 @@ mod tests {
             .create_new(true)
             .open(&corrupt)
             .expect("corrupt output");
-        write_archive(file, &entries, &manifest).expect("rewrite corrupt archive");
+        write_archive(file, &entries, &manifest, None).expect("rewrite corrupt archive");
         let actual_hash = canonical_sha256(&fs::read(&corrupt).expect("corrupt bytes"));
 
         let error = verify_evidence_archive(&corrupt, &actual_hash)

@@ -1402,7 +1402,7 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(monitor_probe.contains("self.artifacts"));
     assert!(monitor_probe.contains("ArtifactWriteRequest::new"));
     assert!(monitor_probe.contains("ArtifactProducer::CaptureStore"));
-    assert!(monitor_probe.contains(".map_err(RuntimeHostError::artifact)"));
+    assert!(monitor_probe.contains("let error = RuntimeHostError::artifact(error)"));
     assert!(monitor_control.contains("fn record_monitor_recovery_coordination"));
     assert!(monitor_control.contains("fn monitor_recovery_admission"));
     assert!(monitor_control.contains("MonitorPayloadDraft::recovery_admitted"));
