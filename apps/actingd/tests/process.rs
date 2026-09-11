@@ -1849,6 +1849,83 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
                 .expect("first page request"),
         )
         .expect("first run event page");
+    if first_page.returned_count() != MAX_RUNTIME_EVENT_QUERY_EVENTS
+        || !first_page.has_more()
+        || first_page.next_cursor().is_none()
+    {
+        let mut context = [0_u8; 16 * 1024];
+        let mut remaining = &mut context[..16 * 1024 - 128];
+        let formatted = (|| -> std::io::Result<()> {
+            write!(
+                remaining,
+                "First run event page precondition failure; existing page only: run_id="
+            )?;
+            serde_json::to_writer(&mut remaining, &run_id).map_err(std::io::Error::other)?;
+            writeln!(
+                remaining,
+                ", returned_count={}, has_more={}, snapshot_ledger_position={}, continuation_present={}",
+                first_page.returned_count(),
+                first_page.has_more(),
+                first_page.snapshot_ledger_position(),
+                first_page.next_cursor().is_some(),
+            )?;
+            let context_types = [
+                EventType::TaskCompleted,
+                EventType::TaskFailed,
+                EventType::TaskCancelled,
+                EventType::TaskTerminalIntent,
+                EventType::TaskTerminalCommitFailed,
+                EventType::TaskTerminalRejected,
+                EventType::RuntimeFailed,
+                EventType::PolicyExecutionRecorded,
+                EventType::PolicyDispatchCompleted,
+            ];
+            for event_type in context_types {
+                let count = first_page
+                    .events()
+                    .iter()
+                    .filter(|event| {
+                        event.links.run_id() == Some(&run_id) && event.event_type == event_type
+                    })
+                    .count();
+                if count == 0 {
+                    writeln!(remaining, "{event_type:?}: not recorded in this page")?;
+                } else {
+                    writeln!(remaining, "{event_type:?}: {count} recorded in this page")?;
+                }
+            }
+            writeln!(remaining, "Existing related facts, page tail first:")?;
+            for event in first_page.events().iter().rev().filter(|event| {
+                event.links.run_id() == Some(&run_id) && context_types.contains(&event.event_type)
+            }) {
+                serde_json::to_writer(&mut remaining, event).map_err(std::io::Error::other)?;
+                writeln!(remaining)?;
+            }
+            Ok(())
+        })();
+        let used = 16 * 1024 - 128 - remaining.len();
+        let valid = std::str::from_utf8(&context[..used])
+            .map_or_else(|error| error.valid_up_to(), |_| used);
+        let footer: &[u8] = if formatted.is_err() || valid != used {
+            b"\n[truncated: 16-KiB context limit or formatting failure; remaining fields omitted]\n"
+        } else {
+            b"\n[end first-page failure context]\n"
+        };
+        context[valid..valid + footer.len()].copy_from_slice(footer);
+        let record = &context[..valid + footer.len()];
+        let mut stderr = std::io::stderr().lock();
+        let written = stderr.write_all(record).and_then(|()| stderr.flush());
+        drop(stderr);
+        if let Err(error) = written {
+            eprintln!(
+                "first-page failure context write/flush failed: {error}; original page assertions remain:\n{}",
+                String::from_utf8_lossy(record)
+            );
+        }
+        if let Err(error) = formatted {
+            eprintln!("first-page failure context formatting/write error: {error}");
+        }
+    }
     assert_eq!(
         first_page.returned_count(),
         MAX_RUNTIME_EVENT_QUERY_EVENTS,

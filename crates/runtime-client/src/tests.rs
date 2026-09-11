@@ -399,6 +399,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                             None
                         },
                         scheduling_disposition: if failed { None } else { Some(disposition) },
+                        task_timing: None,
                     },
                     AuditInput::new(),
                 )
@@ -679,6 +680,7 @@ fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> Pr
                 executed_steps: Some(1),
                 failure_code: None,
                 scheduling_disposition: Some(disposition),
+                task_timing: None,
             },
             AuditInput::new(),
         )
@@ -1789,19 +1791,32 @@ fn receipt_eof_at_or_after_deadline_is_typed_timeout() {
     let deadline = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .expect("past deadline");
-    assert_eq!(
-        receipt_eof_error(deadline).code(),
-        "runtime_receipt_timeout"
-    );
+    let error = receipt_eof_error(deadline);
+    assert_eq!(error.code(), "runtime_receipt_timeout");
+    let io = error
+        .receipt_header_io()
+        .expect("original header I/O cause");
+    assert_eq!(io.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert_eq!(io.raw_os_error(), None);
+    assert!(io.request_id().is_none());
+    assert!(io.correlation_id().is_none());
+    assert!(io.expected_owner_epoch().is_none());
+    assert!(io.expected_runtime_pid().is_none());
 }
 
 #[test]
 fn receipt_eof_before_deadline_remains_connection_failure() {
     let deadline = Instant::now() + Duration::from_secs(30);
-    assert_eq!(
-        receipt_eof_error(deadline).code(),
-        "runtime_receipt_header_failed"
-    );
+    let error = receipt_eof_error(deadline);
+    assert_eq!(error.code(), "runtime_receipt_header_failed");
+    let io = error
+        .receipt_header_io()
+        .expect("original pre-deadline EOF cause");
+    assert_eq!(io.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert!(!io.message().is_empty());
+    assert!(io.message().chars().count() <= 256);
+    assert!(!io.message_truncated());
+    assert!(error.to_string().contains("receipt_header_io"));
 }
 
 #[test]
@@ -2523,7 +2538,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         RuntimeErrorCode::RuntimeBusy
     );
     assert!(!host.is_shutdown_requested().expect("still serving"));
-    client
+    let input_receipt = client
         .input(&token, InputAction::Tap { x: 10, y: 20 })
         .expect("input");
     let events = client
@@ -2539,6 +2554,26 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
             .iter()
             .any(|event| event.event_type == EventType::InputCommitted)
     );
+    let committed = events
+        .iter()
+        .find(|event| event.event_type == EventType::InputCommitted)
+        .expect("original input commit event");
+    let terminal = input_receipt.terminal().expect("original input terminal");
+    let Some(RuntimeResult::InputCommitted { action_id }) = input_receipt.result() else {
+        panic!("typed input receipt must retain its commit result")
+    };
+    assert_eq!(input_receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(terminal.sequence, committed.sequence);
+    assert_eq!(terminal.event_id, committed.event_id);
+    assert_eq!(
+        committed.links.request_id().copied(),
+        Some(input_receipt.request_id())
+    );
+    assert_eq!(
+        committed.links.correlation_id().copied(),
+        Some(input_receipt.correlation_id())
+    );
+    assert_eq!(committed.links.action_id(), Some(action_id));
     client.release_lease(&token).expect("release");
     assert!(!client.status().expect("released status").instances()[0].lease_active());
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
@@ -2857,7 +2892,7 @@ fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
         Some(RuntimeResult::ReadonlyObservationCompleted { .. })
     ));
     let token = session.acquire_lease("node.a").expect("debug lease");
-    session
+    let input_receipt = session
         .input(&token, InputAction::Tap { x: 10, y: 20 })
         .expect("debug input");
     session.release_lease(&token).expect("debug release");
@@ -2878,6 +2913,22 @@ fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     ] {
         assert!(events.iter().any(|event| event.event_type == event_type));
     }
+    let committed = events
+        .iter()
+        .find(|event| event.event_type == EventType::InputCommitted)
+        .expect("correlated input commit event");
+    let terminal = input_receipt.terminal().expect("correlated input terminal");
+    let Some(RuntimeResult::InputCommitted { action_id }) = input_receipt.result() else {
+        panic!("Debug input receipt must retain its commit result")
+    };
+    assert_eq!(input_receipt.correlation_id(), session.correlation_id());
+    assert_eq!(terminal.sequence, committed.sequence);
+    assert_eq!(terminal.event_id, committed.event_id);
+    assert_eq!(
+        committed.links.request_id().copied(),
+        Some(input_receipt.request_id())
+    );
+    assert_eq!(committed.links.action_id(), Some(action_id));
     assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
     drop(client);
@@ -3507,9 +3558,7 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
         }
         .expect("lease");
         let input = || match &session {
-            Some(session) => session
-                .input(&token, InputAction::Tap { x: 10, y: 20 })
-                .map(|_| ()),
+            Some(session) => session.input(&token, InputAction::Tap { x: 10, y: 20 }),
             None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
         };
         let error = input().expect_err("typed open failure");
@@ -3544,9 +3593,17 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     .expect("runtime input proxy");
 
     thread::sleep(Duration::from_millis(1_300));
-    proxy
+    let receipt = proxy
         .input(InputAction::Tap { x: 30, y: 40 })
         .expect("input after renewals");
+    receipt
+        .validate()
+        .expect("proxy retains the validated receipt");
+    assert!(receipt.terminal().is_some());
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::InputCommitted { .. })
+    ));
     proxy.close().expect("close proxy");
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
@@ -3667,13 +3724,29 @@ fn broken_ipc_connection_latches_without_reconnect() {
         }
         .expect("lease");
         let input = || match &session {
-            Some(session) => session
-                .input(&token, InputAction::Tap { x: 10, y: 20 })
-                .map(|_| ()),
+            Some(session) => session.input(&token, InputAction::Tap { x: 10, y: 20 }),
             None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
         };
         let error = input().expect_err("the complete finite receipt budget must expire");
         assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+        let io = error.receipt_header_io().expect("input header I/O context");
+        assert!(matches!(
+            io.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        assert!(io.request_id().is_some());
+        assert!(io.correlation_id().is_some());
+        assert_eq!(
+            io.expected_owner_epoch(),
+            Some(&client.runtime_info().owner_epoch())
+        );
+        assert_eq!(io.expected_runtime_pid(), Some(client.runtime_info().pid()));
+        if let Some(session) = &session {
+            assert_eq!(io.correlation_id(), Some(&session.correlation_id()));
+        }
+        assert!(!io.message().is_empty());
+        assert!(io.message().chars().count() <= 256);
+        assert!(error.committed_receipt().is_none());
         assert!(error.is_fatal());
         assert_eq!(input().expect_err("no resend after timeout"), error);
         assert_eq!(

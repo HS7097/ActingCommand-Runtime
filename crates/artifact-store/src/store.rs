@@ -5,7 +5,8 @@ use actingcommand_contract::{
     ArtifactFailureStage, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactMaterial,
     ArtifactMaterialAccumulator, ArtifactPayloadDraft, ArtifactReference, ArtifactStoreIssuer,
     AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
-    IdentifierIssuer, OriginModule, ProjectedArtifactReference, StoreIssuedArtifact,
+    IdentifierIssuer, ObservedMicroseconds, OriginModule, ProjectedArtifactReference,
+    StoreIssuedArtifact, TaskRecordSubphaseSummary, TaskTimingResult, TimingObservationIssue,
     VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
@@ -14,6 +15,7 @@ use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(1);
 
@@ -145,6 +147,41 @@ pub struct ArtifactStream {
     material: ArtifactMaterialAccumulator,
     failure: Option<ArtifactStoreError>,
     capacity: Option<Arc<dyn ArtifactCapacityAdmission>>,
+    append_timing: Option<ArtifactAppendTiming>,
+}
+
+/// Direct call observations from one logical append, without task or record identity.
+pub struct ArtifactAppendTiming {
+    pub capacity_admit: TaskRecordSubphaseSummary,
+    pub file_write: TaskRecordSubphaseSummary,
+    pub material_update: TaskRecordSubphaseSummary,
+}
+
+impl Default for ArtifactAppendTiming {
+    fn default() -> Self {
+        Self {
+            capacity_admit: TaskRecordSubphaseSummary::default(),
+            file_write: TaskRecordSubphaseSummary {
+                successful_returned_bytes: Some(0),
+                ..TaskRecordSubphaseSummary::default()
+            },
+            material_update: TaskRecordSubphaseSummary::default(),
+        }
+    }
+}
+
+fn observed_span(started: Instant) -> ObservedMicroseconds {
+    match Instant::now().checked_duration_since(started) {
+        Some(elapsed) => u64::try_from(elapsed.as_micros()).map_or(
+            ObservedMicroseconds::Unavailable {
+                reason: TimingObservationIssue::DurationOverflow,
+            },
+            |value| ObservedMicroseconds::Measured { value },
+        ),
+        None => ObservedMicroseconds::Unavailable {
+            reason: TimingObservationIssue::ClockReversed,
+        },
+    }
 }
 
 impl ArtifactStream {
@@ -166,6 +203,21 @@ impl ArtifactStream {
                 )
             })
         })
+    }
+
+    /// Measures only entered calls inside this original append, including its Err path.
+    /// The returned observations precede owner abort and are never retained for another append.
+    pub fn append_observed(
+        &mut self,
+        bytes: &[u8],
+    ) -> (ArtifactStoreResult<()>, ArtifactAppendTiming) {
+        self.append_timing = Some(ArtifactAppendTiming::default());
+        let result = self.append(bytes);
+        let timing = self
+            .append_timing
+            .take()
+            .expect("append observation remains owned by this call");
+        (result, timing)
     }
 
     /// Abandons unpublished bytes. Cleanup errors propagate to the task's existing fatal path.
@@ -206,19 +258,47 @@ impl Write for ArtifactStream {
         if let Some(error) = &self.failure {
             return Err(std::io::Error::other(error.clone()));
         }
-        if let Err(error) = admit_bytes(
+        let started = self.append_timing.as_ref().map(|_| Instant::now());
+        let admission = admit_bytes(
             self.capacity.as_deref(),
             &mut self.context,
             &self.temp_path,
             bytes.len() as u64,
-        ) {
+        );
+        if let (Some(started), Some(timing)) = (started, self.append_timing.as_mut()) {
+            timing.capacity_admit.observe(
+                observed_span(started),
+                if admission.is_ok() {
+                    TaskTimingResult::Ok
+                } else {
+                    TaskTimingResult::Err
+                },
+                None,
+            );
+        }
+        if let Err(error) = admission {
             return Err(std::io::Error::other(self.fail(error)));
         }
         let result = self
             .file
             .as_mut()
             .ok_or_else(|| std::io::Error::other("artifact stream is closed"))
-            .and_then(|file| file.write(bytes))
+            .and_then(|file| {
+                let started = self.append_timing.as_ref().map(|_| Instant::now());
+                let result = file.write(bytes);
+                if let (Some(started), Some(timing)) = (started, self.append_timing.as_mut()) {
+                    timing.file_write.observe(
+                        observed_span(started),
+                        if result.is_ok() {
+                            TaskTimingResult::Ok
+                        } else {
+                            TaskTimingResult::Err
+                        },
+                        result.as_ref().ok().map(|count| *count as u64),
+                    );
+                }
+                result
+            })
             .and_then(|count| {
                 if count == 0 && !bytes.is_empty() {
                     return Err(std::io::Error::new(
@@ -226,7 +306,20 @@ impl Write for ArtifactStream {
                         "artifact stream write returned zero",
                     ));
                 }
-                self.material.update(&bytes[..count])?;
+                let started = self.append_timing.as_ref().map(|_| Instant::now());
+                let update = self.material.update(&bytes[..count]);
+                if let (Some(started), Some(timing)) = (started, self.append_timing.as_mut()) {
+                    timing.material_update.observe(
+                        observed_span(started),
+                        if update.is_ok() {
+                            TaskTimingResult::Ok
+                        } else {
+                            TaskTimingResult::Err
+                        },
+                        None,
+                    );
+                }
+                update?;
                 Ok(count)
             });
         result.map_err(|error| {
@@ -509,6 +602,7 @@ impl ArtifactStore {
             material: ArtifactMaterialAccumulator::default(),
             failure: None,
             capacity: self.capacity.get().cloned(),
+            append_timing: None,
         })
     }
 

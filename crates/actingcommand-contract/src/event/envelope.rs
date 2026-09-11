@@ -495,6 +495,31 @@ impl EventDraft {
         }
         let payload = self.payload.sanitize(fingerprinter)?;
         payload.validate()?;
+        if let Some(timing) = payload.task_timing() {
+            let admission_carrier = payload.event_type() == super::EventType::RuntimeFailed
+                && timing.admission_request_id.is_some()
+                && self.links.request_id() == timing.admission_request_id.as_ref()
+                && self.links.task_id() == Some(&timing.task_id)
+                && self.links.run_id() == Some(&timing.run_id)
+                && self.links.correlation_id() == Some(&timing.correlation_id);
+            if (self
+                .links
+                .request_id()
+                .is_some_and(|id| id != &timing.request_id)
+                && !admission_carrier)
+                || self.links.task_id().is_some_and(|id| id != &timing.task_id)
+                || self.links.run_id().is_some_and(|id| id != &timing.run_id)
+                || self
+                    .links
+                    .correlation_id()
+                    .is_some_and(|id| id != &timing.correlation_id)
+            {
+                return Err(SanitizationError::new(
+                    "task_timing_identity_mismatch",
+                    "task_timing",
+                ));
+            }
+        }
         let sensitivity = artifacts
             .iter()
             .fold(payload.sensitivity(), |current, artifact| {
