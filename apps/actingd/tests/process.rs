@@ -1858,7 +1858,7 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         let formatted = (|| -> std::io::Result<()> {
             writeln!(
                 remaining,
-                "First run event page precondition failure; existing page only: run_id={run_id}, returned_count={}, has_more={}, snapshot_ledger_position={}, continuation_present={}",
+                "First run event page precondition failure; existing page only: run_id={run_id:?}, returned_count={}, has_more={}, snapshot_ledger_position={}, continuation_present={}",
                 first_page.returned_count(),
                 first_page.has_more(),
                 first_page.snapshot_ledger_position(),
