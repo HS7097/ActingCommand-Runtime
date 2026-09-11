@@ -1269,6 +1269,7 @@ impl RuntimeLifecycleFailureDraft {
                 native_detail: None,
                 capacity: None,
                 raw_os_error: None,
+                task_timing: None,
             },
             primary_detail: None,
             cleanup_cause: None,
@@ -1308,6 +1309,10 @@ impl RuntimeLifecycleFailureDraft {
         self.record.capacity = capacity;
         self
     }
+    pub fn with_task_timing(mut self, timing: Option<Box<crate::TaskTimingObservations>>) -> Self {
+        self.record.task_timing = timing;
+        self
+    }
     pub fn with_raw_os_error(mut self, code: Option<i32>) -> Self {
         self.record.raw_os_error = code;
         self
@@ -1339,6 +1344,8 @@ impl RuntimeLifecycleFailureDraft {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecycleFailureRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_timing: Option<Box<crate::TaskTimingObservations>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     capacity: Option<crate::CapacityDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     raw_os_error: Option<i32>,
@@ -1369,6 +1376,9 @@ pub struct RuntimeLifecycleFailureRecord {
 }
 
 impl RuntimeLifecycleFailureRecord {
+    pub fn task_timing(&self) -> Option<&crate::TaskTimingObservations> {
+        self.task_timing.as_deref()
+    }
     pub const fn capacity(&self) -> Option<&crate::CapacityDecision> {
         self.capacity.as_ref()
     }
@@ -1419,6 +1429,9 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_diagnostic_detail_stage(&self.stage)?;
+        if let Some(timing) = &self.task_timing {
+            timing.validate()?;
+        }
         if let Some(capacity) = &self.capacity {
             capacity.validate()?;
         }
@@ -2899,6 +2912,8 @@ pub enum TaskSemanticFact {
         failure_code: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduling_disposition: Option<SchedulingDisposition>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_timing: Option<Box<crate::TaskTimingObservations>>,
     },
     TerminalRejected {
         committed_outcome: TaskOutcome,
@@ -3668,7 +3683,11 @@ impl TaskSemanticFact {
                 executed_steps,
                 failure_code,
                 scheduling_disposition,
+                task_timing,
             } => {
+                if let Some(timing) = task_timing {
+                    timing.validate()?;
+                }
                 if executed_steps.is_some_and(|steps| steps > 1_000)
                     || (*outcome == TaskOutcome::Success && executed_steps.is_none())
                 {
@@ -9363,6 +9382,20 @@ impl EventPayload {
 
     pub fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
         self.family_payload().detail().artifact_failure()
+    }
+
+    pub fn task_timing(&self) -> Option<&crate::TaskTimingObservations> {
+        match self {
+            Self::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                TaskSemanticFact::TerminalCommitted { task_timing, .. } => task_timing.as_deref(),
+                _ => None,
+            },
+            _ => self
+                .family_payload()
+                .detail()
+                .lifecycle_failure()?
+                .task_timing(),
+        }
     }
 
     pub fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {

@@ -24,6 +24,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
     pub(crate) raw_os_error: Option<i32>,
     pub(crate) adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
@@ -200,6 +201,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                task_timing: None,
                 capacity: None,
                 raw_os_error: None,
                 adb_recovery: error.adb_recovery().cloned().map(Box::new),
@@ -251,6 +253,9 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        if self.lifecycle.task_timing.is_none() {
+            self.lifecycle.task_timing = other.lifecycle.task_timing.clone();
+        }
         if self.lifecycle.capacity.is_none() {
             self.lifecycle.capacity = other.lifecycle.capacity.clone();
         }

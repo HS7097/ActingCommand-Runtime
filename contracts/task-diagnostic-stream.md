@@ -1,5 +1,75 @@
 # Task diagnostic stream
 
+The existing task terminal may carry `task_timing`, a bounded observation of
+`recognition_evaluate` and `diagnostic_record_write`. Each has separate preflight,
+execution and finalization counts, error counts, accumulated/maximum microseconds
+and a last sample with its actual frame/recognition or record index. The clock is
+the current process's `std::time::Instant`. These spans do not share the origin of
+RuntimeClock step/dispatch values, summary `runtime_ms` or event Unix timestamps.
+The recognition result describes the outer page-batch Result; individual page
+failures remain in the original page outcomes. Home preflight does not measure
+this batch call and remains unobserved; entry recovery retains its own budget
+origin within the preflight phase.
+
+The kernel supplies its original start/deadline only for observation. A last
+sample records the task budget known before that call; absent/not-started budgets
+and incomplete conversions are explicit. A measured zero is a valid measurement,
+not a replacement for a missing sample. Checked count, duration or accumulation
+failure marks the observation incomplete without changing the original result.
+The original `TaskTimingFailure` remains in milliseconds and is also retained in
+the terminal observation with its phase and budget origin.
+
+The record-write span includes the original encode/framing/append call, including
+an Err return, and excludes the document footer and seal. It never writes its own
+measurement into that record. The existing task terminal receives the snapshot
+after the last diagnostic record returns. An existing permitted RuntimeFailed
+lifecycle record can carry the snapshot when diagnostics are aborted; the
+original deduplication and LedgerFailure prohibition are unchanged. Missing
+terminal/failure evidence, interrupted execution and older records do not supply
+timing observations. No extra event or artifact write is introduced.
+
+The optional `diagnostic_record_write.subphases` contains exactly `encode`,
+`framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the
+original serde call (including its typed `to_value` conversion) and checked
+framing/reserve/comma/newline work. ArtifactStream returns in-memory observations
+of entered calls within that same single append: the complete original capacity
+decision/binding/Drain check, the actual file write, and the original hash/count
+update of only the successfully returned bytes. Each short-write iteration keeps
+its own admission and file/material call in the fixed cumulative counts and last
+sample. Host adds the actual record index and merges into the original phase/run.
+
+Every subphase retains attempts/errors/total/max/last with checked microseconds
+and accumulation. Unentered calls have `unobserved` status and absent elapsed
+values; zero attempt/error/byte counts are counts, not measured zero durations.
+File `successful_returned_bytes` sums only successful file returns, including a
+zero return; its last `returned_bytes` is absent on Err. It does not claim how
+many physical bytes an errored OS operation wrote. WriteZero and material errors
+retain the original write failure even when the file call itself returned Ok.
+Cleanup and other unmeasured overhead are outside these five items; their cause
+cannot be inferred by subtracting subphase totals from the outer span.
+
+The optional append observer is taken after the original append returns, before
+owner abort, including on Err. Other stream calls keep observation disabled.
+No state is borrowed from a previous append, stream or record. The same terminal
+or permitted failure snapshot includes the last record's subphases; an absent
+field in older facts means unrecorded and strict typed decoding remains in force.
+
+Template deadline errors retain a typed `timing` observation through the original
+recognition error and diagnostic error record: exact/coarse/refinement,
+imageproc-returned or joint-template-color check stage, elapsed and limit in
+microseconds. The original five-second deadline, check positions and messages
+remain. Template PNG/ROI preparation precedes that deadline's original start.
+Forensic event reads expose the optional typed fields; a run summary copies
+`task_timing` only from its original terminal. Field absence means not recorded.
+
+`request_id` identifies the actual contained-task execution. Scheduled runs also
+retain the distinct `admission_request_id` from their validated PolicyRunContext,
+with the original correlation/task/run identity. The task terminal keeps its
+execution request link. An existing RuntimeFailed lifecycle carrier may retain
+its admission request link only when that recorded admission ID and all three
+correlation/task/run links match the observation. Neither request is rewritten,
+and this association creates no additional event or bypass of failure handling.
+
 `actingcommand.runtime.task-diagnostic.v1` is one immutable, task-scoped
 `DiagnosticJson` artifact produced by the Runtime through ArtifactStore. Its
 authority is the original GlobalLedger `ArtifactVerified` reference. Unpublished
