@@ -113,21 +113,11 @@ fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
     let (release, sources) = release_set(root.path(), "1.0.0", 'c');
-    let host = RuntimeHost::start(
-        config(&root),
-        Arc::new(FakeProvider::one(
-            "neutral-release",
-            runtime_instance_id,
-            Arc::new(FakeState::default()),
-        )),
-    )
-    .expect("runtime host");
-    host.stage_release_set(release.clone(), &sources)
-        .expect("stage release");
-    host.close().expect("close host");
-
     let state =
         RuntimeStateStore::open(root.path(), b"different-bootstrap-seed").expect("runtime state");
+    state
+        .stage_release(release.clone(), &sources)
+        .expect("stage legacy release");
     let preview = state
         .preview_release_transition(ReleaseTransitionKind::Activate, release.release_id())
         .expect("transition preview");
@@ -248,7 +238,14 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
             event_type: Some(EventType::StateMigrated),
             ..EventQuery::default()
         },
-    );
+    )
+    .into_iter()
+    .filter(|event| {
+        matches!(&event.payload, ProjectionPayload::Full(payload)
+        if matches!(payload.as_ref(), EventPayload::State(StatePayload::Migrated(value))
+            if value.migration().state_key() == "policy.catalog.active"))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(events.len(), 1);
     let ProjectionPayload::Full(payload) = &events[0].payload else {
         panic!("expected forensic state payload")

@@ -68,6 +68,48 @@ keys are read unchanged even if a later bootstrap seed differs. A missing key
 beside an existing database fails instead of creating a replacement key. First
 creation retains the original seed/time/process derivation and write/sync sequence.
 
+## Release transactions and legacy provenance
+
+Runtime stages a generation with `ReleaseStaged` and its source reference in the
+Ledger writer's transaction. Activation and rollback preserve the durable intent;
+the pointer, pointer history, transition, source reference and corresponding
+outcome then commit together. The Release critical entry uses the existing event
+family, outcome type, identity links, action and effect predicates. Only confirmed
+rolled-back State work permits a `NotPerformed` failure. A COMMIT error remains an
+error with its original detail and observed disposition; it never produces a
+success response or an opposite outcome. Live publication follows COMMIT.
+
+State prepares and verifies immutable release bytes under the Host's state write
+gate before submitting work to the writer. Borrowed `RuntimeTransaction` apply and
+observe operations validate metadata, hashes, tags and the prepared SQL baseline
+without acquiring the database lock again or reading files. State retains unused
+content-addressed blobs after a failed SQL transaction for verified reentry.
+Active-release and artifact resolution check the committed source relationship
+before returning the selected generation or verifying its bytes.
+
+The first Release recovery freezes `release.legacy.baseline` through the existing
+`StateMigrated` construction from `release.state.v1` to `release.atomic.v1`.
+Its immutable document contains the member count, deterministic member digest and
+active pointer. `release.legacy.members.v1` contains the individually enumerable
+generation identities and manifest digests, complete committed transitions, and
+pointer history. Enumeration is bounded to 16,384 members; the existing 1 MiB
+document and 64 KiB projection-entry limits remain in force. Revision order,
+previous pointers, target manifests and rollback eligibility establish the
+history chain independently of the order in which recovery facts are appended.
+
+Capture requires absence of every State boundary component and the corresponding
+Ledger boundary fact. Freeze binds its actual Ledger position inside the same
+transaction and permanently reserves the Release write path. Recovery validates
+the immutable document, migration, historical revision and each member on every
+entry. It binds already present verified facts or appends the original staged or
+`Recovered`/`ReplayedCommitted` outcome only for a frozen committed member. Such a
+legacy member may have no intent. Atomic admission follows closure of every
+required source; an unresolved intent retains its unknown effect and closes
+startup. Partial recovery resumes against the same baseline. Generic State
+document, migration, rollback and projection writes reject the reserved key and
+namespaces. Standalone State specifications construct their legacy history before
+the first Host recovery boundary.
+
 ## Error and validation contract
 
 Physical errors retain their existing `state_*` code and operation, including

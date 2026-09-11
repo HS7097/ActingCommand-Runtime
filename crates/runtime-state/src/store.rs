@@ -30,6 +30,8 @@ static RELEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 mod approval;
 pub use approval::*;
+mod release;
+pub use release::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDocument {
@@ -369,6 +371,7 @@ impl PreparedCatalogState {
 }
 
 fn reject_catalog_key(state_key: &str) -> RuntimeStateResult<()> {
+    release::reject_release_key(state_key)?;
     if state_key == CATALOG_ACTIVE_STATE_KEY {
         return Err(request(
             "catalog_state_owner_required",
@@ -634,6 +637,7 @@ impl RuntimeStateStore {
         ledger_sequence: u64,
         payload: &[u8],
     ) -> RuntimeStateResult<ProjectionEntry> {
+        release::reject_release_namespace(namespace)?;
         if namespace == APPROVAL_PROJECTION_NAMESPACE {
             return Err(request(
                 "approval_projection_owner_required",
@@ -1083,6 +1087,7 @@ impl RuntimeStateStore {
         manifest: RuntimeReleaseSet,
         sources: &ReleaseArtifactSources,
     ) -> RuntimeStateResult<StagedRelease> {
+        self.require_legacy_release_writer()?;
         manifest
             .validate()
             .map_err(|_| request("release_manifest_invalid", "stage_release"))?;
@@ -1101,8 +1106,12 @@ impl RuntimeStateStore {
                 manifest_json.as_slice(),
             ],
         );
-        let connection = self.connection("stage_release")?;
-        let created = connection
+        let mut connection = self.connection("stage_release")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| fatal("state_transaction_begin_failed", "stage_release"))?;
+        self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))?;
+        let created = transaction
             .execute(
                 "INSERT OR IGNORE INTO release_generations
                  (release_id, manifest_json, manifest_sha256, integrity_tag)
@@ -1117,7 +1126,7 @@ impl RuntimeStateStore {
             .map_err(|_| fatal("release_generation_write_failed", "stage_release"))?
             == 1;
         if !created {
-            let existing = query_release(&connection, manifest.release_id())?
+            let existing = query_release(&transaction, manifest.release_id())?
                 .ok_or_else(|| fatal("release_generation_missing", "stage_release"))?;
             let existing = self.validate_release_row(existing, "stage_release")?;
             if existing != manifest {
@@ -1127,6 +1136,9 @@ impl RuntimeStateStore {
                 ));
             }
         }
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "stage_release"))?;
         Ok(StagedRelease { manifest, created })
     }
 
@@ -1188,8 +1200,18 @@ impl RuntimeStateStore {
     }
 
     pub fn active_release(&self) -> RuntimeStateResult<Option<ActiveRelease>> {
-        let connection = self.connection("read_active_release")?;
-        self.read_active_release(&connection, "read_active_release")
+        let mut connection = self.connection("read_active_release")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|_| fatal("state_transaction_begin_failed", "read_active_release"))?;
+        self.verify_release_read_sources(&self.database.borrow_transaction(&transaction))?;
+        let active = self.read_active_release_metadata(&transaction, "read_active_release")?;
+        drop(transaction);
+        drop(connection);
+        if let Some(active) = &active {
+            self.verify_release_artifacts(active.manifest(), "read_active_release")?;
+        }
+        Ok(active)
     }
 
     pub fn preview_release_transition(
@@ -1260,6 +1282,7 @@ impl RuntimeStateStore {
         &self,
         preview: &ReleaseTransitionPreview,
     ) -> RuntimeStateResult<ActiveRelease> {
+        self.require_legacy_release_writer()?;
         preview
             .data
             .validate()
@@ -1273,8 +1296,27 @@ impl RuntimeStateStore {
                     "commit_release_transition",
                 )
             })?;
-        if let Some(existing) =
-            query_release_transition(&transaction, preview.data.transition_id())?
+        self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))?;
+        let current = self.read_active_release(&transaction, "commit_release_transition")?;
+        let active = self.apply_release_transition_metadata(&transaction, preview)?;
+        if current.as_ref().map(ActiveRelease::manifest) != Some(active.manifest()) {
+            self.verify_release_artifacts(active.manifest(), "commit_release_transition")?;
+        }
+        transaction.commit().map_err(|_| {
+            fatal(
+                "state_transaction_commit_failed",
+                "commit_release_transition",
+            )
+        })?;
+        Ok(active)
+    }
+
+    fn apply_release_transition_metadata(
+        &self,
+        transaction: &Transaction<'_>,
+        preview: &ReleaseTransitionPreview,
+    ) -> RuntimeStateResult<ActiveRelease> {
+        if let Some(existing) = query_release_transition(transaction, preview.data.transition_id())?
         {
             let existing =
                 self.validate_release_transition_row(&existing, "commit_release_transition")?;
@@ -1285,22 +1327,17 @@ impl RuntimeStateStore {
                 ));
             }
             let active = self
-                .read_active_release(&transaction, "commit_release_transition")?
+                .read_active_release_metadata(transaction, "commit_release_transition")?
                 .ok_or_else(|| {
                     fatal(
                         "release_pointer_missing_after_transition",
                         "commit_release_transition",
                     )
                 })?;
-            transaction.commit().map_err(|_| {
-                fatal(
-                    "state_transaction_commit_failed",
-                    "commit_release_transition",
-                )
-            })?;
             return Ok(active);
         }
-        let current = self.read_active_release(&transaction, "commit_release_transition")?;
+        let current =
+            self.read_active_release_metadata(transaction, "commit_release_transition")?;
         let expected_revision = current
             .as_ref()
             .map_or(Some(1), |active| active.revision.checked_add(1));
@@ -1313,9 +1350,9 @@ impl RuntimeStateStore {
                 "commit_release_transition",
             ));
         }
-        let target = query_release(&transaction, preview.data.release_id())?
+        let target = query_release(transaction, preview.data.release_id())?
             .ok_or_else(|| request("release_generation_unknown", "commit_release_transition"))?;
-        let target = self.validate_release_row(target, "commit_release_transition")?;
+        let target = self.validate_release_metadata(target, "commit_release_transition")?;
         if target.manifest_sha256() != preview.data.manifest_sha256() {
             return Err(fatal(
                 "release_transition_manifest_changed",
@@ -1323,7 +1360,7 @@ impl RuntimeStateStore {
             ));
         }
         if preview.data.kind() == ReleaseTransitionKind::Rollback
-            && !was_release_active(&transaction, preview.data.release_id())?
+            && !was_release_active(transaction, preview.data.release_id())?
             && current
                 .as_ref()
                 .and_then(ActiveRelease::previous_release_id)
@@ -1405,12 +1442,6 @@ impl RuntimeStateStore {
                     "commit_release_transition",
                 )
             })?;
-        transaction.commit().map_err(|_| {
-            fatal(
-                "state_transaction_commit_failed",
-                "commit_release_transition",
-            )
-        })?;
         Ok(ActiveRelease {
             revision: preview.data.pointer_revision(),
             manifest: target,
@@ -1470,6 +1501,18 @@ impl RuntimeStateStore {
         connection: &Connection,
         operation: &'static str,
     ) -> RuntimeStateResult<Option<ActiveRelease>> {
+        let active = self.read_active_release_metadata(connection, operation)?;
+        if let Some(active) = &active {
+            self.verify_release_artifacts(active.manifest(), operation)?;
+        }
+        Ok(active)
+    }
+
+    fn read_active_release_metadata(
+        &self,
+        connection: &Connection,
+        operation: &'static str,
+    ) -> RuntimeStateResult<Option<ActiveRelease>> {
         let pointer = query_pointer(connection)?;
         let Some(pointer) = pointer else {
             return Ok(None);
@@ -1477,7 +1520,7 @@ impl RuntimeStateStore {
         self.validate_pointer_row(&pointer, operation)?;
         let manifest = query_release(connection, &pointer.release_id)?
             .ok_or_else(|| fatal("release_pointer_target_missing", operation))?;
-        let manifest = self.validate_release_row(manifest, operation)?;
+        let manifest = self.validate_release_metadata(manifest, operation)?;
         Ok(Some(ActiveRelease {
             revision: pointer.revision,
             manifest,
@@ -1579,6 +1622,16 @@ impl RuntimeStateStore {
         row: ReleaseRow,
         operation: &'static str,
     ) -> RuntimeStateResult<RuntimeReleaseSet> {
+        let manifest = self.validate_release_metadata(row, operation)?;
+        self.verify_release_artifacts(&manifest, operation)?;
+        Ok(manifest)
+    }
+
+    fn validate_release_metadata(
+        &self,
+        row: ReleaseRow,
+        operation: &'static str,
+    ) -> RuntimeStateResult<RuntimeReleaseSet> {
         let manifest = serde_json::from_slice::<RuntimeReleaseSet>(&row.manifest_json)
             .map_err(|_| fatal("release_manifest_invalid", operation))?;
         manifest
@@ -1599,7 +1652,6 @@ impl RuntimeStateStore {
         {
             return Err(fatal("release_generation_integrity_mismatch", operation));
         }
-        self.verify_release_artifacts(&manifest, operation)?;
         Ok(manifest)
     }
 

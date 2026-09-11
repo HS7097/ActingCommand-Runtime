@@ -350,6 +350,9 @@ impl<B: DurableStorage> EventStore<B> {
                 | EventType::CatalogRolledBack
                 | EventType::StateMigrated
                 | EventType::ApprovalDecision
+                | EventType::ReleaseStaged
+                | EventType::ReleaseActivated
+                | EventType::ReleaseRolledBack
         ) {
             return Err(GlobalLedgerError::request(
                 "joint_event_type_unsupported",

@@ -2459,7 +2459,7 @@ fn initial_registered_instances(
 }
 
 fn reconcile_runtime_state(
-    state: &RuntimeStateStore,
+    state: &Arc<RuntimeStateStore>,
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
@@ -2481,6 +2481,9 @@ fn reconcile_runtime_state(
         .migrations()
         .map_err(|error| RuntimeHostError::state(&error))?
     {
+        if migration.state_key() == actingcommand_runtime_state::RELEASE_BASELINE_STATE_KEY {
+            continue;
+        }
         if migration.state_key() == actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY {
             if !migrated.contains(migration.migration_id()) {
                 return Err(RuntimeHostError::fatal(
@@ -2500,48 +2503,7 @@ fn reconcile_runtime_state(
         }
     }
 
-    let staged =
-        release_event_identities(ledger, EventType::ReleaseStaged, |payload| match payload {
-            ReleasePayload::Staged(value) => Some(value.manifest().release_id().to_owned()),
-            _ => None,
-        })?;
-    for manifest in state
-        .release_generations()
-        .map_err(|error| RuntimeHostError::state(&error))?
-    {
-        if !staged.contains(manifest.release_id()) {
-            append_runtime_state_event(
-                ledger,
-                events,
-                ReleasePayloadDraft::staged(manifest, AuditInput::new()),
-            )?;
-        }
-    }
-
-    let mut completed = release_transition_identities(ledger, EventType::ReleaseActivated)?;
-    completed.extend(release_transition_identities(
-        ledger,
-        EventType::ReleaseRolledBack,
-    )?);
-    for transition in state
-        .release_transitions()
-        .map_err(|error| RuntimeHostError::state(&error))?
-    {
-        if completed.contains(transition.transition_id()) {
-            continue;
-        }
-        let recovered = transition.recovered_for_ledger();
-        let payload = match recovered.kind() {
-            ReleaseTransitionKind::Activate => {
-                ReleasePayloadDraft::activated(recovered, AuditInput::new())
-            }
-            ReleaseTransitionKind::Rollback => {
-                ReleasePayloadDraft::rolled_back(recovered, AuditInput::new())
-            }
-        };
-        append_runtime_state_event(ledger, events, payload)?;
-    }
-    Ok(())
+    state_control::reconcile_release_state(state, ledger, events)
 }
 
 fn reconcile_policy_dispatches(
@@ -3104,37 +3066,6 @@ fn policy_recovery_outcome_matches(
         }
         _ => false,
     }
-}
-
-fn release_event_identities(
-    ledger: &GlobalLedger,
-    event_type: EventType,
-    identity: impl Fn(&ReleasePayload) -> Option<String>,
-) -> RuntimeHostResult<BTreeSet<String>> {
-    Ok(ledger
-        .query(EventQuery {
-            event_type: Some(event_type),
-            ..EventQuery::default()
-        })
-        .map_err(|_| ledger_error("query_release_events"))?
-        .into_iter()
-        .filter_map(|event| match event.payload() {
-            EventPayload::Release(payload) => identity(payload),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>())
-}
-
-fn release_transition_identities(
-    ledger: &GlobalLedger,
-    event_type: EventType,
-) -> RuntimeHostResult<BTreeSet<String>> {
-    release_event_identities(ledger, event_type, |payload| match payload {
-        ReleasePayload::Activated(value) | ReleasePayload::RolledBack(value) => {
-            Some(value.transition().transition_id().to_owned())
-        }
-        _ => None,
-    })
 }
 
 fn append_runtime_state_event(
