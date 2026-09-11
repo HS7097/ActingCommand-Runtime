@@ -644,6 +644,12 @@ fn session_instance_registry_rejects_invalid_configured_backend() {
 
 #[test]
 fn capabilities_are_offline() {
+    // Specification: Workflow #97 P6 CAPABILITY-TRUTH-v1.
+    let _guard = env_lock();
+    let temp = TempDir::new().unwrap();
+    let runtime_root = temp.path().join("runtime-must-not-exist");
+    let _runtime_env = use_runtime_state_root(&runtime_root);
+    set_missing_config_env();
     let result = run_cli(["--json", "capabilities"], true);
     assert_eq!(result.exit_code(), 0);
     assert!(
@@ -798,6 +804,67 @@ fn capabilities_are_offline() {
         retired.get("status").and_then(Value::as_str),
         Some("retired")
     );
+    for command in data["commands"].as_array().unwrap() {
+        let status = command["status"].as_str().unwrap();
+        assert!(matches!(
+            status,
+            "available" | "retired" | "reserved" | "unavailable" | "unverified"
+        ));
+        assert_eq!(command["available"], status == "available");
+        assert!(!command["reason_code"].as_str().unwrap().is_empty());
+    }
+    for (name, status, reason) in [
+        ("ledger show", "retired", "local_ledger_retired"),
+        (
+            "session request status",
+            "retired",
+            "legacy_session_authority_retired",
+        ),
+        ("devices", "retired", "actinglab_device_authority_retired"),
+        ("monitor", "retired", "legacy_session_authority_retired"),
+        ("operation run", "unavailable", "lab_lease_required"),
+        ("scheduler start", "reserved", "handler_reserved"),
+        ("lab status", "unverified", "runtime_dependency_unverified"),
+        ("package dry-run", "available", "offline_handler_ready"),
+    ] {
+        let command = data["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["command"] == name)
+            .unwrap();
+        assert_eq!(command["status"], status, "{name}");
+        assert_eq!(command["reason_code"], reason, "{name}");
+    }
+    for backend in data["capture_backends"].as_array().unwrap() {
+        assert_eq!(backend["status"], "unverified");
+        assert_eq!(backend["available"], false);
+        assert_eq!(backend["availability_checked"], false);
+        assert_eq!(backend["execution_authority"], "runtime");
+    }
+    assert_eq!(
+        data["session_layer"]["resident_daemon"]["status"],
+        "retired"
+    );
+    assert_eq!(data["schema_domains"], data["lab2_cli"]["schema_versions"]);
+    assert_eq!(
+        data["schema_domains"]["task_operation"]["supported"],
+        json!(["0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"])
+    );
+    assert_eq!(
+        data["schema_domains"]["recognition_pack"]["supported"],
+        json!(["0.1", "0.3", "0.4", "0.5", "0.6"])
+    );
+    assert_eq!(
+        data["schema_domains"]["control"]["supported"],
+        json!(["Lab-1y.control.v1", "Lab-1y.control.v2"])
+    );
+    assert_eq!(
+        data["schema_domains"]["package_reference"]["git_source_tree"]["schema_version"],
+        "actingcommand.package.git-source-tree.v1"
+    );
+    assert!(data["lab2_cli"]["schema_versions"].get("max").is_none());
+    assert!(!runtime_root.exists());
 }
 
 #[test]
@@ -1633,7 +1700,7 @@ fn session_transport_is_offline_transport_contract() {
     assert_eq!(
         data.pointer("/channels/daemon_file_ipc/status")
             .and_then(Value::as_str),
-        Some("available")
+        Some("retired")
     );
     assert_eq!(
         data.pointer("/channels/trusted_remote/encryption_required")
@@ -1720,7 +1787,11 @@ fn top_level_record_capability_is_available() {
             .unwrap_or_else(|| panic!("{command_name} capability"));
         assert_eq!(
             command.get("status").and_then(Value::as_str),
-            Some("available")
+            Some(match command_name {
+                "session stream" => "unverified",
+                "session request stream check" => "retired",
+                _ => "available",
+            })
         );
     }
     let stream = commands
@@ -1729,12 +1800,12 @@ fn top_level_record_capability_is_available() {
         .expect("stream capability");
     assert_eq!(
         stream.get("status").and_then(Value::as_str),
-        Some("available")
+        Some("unverified")
     );
 }
 
 #[test]
-fn session_response_capabilities_are_available() {
+fn session_response_capabilities_are_retired() {
     let commands = command_capabilities();
     for command_name in [
         "session response",
@@ -1750,13 +1821,13 @@ fn session_response_capabilities_are_available() {
             .unwrap_or_else(|| panic!("{command_name} capability"));
         assert_eq!(
             command.get("status").and_then(Value::as_str),
-            Some("available")
+            Some("retired")
         );
     }
 }
 
 #[test]
-fn session_request_no_wait_capability_is_available() {
+fn session_request_no_wait_capability_is_retired() {
     let commands = command_capabilities();
     let command = commands
         .iter()
@@ -1766,12 +1837,12 @@ fn session_request_no_wait_capability_is_available() {
         .expect("session request --no-wait capability");
     assert_eq!(
         command.get("status").and_then(Value::as_str),
-        Some("available")
+        Some("retired")
     );
 }
 
 #[test]
-fn session_request_cancel_capability_is_available() {
+fn session_request_cancel_capability_is_retired() {
     let commands = command_capabilities();
     let command = commands
         .iter()
@@ -1781,7 +1852,7 @@ fn session_request_cancel_capability_is_available() {
         .expect("session request cancel capability");
     assert_eq!(
         command.get("status").and_then(Value::as_str),
-        Some("available")
+        Some("retired")
     );
     assert_eq!(
         command.get("needs").and_then(Value::as_array).unwrap(),
@@ -1790,7 +1861,7 @@ fn session_request_cancel_capability_is_available() {
 }
 
 #[test]
-fn session_request_state_capabilities_are_available() {
+fn session_request_state_capabilities_are_retired() {
     let commands = command_capabilities();
     for command_name in [
         "session request-state",
@@ -1808,7 +1879,7 @@ fn session_request_state_capabilities_are_available() {
             .unwrap_or_else(|| panic!("{command_name} capability"));
         assert_eq!(
             command.get("status").and_then(Value::as_str),
-            Some("available")
+            Some("retired")
         );
     }
 }
@@ -2109,7 +2180,7 @@ fn direct_touch_commands_are_capability_registered() {
             .unwrap_or_else(|| panic!("{command} capability missing"));
         assert_eq!(
             capability.get("status").and_then(Value::as_str),
-            Some("available")
+            Some("unverified")
         );
         assert_eq!(
             capability.get("needs").and_then(Value::as_array).unwrap(),
@@ -2190,7 +2261,32 @@ fn direct_touch_commands_are_capability_registered() {
             .unwrap_or_else(|| panic!("{command} capability missing"));
         assert_eq!(
             capability.get("status").and_then(Value::as_str),
-            Some("available")
+            Some(match command {
+                "session throat-policy"
+                | "session capture-policy"
+                | "session self-heal-policy"
+                | "session contract"
+                | "session api"
+                | "session instance list" => "available",
+                "session status"
+                | "session instance"
+                | "session instance app"
+                | "session instance app launch"
+                | "session instance app stop"
+                | "session instance app force-stop"
+                | "session instance app restart"
+                | "session app"
+                | "session app launch"
+                | "session app stop"
+                | "session app force-stop"
+                | "session app restart"
+                | "session capture"
+                | "session capture diagnose"
+                | "session recover --stale-capture"
+                | "stream"
+                | "capture diagnose" => "unverified",
+                _ => "retired",
+            })
         );
     }
     for command in [

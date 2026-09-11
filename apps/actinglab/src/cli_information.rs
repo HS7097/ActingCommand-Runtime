@@ -186,11 +186,15 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
     let data = match kind.as_str() {
         "task" => json!({
             "schema_version": "0.1",
+            "domain": "legacy_task",
+            "task_operation": crate::commands::capabilities::schema_capabilities()["task_operation"],
             "required": ["schema_version", "id", "steps"],
             "step_action_types": ["complete", "click"]
         }),
         "control" => json!({
             "schema_version": "Lab-1y.control.v1",
+            "domain": "control",
+            "supported_schema_versions": crate::commands::capabilities::schema_capabilities()["control"]["supported"],
             "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
             "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
             "touch_backend": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
@@ -213,24 +217,31 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
             ]
         }),
         "pack" => json!({
-            "schema_version": ["0.1", "0.3", "0.4", "0.5"],
+            "domain": "recognition_pack",
+            "schema_version": crate::commands::capabilities::schema_capabilities()["recognition_pack"]["supported"],
             "default_match_metric": "ccorr_normed",
             "supported_match_metric": ["ccorr_normed", "ccoeff_normed"]
         }),
         "package" => json!({
             "schema_version": "0.2",
+            "domain": "module_package",
+            "package_reference": crate::commands::capabilities::schema_capabilities()["package_reference"],
             "required_paths": ["<module>/manifest.json", "<module>/operations/<task_id>/task.json"],
             "security": ["no zip-slip", "no executable scripts", "hashes verified when declared"]
         }),
         "ledger" => json!({
             "schema_version": "actingcommand.ledger.query.v0.1",
+            "status": "retired",
+            "available": false,
+            "reason_code": "local_ledger_retired",
             "commands": ["show", "events", "receipts", "diagnose", "evidence"],
             "filters": ["--run-id", "--req-id", "--instance-id"],
             "read_only": true,
             "device_io": false
         }),
         "all" => json!({
-            "schemas": ["task", "control", "pack", "package", "ledger", "observe", "do", "ensure", "wait", "lab receipt"]
+            "schemas": ["task", "control", "pack", "package", "ledger", "observe", "do", "ensure", "wait", "lab receipt"],
+            "schema_domains": crate::commands::capabilities::schema_capabilities()
         }),
         other => lab2_cli::command_schema(other)
             .ok_or_else(|| CliError::usage(format!("unknown schema kind: {other}")))?,

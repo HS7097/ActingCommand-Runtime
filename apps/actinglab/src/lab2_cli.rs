@@ -1259,11 +1259,7 @@ pub(crate) fn capability_summary(config: &UserConfig) -> Value {
         "schema_version": "actingcommand.lab2.capabilities.v0.1",
         "verbs": commands,
         "click_kinds": ["target_rect_center"],
-        "schema_versions": {
-            "min": "0.3",
-            "max": "0.5",
-            "supported": ["0.3", "0.4", "0.5"]
-        },
+        "schema_versions": crate::commands::capabilities::schema_capabilities(),
         "engine_capabilities": recognition_engine_capabilities(),
         "instances": lab2_config_instances(config),
         "recovery_transparency": {
@@ -1452,10 +1448,16 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "lab receipt",
-            summary: "load all ledger records tied to a req_id",
-            required: &["--req <req_id>", "--run-root <path> or config run_root"],
+            summary: "query Runtime GlobalLedger events by correlation identifier",
+            required: &["--req <runtime-correlation-id>"],
             optional: &[],
-            output_fields: &["req_id", "ledger_count", "record_count", "records"],
+            output_fields: &[
+                "req_id",
+                "correlation_id",
+                "authority",
+                "event_count",
+                "events",
+            ],
             requires_lease: false,
         },
         Lab2CommandContract {
@@ -1478,7 +1480,12 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
 }
 
 fn command_contract_summary(contract: Lab2CommandContract) -> Value {
+    let capability = command_contract_capability(contract.name);
     json!({
+        "status": capability["status"],
+        "available": capability["available"],
+        "reason_code": capability["reason_code"],
+        "needs": capability["needs"],
         "command": contract.name,
         "summary": contract.summary,
         "requires_lease": contract.requires_lease,
@@ -1489,7 +1496,12 @@ fn command_contract_summary(contract: Lab2CommandContract) -> Value {
 }
 
 fn command_contract_schema(contract: Lab2CommandContract) -> Value {
+    let capability = command_contract_capability(contract.name);
     json!({
+        "status": capability["status"],
+        "available": capability["available"],
+        "reason_code": capability["reason_code"],
+        "needs": capability["needs"],
         "schema_version": "actingcommand.lab2.command_shape.v0.1",
         "command": contract.name,
         "summary": contract.summary,
@@ -1510,6 +1522,18 @@ fn command_contract_schema(contract: Lab2CommandContract) -> Value {
     })
 }
 
+fn command_contract_capability(name: &str) -> Value {
+    use crate::commands::capabilities::command_cap;
+    match name {
+        "lab evidence" => command_cap(name, ["offline", "read_only"], "available"),
+        "lab arbitrator" => command_cap(name, ["offline"], "retired"),
+        _ => crate::command_capabilities()
+            .into_iter()
+            .find(|capability| capability["command"] == name)
+            .unwrap_or_else(|| command_cap(name, ["unknown"], "unverified")),
+    }
+}
+
 fn recognition_engine_capabilities() -> Value {
     let metrics = [
         MatchMetric::CrossCorrelationNormalized,
@@ -1520,18 +1544,22 @@ fn recognition_engine_capabilities() -> Value {
     .collect::<Vec<_>>();
     json!({
         "template_matching": {
+            "status": "available",
+            "available": true,
+            "reason_code": "offline_handler_ready",
             "supported_metrics": metrics,
             "families": [
                 {"id": "ncc", "implemented_by": "ccorr_normed score normalization"},
                 {"id": "ccoeff", "implemented_by": "ccoeff_normed"}
             ],
             "unsupported": [
-                {"id": "masked_template_match", "reason": "not implemented in current recognition engine"},
-                {"id": "count_match", "reason": "resource-level count semantics are not implemented in Lab-2 CLI"}
+                {"id": "masked_template_match", "status": "unavailable", "available": false, "reason_code": "recognition_semantics_not_implemented", "reason": "not implemented in current recognition engine"},
+                {"id": "count_match", "status": "unavailable", "available": false, "reason_code": "recognition_semantics_not_implemented", "reason": "resource-level count semantics are not implemented in Lab-2 CLI"}
             ]
         },
-        "color": {"rgb_mean_distance": true},
-        "ocr": {"default_screen_state": false, "explicit_command_required": true}
+        "color": {"rgb_mean_distance": true, "status": "available", "available": true, "reason_code": "offline_handler_ready"},
+        "ocr": {"default_screen_state": false, "explicit_command_required": true, "declared_support": true, "status": "unverified", "available": false, "reason_code": "runtime_provider_configuration_and_assets_unverified"},
+        "nn": {"declared_support": true, "status": "unverified", "available": false, "reason_code": "runtime_provider_configuration_and_assets_unverified"}
     })
 }
 
@@ -1547,7 +1575,10 @@ fn lab2_config_instances(config: &UserConfig) -> Vec<Value> {
                 "serial_configured": instance.serial.is_some(),
                 "package_configured": instance.package.is_some(),
                 "capture_backend": instance.capture_backend,
-                "touch_backend": instance.touch_backend
+                "touch_backend": instance.touch_backend,
+                "status": "unverified",
+                "available": false,
+                "reason_code": "client_configuration_is_not_runtime_availability"
             })
         })
         .collect()
