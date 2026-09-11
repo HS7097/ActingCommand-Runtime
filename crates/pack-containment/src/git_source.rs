@@ -542,6 +542,11 @@ pub(super) fn compile(
     }
     let control: LabControl = read_json_entry(&entries, "control.json")?;
     let resources = read_json_value_entry(&entries, "resources/operations/resources.json")?;
+    source::validate_resource_declarations(
+        Path::new("resources/operations/resources.json"),
+        &resources,
+    )
+    .map_err(|error| declaration_error("resources/operations/resources.json", error))?;
     let mut bundles = Vec::new();
     for (path, bytes) in &entries {
         if let Some(task) = path
@@ -560,6 +565,8 @@ pub(super) fn compile(
             });
         }
     }
+    source::declaration_file_requests(&bundles)
+        .map_err(|error| declaration_error("resources/operations", error))?;
     let entry = bundles
         .iter()
         .find(|bundle| bundle.task_id == control.entry_task_id)
@@ -633,16 +640,10 @@ pub(super) fn compile(
     };
     converter
         .validate_bundles(&files)
-        .map_err(|error| ContainmentError::PackParse {
-            path: "resources/operations".to_owned(),
-            message: error.to_string(),
-        })?;
+        .map_err(|error| declaration_error("resources/operations", error))?;
     let outputs = converter
         .build_all(&files)
-        .map_err(|error| ContainmentError::PackParse {
-            path: "resources/operations".to_owned(),
-            message: error.to_string(),
-        })?;
+        .map_err(|error| declaration_error("resources/operations", error))?;
     let operation = converter
         .canonical_task(&control.entry_task_id)
         .map_err(|error| ContainmentError::PackParse {

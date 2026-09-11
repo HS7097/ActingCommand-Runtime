@@ -273,10 +273,87 @@ pub struct VerifiedProjectionMetadata {
 
 impl ProjectionMetadata {
     pub fn parse(bytes: &[u8]) -> LabResult<Self> {
+        Self::parse_at("projection.json", bytes)
+    }
+
+    pub fn parse_at(path: &str, bytes: &[u8]) -> LabResult<Self> {
         if bytes.len() > METADATA_BYTE_LIMIT {
             return Err(invalid("projection metadata exceeds 1 MiB"));
         }
-        serde_json::from_slice(bytes)
+        let value: Value = serde_json::from_slice(bytes)
+            .map_err(|e| invalid(format!("invalid projection metadata: {e}")))?;
+        let schema_version = value
+            .get("schema_version")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let check = |value: &Value, pointer: &str, fields: &[&str]| -> LabResult<()> {
+            if let Some(object) = value.as_object()
+                && let Some(field) = object
+                    .keys()
+                    .find(|field| !fields.contains(&field.as_str()))
+            {
+                let issue = crate::ResourceDeclarationIssue {
+                    declaration_file: path.to_owned(),
+                    field_path: format!(
+                        "{pointer}/{}",
+                        field.replace('~', "~0").replace('/', "~1")
+                    ),
+                    schema_version: schema_version.clone(),
+                    reason: crate::ResourceDeclarationReason::UnknownField,
+                };
+                return Err(LabError::new(
+                    crate::LabErrorClass::UsageValidation,
+                    "resource_declaration_invalid",
+                    format!(
+                        "{} contains an unknown declaration field {}",
+                        path, issue.field_path
+                    ),
+                    &[],
+                )
+                .with_details(json!(issue)));
+            }
+            Ok(())
+        };
+        check(
+            &value,
+            "",
+            &["schema_version", "actions", "targets", "fields", "pages"],
+        )?;
+        for (family, fields) in [
+            ("actions", &["action", "safety", "source"][..]),
+            ("targets", &["target_id", "privacy", "source"][..]),
+            ("fields", &["field", "privacy", "source"][..]),
+            (
+                "pages",
+                &["page_id", "completeness", "scope", "source", "visible_rect"][..],
+            ),
+        ] {
+            if let Some(entries) = value.get(family).and_then(Value::as_array) {
+                for (index, entry) in entries.iter().enumerate() {
+                    let pointer = format!("/{family}/{index}");
+                    check(entry, &pointer, fields)?;
+                    match family {
+                        "actions" => check(
+                            &entry["action"],
+                            &format!("{pointer}/action"),
+                            &["role", "task_id", "resource_id", "page"],
+                        )?,
+                        "fields" => check(
+                            &entry["field"],
+                            &format!("{pointer}/field"),
+                            &["task_id", "field_id", "target_id"],
+                        )?,
+                        "pages" => check(
+                            &entry["visible_rect"],
+                            &format!("{pointer}/visible_rect"),
+                            &["x", "y", "width", "height"],
+                        )?,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        serde_json::from_value(value)
             .map_err(|e| invalid(format!("invalid projection metadata: {e}")))
     }
 

@@ -942,7 +942,7 @@ pub(crate) fn session_record_build_draft(
             from,
             to,
             click,
-            destructive,
+            destructive: _,
         } = &step.data
         {
             let click_value = session_record_bundle_click(click, &step.step_id)?;
@@ -962,7 +962,6 @@ pub(crate) fn session_record_build_draft(
                 "guard": guard,
                 "consumes": [],
                 "produces": [],
-                "destructive": destructive,
                 "provenance": {
                     "record_step_id": step.step_id,
                     "created_at_unix_ms": step.created_at_unix_ms,

@@ -27,6 +27,14 @@ const MAX_TASK_TIMEOUT_MS: u64 = actingcommand_contract::MAX_CONTAINED_TASK_TIME
 const MAX_TASK_STEPS: u32 = 1_000;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 
+mod declarations;
+pub(crate) use declarations::validate_loaded_declarations;
+pub use declarations::{
+    declaration_file_requests, validate_bundle_declarations, validate_contained_declarations,
+    validate_control_declarations, validate_navigation_declarations,
+    validate_resource_declarations,
+};
+
 /// File data needed by conversion; metadata-only templates are not decoded.
 #[derive(Debug, Clone, Copy)]
 pub enum SourceRead {
@@ -274,7 +282,8 @@ impl OperationConverter {
                 )));
             }
         };
-        let declaration = ProjectionMetadata::parse(bytes)?;
+        let declaration =
+            ProjectionMetadata::parse_at(&path.to_string_lossy().replace('\\', "/"), bytes)?;
         declaration
             .clone()
             .validate(self.projection_catalog(&outputs)?)?;
@@ -523,6 +532,9 @@ impl OperationConverter {
     }
 
     pub fn validate_bundles(&self, files: &ConversionFiles) -> CliOutcome<()> {
+        for bundle in &self.bundles {
+            validate_bundle_declarations(bundle, files)?;
+        }
         self.validate_error_page_anchor_definitions()?;
         let declared_anchor_ids = self.declared_anchor_ids();
         let mut errors = Vec::new();
@@ -766,6 +778,19 @@ impl OperationConverter {
         dependencies: &[Bundle],
         files: &ConversionFiles,
     ) -> CliOutcome<Value> {
+        let recognition_defaults = self
+            .defaults
+            .as_object()
+            .ok_or_else(|| CliError::package_invalid("recognition defaults must be an object"))?
+            .iter()
+            .filter(|(field, _)| {
+                matches!(
+                    field.as_str(),
+                    "template_threshold" | "color_max_distance" | "match_metric"
+                )
+            })
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect();
         let mut targets = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in self.bundles.iter().chain(dependencies) {
@@ -873,17 +898,11 @@ impl OperationConverter {
                 "schema_version",
                 Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
             ),
-            (
-                "converter_schema_version",
-                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
-            ),
-            ("generated", Value::Bool(true)),
-            ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("game", Value::String(self.game.clone())),
             ("server", Value::String(self.server.clone())),
             ("locale", Value::String(self.locale.clone())),
             ("coordinate_space", self.coordinate_space.clone()),
-            ("defaults", self.defaults.clone()),
+            ("defaults", Value::Object(recognition_defaults)),
             (
                 "targets",
                 Value::Array(
@@ -966,12 +985,6 @@ impl OperationConverter {
                 "schema_version",
                 Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
             ),
-            (
-                "converter_schema_version",
-                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
-            ),
-            ("generated", Value::Bool(true)),
-            ("generated_by", Value::String(GENERATED_BY.to_string())),
             (
                 "pages",
                 Value::Array(
