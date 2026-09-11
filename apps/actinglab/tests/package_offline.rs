@@ -372,7 +372,13 @@ fn package_dry_run_rejects_malformed_schema_0_7_in_the_formal_parser() {
         home_frame(true),
     );
     let output = fixture.run(&[], "malformed-schema-0.7.zip");
-    assert_error_code(&output, "contained_task_program_invalid");
+    assert_error_code(&output, "package_invalid");
+    let error = envelope(&output);
+    let message = error["error"]["message"]
+        .as_str()
+        .expect("declaration error");
+    assert!(message.contains("/post_admission_ocr/unexpected"));
+    assert!(message.contains("UnknownField"));
     assert!(
         !fixture
             .temp

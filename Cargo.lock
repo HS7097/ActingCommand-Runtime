@@ -250,6 +250,7 @@ dependencies = [
 name = "actingcommand-page-detector"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "serde",
