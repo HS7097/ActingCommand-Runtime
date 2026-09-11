@@ -119,6 +119,7 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
     context.health = PerformanceMonitorHealth::Partial;
     let mut summary = PerformanceSummaryEventData {
         context,
+        capacity: None,
         foreground: None,
         owned_processes: vec![PerformanceProcessSummary {
             pid: 7,

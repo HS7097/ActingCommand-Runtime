@@ -960,7 +960,7 @@ impl LifecycleNativeDetail {
         self.truncated
     }
 
-    fn validate(&self) -> Result<(), SanitizationError> {
+    pub(crate) fn validate(&self) -> Result<(), SanitizationError> {
         let lower = self.text.to_ascii_lowercase();
         if self.text.is_empty()
             || self.text.len() > MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES
@@ -1267,6 +1267,9 @@ impl RuntimeLifecycleFailureDraft {
                 cleanup_cause: None,
                 cause: None,
                 native_detail: None,
+                capacity: None,
+                raw_os_error: None,
+                task_timing: None,
             },
             primary_detail: None,
             cleanup_cause: None,
@@ -1302,6 +1305,18 @@ impl RuntimeLifecycleFailureDraft {
         self.record.native_detail = detail;
         self
     }
+    pub fn with_capacity(mut self, capacity: Option<crate::CapacityDecision>) -> Self {
+        self.record.capacity = capacity;
+        self
+    }
+    pub fn with_task_timing(mut self, timing: Option<Box<crate::TaskTimingObservations>>) -> Self {
+        self.record.task_timing = timing;
+        self
+    }
+    pub fn with_raw_os_error(mut self, code: Option<i32>) -> Self {
+        self.record.raw_os_error = code;
+        self
+    }
     pub fn with_cleanup_cause(mut self, cause: Option<CleanupCauseDraft>) -> Self {
         self.cleanup_cause = cause;
         self
@@ -1329,6 +1344,12 @@ impl RuntimeLifecycleFailureDraft {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecycleFailureRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_timing: Option<Box<crate::TaskTimingObservations>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capacity: Option<crate::CapacityDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw_os_error: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
     stage: String,
@@ -1355,6 +1376,15 @@ pub struct RuntimeLifecycleFailureRecord {
 }
 
 impl RuntimeLifecycleFailureRecord {
+    pub fn task_timing(&self) -> Option<&crate::TaskTimingObservations> {
+        self.task_timing.as_deref()
+    }
+    pub const fn capacity(&self) -> Option<&crate::CapacityDecision> {
+        self.capacity.as_ref()
+    }
+    pub const fn raw_os_error(&self) -> Option<i32> {
+        self.raw_os_error
+    }
     pub fn adb_recovery(&self) -> Option<&AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
@@ -1399,6 +1429,12 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_diagnostic_detail_stage(&self.stage)?;
+        if let Some(timing) = &self.task_timing {
+            timing.validate()?;
+        }
+        if let Some(capacity) = &self.capacity {
+            capacity.validate()?;
+        }
         if let Some(recovery) = &self.adb_recovery {
             recovery.validate()?;
         }
@@ -1423,6 +1459,13 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn sensitivity(&self) -> Sensitivity {
         let mut sensitivity = Sensitivity::Internal;
+        if self
+            .capacity
+            .as_ref()
+            .is_some_and(|capacity| capacity.target_volume.is_some())
+        {
+            sensitivity = Sensitivity::Sensitive;
+        }
         if self.adb_recovery.is_some() {
             sensitivity = Sensitivity::Sensitive;
         }
@@ -1460,6 +1503,9 @@ impl RuntimeLifecycleFailureRecord {
     }
     fn public_summary(&self) -> Self {
         let mut result = self.clone();
+        if let Some(capacity) = &mut result.capacity {
+            capacity.target_volume = None;
+        }
         result.primary_detail = None;
         result.adb_recovery = None;
         result.native_detail = None;
@@ -1593,6 +1639,8 @@ pub struct ArtifactFailureCause {
     pub code: String,
     pub operation: String,
     pub native_detail: LifecycleNativeDetail,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_os_error: Option<i32>,
 }
 
 pub const MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES: usize = 4;
@@ -1606,10 +1654,15 @@ pub struct ArtifactFailureRecord {
     pub primary: ArtifactFailureCause,
     pub secondary: Vec<ArtifactFailureCause>,
     pub omitted_secondary_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<crate::CapacityDecision>,
 }
 
 impl ArtifactFailureRecord {
     fn validate(&self) -> Result<(), SanitizationError> {
+        if let Some(capacity) = &self.capacity {
+            capacity.validate()?;
+        }
         if self.secondary.len() > MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES {
             return Err(SanitizationError::new(
                 "invalid_artifact_failure_causes",
@@ -1748,6 +1801,8 @@ pub struct PerformanceSummaryPayload {
     third_party_high_load: Vec<crate::PerformanceProcessSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ledger_commits: Option<crate::PerformanceLedgerSample>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capacity: Option<crate::PerformanceCapacitySample>,
     audit: SanitizedAudit,
 }
 
@@ -2866,6 +2921,8 @@ pub enum TaskSemanticFact {
         failure_code: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduling_disposition: Option<SchedulingDisposition>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_timing: Option<Box<crate::TaskTimingObservations>>,
     },
     TerminalRejected {
         committed_outcome: TaskOutcome,
@@ -3635,7 +3692,11 @@ impl TaskSemanticFact {
                 executed_steps,
                 failure_code,
                 scheduling_disposition,
+                task_timing,
             } => {
+                if let Some(timing) = task_timing {
+                    timing.validate()?;
+                }
                 if executed_steps.is_some_and(|steps| steps > 1_000)
                     || (*outcome == TaskOutcome::Success && executed_steps.is_none())
                 {
@@ -3948,6 +4009,9 @@ impl PerformanceStutterPayload {
 }
 
 impl PerformanceSummaryPayload {
+    pub const fn capacity(&self) -> Option<&crate::PerformanceCapacitySample> {
+        self.capacity.as_ref()
+    }
     pub const fn context(&self) -> &PerformanceContext {
         &self.context
     }
@@ -5209,6 +5273,7 @@ impl PerformanceSummaryDraft {
             owned_processes: self.data.owned_processes,
             third_party_high_load: self.data.third_party_high_load,
             ledger_commits: self.data.ledger_commits,
+            capacity: self.data.capacity,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -5756,6 +5821,7 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 owned_processes: value.owned_processes.clone(),
                 third_party_high_load: value.third_party_high_load.clone(),
                 ledger_commits: value.ledger_commits.clone(),
+                capacity: value.capacity.clone(),
             })
         }
         PerformancePayload::MonitorDegraded(value)
@@ -9268,6 +9334,13 @@ impl EventPayload {
         if self.artifact_failure().is_some() {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
+        if self
+            .performance_summary()
+            .and_then(PerformanceSummaryPayload::capacity)
+            .is_some()
+        {
+            sensitivity = sensitivity.max(Sensitivity::Sensitive);
+        }
         if matches!(self, Self::Provider(_)) {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -9341,6 +9414,20 @@ impl EventPayload {
 
     pub fn artifact_failure(&self) -> Option<&ArtifactFailureRecord> {
         self.family_payload().detail().artifact_failure()
+    }
+
+    pub fn task_timing(&self) -> Option<&crate::TaskTimingObservations> {
+        match self {
+            Self::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                TaskSemanticFact::TerminalCommitted { task_timing, .. } => task_timing.as_deref(),
+                _ => None,
+            },
+            _ => self
+                .family_payload()
+                .detail()
+                .lifecycle_failure()?
+                .task_timing(),
+        }
     }
 
     pub fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {

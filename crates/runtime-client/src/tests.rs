@@ -399,6 +399,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                             None
                         },
                         scheduling_disposition: if failed { None } else { Some(disposition) },
+                        task_timing: None,
                     },
                     AuditInput::new(),
                 )
@@ -677,6 +678,7 @@ fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> Pr
                 executed_steps: Some(1),
                 failure_code: None,
                 scheduling_disposition: Some(disposition),
+                task_timing: None,
             },
             AuditInput::new(),
         )
