@@ -676,7 +676,14 @@ mod imp {
         phase: StdioPhase,
         facts: &mut VendorStdioFacts,
     ) -> DeviceResult<()> {
-        let before = native_facts::owned_fd(target_fd, target);
+        let target_handle = unsafe { _get_osfhandle(target_fd) };
+        let target_handle_error = (target_handle == -1).then(native_facts::crt_error);
+        let before = native_facts::owned_handle(
+            target_fd,
+            target,
+            target_handle,
+            target_handle_error.clone(),
+        );
         let mut restore_flags = None;
         if phase == StdioPhase::Restore {
             // _dup2 ignores its internal target close error. Retire this live,
@@ -701,24 +708,13 @@ mod imp {
                     _ => None,
                 });
             if !owned || restore_flags.is_none() {
-                let error = match &before.handle {
-                    crate::StdioFact::Unknown(
-                        crate::StdioUnknown::QueryFailed(error)
-                        | crate::StdioUnknown::HandleUnavailable(error),
-                    ) => Some(error.clone()),
-                    _ => None,
-                };
-                let returned = match before.handle {
-                    crate::StdioFact::Known(handle) => handle as i64,
-                    _ => -1,
-                };
                 let mut observation = native_facts::step(
                     phase,
                     StdioApi::GetOsfhandle,
                     target,
                     None,
-                    returned,
-                    error,
+                    target_handle as i64,
+                    target_handle_error,
                 );
                 observation.after = Some(before);
                 facts.push(observation);
