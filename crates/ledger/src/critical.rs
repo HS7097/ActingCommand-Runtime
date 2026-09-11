@@ -302,6 +302,30 @@ enum OutcomeRole {
     Failure,
 }
 
+/// Reuses the original critical predicates for the internal catalog SQL path.
+pub fn validate_catalog_outcome(
+    target: CatalogTransitionTarget,
+    intent: &PersistedEvent,
+    outcome: &SanitizedEventDraft,
+    success: bool,
+) -> Result<(), CriticalPlanError> {
+    validate_outcome(
+        CriticalOperation::CatalogTransition(target),
+        intent,
+        outcome,
+        if success {
+            OutcomeRole::Success
+        } else {
+            OutcomeRole::Failure
+        },
+        if success {
+            EffectDisposition::Performed
+        } else {
+            EffectDisposition::NotPerformed
+        },
+    )
+}
+
 fn validate_outcome(
     operation: CriticalOperation,
     intent: &PersistedEvent,
