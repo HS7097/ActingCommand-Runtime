@@ -348,6 +348,14 @@ pub enum EventType {
     RecognitionCompleted,
     #[serde(rename = "recognition.failed")]
     RecognitionFailed,
+    #[serde(rename = "artifact.pin_recorded")]
+    ArtifactPinRecorded,
+    #[serde(rename = "artifact.pin_released")]
+    ArtifactPinReleased,
+    #[serde(rename = "artifact.eviction_intent")]
+    ArtifactEvictionIntent,
+    #[serde(rename = "artifact.eviction_outcome")]
+    ArtifactEvictionOutcome,
     #[serde(rename = "artifact.created")]
     ArtifactCreated,
     #[serde(rename = "artifact.verified")]
@@ -494,7 +502,11 @@ impl EventType {
             Self::RecognitionRequested | Self::RecognitionCompleted | Self::RecognitionFailed => {
                 EventFamily::Recognition
             }
-            Self::ArtifactCreated
+            Self::ArtifactPinRecorded
+            | Self::ArtifactPinReleased
+            | Self::ArtifactEvictionIntent
+            | Self::ArtifactEvictionOutcome
+            | Self::ArtifactCreated
             | Self::ArtifactVerified
             | Self::ArtifactStoreFailed
             | Self::ArtifactVerificationFailed

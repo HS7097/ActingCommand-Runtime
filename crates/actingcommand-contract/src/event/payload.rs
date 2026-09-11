@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod retention;
+pub use retention::*;
 mod ledger_migration;
 mod signature;
 pub use ledger_migration::*;
@@ -7545,6 +7547,7 @@ impl RecognitionPayloadDraft {
 }
 
 enum ArtifactDraftKind {
+    Retention(crate::ArtifactRetentionFact, AuditInput),
     Created(OutcomeDraft),
     Verified(OutcomeDraft),
     StoreFailed(DiagnosticOutcomeDraft),
@@ -8499,6 +8502,7 @@ pub enum RecognitionPayload {
     deny_unknown_fields
 )]
 pub enum ArtifactPayload {
+    Retention(ArtifactRetentionPayload),
     Created(OutcomePayload),
     Verified(OutcomePayload),
     StoreFailed(DiagnosticOutcomePayload),
@@ -8724,14 +8728,28 @@ family_payload!(RecognitionPayload, {
     Completed => EventType::RecognitionCompleted,
     Failed => EventType::RecognitionFailed,
 });
-family_payload!(ArtifactPayload, {
-    Created => EventType::ArtifactCreated,
-    Verified => EventType::ArtifactVerified,
-    StoreFailed => EventType::ArtifactStoreFailed,
-    VerificationFailed => EventType::ArtifactVerificationFailed,
-    ExportCompleted => EventType::ArtifactExportCompleted,
-    ExportFailed => EventType::ArtifactExportFailed,
-});
+impl FamilyPayload for ArtifactPayload {
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::Retention(value) => value.event_type(),
+            Self::Created(_) => EventType::ArtifactCreated,
+            Self::Verified(_) => EventType::ArtifactVerified,
+            Self::StoreFailed(_) => EventType::ArtifactStoreFailed,
+            Self::VerificationFailed(_) => EventType::ArtifactVerificationFailed,
+            Self::ExportCompleted(_) => EventType::ArtifactExportCompleted,
+            Self::ExportFailed(_) => EventType::ArtifactExportFailed,
+        }
+    }
+    fn detail(&self) -> &dyn PayloadDetail {
+        match self {
+            Self::Retention(value) => value,
+            Self::Created(value) | Self::Verified(value) => value,
+            Self::StoreFailed(value) | Self::VerificationFailed(value) => value,
+            Self::ExportCompleted(value) => value,
+            Self::ExportFailed(value) => value,
+        }
+    }
+}
 family_payload!(ClientPayload, {
     Action => EventType::ClientAction,
     UiAction => EventType::UiAction,
