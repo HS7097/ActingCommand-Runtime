@@ -33,10 +33,11 @@ use crate::{
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
-    ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
-    EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter,
-    EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
-    PinnedFrameEvidence, PreparedArtifact, StoredArtifact, build_capture_pipeline_summary,
+    ArtifactWriteContext, ArtifactWriteRequest, CapturePipeline, CapturePipelineConfig,
+    CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
+    EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
+    FrameStoreFrameInput, PackageVerification, PersistedFrameEvidence, PinnedFrameEvidence,
+    PreparedArtifact, RecognitionState, StoredArtifact, build_capture_pipeline_summary,
     capture_summary_record, read_projected_verified,
 };
 use actingcommand_contract::{
@@ -145,6 +146,7 @@ const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 mod agent_control;
 mod client_events;
 mod device_diagnostic;
+mod frame_retention;
 mod governance;
 mod lab_operation;
 mod monitor_control;
@@ -305,6 +307,7 @@ pub struct RuntimeHostConfig {
     io_timeout: Duration,
     performance_monitor: Option<PerformanceMonitorConfig>,
     capacity_thresholds: actingcommand_contract::CapacityThresholds,
+    frame_retention_enabled: bool,
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -327,6 +330,7 @@ impl RuntimeHostConfig {
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             performance_monitor: None,
             capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
+            frame_retention_enabled: false,
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
@@ -392,6 +396,11 @@ impl RuntimeHostConfig {
         thresholds: actingcommand_contract::CapacityThresholds,
     ) -> Self {
         self.capacity_thresholds = thresholds;
+        self
+    }
+
+    pub fn with_frame_retention_enabled(mut self, enabled: bool) -> Self {
+        self.frame_retention_enabled = enabled;
         self
     }
 
@@ -480,6 +489,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("io_timeout", &self.io_timeout)
             .field("performance_monitor", &self.performance_monitor)
             .field("capacity_thresholds", &self.capacity_thresholds)
+            .field("frame_retention_enabled", &self.frame_retention_enabled)
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
@@ -600,7 +610,7 @@ impl RuntimeHost {
                 .map_err(|error| RuntimeHostError::state(&error))?,
         );
         let artifacts =
-            ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?;
+            Arc::new(ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?);
         let limits = actingcommand_runtime_database::MaintenanceLimits::default();
         let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
             &config.state_root,
@@ -666,6 +676,41 @@ impl RuntimeHost {
                 )
                 .with_native_detail(format!("{error:?}"))
             })?;
+        let recovery = limits
+            .deadline()
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })
+            .and_then(|deadline| {
+                frame_retention::FrameRetention::recover(&ledger, &artifacts, deadline)
+            });
+        if let Err(mut original) = recovery {
+            let ledger_closed = ledger.close().map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            });
+            let owner_closed = config
+                .clock
+                .sample()
+                .and_then(|now| owner.close(now.unix_ms));
+            for result in [ledger_closed, owner_closed] {
+                if let Err(secondary) = result {
+                    original = original
+                        .into_fatal()
+                        .with_related_failure("retention_startup_cleanup", &secondary);
+                }
+            }
+            return Err(original);
+        }
         let performance = (|| {
             PerformanceMonitor::preflight_capacity(
                 crate::performance::CapacityPreflightConfig {
@@ -807,7 +852,11 @@ impl RuntimeHost {
         )?;
         let prepared = (|| {
             let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
-            let performance_interval = performance.sample_interval();
+            let performance_interval = performance.sample_interval().or_else(|| {
+                config
+                    .frame_retention_enabled
+                    .then_some(Duration::from_secs(2))
+            });
             let performance_control =
                 PerformanceBalanceController::new(config.performance_control.clone())?;
             let info = RuntimeInfo::new(
@@ -867,6 +916,11 @@ impl RuntimeHost {
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
+            frame_retention: Mutex::new(
+                config
+                    .frame_retention_enabled
+                    .then(frame_retention::FrameRetention::default),
+            ),
             governance_write_gate: Mutex::new(()),
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
@@ -3168,6 +3222,7 @@ struct HostShared {
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
+    frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
     governance_capability_sha256: Option<[u8; 32]>,
@@ -3193,7 +3248,7 @@ struct HostShared {
         Mutex<BTreeMap<(String, String), AuthoritativeSchedulingOutcome>>,
     procedure_manifest: Mutex<Option<ProcedureManifest>>,
     ledger: GlobalLedger,
-    artifacts: ArtifactStore,
+    artifacts: Arc<ArtifactStore>,
     state: Arc<RuntimeStateStore>,
     agent_dispatcher_config: Option<AgentDispatcherConfig>,
     agent_dispatcher: Mutex<AgentDispatcherState>,
@@ -8537,28 +8592,69 @@ impl HostShared {
             ledger: &self.ledger,
             events: &self.events,
             verified: None,
+            frame_retention: Some((
+                self.owner_epoch,
+                frame_retention::capture_pin_reason(request),
+            )),
         };
-        let stored = self
-            .artifacts
-            .put(
-                ArtifactWriteRequest::new(
-                    ArtifactKind::CaptureFrame,
-                    &artifact_png,
-                    write_context,
-                    ArtifactIssuePolicy::new(
-                        ArtifactProducer::CaptureStore,
-                        if request.actor() == EventActor::Lab
-                            && request.source() == EventSource::Lab
-                        {
-                            RetentionClass::DebugFull
-                        } else {
-                            RetentionClass::Adaptive
-                        },
-                        ArtifactRedactionState::NotRequired,
-                    ),
-                ),
+        let frame_id = links.frame_id().ok_or_else(|| {
+            online_observation::observation_integrity_failure("observation_frame_identity_missing")
+        })?;
+        let mut pipeline = CapturePipeline::open_with_store(
+            Arc::clone(&self.artifacts),
+            frame_retention::spill_root(self.artifacts.root(), frame_id)
+                .map_err(online_observation::observation_artifact_failure)?,
+            CapturePipelineConfig {
+                retention_class: if request.actor() == EventActor::Lab
+                    && request.source() == EventSource::Lab
+                {
+                    RetentionClass::DebugFull
+                } else {
+                    RetentionClass::Adaptive
+                },
+                redaction_state: ArtifactRedactionState::NotRequired,
+                ..CapturePipelineConfig::default()
+            },
+            write_context.clone(),
+            &mut sink,
+        )
+        .map_err(online_observation::observation_artifact_failure)?;
+        let mut retained = frame.clone();
+        retained.original_png = Some(artifact_png);
+        let captured = pipeline
+            .record_frame(
+                FrameStoreFrameInput {
+                    frame_index: 0,
+                    file_name: "frame-0.png".to_owned(),
+                    label: "initial".to_owned(),
+                    recognition_state: RecognitionState::CompletedNoMatch,
+                    pinned_reason: None,
+                    frame: retained,
+                },
+                write_context.clone(),
                 &mut sink,
             )
+            .map_err(online_observation::observation_artifact_failure)?;
+        if !captured.frame.warnings.is_empty() {
+            return Err(online_observation::observation_artifact_failure(
+                ArtifactStoreError::fatal(
+                    "capture_spill_failed",
+                    "persist_readonly_frame",
+                    captured.frame.warnings.join("; "),
+                ),
+            ));
+        }
+        let reference = pipeline
+            .persist_frame(0, &mut sink)
+            .map_err(online_observation::observation_artifact_failure)?;
+        pipeline
+            .poll_pressure(&write_context, &mut sink)
+            .map_err(online_observation::observation_artifact_failure)?;
+        pipeline
+            .finish(&mut sink)
+            .map_err(online_observation::observation_artifact_failure)?;
+        pipeline
+            .cleanup_spills()
             .map_err(online_observation::observation_artifact_failure)?;
         let observation = ReadonlyObservation::new(
             frame.width,
@@ -8566,7 +8662,7 @@ impl HostShared {
             RecognitionVerdict::FrameDecoded,
             runtime_capture_backend(frame.backend_name)
                 .map_err(RequestFailure::poison_without_terminal)?,
-            stored.reference().project(true),
+            reference.project(true),
         )
         .map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -9540,18 +9636,17 @@ impl HostShared {
                     } else {
                         TaskOutcome::Cancelled
                     };
-                    let capture_summary =
-                        capture_evidence
-                            .finalize(terminal_outcome)
-                            .map_err(|summary_failure| {
-                                self.cleanup_composite_failure_with_run_links(
-                                    request,
-                                    token.clone(),
-                                    connection_id,
-                                    run_links,
-                                    summary_failure,
-                                )
-                            })?;
+                    let capture_summary = capture_evidence
+                        .finalize(terminal_outcome, self)
+                        .map_err(|summary_failure| {
+                            self.cleanup_composite_failure_with_run_links(
+                                request,
+                                token.clone(),
+                                connection_id,
+                                run_links,
+                                summary_failure,
+                            )
+                        })?;
                     let task_terminal = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -9615,18 +9710,19 @@ impl HostShared {
                 let task_failure = scheduled.then_some(failure.task_failure).flatten();
                 let failure_severity = task_failure.map(|evidence| evidence.severity);
                 if failure_severity.is_some() || !scheduled && !failure.poison_runtime {
-                    let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure) {
-                        Ok(summary) => summary,
-                        Err(summary_failure) => {
-                            return Err(self.cleanup_composite_failure_with_run_links(
-                                request,
-                                token,
-                                connection_id,
-                                run_links,
-                                summary_failure,
-                            ));
-                        }
-                    };
+                    let capture_summary =
+                        match capture_evidence.finalize(TaskOutcome::Failure, self) {
+                            Ok(summary) => summary,
+                            Err(summary_failure) => {
+                                return Err(self.cleanup_composite_failure_with_run_links(
+                                    request,
+                                    token,
+                                    connection_id,
+                                    run_links,
+                                    summary_failure,
+                                ));
+                            }
+                        };
                     let event = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -9686,7 +9782,7 @@ impl HostShared {
                         pin_failure,
                     ));
                 }
-                let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure) {
+                let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure, self) {
                     Ok(summary) => summary,
                     Err(summary_failure) => {
                         return Err(self.cleanup_composite_failure_with_run_links(
@@ -9763,7 +9859,7 @@ impl HostShared {
                 )),
             ));
         }
-        let capture_summary = match capture_evidence.finalize(outcome.outcome) {
+        let capture_summary = match capture_evidence.finalize(outcome.outcome, self) {
             Ok(summary) => summary,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure_with_run_links(
@@ -13654,6 +13750,8 @@ impl Drop for ActiveContainedRun<'_> {
 
 #[derive(Default)]
 struct CaptureEvidenceAccumulator {
+    pipeline: Option<CapturePipeline>,
+    pipeline_failure: Option<ArtifactStoreError>,
     counts: CapturePipelineCounts,
     next_frame_index: usize,
     last_frame_index: Option<usize>,
@@ -13685,7 +13783,7 @@ impl CaptureEvidenceAccumulator {
     fn persisted(
         &mut self,
         frame_index: usize,
-        stored: &StoredArtifact,
+        artifact: &ArtifactReference,
     ) -> Result<(), RequestFailure> {
         if self
             .frames
@@ -13710,7 +13808,7 @@ impl CaptureEvidenceAccumulator {
         self.frames.push(PersistedFrameEvidence {
             frame_index,
             pinned_reason: None,
-            artifact: stored.reference().clone(),
+            artifact: artifact.clone(),
         });
         self.last_frame_index = Some(frame_index);
         if self.pending_post_input {
@@ -13784,13 +13882,51 @@ impl CaptureEvidenceAccumulator {
         Ok(())
     }
 
-    fn finalize(mut self, outcome: TaskOutcome) -> Result<CapturePipelineSummary, RequestFailure> {
+    fn finalize(
+        mut self,
+        outcome: TaskOutcome,
+        host: &HostShared,
+    ) -> Result<CapturePipelineSummary, RequestFailure> {
         if self.pending_post_input {
             self.pin(None, PinnedFrameReason::PostInput, None)?;
         }
         self.pin_last(PinnedFrameReason::Terminal)?;
         if outcome == TaskOutcome::Failure {
             self.pin_last(PinnedFrameReason::Failure)?;
+        }
+        if let Some(pipeline) = self.pipeline.as_mut() {
+            if let Some(error) = self.pipeline_failure.take() {
+                return Err(online_observation::observation_artifact_failure(error));
+            }
+            let mut sink = online_observation::ObservationArtifactSink {
+                ledger: &host.ledger,
+                events: &host.events,
+                verified: None,
+                frame_retention: Some((
+                    host.owner_epoch,
+                    actingcommand_contract::ArtifactPinReason::Explicit,
+                )),
+            };
+            for ((index, reason), original) in &self.pinned {
+                if let Some(index) = index {
+                    let material = pipeline
+                        .pin_frame(*index, *reason, &mut sink)
+                        .map_err(online_observation::observation_artifact_failure)?;
+                    if original.as_ref() != Some(&material) {
+                        return Err(online_observation::observation_integrity_failure(
+                            "capture_pin_material_changed",
+                        ));
+                    }
+                }
+            }
+            let summary = pipeline
+                .finish(&mut sink)
+                .map_err(online_observation::observation_artifact_failure)?;
+            pipeline
+                .cleanup_spills()
+                .map_err(online_observation::observation_artifact_failure)?;
+            self.counts = summary.counts;
+            self.frames = summary.frames;
         }
         let pinned = self
             .pinned
@@ -13877,7 +14013,8 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
                 self.inner.current_recognition_id.map(|id| *id.transport()),
             );
         }
-        self.inner.diagnostic_pages(phase, results)
+        self.inner.diagnostic_pages(phase, results)?;
+        self.inner.record_capture_recognition(results)
     }
     fn record_guard_evaluation(
         &mut self,
@@ -14175,6 +14312,93 @@ impl RuntimeContainedTask<'_> {
             RuntimeReceiptState::Failed,
             None,
         ))
+    }
+
+    fn poll_capture_pressure(&mut self) -> Result<(), RequestFailure> {
+        if !self
+            .capture_evidence
+            .pipeline
+            .as_ref()
+            .is_some_and(CapturePipeline::is_paused)
+        {
+            return Ok(());
+        }
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.host.ledger,
+            events: &self.host.events,
+        };
+        let context = ArtifactWriteContext::new(
+            self.request.task_artifact_links(self.run_id),
+            self.links(),
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+        );
+        let pipeline = self
+            .capture_evidence
+            .pipeline
+            .as_mut()
+            .expect("paused pipeline exists");
+        pipeline
+            .poll_pressure(&context, &mut sink)
+            .map_err(online_observation::observation_artifact_failure)?;
+        if pipeline.is_paused() && self.finalizing.is_none() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "capture_pressure_paused",
+                    "admit_contained_task_capture",
+                    RuntimeErrorCode::CaptureFailed,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    fn record_capture_recognition(
+        &mut self,
+        results: &actingcommand_page_detector::PageBatchResult,
+    ) -> Result<(), RequestFailure> {
+        let Some(index) = self.capture_evidence.last_frame_index else {
+            return Ok(());
+        };
+        let state = match results {
+            Ok(outcomes) => {
+                if let Some(error) = outcomes
+                    .iter()
+                    .find_map(|outcome| outcome.result.as_ref().err())
+                {
+                    RecognitionState::Failed {
+                        reason: error.to_string().chars().take(256).collect(),
+                    }
+                } else {
+                    let mut matches = outcomes
+                        .iter()
+                        .filter_map(|outcome| outcome.result.as_ref().ok())
+                        .filter(|evaluation| evaluation.matched);
+                    let first = matches.next();
+                    if matches.next().is_some() {
+                        // No unique page relation is available to the frame cache.
+                        return Ok(());
+                    }
+                    RecognitionState::from_matched_page(
+                        first.map(|evaluation| evaluation.page_id.clone()),
+                    )
+                }
+            }
+            Err(error) => RecognitionState::Failed {
+                reason: error.to_string().chars().take(256).collect(),
+            },
+        };
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.host.ledger,
+            events: &self.host.events,
+        };
+        if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
+            pipeline
+                .record_recognition(index, state, &mut sink)
+                .map_err(online_observation::observation_artifact_failure)?;
+        }
+        Ok(())
     }
 
     const fn capture_origin(&self) -> (EventSource, OriginModule) {
@@ -14931,7 +15155,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 self.current_recognition_id.map(|id| *id.transport()),
             );
         }
-        self.diagnostic_pages(phase, results)
+        self.diagnostic_pages(phase, results)?;
+        self.record_capture_recognition(results)
     }
     fn record_guard_evaluation(
         &mut self,
@@ -14965,6 +15190,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
 
     fn capture(&mut self) -> Result<Frame, Self::Error> {
         self.ensure_active()?;
+        self.poll_capture_pressure()?;
         let instance_guard = self.host.instance_guard(self.token.instance_id())?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
         let frame_id = self
@@ -15000,13 +15226,6 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             Ok(frame) => {
                 self.ensure_active()?;
                 let frame_index = self.capture_evidence.captured()?;
-                let artifact_png = frame.png_for_artifact().map_err(|_| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_invalid",
-                        "run_contained_task_capture",
-                        RuntimeErrorCode::CaptureFailed,
-                    ))
-                })?;
                 let write_context = ArtifactWriteContext::new(
                     self.request
                         .task_artifact_links(self.run_id)
@@ -15014,28 +15233,77 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     links,
                     unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
                 );
-                let mut sink = RuntimeArtifactEventSink {
+                let mut sink = online_observation::ObservationArtifactSink {
                     ledger: &self.host.ledger,
                     events: &self.host.events,
+                    verified: None,
+                    frame_retention: Some((
+                        self.host.owner_epoch,
+                        frame_retention::capture_pin_reason(self.request),
+                    )),
                 };
-                let stored = self
-                    .host
-                    .artifacts
-                    .put(
-                        ArtifactWriteRequest::new(
-                            ArtifactKind::CaptureFrame,
-                            &artifact_png,
-                            write_context,
-                            ArtifactIssuePolicy::new(
-                                ArtifactProducer::CaptureStore,
-                                RetentionClass::DebugFull,
-                                ArtifactRedactionState::NotRequired,
-                            ),
-                        ),
+                let persistence = (|| {
+                    if self.capture_evidence.pipeline.is_none() {
+                        self.capture_evidence.pipeline = Some(CapturePipeline::open_with_store(
+                            Arc::clone(&self.host.artifacts),
+                            frame_retention::spill_root(
+                                self.host.artifacts.root(),
+                                self.run_id.transport(),
+                            )?,
+                            CapturePipelineConfig {
+                                retention_class: RetentionClass::DebugFull,
+                                redaction_state: ArtifactRedactionState::NotRequired,
+                                ..CapturePipelineConfig::default()
+                            },
+                            write_context.clone(),
+                            &mut sink,
+                        )?);
+                    }
+                    let pipeline = self
+                        .capture_evidence
+                        .pipeline
+                        .as_mut()
+                        .expect("capture pipeline initialized");
+                    let result = pipeline.record_frame(
+                        FrameStoreFrameInput {
+                            frame_index,
+                            file_name: format!("frame-{frame_index}.png"),
+                            label: if frame_index == 0 {
+                                "initial"
+                            } else if input_action_id.is_some() {
+                                "after-input"
+                            } else {
+                                "capture"
+                            }
+                            .to_owned(),
+                            recognition_state: RecognitionState::Pending,
+                            pinned_reason: self.finalizing.map(|_| PinnedFrameReason::Terminal),
+                            frame: frame.clone(),
+                        },
+                        write_context.clone(),
                         &mut sink,
-                    )
-                    .map_err(online_observation::observation_artifact_failure)?;
-                self.capture_evidence.persisted(frame_index, &stored)?;
+                    )?;
+                    if !result.frame.warnings.is_empty() {
+                        return Err(ArtifactStoreError::fatal(
+                            "capture_spill_failed",
+                            "persist_contained_task_frame",
+                            result.frame.warnings.join("; "),
+                        ));
+                    }
+                    let reference = pipeline.persist_frame(frame_index, &mut sink)?;
+                    pipeline.poll_pressure(&write_context, &mut sink)?;
+                    Ok(reference)
+                })();
+                let reference = match persistence {
+                    Ok(reference) => reference,
+                    Err(error) => {
+                        self.capture_evidence
+                            .pipeline_failure
+                            .get_or_insert(error.clone());
+                        return Err(online_observation::observation_artifact_failure(error));
+                    }
+                };
+                self.capture_evidence.persisted(frame_index, &reference)?;
                 self.last_frame_id = Some(frame_id);
                 self.last_capture_input_action_id = input_action_id;
                 if self.configuration_records > 0 && !self.configuration_capture_recorded {

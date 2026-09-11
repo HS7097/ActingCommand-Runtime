@@ -17,6 +17,63 @@ use std::time::{Duration, Instant};
 
 use crate::{RuntimeHostError, RuntimeHostResult, events::RuntimeEvents};
 
+pub(super) fn capture_pin_reason(
+    request: &actingcommand_contract::ValidatedRuntimeRequest<'_>,
+) -> ArtifactPinReason {
+    if request.actor() == EventActor::Lab && request.source() == EventSource::Lab {
+        ArtifactPinReason::Lab
+    } else {
+        ArtifactPinReason::Explicit
+    }
+}
+
+pub(super) fn spill_root(
+    root: &std::path::Path,
+    identity: &impl serde::Serialize,
+) -> ArtifactStoreResult<std::path::PathBuf> {
+    use sha2::{Digest, Sha256};
+    let canonical = serde_json::to_vec(identity).map_err(|error| {
+        ArtifactStoreError::fatal(
+            "frame_spill_identity_invalid",
+            "open_capture_pipeline",
+            error.to_string(),
+        )
+    })?;
+    Ok(root
+        .join("frame-spills")
+        .join(format!("{:x}", Sha256::digest(canonical))))
+}
+
+impl super::HostShared {
+    pub(super) fn maintain_frame_retention(&self) -> RuntimeHostResult<bool> {
+        let result = (|| {
+            let mut retention = super::lock(&self.frame_retention, "maintain_frame_retention")?;
+            let Some(retention) = retention.as_mut() else {
+                return Ok(false);
+            };
+            retention.maintain(&self.ledger, &self.artifacts, || {
+                self.fatal.is_shutdown_requested()
+            })?;
+            Ok(true)
+        })();
+        match result {
+            Ok(enabled) => Ok(enabled),
+            Err(error) => {
+                let mut failure = None;
+                self.record_lifecycle_result(
+                    super::RuntimeLifecycleFailureStage::OperationCleanup,
+                    &mut failure,
+                    Err(error),
+                );
+                let error =
+                    failure.expect("retention error remains explicit after lifecycle recording");
+                self.fatal.mark(error.clone())?;
+                Err(error)
+            }
+        }
+    }
+}
+
 /// The publication sink calls this while the original material publication guard is held.
 pub(super) fn pin_published_frames(
     ledger: &GlobalLedger,
@@ -177,6 +234,9 @@ impl FrameRetention {
                 return Ok(round);
             }
             self.after = Some(reference.artifact_id);
+            if candidates.ineligible.contains(&reference.artifact_id) {
+                continue;
+            }
             if reference.byte_count > RETENTION_ROUND_BYTES.saturating_sub(removed_bytes) {
                 continue;
             }

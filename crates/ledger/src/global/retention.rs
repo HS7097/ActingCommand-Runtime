@@ -29,6 +29,7 @@ pub(super) struct RetentionIndex {
     owner_epochs: BTreeMap<u64, OwnerEpoch>,
     closures: BTreeMap<ClosureScope, ClosureFacts>,
     released_leases: BTreeMap<(OwnerEpoch, InstanceId, LeaseId), TerminalEvent>,
+    quiescent_instances: BTreeMap<(OwnerEpoch, InstanceId), TerminalEvent>,
     pending_objects: BTreeSet<ArtifactId>,
     unlinked_warning: bool,
     through_sequence: u64,
@@ -105,6 +106,8 @@ impl ClosureScope {
 /// Every returned object counts against the round, including protected objects.
 pub struct ArtifactRetentionCandidates {
     pub references: Vec<ProjectedArtifactReference>,
+    /// These snapshot observations only skip work; admission still validates the current writer state.
+    pub ineligible: BTreeSet<ArtifactId>,
     pub next_after: Option<ArtifactId>,
     pub through_sequence: u64,
     pub recovery_pending: bool,
@@ -163,7 +166,7 @@ impl RetentionIndex {
     ) -> ArtifactRetentionCandidates {
         use std::ops::Bound::{Excluded, Unbounded};
         let bounds = (after.map_or(Unbounded, Excluded), Unbounded);
-        let references = if recovery_only {
+        let references: Vec<ProjectedArtifactReference> = if recovery_only {
             self.pending_objects
                 .range(bounds)
                 .take(RETENTION_ROUND_OBJECTS)
@@ -184,8 +187,35 @@ impl RetentionIndex {
         };
         let next_after = (references.len() == RETENTION_ROUND_OBJECTS)
             .then(|| references.last().expect("nonempty full page").artifact_id);
+        let ineligible = if recovery_only {
+            BTreeSet::new()
+        } else {
+            references
+                .iter()
+                .filter_map(|reference| {
+                    let object = self.objects.get(&reference.artifact_id)?;
+                    let eligible_scope = object.identity.as_ref().is_some_and(|identity| {
+                        self.closures
+                            .get(&ClosureScope::from_identity(identity))
+                            .is_some_and(|closure| closure.success.is_some())
+                            && self.close_for(identity).is_some()
+                    });
+                    (self.unlinked_warning
+                        || object.permanently_protected
+                        || object
+                            .pins
+                            .values()
+                            .any(|(_, reason)| *reason != ArtifactPinReason::Explicit)
+                        || object.proof.is_some()
+                        || object.verified.is_none()
+                        || !eligible_scope)
+                        .then_some(reference.artifact_id)
+                })
+                .collect()
+        };
         ArtifactRetentionCandidates {
             references,
+            ineligible,
             next_after,
             through_sequence: self.through_sequence,
             recovery_pending: recovery_only,
@@ -215,6 +245,9 @@ impl RetentionIndex {
         let (Some(identity), Some(verified)) = (&object.identity, &object.verified) else {
             return Ok(None);
         };
+        if indexes.lab_related(source(events, verified)?, self.through_sequence) {
+            return Ok(None);
+        }
         let Some(closure) = self.closures.get(&ClosureScope::from_identity(identity)) else {
             return Ok(None);
         };
@@ -245,12 +278,16 @@ impl RetentionIndex {
     }
 
     fn close_for(&self, identity: &ArtifactRetentionIdentity) -> Option<&TerminalEvent> {
-        if identity.run_id.is_none()
-            && let Some(lease) = identity.lease_id
-        {
-            return self
-                .released_leases
-                .get(&(identity.owner_epoch, identity.instance_id, lease));
+        if identity.run_id.is_none() {
+            return match identity.lease_id {
+                Some(lease) => {
+                    self.released_leases
+                        .get(&(identity.owner_epoch, identity.instance_id, lease))
+                }
+                None => self
+                    .quiescent_instances
+                    .get(&(identity.owner_epoch, identity.instance_id)),
+            };
         }
         self.closures
             .get(&ClosureScope::from_identity(identity))?
@@ -358,6 +395,12 @@ impl RetentionIndex {
             }
         }
         let Some(fact) = retention else { return Ok(()) };
+        if event.origin().source() != EventSource::Runtime
+            || event.origin().module() != actingcommand_contract::OriginModule::ArtifactStore
+            || event.origin().actor() != actingcommand_contract::EventActor::Runtime
+        {
+            return Err(invalid("artifact_retention_origin_invalid"));
+        }
         fact.validate()
             .map_err(|_| invalid("invalid_artifact_retention_fact"))?;
         let identity = fact.identity();
@@ -525,6 +568,21 @@ impl RetentionIndex {
     pub(super) fn apply<E: LedgerEventRead>(&mut self, event: &E) {
         if let Some(epoch) = recorded_owner(event) {
             self.owner_epochs.insert(event.sequence(), epoch);
+        }
+        if let EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload)) = event.payload()
+            && let RuntimeLifecyclePhase::ResourceQuiescence {
+                instance_id,
+                resource_count,
+                quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
+                owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
+            } = payload.phase()
+            && resource_count > 0
+            && event.links().instance_id() == Some(&instance_id)
+            && event.links().request_id().is_some()
+            && event.links().correlation_id().is_some()
+        {
+            self.quiescent_instances
+                .insert((payload.owner_epoch(), instance_id), terminal(event));
         }
         if event.links().run_id().is_none()
             && let (Some(owner), Some(instance), Some(lease)) = (
@@ -857,10 +915,18 @@ fn same_links<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentit
 }
 
 fn same_close_scope<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
-    if identity.run_id.is_none() && identity.lease_id.is_some() {
+    if identity.run_id.is_none() {
         return event.links().instance_id() == Some(&identity.instance_id)
-            && event.links().lease_id() == identity.lease_id.as_ref()
-            && event.links().run_id().is_none();
+            && match identity.lease_id {
+                Some(lease) => {
+                    event.links().lease_id() == Some(&lease) && event.links().run_id().is_none()
+                }
+                None => {
+                    event.links().request_id().is_some()
+                        && event.links().correlation_id().is_some()
+                        && successful_close(event, identity)
+                }
+            };
     }
     same_scope(event, identity)
 }
@@ -900,6 +966,13 @@ fn scopes<E: LedgerEventRead>(event: &E) -> impl Iterator<Item = RetentionScope>
 }
 
 fn recorded_owner<E: LedgerEventRead>(event: &E) -> Option<OwnerEpoch> {
+    if let Some(capacity) = event
+        .payload()
+        .performance_summary()
+        .and_then(|summary| summary.capacity())
+    {
+        return Some(capacity.owner_epoch);
+    }
     if let Some(fact) = event.payload().runtime_state() {
         return Some(match fact {
             RuntimeStateFact::Observed { state, .. } => state.owner_epoch(),
@@ -943,6 +1016,10 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                     "artifact_eviction_intent_pending",
                     "admit_artifact_eviction",
                 ));
+            }
+            // Present material stays sealed for explicit disposition; startup never repeats an unknown unlink.
+            if guard.material_present() {
+                return Ok((ArtifactEvictionAdmission::Deferred, Vec::new()));
             }
             let original = source(&self.events, &proof.intent)?;
             let Some(ArtifactRetentionFact::EvictionIntent(intent)) =

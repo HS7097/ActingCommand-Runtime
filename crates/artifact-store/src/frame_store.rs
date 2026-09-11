@@ -543,6 +543,36 @@ impl FrameStore {
             .map(|entry| &entry.material)
     }
 
+    pub(crate) fn record_recognition(
+        &mut self,
+        frame_index: usize,
+        state: RecognitionState,
+    ) -> CliOutcome<()> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.frame_index == frame_index)
+            .ok_or_else(|| {
+                CliError::usage(format!("unknown frame index {frame_index} for recognition"))
+            })?;
+        let previous_matches = self.entries[..index]
+            .iter()
+            .rev()
+            .find(|entry| entry.retained)
+            .is_some_and(|entry| entry.recognition_state.can_dedupe_with(&state));
+        let entry = &mut self.entries[index];
+        entry.key_frame = entry.pinned_reason.is_some()
+            || entry.label == "initial"
+            || entry.label.contains("click")
+            || entry.label.contains("action")
+            || entry.label.contains("before")
+            || entry.label.contains("after")
+            || matches!(state, RecognitionState::Failed { .. })
+            || !previous_matches;
+        entry.recognition_state = state;
+        Ok(())
+    }
+
     /// A pin cannot resurrect a perceptually similar representative as the original frame.
     pub fn pin_frame(&mut self, frame_index: usize, reason: PinnedFrameReason) -> CliOutcome<()> {
         let entry = self
@@ -997,13 +1027,14 @@ impl FrameStore {
         store: Arc<ArtifactStore>,
         reference: ArtifactReference,
     ) -> CliOutcome<()> {
-        let entry = self
+        let index = self
             .entries
-            .iter_mut()
-            .find(|entry| entry.frame_index == frame_index)
+            .iter()
+            .position(|entry| entry.frame_index == frame_index)
             .ok_or_else(|| {
                 CliError::usage(format!("unknown frame index {frame_index} for persistence"))
             })?;
+        let entry = &mut self.entries[index];
         if !entry.retained {
             return Err(CliError::usage(format!(
                 "deduplicated frame index {frame_index} cannot be marked persisted"
@@ -1020,6 +1051,9 @@ impl FrameStore {
         }
         entry.artifact_persisted = true;
         entry.artifact_material = Some(PersistedFrameMaterial { store, reference });
+        if matches!(entry.storage, FrameStorage::Spilled { .. }) {
+            self.release_persisted_memory(index)?;
+        }
         Ok(())
     }
 
@@ -1149,10 +1183,13 @@ impl FrameStore {
     }
 
     fn release_persisted_memory(&mut self, index: usize) -> CliOutcome<()> {
-        if !matches!(self.entries[index].storage, FrameStorage::Resident(_)) {
+        if !matches!(
+            self.entries[index].storage,
+            FrameStorage::Resident(_) | FrameStorage::Spilled { .. }
+        ) {
             return Ok(());
         }
-        let Some(material) = self.entries[index].artifact_material.clone() else {
+        let Some(material) = self.entries[index].artifact_material.take() else {
             return Err(CliError::fatal(
                 "frame_material_unavailable",
                 "release_persisted_frame_memory",

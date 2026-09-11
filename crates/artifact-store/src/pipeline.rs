@@ -487,12 +487,54 @@ impl CapturePipeline {
         Ok(resumed)
     }
 
+    pub fn record_recognition(
+        &mut self,
+        frame_index: usize,
+        state: crate::RecognitionState,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<()> {
+        self.frame_store.record_recognition(frame_index, state)?;
+        let context = self.contexts.get(&frame_index).cloned().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "missing_frame_context",
+                "record_capture_recognition",
+                "original frame context is missing",
+            )
+        })?;
+        self.poll_pressure(&context, sink)?;
+        Ok(())
+    }
+
     pub fn finish(
         &mut self,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<CapturePipelineSummary> {
         self.persist_candidates(true, sink)?;
         self.summary()
+    }
+
+    /// The caller owns the configured temporary directory and has finished material publication.
+    pub fn cleanup_spills(&mut self) -> ArtifactStoreResult<()> {
+        if !self
+            .frame_store
+            .persistence_candidate_indexes(true)
+            .is_empty()
+        {
+            return Err(ArtifactStoreError::fatal(
+                "frame_spill_material_pending",
+                "cleanup_frame_spills",
+                "original frame publication is incomplete",
+            ));
+        }
+        let warnings = self.frame_store.cleanup_temp();
+        if !warnings.is_empty() {
+            return Err(ArtifactStoreError::fatal(
+                "frame_spill_cleanup_failed",
+                "finish_capture_pipeline",
+                warnings.join("; "),
+            ));
+        }
+        Ok(())
     }
 
     pub fn summary(&self) -> ArtifactStoreResult<CapturePipelineSummary> {
