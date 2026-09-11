@@ -36,6 +36,14 @@ remain. Template PNG/ROI preparation precedes that deadline's original start.
 Forensic event reads expose the optional typed fields; a run summary copies
 `task_timing` only from its original terminal. Field absence means not recorded.
 
+`request_id` identifies the actual contained-task execution. Scheduled runs also
+retain the distinct `admission_request_id` from their validated PolicyRunContext,
+with the original correlation/task/run identity. The task terminal keeps its
+execution request link. An existing RuntimeFailed lifecycle carrier may retain
+its admission request link only when that recorded admission ID and all three
+correlation/task/run links match the observation. Neither request is rewritten,
+and this association creates no additional event or bypass of failure handling.
+
 `actingcommand.runtime.task-diagnostic.v1` is one immutable, task-scoped
 `DiagnosticJson` artifact produced by the Runtime through ArtifactStore. Its
 authority is the original GlobalLedger `ArtifactVerified` reference. Unpublished

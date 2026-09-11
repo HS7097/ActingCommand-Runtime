@@ -683,7 +683,7 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<OWNER_EPOCH>".to_string();
             return;
         }
-        Some("request_id" | "task_request_id") => {
+        Some("request_id" | "task_request_id" | "admission_request_id") => {
             *text = "<REQUEST_ID>".to_string();
             return;
         }

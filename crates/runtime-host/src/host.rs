@@ -8980,6 +8980,7 @@ impl HostShared {
             ExecutionBackendProvenance::PhysicalDevice,
             None,
             active_run.control(),
+            None,
         )
     }
 
@@ -9299,6 +9300,7 @@ impl HostShared {
             execution_provenance,
             Some(run_links),
             active_run.control(),
+            Some(context.request().request_id()),
         )?;
         Ok((task_request_message, success))
     }
@@ -9318,6 +9320,7 @@ impl HostShared {
         execution_provenance: ExecutionBackendProvenance,
         run_links: Option<RuntimeRunLinks>,
         control: Arc<ContainedRunControl>,
+        admission_request_id: Option<RequestId>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
         let scheduling_outcome = prepared
@@ -9365,6 +9368,8 @@ impl HostShared {
             diagnostic_records: 0,
             task_timing: task_timing::TaskTimingObserver::new(
                 control.request_id,
+                admission_request_id,
+                request.correlation_id(),
                 *task_id.transport(),
                 *run_id.transport(),
             ),

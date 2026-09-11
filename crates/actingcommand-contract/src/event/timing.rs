@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    FrameId, RecognitionId, RequestId, RunId, SanitizationError, TaskId, TaskTimingFailure,
+    CorrelationId, FrameId, RecognitionId, RequestId, RunId, SanitizationError, TaskId,
+    TaskTimingFailure,
 };
 use serde::{Deserialize, Serialize};
 
@@ -172,6 +173,10 @@ pub struct TaskTimingPhaseObservations {
 pub struct TaskTimingObservations {
     pub clock: TimingObservationClock,
     pub request_id: RequestId,
+    /// The distinct scheduler admission request when this run was scheduled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_request_id: Option<RequestId>,
+    pub correlation_id: CorrelationId,
     pub task_id: TaskId,
     pub run_id: RunId,
     pub preflight: TaskTimingPhaseObservations,

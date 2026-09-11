@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    FrameId, ObservedMicroseconds, RecognitionId, RequestId, RunId, TaskId,
+    CorrelationId, FrameId, ObservedMicroseconds, RecognitionId, RequestId, RunId, TaskId,
     TaskTimingBudgetObservation, TaskTimingFailure, TaskTimingFailureObservation,
     TaskTimingObservationState, TaskTimingObservations, TaskTimingPhase,
     TaskTimingPhaseObservations, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
@@ -17,11 +17,19 @@ pub(super) struct TaskTimingObserver {
 }
 
 impl TaskTimingObserver {
-    pub(super) fn new(request_id: RequestId, task_id: TaskId, run_id: RunId) -> Self {
+    pub(super) fn new(
+        request_id: RequestId,
+        admission_request_id: Option<RequestId>,
+        correlation_id: CorrelationId,
+        task_id: TaskId,
+        run_id: RunId,
+    ) -> Self {
         Self {
             value: Box::new(TaskTimingObservations {
                 clock: TimingObservationClock::ProcessInstant,
                 request_id,
+                admission_request_id,
+                correlation_id,
                 task_id,
                 run_id,
                 preflight: TaskTimingPhaseObservations::default(),
