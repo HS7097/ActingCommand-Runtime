@@ -13120,9 +13120,8 @@ impl HostShared {
             persisted.push((observation, event));
         }
         if !persisted.is_empty() {
-            self.synchronize_fact_store_under_gate().map_err(|error| {
+            self.synchronize_fact_store_under_gate().inspect_err(|_| {
                 self.lifecycle_append_failed.store(true, Ordering::Release);
-                error
             })?;
             for (observation, event) in &persisted {
                 let _ = observation.recorded_event.set(*event.event_id());

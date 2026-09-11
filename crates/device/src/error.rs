@@ -396,8 +396,7 @@ enum StoredDiagnosticMessage {
 
 #[derive(Clone)]
 pub struct DeviceError {
-    vendor_stdio: Vec<DeviceStdioObservation>,
-    adb: Option<Box<StoredAdbEvidence>>,
+    evidence: Option<Box<StoredDeviceEvidence>>,
     occurrence: Arc<DeviceCloseOccurrence>,
     severity: DeviceErrorSeverity,
     message: String,
@@ -411,33 +410,35 @@ pub struct DeviceError {
 }
 
 #[derive(Clone, Default)]
-struct StoredAdbEvidence {
+struct StoredDeviceEvidence {
+    vendor_stdio: Vec<DeviceStdioObservation>,
     command: Option<crate::AdbCommandEvidence>,
     recovery: Option<crate::AdbTargetRecovery>,
 }
 
 impl DeviceError {
     pub fn adb_command(&self) -> Option<&crate::AdbCommandEvidence> {
-        self.adb.as_deref().and_then(|value| value.command.as_ref())
+        self.evidence
+            .as_deref()
+            .and_then(|value| value.command.as_ref())
     }
     pub(crate) fn with_adb_command(mut self, evidence: crate::AdbCommandEvidence) -> Self {
-        self.adb.get_or_insert_with(Default::default).command = Some(evidence);
+        self.evidence.get_or_insert_with(Default::default).command = Some(evidence);
         self
     }
     pub fn adb_recovery(&self) -> Option<&crate::AdbTargetRecovery> {
-        self.adb
+        self.evidence
             .as_deref()
             .and_then(|value| value.recovery.as_ref())
     }
     pub fn with_adb_recovery(mut self, report: crate::AdbTargetRecovery) -> Self {
-        self.adb.get_or_insert_with(Default::default).recovery = Some(report);
+        self.evidence.get_or_insert_with(Default::default).recovery = Some(report);
         self
     }
 
     pub fn transient(message: impl Into<String>) -> Self {
         Self {
-            vendor_stdio: Vec::new(),
-            adb: None,
+            evidence: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity: DeviceErrorSeverity::Transient,
             message: message.into(),
@@ -453,8 +454,7 @@ impl DeviceError {
 
     pub fn fatal(message: impl Into<String>) -> Self {
         Self {
-            vendor_stdio: Vec::new(),
-            adb: None,
+            evidence: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity: DeviceErrorSeverity::Fatal,
             message: message.into(),
@@ -470,8 +470,7 @@ impl DeviceError {
 
     pub fn with_severity(severity: DeviceErrorSeverity, message: impl Into<String>) -> Self {
         Self {
-            vendor_stdio: Vec::new(),
-            adb: None,
+            evidence: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity,
             message: message.into(),
@@ -581,14 +580,15 @@ impl DeviceError {
     /// Attach owner observations without changing any close occurrence or outcome.
     pub fn with_vendor_stdio_facts(mut self, facts: Arc<crate::VendorStdioFacts>) -> Self {
         if self.resource_close_causes.is_empty() {
-            if let Some(observation) = self
+            let evidence = self.evidence.get_or_insert_with(Default::default);
+            if let Some(observation) = evidence
                 .vendor_stdio
                 .iter_mut()
                 .find(|observation| Arc::ptr_eq(&observation.occurrence, &self.occurrence))
             {
                 observation.facts = Arc::clone(&facts);
             } else {
-                self.vendor_stdio.push(DeviceStdioObservation {
+                evidence.vendor_stdio.push(DeviceStdioObservation {
                     facts: Arc::clone(&facts),
                     occurrence: Arc::clone(&self.occurrence),
                 });
@@ -603,16 +603,26 @@ impl DeviceError {
     }
 
     pub fn vendor_stdio(&self) -> &[DeviceStdioObservation] {
-        &self.vendor_stdio
+        self.evidence
+            .as_deref()
+            .map_or(&[], |evidence| evidence.vendor_stdio.as_slice())
     }
 
     pub fn with_stdio_observations(mut self, observations: &[DeviceStdioObservation]) -> Self {
-        merge_stdio_observations(&mut self.vendor_stdio, observations);
+        if !observations.is_empty() {
+            merge_stdio_observations(
+                &mut self
+                    .evidence
+                    .get_or_insert_with(Default::default)
+                    .vendor_stdio,
+                observations,
+            );
+        }
         self
     }
 
     pub fn merge_resource_cleanup(mut self, cleanup: Self) -> Self {
-        merge_stdio_observations(&mut self.vendor_stdio, &cleanup.vendor_stdio);
+        self = self.with_stdio_observations(cleanup.vendor_stdio());
         let mut causes = self.resource_close_causes.into_vec();
         let mut new_occurrence = cleanup.resource_close_causes.is_empty()
             && !Arc::ptr_eq(&self.occurrence, &cleanup.occurrence);
