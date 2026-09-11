@@ -54,6 +54,17 @@ observations, not event identity or portable equality inputs.
 
 ## Reads, projections and subscriptions
 
+`verify_transaction_event(&RuntimeDatabase, &RuntimeTransaction, &PersistedEvent)`
+checks an already verified opaque fact synchronously inside the same owner's
+borrowed transaction. It authenticates the ledger metadata/format and compares the
+exact sequence's canonical row, identity, hash/tag, predecessor hash, link row and
+ordered artifact metadata through the Ledger's existing private representation.
+Missing or inconsistent rows and a different Database identity fail explicitly.
+The caller retains transaction/rollback ownership. The check does not acquire a
+Database lock, send a writer command, commit, append or read artifact bytes. It is
+an exact-row check for derived-state work; complete ledger recovery remains the
+source of the opaque input and the authority for full-history validity.
+
 Store reads operate on the verified committed snapshot already materialized at
 open and maintained by append. They perform no fallible storage I/O, so this
 private interface returns values directly. A future backend using this boundary

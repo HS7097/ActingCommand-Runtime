@@ -142,14 +142,46 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             Arc::clone(&database),
         )
         .expect("writer");
-        ledger.append(draft(1)).expect("first");
-        ledger.append(draft(2)).expect("second");
+        let first = ledger.append(draft(1)).expect("first");
+        let second = ledger.append(draft(2)).expect("second");
+        {
+            let mut connection = database.connection("original row specification").unwrap();
+            let before = connection.total_changes();
+            let transaction = connection.transaction().unwrap();
+            let borrowed = database.borrow_transaction(&transaction);
+            verify_transaction_event(&database, &borrowed, &first).expect("first original row");
+            verify_transaction_event(&database, &borrowed, &second).expect("second original row");
+            assert!(!transaction.is_autocommit());
+            assert_eq!(transaction.total_changes(), before);
+            transaction.rollback().unwrap();
+        }
         ledger.close().expect("close");
         database
             .connection("mutate assigned matrix")
             .expect("connection")
             .execute_batch(sql)
             .expect("mutate fixture");
+        {
+            let mut connection = database.connection("changed original rows").unwrap();
+            let transaction = connection.transaction().unwrap();
+            let borrowed = database.borrow_transaction(&transaction);
+            let failures = [&first, &second]
+                .into_iter()
+                .filter_map(|event| verify_transaction_event(&database, &borrowed, event).err())
+                .collect::<Vec<_>>();
+            assert!(
+                !failures.is_empty(),
+                "{label}: changed original rows must fail"
+            );
+            for error in failures {
+                assert!(error.is_fatal(), "{label}: {error}");
+                assert!(
+                    !format!("{error:?} {error}").contains("token-secret"),
+                    "{label}: disclosure"
+                );
+            }
+            transaction.rollback().unwrap();
+        }
         let error =
             GlobalLedger::open_sqlite_candidate(config(root.path(), "matrix-reopen"), database)
                 .expect_err(label);
@@ -312,6 +344,17 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
     for input in inputs.0 {
         let expected = segment.append(input.clone()).expect("reference event");
         assert_eq!(sqlite.append(input).expect("candidate event"), expected);
+        let mut connection = database
+            .connection("artifact metadata original row")
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        verify_transaction_event(
+            &database,
+            &database.borrow_transaction(&transaction),
+            &expected,
+        )
+        .expect("exact artifact references without reopening material");
+        transaction.rollback().unwrap();
     }
     assert_eq!(
         sqlite

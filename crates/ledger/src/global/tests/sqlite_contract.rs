@@ -270,6 +270,28 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         .expect("imported facts");
     assert_eq!(&facts[..2], &expected);
     assert_eq!(facts.len(), 3);
+    {
+        let mut connection = imported_database
+            .connection("formal original rows")
+            .unwrap();
+        let before = connection.total_changes();
+        let transaction = connection.transaction().unwrap();
+        let borrowed = imported_database.borrow_transaction(&transaction);
+        for event in &facts {
+            verify_transaction_event(&imported_database, &borrowed, event)
+                .expect("imported original fact in the same transaction");
+        }
+        let other_owner = RuntimeDatabase::open_existing(imported_root.path(), true).unwrap();
+        assert_eq!(
+            verify_transaction_event(&other_owner, &borrowed, &facts[0])
+                .expect_err("different Database owner")
+                .code(),
+            "ledger_transaction_owner_mismatch"
+        );
+        assert!(!transaction.is_autocommit());
+        assert_eq!(transaction.total_changes(), before);
+        transaction.rollback().unwrap();
+    }
     imported
         .append(event("after-cutover"))
         .expect("formal append preserves marker");
