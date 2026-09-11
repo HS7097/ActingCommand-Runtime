@@ -324,3 +324,31 @@ must equal the latest effective source, including catalog identity/version and v
 material; an older matching hash is insufficient. File publication/removal, Provider,
 device effects and capacity sampling remain outside the SQL transaction. The original
 performance monitor and Business/Drain admission retain their own committed-fact boundary.
+
+## Release source references
+
+Release State persists a versioned `ReleaseLedgerSourceReference` containing the original
+event identity, sequence and canonical-record digest. `capture_release_source_reference`
+checks the opaque fact against the same borrowed RuntimeDatabase transaction before
+generating the locator. Deserialization confers no fact authority. Each later
+`verify_release_source_reference` checks the original record, native typed metadata,
+canonical hash/tag, predecessor, indexed fields, links and ordered artifact metadata in
+the caller's transaction. The returned opaque relationship exposes the original origin,
+links and typed payload, with no material access capability. Only ReleaseStaged,
+ReleaseActivated, ReleaseRolledBack and StateMigrated for `release.legacy.baseline` are
+eligible; the Release owner checks the corresponding manifest, transition or migration.
+
+`read_release_baseline_source` verifies the fixed authenticated global prefix in pages
+of at most 256 original records before returning absence or one exact baseline source.
+It reads every original record so damaged filter columns cannot conceal a boundary,
+checks the chain/head and complete native index counts, and reports duplicate boundaries
+with both original locators. No new fact is written. A standalone State database can
+return absence only with format zero and no Ledger tables or other Ledger schema objects;
+partial schema, existing format/metadata declarations and invalid rows fail. A persisted
+locator always fails when its Ledger storage is absent. State also checks all its own
+boundary/source/migration records before permitting first capture.
+
+These synchronous interfaces borrow the existing transaction and neither acquire a new
+connection nor wait for the writer, read artifact bytes, publish an event or commit.
+Their module verification does not replace the complete Release consumer's recovery,
+atomicity and required CI evidence.

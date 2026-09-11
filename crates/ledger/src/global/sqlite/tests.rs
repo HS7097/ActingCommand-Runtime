@@ -56,6 +56,19 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
         assert_eq!(decode(encode(value)), value);
     }
     drop(connection);
+    {
+        let mut connection = database.connection("uninitialized Ledger source").unwrap();
+        let before = connection.total_changes();
+        let transaction = connection.transaction().unwrap();
+        assert!(
+            read_release_baseline_source(&database, &database.borrow_transaction(&transaction))
+                .expect("Standalone State has no Ledger baseline")
+                .is_none()
+        );
+        assert!(!transaction.is_autocommit());
+        assert_eq!(transaction.total_changes(), before);
+        transaction.rollback().unwrap();
+    }
     let sqlite = GlobalLedger::open_sqlite_candidate(
         config(root.path(), "integer-writer"),
         Arc::clone(&database),
@@ -199,6 +212,17 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             let borrowed = database.borrow_transaction(&transaction);
             verify_transaction_event(&database, &borrowed, &first).expect("first original row");
             verify_transaction_event(&database, &borrowed, &second).expect("second original row");
+            assert!(
+                read_release_baseline_source(&database, &borrowed)
+                    .expect("authenticated prefix has no Release baseline")
+                    .is_none()
+            );
+            assert_eq!(
+                capture_release_source_reference(&database, &borrowed, &first)
+                    .expect_err("Command facts cannot become Release source references")
+                    .code(),
+                "release_ledger_source_type_unsupported"
+            );
             assert!(!transaction.is_autocommit());
             assert_eq!(transaction.total_changes(), before);
             transaction.rollback().unwrap();
@@ -215,6 +239,13 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             let mut connection = database.connection("changed original rows").unwrap();
             let transaction = connection.transaction().unwrap();
             let borrowed = database.borrow_transaction(&transaction);
+            let baseline_error = read_release_baseline_source(&database, &borrowed)
+                .expect_err("corrupt prefix cannot prove baseline absence");
+            assert!(baseline_error.is_fatal(), "{label}: {baseline_error}");
+            assert!(
+                !format!("{baseline_error:?} {baseline_error}").contains("token-secret"),
+                "{label}: baseline disclosure"
+            );
             let failures = [&first, &second]
                 .into_iter()
                 .filter_map(|event| verify_transaction_event(&database, &borrowed, event).err())

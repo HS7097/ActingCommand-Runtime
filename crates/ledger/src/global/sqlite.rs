@@ -31,7 +31,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
+mod release_source;
 mod views;
+pub use release_source::*;
 
 const FORMAL_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";

@@ -11,7 +11,11 @@ mod sqlite;
 mod storage;
 mod store;
 pub use migration::*;
-pub use sqlite::{SqliteLedgerReadOnly, verify_transaction_event};
+pub use sqlite::{
+    RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
+    VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
+    verify_release_source_reference, verify_transaction_event,
+};
 
 pub(crate) use projection::query_matches;
 
