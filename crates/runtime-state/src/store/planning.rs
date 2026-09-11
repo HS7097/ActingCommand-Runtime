@@ -107,9 +107,9 @@ impl PlanningRows {
     }
 
     fn load(&mut self, key: PlanningKey) -> RuntimeStateResult<()> {
-        if !self.baseline.contains_key(&key) {
+        if let std::collections::btree_map::Entry::Vacant(slot) = self.baseline.entry(key.clone()) {
             let entry = self.store.read_projection_entry(key.0, &key.1)?;
-            self.baseline.insert(key.clone(), entry.clone());
+            slot.insert(entry.clone());
             self.staged.insert(key, entry);
         }
         Ok(())
