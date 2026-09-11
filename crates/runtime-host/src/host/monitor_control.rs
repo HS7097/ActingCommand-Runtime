@@ -6,6 +6,12 @@ const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 
+enum MonitorFailureStage {
+    Capture,
+    Artifact,
+    Recognition,
+}
+
 struct MonitorRecoveryAdmission {
     reason: MonitorRecoveryCoordinationReason,
     lease_id: Option<LeaseId>,
@@ -194,6 +200,42 @@ impl HostShared {
             links.clone(),
             MonitorPayloadDraft::requested(AuditInput::new()),
         )?;
+        if let Err(error) = self.admit_capacity() {
+            if error.is_fatal() {
+                return Err(error);
+            }
+            let mut registry = lock(&self.monitor_registry, "refuse_monitor_capacity")?;
+            let update = registry.prepare_failure(
+                probe,
+                started_at_unix_ms,
+                unix_ms_now()?,
+                error.projection().code,
+            )?;
+            let failed = self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links.clone(),
+                MonitorPayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .with_runtime_state(update.fact)
+                .map_err(|_| {
+                    RuntimeHostError::fatal(
+                        "monitor_state_invalid",
+                        "refuse_monitor_capacity",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?,
+            )?;
+            registry.apply(&failed)?;
+            drop(registry);
+            self.record_required_failure(&error, &failed, links)?;
+            return Ok(());
+        }
         self.append_event_raw(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -232,7 +274,13 @@ impl HostShared {
                 if self.retain_unconfirmed_resources(&error, links.clone())? {
                     return Err(error);
                 }
-                return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
+                return self.finish_monitor_failure(
+                    probe,
+                    &links,
+                    started_at_unix_ms,
+                    error,
+                    MonitorFailureStage::Capture,
+                );
             }
         };
         let artifact_png = match frame.png_for_artifact() {
@@ -243,30 +291,15 @@ impl HostShared {
                     "run_monitor_capture",
                     RuntimeErrorCode::CaptureFailed,
                 );
-                return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
+                return self.finish_monitor_failure(
+                    probe,
+                    &links,
+                    started_at_unix_ms,
+                    error,
+                    MonitorFailureStage::Capture,
+                );
             }
         };
-        let write_context =
-            ArtifactWriteContext::new(issued.artifact_links(), links.clone(), unix_ms_now()?);
-        let mut sink = RuntimeArtifactEventSink {
-            ledger: &self.ledger,
-            events: &self.events,
-        };
-        self.artifacts
-            .put(
-                ArtifactWriteRequest::new(
-                    ArtifactKind::CaptureFrame,
-                    &artifact_png,
-                    write_context,
-                    ArtifactIssuePolicy::new(
-                        ArtifactProducer::CaptureStore,
-                        RetentionClass::Adaptive,
-                        ArtifactRedactionState::NotRequired,
-                    ),
-                ),
-                &mut sink,
-            )
-            .map_err(RuntimeHostError::artifact)?;
         self.append_event_raw(
             EventSeverity::Info,
             EventSource::Device,
@@ -281,6 +314,37 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
+        let write_context =
+            ArtifactWriteContext::new(issued.artifact_links(), links.clone(), unix_ms_now()?);
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        if let Err(error) = self.artifacts.put(
+            ArtifactWriteRequest::new(
+                ArtifactKind::CaptureFrame,
+                &artifact_png,
+                write_context,
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::CaptureStore,
+                    RetentionClass::Adaptive,
+                    ArtifactRedactionState::NotRequired,
+                ),
+            ),
+            &mut sink,
+        ) {
+            let error = RuntimeHostError::artifact(error);
+            if error.is_fatal() {
+                return Err(error);
+            }
+            return self.finish_monitor_failure(
+                probe,
+                &links,
+                started_at_unix_ms,
+                error,
+                MonitorFailureStage::Artifact,
+            );
+        }
 
         let observation = match self.execution.observe_monitor(
             &probe.instance_alias,
@@ -295,7 +359,7 @@ impl HostShared {
                     &links,
                     started_at_unix_ms,
                     error,
-                    false,
+                    MonitorFailureStage::Recognition,
                 );
             }
         };
@@ -446,15 +510,15 @@ impl HostShared {
         links: &EventLinksDraft,
         started_at_unix_ms: u64,
         error: RuntimeHostError,
-        capture_failed: bool,
+        stage: MonitorFailureStage,
     ) -> RuntimeHostResult<()> {
         let runtime_code = error.projection().code;
-        let diagnostic = if capture_failed {
-            DiagnosticCode::CaptureFailed
-        } else {
-            DiagnosticCode::RecognitionFailed
+        let diagnostic = match stage {
+            MonitorFailureStage::Capture => DiagnosticCode::CaptureFailed,
+            MonitorFailureStage::Artifact => DiagnosticCode::RuntimeDiagnostic,
+            MonitorFailureStage::Recognition => DiagnosticCode::RecognitionFailed,
         };
-        if capture_failed {
+        if matches!(stage, MonitorFailureStage::Capture) {
             let payload = CapturePayloadDraft::failed_with_causes(
                 EventAction::CaptureObserve,
                 diagnostic,
@@ -497,7 +561,11 @@ impl HostShared {
             links.clone(),
             MonitorPayloadDraft::failed(
                 diagnostic,
-                EffectDisposition::NotPerformed,
+                if matches!(stage, MonitorFailureStage::Artifact) {
+                    EffectDisposition::Performed
+                } else {
+                    EffectDisposition::NotPerformed
+                },
                 AuditInput::new(),
             )
             .with_runtime_state(update.fact)
@@ -510,6 +578,10 @@ impl HostShared {
             })?,
         )?;
         registry.apply(&failed)?;
+        drop(registry);
+        if matches!(stage, MonitorFailureStage::Artifact) {
+            self.record_required_failure(&error, &failed, links.clone())?;
+        }
         if error.code() == "monitor_observation_invalid" {
             return Err(error);
         }

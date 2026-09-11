@@ -1885,6 +1885,9 @@ impl RuntimeClient {
         ))
     }
 
+    /// Reads the shared ledger view at the request's explicit or first-page snapshot.
+    /// Start a new first page when changing the query, connection, or offline root;
+    /// a cursor binds query/profile/snapshot, not the identity of another source.
     pub fn query_event_page(
         &self,
         query: EventQuery,
@@ -4695,6 +4698,7 @@ mod run_summary_package_tests {
         .sanitize(&RejectSecrets)
         .expect("sanitize package admission");
         ProjectedEvent {
+            views: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),
@@ -4802,6 +4806,7 @@ mod run_summary_settlement_tests {
         .sanitize(&RejectSecrets)
         .expect("sanitize settlement fixture");
         ProjectedEvent {
+            views: Vec::new(),
             schema_version: sanitized.schema_version().to_owned(),
             sequence,
             event_id: *sanitized.event_id(),

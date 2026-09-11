@@ -120,7 +120,21 @@ fn open_read_only_is_byte_identical_and_does_not_contend_with_writer() {
         .expect("open read-only snapshot");
 
     assert_eq!(tree_bytes(&root), before);
-    assert_eq!(snapshot.events(), &[first]);
+    assert_eq!(snapshot.events(), std::slice::from_ref(&first));
+    let metadata = GlobalLedger::open_metadata(super::GlobalLedgerEvidenceConfig::new(temp.path()))
+        .expect("metadata does not contend with writer");
+    let page = metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Lab,
+            &actingcommand_contract::RuntimeEventQueryPageRequest::default(),
+        )
+        .expect("metadata page");
+    assert_eq!(page.events()[0].event_id, *first.event_id());
+    assert_eq!(metadata.latest_sequence(), first.sequence());
+    assert!(metadata.read_complete());
+    assert_eq!(metadata.writer_metadata(), snapshot.writer_metadata());
+    assert_eq!(tree_bytes(&root), before);
     assert!(snapshot.corrupt_tail().is_none());
     assert!(snapshot.repairs().is_empty());
     #[cfg(windows)]
@@ -200,6 +214,27 @@ fn open_read_only_reports_complete_corruption_with_readable_prefix() {
     assert_eq!(tail.byte_offset, byte_offset);
     assert_eq!(tail.dangling_byte_count, suffix.len() as u64);
     assert_eq!(tail.tail_sha256, sha256(suffix));
+    let metadata = GlobalLedger::open_metadata(super::GlobalLedgerEvidenceConfig::new(temp.path()))
+        .expect("metadata retains the verified prefix");
+    assert!(!metadata.read_complete());
+    assert_eq!(metadata.corrupt_tail(), snapshot.corrupt_tail());
+    assert_eq!(metadata.latest_sequence(), snapshot.latest_sequence());
+    let page = metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Lab,
+            &actingcommand_contract::RuntimeEventQueryPageRequest::default(),
+        )
+        .expect("incomplete metadata page");
+    assert!(!page.read_scope().unwrap().read_complete);
+    assert!(
+        page.read_scope()
+            .unwrap()
+            .limits
+            .contains(&actingcommand_contract::LedgerPageLimit::SourceIncomplete)
+    );
+    assert_eq!(page.events().len(), 1);
+    assert_eq!(tree_bytes(&root), before);
 }
 
 #[test]

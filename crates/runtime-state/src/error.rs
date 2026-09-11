@@ -18,6 +18,10 @@ pub struct RuntimeStateError {
 }
 
 impl RuntimeStateError {
+    pub(crate) fn with_detail(mut self, detail: String) -> Self {
+        self.detail = Some(detail);
+        self
+    }
     pub const fn request(code: &'static str, operation: &'static str) -> Self {
         Self {
             code,

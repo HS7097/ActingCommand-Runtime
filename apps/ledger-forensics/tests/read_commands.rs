@@ -119,6 +119,7 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
     context.health = PerformanceMonitorHealth::Partial;
     let mut summary = PerformanceSummaryEventData {
         context,
+        capacity: None,
         foreground: None,
         owned_processes: vec![PerformanceProcessSummary {
             pid: 7,
@@ -744,8 +745,117 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
     assert_eq!(continuation["data"]["events"][0]["sequence"], 2);
     assert!(continuation["data"].get("next_after_sequence").is_none());
 
+    let view_query = serde_json::json!({
+        "view": "errors", "origin_module": "runtime",
+        "minimum_severity": "error", "maximum_severity": "error",
+        "from_timestamp_unix_ms": 1_752_147_200_000_u64,
+        "to_timestamp_unix_ms": 1_752_147_200_002_u64,
+        "correlation_id": correlation_id.transport(),
+    });
+    let views = invoke(
+        binary,
+        state_root,
+        &[
+            "views".into(),
+            "--query".into(),
+            view_query.to_string(),
+            "--snapshot".into(),
+            "2".into(),
+            "--limit".into(),
+            "1".into(),
+        ],
+    );
+    assert!(views.status.success(), "view page failed: {views:?}");
+    let views: serde_json::Value = serde_json::from_slice(&views.stdout).unwrap();
+    assert_eq!(views["command"], "views");
+    assert_eq!(views["data"]["snapshot_ledger_position"], 2);
+    assert_eq!(views["data"]["events"][0]["sequence"], 1);
+    assert_eq!(
+        views["data"]["events"][0]["views"],
+        serde_json::json!(["events", "changes", "errors"])
+    );
+    assert_eq!(views["data"]["read_scope"]["source"], "offline");
+    assert_eq!(
+        views["data"]["read_scope"]["material_read"],
+        "not_requested"
+    );
+    assert_eq!(views["data"]["read_scope"]["read_complete"], true);
+    assert_eq!(
+        views["data"]["read_scope"]["limits"],
+        serde_json::json!(["event_count"])
+    );
+    let view_cursor = views["data"]["next_cursor"].to_string();
+    let view_continuation = invoke(
+        binary,
+        state_root,
+        &[
+            "views".into(),
+            "--query".into(),
+            view_query.to_string(),
+            "--profile".into(),
+            "ui".into(),
+            "--cursor".into(),
+            view_cursor.clone(),
+            "--snapshot".into(),
+            "2".into(),
+            "--limit".into(),
+            "1".into(),
+        ],
+    );
+    assert!(view_continuation.status.success(), "{view_continuation:?}");
+    let view_continuation: serde_json::Value =
+        serde_json::from_slice(&view_continuation.stdout).unwrap();
+    assert_eq!(view_continuation["data"]["events"][0]["sequence"], 2);
+    assert_eq!(view_continuation["data"]["has_more"], false);
+    let mut narrowed = view_query;
+    narrowed["to_timestamp_unix_ms"] = serde_json::json!(1_752_147_200_001_u64);
+    let changed_cursor = invoke(
+        binary,
+        state_root,
+        &[
+            "views".into(),
+            "--query".into(),
+            narrowed.to_string(),
+            "--cursor".into(),
+            view_cursor,
+        ],
+    );
+    assert!(!changed_cursor.status.success());
+    assert!(changed_cursor.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&changed_cursor.stderr)
+            .contains("runtime_event_query_cursor_invalid")
+    );
+    let narrowed = invoke(
+        binary,
+        state_root,
+        &[
+            "views".into(),
+            "--query".into(),
+            narrowed.to_string(),
+            "--snapshot".into(),
+            "2".into(),
+        ],
+    );
+    assert!(narrowed.status.success(), "{narrowed:?}");
+    let narrowed: serde_json::Value = serde_json::from_slice(&narrowed.stdout).unwrap();
+    assert_eq!(narrowed["data"]["events"].as_array().unwrap().len(), 1);
+    assert_eq!(narrowed["data"]["events"][0]["sequence"], 1);
+    assert_eq!(narrowed["data"]["has_more"], false);
+
     let missing_root = state_root.join("does-not-exist");
     let invalid_commands = [
+        vec!["views", "--query", "{}", "--query", "{}"],
+        vec!["views", "--query", "{\"view\":\"unknown\"}"],
+        vec![
+            "views",
+            "--query",
+            "{\"from_timestamp_unix_ms\":2,\"to_timestamp_unix_ms\":1}",
+        ],
+        vec!["views", "--profile", "unknown"],
+        vec!["views", "--cursor", "{}"],
+        vec!["views", "--limit", "257"],
+        vec!["views", "--snapshot", "1", "--snapshot", "2"],
         vec!["events", "--limit", "1", "--limit", "2"],
         vec!["events", "--unknown", "value"],
         vec!["events", "--limit"],

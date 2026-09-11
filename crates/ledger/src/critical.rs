@@ -2,8 +2,8 @@
 
 use crate::{GlobalLedger, GlobalLedgerError, GlobalLedgerResult, PersistedEvent};
 use actingcommand_contract::{
-    EffectDisposition, EventDraft, EventLinks, EventType, SanitizationError, SanitizedEventDraft,
-    SecretFingerprinter,
+    EffectDisposition, EventDraft, EventId, EventLinks, EventPayload, EventType, SanitizationError,
+    SanitizedEventDraft, SecretFingerprinter,
 };
 use std::fmt;
 
@@ -302,6 +302,54 @@ enum OutcomeRole {
     Failure,
 }
 
+/// Reuses the original critical predicates for the internal catalog SQL path.
+pub fn validate_catalog_outcome(
+    target: CatalogTransitionTarget,
+    intent: &PersistedEvent,
+    outcome: &SanitizedEventDraft,
+    success: bool,
+) -> Result<(), CriticalPlanError> {
+    validate_outcome(
+        CriticalOperation::CatalogTransition(target),
+        intent,
+        outcome,
+        if success {
+            OutcomeRole::Success
+        } else {
+            OutcomeRole::Failure
+        },
+        if success {
+            EffectDisposition::Performed
+        } else {
+            EffectDisposition::NotPerformed
+        },
+    )
+}
+
+/// Reuses the original critical predicates for the internal Release SQL path.
+pub fn validate_release_outcome(
+    target: ReleaseTransitionTarget,
+    intent: &PersistedEvent,
+    outcome: &SanitizedEventDraft,
+    success: bool,
+) -> Result<(), CriticalPlanError> {
+    validate_outcome(
+        CriticalOperation::ReleaseTransition(target),
+        intent,
+        outcome,
+        if success {
+            OutcomeRole::Success
+        } else {
+            OutcomeRole::Failure
+        },
+        if success {
+            EffectDisposition::Performed
+        } else {
+            EffectDisposition::NotPerformed
+        },
+    )
+}
+
 fn validate_outcome(
     operation: CriticalOperation,
     intent: &PersistedEvent,
@@ -309,39 +357,96 @@ fn validate_outcome(
     role: OutcomeRole,
     effect: EffectDisposition,
 ) -> Result<(), CriticalPlanError> {
-    if outcome.event_type().family() != intent.event_type().family() {
+    validate_outcome_envelope(
+        operation,
+        intent,
+        OutcomeEnvelope {
+            event_type: outcome.event_type(),
+            event_id: outcome.event_id(),
+            links: outcome.links(),
+            payload: outcome.payload(),
+        },
+        role,
+        effect,
+    )
+}
+
+/// Checks the same Release predicates against the fact inside the borrowed transaction.
+pub fn validate_release_transaction_outcome(
+    target: ReleaseTransitionTarget,
+    intent: &PersistedEvent,
+    outcome: &PersistedEvent,
+    success: bool,
+) -> Result<(), CriticalPlanError> {
+    validate_outcome_envelope(
+        CriticalOperation::ReleaseTransition(target),
+        intent,
+        OutcomeEnvelope {
+            event_type: outcome.event_type(),
+            event_id: outcome.event_id(),
+            links: outcome.links(),
+            payload: outcome.payload(),
+        },
+        if success {
+            OutcomeRole::Success
+        } else {
+            OutcomeRole::Failure
+        },
+        if success {
+            EffectDisposition::Performed
+        } else {
+            EffectDisposition::NotPerformed
+        },
+    )
+}
+
+struct OutcomeEnvelope<'a> {
+    event_type: EventType,
+    event_id: &'a EventId,
+    links: &'a EventLinks,
+    payload: &'a EventPayload,
+}
+
+fn validate_outcome_envelope(
+    operation: CriticalOperation,
+    intent: &PersistedEvent,
+    outcome: OutcomeEnvelope<'_>,
+    role: OutcomeRole,
+    effect: EffectDisposition,
+) -> Result<(), CriticalPlanError> {
+    if outcome.event_type.family() != intent.event_type().family() {
         return Err(CriticalPlanError::EventFamilyMismatch);
     }
     let expected_type = match role {
         OutcomeRole::Success => operation.success_type(),
         OutcomeRole::Failure => operation.failure_type(),
     };
-    if outcome.event_type() != expected_type {
+    if outcome.event_type != expected_type {
         return Err(CriticalPlanError::OutcomeRoleMismatch);
     }
-    if outcome.event_type() == intent.event_type() {
+    if outcome.event_type == intent.event_type() {
         return Err(CriticalPlanError::DuplicateEventType);
     }
-    if outcome.event_id() == intent.event_id() {
+    if outcome.event_id == intent.event_id() {
         return Err(CriticalPlanError::DuplicateEventId);
     }
     validate_matching_link(
         intent.links().correlation_id(),
-        outcome.links().correlation_id(),
+        outcome.links.correlation_id(),
         CriticalPlanError::MissingCorrelationId,
         CriticalPlanError::CorrelationIdMismatch,
     )?;
     validate_matching_link(
         intent.links().action_id(),
-        outcome.links().action_id(),
+        outcome.links.action_id(),
         CriticalPlanError::MissingActionId,
         CriticalPlanError::ActionIdMismatch,
     )?;
-    validate_stable_identity_links(intent.links(), outcome.links())?;
-    if outcome.payload().action() != intent.payload().action() {
+    validate_stable_identity_links(intent.links(), outcome.links)?;
+    if outcome.payload.action() != intent.payload().action() {
         return Err(CriticalPlanError::PayloadActionMismatch);
     }
-    if outcome.payload().effect_disposition() != Some(effect) {
+    if outcome.payload.effect_disposition() != Some(effect) {
         return Err(CriticalPlanError::EffectDispositionMismatch);
     }
     Ok(())
