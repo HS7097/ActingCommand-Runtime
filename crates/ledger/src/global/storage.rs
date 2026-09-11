@@ -5,7 +5,7 @@ use super::{
     Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
 };
 use crate::PersistedEvent;
-use crate::fact::StoredEventRecord;
+use crate::fact::{LedgerEventRead, StoredEventRecord};
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
     EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
@@ -150,6 +150,8 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
 }
 
 pub(super) trait DurableStorage: Send + 'static {
+    fn material_root(&self) -> &Path;
+
     fn project_view_page(
         &self,
         _query: &actingcommand_contract::EventQuery,
@@ -167,9 +169,11 @@ pub(super) trait DurableStorage: Send + 'static {
 pub(super) struct EventStore<B> {
     pub(super) commit_statistics: Arc<CommitStatistics>,
     pub(super) backend: B,
-    next_sequence: u64,
-    events: Vec<PersistedEvent>,
-    indexes: EventIndexes,
+    pub(super) next_sequence: u64,
+    pub(super) events: Vec<PersistedEvent>,
+    pub(super) indexes: EventIndexes,
+    pub(super) retention: super::retention::RetentionIndex,
+    pub(super) recovering_retention: bool,
 }
 
 pub(super) type SegmentStore = EventStore<SegmentStorage>;
@@ -253,10 +257,14 @@ impl SegmentStore {
                     return Err(error);
                 }
             };
+        let retention = super::retention::RetentionIndex::from_events(&events)?;
+        let recovering_retention = retention.has_pending();
         let mut store = Self {
             commit_statistics,
             backend: SegmentStorage {
-                root: config.root.clone(),
+                root: config.root.canonicalize().map_err(|error| {
+                    GlobalLedgerError::io("ledger_io", "canonicalize_ledger_root", &error)
+                })?,
                 segments_dir,
                 ownership,
                 segment_max_bytes: config.segment_max_bytes,
@@ -266,6 +274,8 @@ impl SegmentStore {
             },
             next_sequence,
             indexes: EventIndexes::from_events(&events),
+            retention,
+            recovering_retention,
             events,
         };
         let recovery_result = (|| {
@@ -309,11 +319,15 @@ impl<B: DurableStorage> EventStore<B> {
                     return Err(error);
                 }
             };
+        let retention = super::retention::RetentionIndex::from_events(&events)?;
+        let recovering_retention = retention.has_pending();
         Ok(Self {
             commit_statistics,
             backend,
             next_sequence,
             indexes: EventIndexes::from_events(&events),
+            retention,
+            recovering_retention,
             events,
         })
     }
@@ -322,6 +336,12 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        if self.recovering_retention && draft.event_type() != EventType::LedgerRecovered {
+            return Err(GlobalLedgerError::request(
+                "artifact_retention_recovery_pending",
+                "append_event",
+            ));
+        }
         if matches!(draft.payload(), EventPayload::Ledger(actingcommand_contract::LedgerPayload::Recovered(payload)) if payload.migration().is_some())
         {
             return Err(GlobalLedgerError::request(
@@ -1123,6 +1143,14 @@ impl<B: DurableStorage> EventStore<B> {
     }
 
     fn persist_event(&mut self, event: PersistedEvent) -> GlobalLedgerResult<PersistedEvent> {
+        self.persist_retention_checked(event, false)
+    }
+
+    pub(super) fn persist_retention_checked(
+        &mut self,
+        event: PersistedEvent,
+        guarded: bool,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
@@ -1130,8 +1158,11 @@ impl<B: DurableStorage> EventStore<B> {
                 "append_event",
             ));
         }
+        self.retention
+            .validate(&event, &self.events, &self.indexes, guarded)?;
         let write_sync_ns = self.backend.persist(&event)?;
         self.next_sequence = following_sequence;
+        self.retention.apply(&event);
         self.indexes.insert(&event, self.events.len());
         self.events.push(event.clone());
         self.commit_statistics
@@ -1254,6 +1285,10 @@ impl<B: DurableStorage> EventStore<B> {
 }
 
 impl DurableStorage for SegmentStorage {
+    fn material_root(&self) -> &Path {
+        &self.root
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
         let mut bytes = serde_json::to_vec(&StoredLine {
             line_type: LINE_TYPE.to_string(),
@@ -1841,16 +1876,12 @@ fn recover_segments(
     let snapshots = read_segment_snapshots(&segments)?;
     let mut next_sequence = 1_u64;
     let mut event_ids = BTreeSet::new();
-    let mut events = Vec::new();
+    let mut records = Vec::new();
     for snapshot in &snapshots {
-        parse_segment_records(
-            snapshot,
-            &mut next_sequence,
-            &mut event_ids,
-            &mut events,
-            verifier,
-        )?;
+        parse_segment_records(snapshot, &mut next_sequence, &mut event_ids, &mut records)?;
     }
+
+    let events = super::retention::restore_records(records, verifier, |_| Ok(()))?;
 
     let mut pending_repairs = Vec::new();
     for repair in journal.unresolved() {
@@ -1931,8 +1962,7 @@ fn parse_segment_records(
     snapshot: &SegmentSnapshot,
     next_sequence: &mut u64,
     event_ids: &mut BTreeSet<EventId>,
-    events: &mut Vec<PersistedEvent>,
-    verifier: &mut Option<&mut ArtifactVerifier<'_>>,
+    records: &mut Vec<StoredEventRecord>,
 ) -> GlobalLedgerResult<()> {
     let complete_records = if snapshot.complete_len == 0 {
         &snapshot.bytes[..0]
@@ -1977,12 +2007,10 @@ fn parse_segment_records(
                 "validate_line_type",
             ));
         }
-        let event = if let Some(verifier) = verifier.as_deref_mut() {
-            stored.event.into_event_with_artifact_verifier(verifier)
-        } else {
-            stored.event.into_event()
-        }
-        .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+        let event =
+            stored.event.clone().into_metadata().map_err(|error| {
+                GlobalLedgerError::fatal(error.code(), "validate_persisted_event")
+            })?;
         if event.sequence() != *next_sequence {
             return Err(GlobalLedgerError::fatal(
                 "sequence_discontinuity",
@@ -1995,7 +2023,7 @@ fn parse_segment_records(
                 "recover_event_ids",
             ));
         }
-        events.push(event);
+        records.push(stored.event);
         *next_sequence = increment_sequence(*next_sequence)?;
     }
     Ok(())

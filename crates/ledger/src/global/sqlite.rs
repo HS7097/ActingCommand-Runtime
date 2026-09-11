@@ -545,6 +545,10 @@ impl SqliteLedgerStore {
 }
 
 impl DurableStorage for SqliteStorage {
+    fn material_root(&self) -> &std::path::Path {
+        self.database.root()
+    }
+
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -1109,17 +1113,9 @@ where
     let budget = raw.budget;
     let bytes = raw.bytes;
     let (records, hash) = verify_snapshot_records(database, raw)?;
-    let mut events = Vec::with_capacity(records.len());
-    for stored in records {
-        check_read_budget(budget, bytes, events.len() + 1)?;
-        let event = match verifier.as_mut() {
-            Some(verifier) => stored.into_event_with_artifact_verifier(verifier),
-            None => stored.into_event(),
-        }
-        .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
-        check_read_budget(budget, bytes, events.len() + 1)?;
-        events.push(event);
-    }
+    let events = super::retention::restore_records(records, verifier, |count| {
+        check_read_budget(budget, bytes, count)
+    })?;
     Ok((events, hash))
 }
 

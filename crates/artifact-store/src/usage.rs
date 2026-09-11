@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ArtifactStoreError, ArtifactStoreResult};
-use actingcommand_contract::ProjectedArtifactReference;
+use actingcommand_contract::{
+    ArtifactEvictionIntentRecord, ArtifactMaterial, ProjectedArtifactReference,
+};
 use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// OS coordination only; retention policy and availability remain Ledger facts.
@@ -15,6 +18,7 @@ pub struct ArtifactDeleteGuard {
     reference: ProjectedArtifactReference,
     _lock: File,
     material: Option<File>,
+    removal_attempted: bool,
 }
 
 impl ArtifactDeleteGuard {
@@ -26,6 +30,36 @@ impl ArtifactDeleteGuard {
     }
     pub fn material_present(&self) -> bool {
         self.material.is_some()
+    }
+
+    /// The Runtime's opaque Ledger permit calls this only after durable intent admission.
+    /// The fixed and material locks remain held until the outcome has been committed.
+    pub fn remove_after_durable_intent(
+        &mut self,
+        intent: &ArtifactEvictionIntentRecord,
+    ) -> std::io::Result<()> {
+        if self.removal_attempted
+            || self.material.is_none()
+            || intent.identity.artifact != self.reference
+            || actingcommand_contract::ArtifactRetentionFact::EvictionIntent(intent.clone())
+                .validate()
+                .is_err()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "artifact deletion requires the original unconsumed material guard and intent",
+            ));
+        }
+        self.removal_attempted = true;
+        let key = self.reference.object_key().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "artifact object key required",
+            )
+        })?;
+        let path =
+            crate::store::safe_object_path(&self.root, key).map_err(std::io::Error::other)?;
+        fs::remove_file(path)
     }
 }
 
@@ -84,13 +118,25 @@ pub fn try_artifact_delete_guard(
         .ok_or_else(|| failure("artifact_object_key_missing", "object key required"))?;
     let path = crate::store::safe_object_path(&root, key)?;
     let material = match OpenOptions::new().read(true).write(true).open(&path) {
-        Ok(file) => {
+        Ok(mut file) => {
             match file.try_lock() {
                 Ok(()) => {}
                 Err(TryLockError::WouldBlock) => return Ok(None),
                 Err(TryLockError::Error(error)) => {
                     return Err(failure("artifact_use_lock_failed", error));
                 }
+            }
+            let material = ArtifactMaterial::read_from(
+                &mut (&mut file).take(reference.byte_count.saturating_add(1)),
+            )
+            .map_err(|error| failure("artifact_read_failed", error))?;
+            if material.byte_count() != reference.byte_count
+                || material.sha256() != reference.sha256
+            {
+                return Err(failure(
+                    "artifact_hash_mismatch",
+                    "exclusive material identity differs from the original Ledger reference",
+                ));
             }
             Some(file)
         }
@@ -102,6 +148,7 @@ pub fn try_artifact_delete_guard(
         reference: reference.clone(),
         _lock: lock,
         material,
+        removal_attempted: false,
     }))
 }
 

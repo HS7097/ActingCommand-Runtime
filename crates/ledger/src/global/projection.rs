@@ -250,7 +250,7 @@ impl EventIndexes {
             })
     }
 
-    fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
+    pub(super) fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
         let links = event.links();
         let request_matches = |request: &RequestId| {
             self.lab_requests

@@ -263,19 +263,29 @@ impl StoredEventRecord {
     where
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + ?Sized,
     {
+        self.into_event_with_artifact_availability(&mut |projected| {
+            verifier(projected)
+                .map(ArtifactAvailability::Available)
+                .ok_or(FactValidationError {
+                    code: "artifact_store_verification_failed",
+                })
+        })
+    }
+
+    pub(crate) fn into_event_with_artifact_availability<F>(
+        self,
+        availability: &mut F,
+    ) -> Result<PersistedEvent, FactValidationError>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Result<ArtifactAvailability, FactValidationError>
+            + ?Sized,
+    {
         let mut artifacts = Vec::with_capacity(self.artifacts.len());
         for stored in &self.artifacts {
-            let projected = stored.projected();
-            let verified = verifier(&projected).ok_or(FactValidationError {
-                code: "artifact_store_verification_failed",
-            })?;
-            if verified.reference().project(true) != projected {
-                return Err(FactValidationError {
-                    code: "artifact_store_verification_mismatch",
-                });
-            }
-            artifacts.push(LedgerArtifactReference::recorded(
-                verified.reference().project(true),
+            let reference = stored.projected();
+            artifacts.push(LedgerArtifactReference::restored(
+                reference.clone(),
+                availability(&reference)?,
             )?);
         }
         self.into_event_with_artifacts(artifacts)
@@ -310,6 +320,9 @@ pub(crate) struct FactValidationError {
 }
 
 impl FactValidationError {
+    pub(crate) const fn new(code: &'static str) -> Self {
+        Self { code }
+    }
     pub(crate) const fn code(self) -> &'static str {
         self.code
     }

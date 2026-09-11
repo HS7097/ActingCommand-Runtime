@@ -4,7 +4,7 @@ use super::*;
 use actingcommand_contract::ArtifactEvictionProof;
 
 /// Original Ledger metadata. This value is not a material verification capability.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LedgerArtifactReference {
     #[serde(flatten)]
     reference: ProjectedArtifactReference,
@@ -12,9 +12,18 @@ pub struct LedgerArtifactReference {
     availability: ArtifactAvailability,
 }
 
+impl PartialEq for LedgerArtifactReference {
+    fn eq(&self, other: &Self) -> bool {
+        self.reference == other.reference
+    }
+}
+
+impl Eq for LedgerArtifactReference {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactAvailability {
     Unrecorded,
+    Available(VerifiedArtifactReference),
     Evicted(Box<ArtifactEvictionProof>),
     PendingEviction(Box<ArtifactEvictionProof>),
 }
@@ -47,6 +56,47 @@ impl LedgerArtifactReference {
     pub(crate) fn with_availability(mut self, availability: ArtifactAvailability) -> Self {
         self.availability = availability;
         self
+    }
+
+    pub(crate) fn restored(
+        reference: ProjectedArtifactReference,
+        availability: ArtifactAvailability,
+    ) -> Result<Self, FactValidationError> {
+        if let ArtifactAvailability::Available(verified) = &availability
+            && verified.reference().project(true) != reference
+        {
+            return Err(FactValidationError::new(
+                "artifact_store_verification_mismatch",
+            ));
+        }
+        let valid = match &availability {
+            ArtifactAvailability::Available(verified) => {
+                verified.reference().project(true) == reference
+            }
+            ArtifactAvailability::Evicted(proof) => {
+                proof.identity.artifact == reference
+                    && proof.validate().is_ok()
+                    && matches!(
+                    proof.disposition,
+                    Some(
+                        actingcommand_contract::ArtifactEvictionDisposition::Deleted
+                            | actingcommand_contract::ArtifactEvictionDisposition::RecoveryAbsent
+                    )
+                )
+            }
+            ArtifactAvailability::PendingEviction(proof) => {
+                proof.identity.artifact == reference
+                    && proof.validate().is_ok()
+                    && proof.outcome.is_none()
+            }
+            ArtifactAvailability::Unrecorded => false,
+        };
+        if !valid {
+            return Err(FactValidationError {
+                code: "artifact_availability_proof_invalid",
+            });
+        }
+        Ok(Self::recorded(reference)?.with_availability(availability))
     }
 
     pub fn availability(&self) -> &ArtifactAvailability {

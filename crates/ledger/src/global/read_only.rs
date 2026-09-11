@@ -309,15 +309,26 @@ fn open_snapshot<E: LedgerEventRead>(
 impl GlobalLedgerReadOnly {
     pub(super) fn open<F>(
         config: GlobalLedgerReadOnlyConfig,
-        mut verify_artifact: F,
+        verify_artifact: F,
     ) -> GlobalLedgerResult<Self>
     where
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
     {
-        let snapshot = open_snapshot(config, |line| parse_event(line, &mut verify_artifact))?;
+        let budget = config.budget;
+        let snapshot = open_metadata(config)?;
+        let bytes = snapshot.storage_snapshot.read_bytes;
+        let records = snapshot
+            .events
+            .into_iter()
+            .map(LedgerEventMetadata::into_record)
+            .collect();
+        let events =
+            super::retention::restore_records(records, &mut Some(verify_artifact), |count| {
+                check_read_budget(budget, bytes, count)
+            })?;
         Ok(Self {
-            indexes: EventIndexes::from_events(&snapshot.events),
-            events: snapshot.events,
+            indexes: EventIndexes::from_events(&events),
+            events,
             writer_metadata: snapshot.writer_metadata,
             listed_through_segment: snapshot.listed_through_segment,
             repairs: snapshot.repairs,
@@ -583,17 +594,6 @@ fn scan_segment<E: LedgerEventRead>(
         return corrupt_tail("corrupt_segment", snapshot, complete_len).map(Some);
     }
     Ok(None)
-}
-
-fn parse_event<F>(line: &[u8], verify_artifact: &mut F) -> GlobalLedgerResult<PersistedEvent>
-where
-    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
-{
-    parse_record(line)?
-        .into_event_with_artifact_verifier(verify_artifact)
-        .map_err(|error| {
-            GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
-        })
 }
 
 fn parse_record(line: &[u8]) -> GlobalLedgerResult<StoredEventRecord> {
