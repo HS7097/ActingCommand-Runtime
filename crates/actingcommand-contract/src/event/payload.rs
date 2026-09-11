@@ -9231,6 +9231,9 @@ impl EventPayloadDraft {
                 }
             }),
             Self::Artifact(value) => EventPayload::Artifact(match value.0 {
+                ArtifactDraftKind::Retention(record, audit) => ArtifactPayload::Retention(
+                    ArtifactRetentionPayload::sanitize(record, audit, fingerprinter)?,
+                ),
                 ArtifactDraftKind::Created(detail) => {
                     ArtifactPayload::Created(detail.sanitize(fingerprinter)?)
                 }
@@ -9333,6 +9336,7 @@ impl EventPayload {
             Self::Input(_) => INPUT_PAYLOAD_SCHEMA,
             Self::Capture(_) => CAPTURE_PAYLOAD_SCHEMA,
             Self::Recognition(_) => RECOGNITION_PAYLOAD_SCHEMA,
+            Self::Artifact(ArtifactPayload::Retention(_)) => ARTIFACT_RETENTION_PAYLOAD_SCHEMA,
             Self::Artifact(_) => ARTIFACT_PAYLOAD_SCHEMA,
             Self::ResourceAuthoring(_) => RESOURCE_AUTHORING_PAYLOAD_SCHEMA,
             Self::Client(_) => CLIENT_PAYLOAD_SCHEMA,
@@ -9343,6 +9347,9 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
+        if let Self::Artifact(ArtifactPayload::Retention(value)) = self {
+            sensitivity = sensitivity.max(value.sensitivity());
+        }
         if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some())
         {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
@@ -9452,6 +9459,9 @@ impl EventPayload {
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(retention) = self.artifact_retention() {
+            retention.validate()?;
+        }
         if let Some(rejection) = self.resource_declaration() {
             if self.event_type() != EventType::RuntimeFailed
                 || detail.effect_disposition() != Some(EffectDisposition::NotPerformed)
@@ -9731,7 +9741,9 @@ impl EventPayload {
                 ));
             }
             Self::Capture(CapturePayload::DedupWindow(value))
-                if value.duplicate_count == 0 || value.duration_ms == 0 =>
+                if value.duplicate_count == 0
+                    || value.duration_ms == 0
+                    || value.preserved_frame_id.is_some() && value.duplicate_count != 1 =>
             {
                 return Err(SanitizationError::new(
                     "invalid_capture_dedup_window",
@@ -9817,6 +9829,15 @@ impl EventPayload {
             resident_bytes: capture_pressure(self).map(CapturePressurePayload::resident_bytes),
             duplicate_count: capture_dedup(self).map(CaptureDedupWindowPayload::duplicate_count),
             duration_ms: capture_dedup(self).map(CaptureDedupWindowPayload::duration_ms),
+            preserved_frame_id: capture_dedup(self)
+                .and_then(|value| value.preserved_frame_id)
+                .map(Box::new),
+            artifact_retention: match self {
+                Self::Artifact(ArtifactPayload::Retention(value)) => {
+                    Some(Box::new(value.public_summary()))
+                }
+                _ => None,
+            },
             cadence_ms: capture_policy(self).map(CapturePolicyPayload::cadence_ms),
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
@@ -10235,6 +10256,10 @@ pub struct PublicPayload {
     duplicate_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserved_frame_id: Option<Box<crate::FrameId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact_retention: Option<Box<ArtifactRetentionPublicSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cadence_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -10413,6 +10438,14 @@ impl PublicPayload {
 
     pub const fn duration_ms(&self) -> Option<u64> {
         self.duration_ms
+    }
+
+    pub fn preserved_frame_id(&self) -> Option<&crate::FrameId> {
+        self.preserved_frame_id.as_deref()
+    }
+
+    pub fn artifact_retention(&self) -> Option<&ArtifactRetentionPublicSummary> {
+        self.artifact_retention.as_deref()
     }
 
     pub const fn cadence_ms(&self) -> Option<u64> {
