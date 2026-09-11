@@ -2834,6 +2834,24 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
         envelope.pointer("/data/backend").and_then(Value::as_str),
         Some("runtime_proxy")
     );
+    let outcome = envelope
+        .pointer("/data/input_outcome")
+        .expect("single-input outcome");
+    assert_eq!(outcome["input_stage"], "committed");
+    assert_eq!(outcome["close_stage"], "succeeded");
+    let receipt: actingcommand_contract::RuntimeReceipt =
+        serde_json::from_value(outcome["input_receipt"].clone())
+            .expect("original Runtime input receipt");
+    receipt.validate().expect("valid input receipt envelope");
+    assert_eq!(
+        receipt.state(),
+        actingcommand_contract::RuntimeReceiptState::Completed
+    );
+    assert!(receipt.terminal().is_some());
+    assert!(matches!(
+        receipt.result(),
+        Some(actingcommand_contract::RuntimeResult::InputCommitted { .. })
+    ));
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
     host.close().expect("close host");
@@ -3232,12 +3250,10 @@ fn write_runtime_owned_lab_package(path: &Path) {
                     "game":"neutral",
                     "server_scope":["test"],
                     "coordinate_space":{"width":2,"height":2},
-                    "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
+                    "defaults":{"max_attempts":1,"retry_interval_ms":1},
                     "entry_page":"home",
                     "target_page":"terminal",
                     "recovery":{"kind":"return_home","task_id":"return_home"},
-                    "max_task_retries":1,
-                    "on_exhausted":"pause",
                     "operations":[{
                         "id":"open_terminal",
                         "purpose":"force a sealed recovery suggestion",
@@ -3245,7 +3261,6 @@ fn write_runtime_owned_lab_package(path: &Path) {
                         "to":"terminal",
                         "click":{"kind":"point","x":1,"y":1},
                         "retryable":true,
-                        "effect":"navigation_only",
                         "unguarded_trusted_coordinate":true
                     }]
                 }"#,
@@ -3265,7 +3280,6 @@ fn write_runtime_owned_lab_package(path: &Path) {
                         "from":"any",
                         "to":"home",
                         "click":{"kind":"point","x":1,"y":1},
-                        "effect":"navigation_only",
                         "unguarded_trusted_coordinate":true
                     }]
                 }"#,

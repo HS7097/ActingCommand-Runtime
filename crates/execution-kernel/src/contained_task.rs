@@ -83,6 +83,7 @@ pub struct ContainedTaskError {
     code: &'static str,
     detail: Option<String>,
     timing: Option<TaskTimingFailure>,
+    declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
 impl ContainedTaskError {
@@ -91,6 +92,7 @@ impl ContainedTaskError {
             code,
             detail: None,
             timing: None,
+            declaration_issue: None,
         }
     }
 
@@ -99,6 +101,7 @@ impl ContainedTaskError {
             code,
             detail: Some(detail.into()),
             timing: None,
+            declaration_issue: None,
         }
     }
 
@@ -134,6 +137,10 @@ impl ContainedTaskError {
 
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
+    }
+
+    pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
+        self.declaration_issue.as_deref()
     }
 }
 
@@ -1665,6 +1672,8 @@ impl PreparedContainedTask {
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();
+        actingcommand_pack_containment::source::validate_contained_declarations(&bundle)
+            .map_err(contained_task_declaration_error)?;
         let control = bundle
             .control()
             .cloned()
@@ -5007,7 +5016,32 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
     }
 }
 
+fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> ContainedTaskError {
+    let mut failure =
+        ContainedTaskError::with_detail("resource_declaration_invalid", error.to_string());
+    if let Some(details) = error.details {
+        match serde_json::from_value(details) {
+            Ok(issue) => failure.declaration_issue = Some(Box::new(issue)),
+            Err(error) => {
+                return ContainedTaskError::with_detail(
+                    "resource_declaration_diagnostic_invalid",
+                    error.to_string(),
+                );
+            }
+        }
+    }
+    failure
+}
+
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {
+    if let ExecutionBundleError::Containment(ContainmentError::ResourceDeclaration { issue }) =
+        &error
+    {
+        let mut rejected =
+            ContainedTaskError::with_detail("resource_declaration_invalid", error.to_string());
+        rejected.declaration_issue = Some(Box::new(issue.clone()));
+        return rejected;
+    }
     let code = match &error {
         ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {

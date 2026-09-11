@@ -402,6 +402,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
         )
         .expect("runtime host");
         let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
         let request = client.request_with_correlation(
