@@ -2715,7 +2715,9 @@ fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> Recog
         stage: match timing.stage {
             recognition::TemplateMatchTimingStage::Exact => TemplateMatchTimingStage::Exact,
             recognition::TemplateMatchTimingStage::Coarse => TemplateMatchTimingStage::Coarse,
-            recognition::TemplateMatchTimingStage::Refinement => TemplateMatchTimingStage::Refinement,
+            recognition::TemplateMatchTimingStage::Refinement => {
+                TemplateMatchTimingStage::Refinement
+            }
             recognition::TemplateMatchTimingStage::ImageprocReturned => {
                 TemplateMatchTimingStage::ImageprocReturned
             }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{FrameId, RecognitionId, RequestId, RunId, SanitizationError, TaskId, TaskTimingFailure};
+use super::{
+    FrameId, RecognitionId, RequestId, RunId, SanitizationError, TaskId, TaskTimingFailure,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +111,19 @@ impl Default for TaskTimingSpanSummary {
 
 impl TaskTimingSpanSummary {
     fn is_valid(&self) -> bool {
+        if self.last.as_ref().is_some_and(|sample| {
+            sample.record_index == Some(0)
+                || matches!(
+                    sample.budget_before,
+                    TaskTimingBudgetObservation::Observed {
+                        remaining_us: 1..,
+                        expired: true,
+                        ..
+                    }
+                )
+        }) {
+            return false;
+        }
         if self
             .attempts
             .zip(self.errors)
@@ -177,9 +192,7 @@ pub struct TaskTimingFailureObservation {
 impl TaskTimingObservations {
     pub(crate) fn validate(&self) -> Result<(), SanitizationError> {
         for phase in [&self.preflight, &self.execution, &self.finalization] {
-            if !phase.recognition_evaluate.is_valid()
-                || !phase.diagnostic_record_write.is_valid()
-            {
+            if !phase.recognition_evaluate.is_valid() || !phase.diagnostic_record_write.is_valid() {
                 return Err(SanitizationError::new(
                     "invalid_task_timing_observations",
                     "task_timing",

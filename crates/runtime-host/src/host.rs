@@ -87,13 +87,12 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
-    ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime,
-    ContainedTaskTimingContext,
-    ContainedTaskRuntimeErrorClass, ContainedTaskTrace, ExecutionBackendProvenance,
-    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
-    PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider,
-    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
-    decide_monitor, page_anchor_matches,
+    ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
+    ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
+    ContainedTaskTrace, ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel,
+    ExternalExpectedSha256, PostAdmissionOcrObservation, PreparedContainedTask,
+    PreparedInputAction, RecognitionVisionProvider, StabilityComparisonResult,
+    StabilityTerminalReason, StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -1763,6 +1762,7 @@ impl RuntimeHost {
                     scheduling_outcome: None,
                     selected_scheduling_outcome: None,
                     capture_summary: None,
+                    task_timing: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -1846,6 +1846,7 @@ impl RuntimeHost {
                     scheduling_outcome: Some((game, declaration)),
                     selected_scheduling_outcome,
                     capture_summary: None,
+                    task_timing: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -9530,6 +9531,7 @@ impl HostShared {
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
+                            task_timing: Some(task_timing.clone()),
                         },
                     )?;
                     if scheduled {
@@ -9608,6 +9610,7 @@ impl HostShared {
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
+                            task_timing: Some(task_timing.clone()),
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
@@ -9675,6 +9678,7 @@ impl HostShared {
                         scheduling_outcome: None,
                         selected_scheduling_outcome: None,
                         capture_summary: Some(capture_summary),
+                        task_timing: Some(task_timing.clone()),
                     },
                 )?;
                 let mut failure = RequestFailure::request(
@@ -9750,6 +9754,7 @@ impl HostShared {
                 scheduling_outcome,
                 selected_scheduling_outcome: outcome.selected_scheduling_outcome,
                 capture_summary: Some(capture_summary),
+                task_timing: Some(task_timing),
             },
         )?;
         match self.release_lease(
@@ -10292,6 +10297,7 @@ impl HostShared {
                         executed_steps: None,
                         failure_code: Some("contained_task_recovered_after_restart".to_owned()),
                         scheduling_disposition: None,
+                        task_timing: None,
                     },
                     AuditInput::new(),
                 ),
@@ -10398,262 +10404,273 @@ impl HostShared {
         token: &LeaseToken,
         draft: ContainedTaskTerminalDraft,
     ) -> Result<PersistedEvent, RequestFailure> {
-        let links = self
-            .events
-            .request_links(
-                request,
-                Some(token.instance_id()),
-                Some(token.lease_id()),
-                None,
-            )
-            .with_task_id(draft.task_id)
-            .with_run_id(draft.run_id);
-        let connection_id = lock(&self.scheduler, "read_task_lease_connection")?
-            .connection_for_token(token)
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "read_task_lease_connection",
-                    &error,
-                ))
-            })?;
-        self.close_instance_resources(token, connection_id, links.clone())?;
-        let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
-            .map_err(RequestFailure::poison_without_terminal)?;
-        let chain_events = self
-            .ledger
-            .query(EventQuery {
-                instance_id: Some(token.instance_id()),
-                correlation_id: Some(request.correlation_id()),
-                task_id: Some(*draft.task_id.transport()),
-                run_id: Some(*draft.run_id.transport()),
-                lease_id: Some(token.lease_id()),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error(
-                    "check_contained_task_terminal",
-                ))
-            })?;
-        let terminals = chain_events
-            .iter()
-            .filter_map(|event| match event.payload() {
-                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-                    TaskSemanticFact::TerminalCommitted { outcome, .. } => Some(*outcome),
+        let task_timing = draft.task_timing.clone();
+        let result = (|| {
+            let links = self
+                .events
+                .request_links(
+                    request,
+                    Some(token.instance_id()),
+                    Some(token.lease_id()),
+                    None,
+                )
+                .with_task_id(draft.task_id)
+                .with_run_id(draft.run_id);
+            let connection_id = lock(&self.scheduler, "read_task_lease_connection")?
+                .connection_for_token(token)
+                .map_err(|error| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                        "read_task_lease_connection",
+                        &error,
+                    ))
+                })?;
+            self.close_instance_resources(token, connection_id, links.clone())?;
+            let gate = lock(&self.fact_write_gate, "append_contained_task_terminal")
+                .map_err(RequestFailure::poison_without_terminal)?;
+            let chain_events = self
+                .ledger
+                .query(EventQuery {
+                    instance_id: Some(token.instance_id()),
+                    correlation_id: Some(request.correlation_id()),
+                    task_id: Some(*draft.task_id.transport()),
+                    run_id: Some(*draft.run_id.transport()),
+                    lease_id: Some(token.lease_id()),
+                    ..EventQuery::default()
+                })
+                .map_err(|_| {
+                    RequestFailure::poison_without_terminal(ledger_error(
+                        "check_contained_task_terminal",
+                    ))
+                })?;
+            let terminals = chain_events
+                .iter()
+                .filter_map(|event| match event.payload() {
+                    EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                        TaskSemanticFact::TerminalCommitted { outcome, .. } => Some(*outcome),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if let [committed_outcome] = terminals.as_slice() {
-            let rejected = self
-                .append_event_under_fact_gate(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    links.clone(),
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::TerminalRejected {
-                            committed_outcome: *committed_outcome,
-                            attempted_outcome: draft.outcome,
-                            reason: "terminal_already_committed".to_string(),
-                        },
-                        AuditInput::new(),
-                    ),
-                )
-                .map_err(RequestFailure::poison_without_terminal)?;
-            self.synchronize_fact_store_under_gate()
-                .map_err(RequestFailure::poison_without_terminal)?;
-            drop(gate);
-            self.observe_pipeline_event(&rejected)
-                .map_err(RequestFailure::poison_without_terminal)?;
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "contained_task_terminal_already_committed",
-                    "append_contained_task_terminal",
-                    RuntimeErrorCode::InvalidRequest,
-                ),
-                RuntimeReceiptState::Denied,
-                Some(terminal(&rejected)),
-            ));
-        }
-        if terminals.len() > 1 {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "contained_task_terminal_state_inconsistent",
-                    "append_contained_task_terminal",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let existing_summary_events = chain_events
-            .iter()
-            .filter(|event| event.event_type() == EventType::CaptureSummaryCommitted)
-            .collect::<Vec<_>>();
-        if existing_summary_events.len() > 1 {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "capture_summary_state_inconsistent",
-                    "append_contained_task_terminal",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let existing_summary = existing_summary_events
-            .first()
-            .map(|event| {
-                if event.origin().source() != EventSource::Runtime
-                    || event.origin().module() != OriginModule::CapturePipeline
-                    || event.origin().actor() != EventActor::Runtime
-                {
-                    return Err(RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            "capture_summary_state_conflict",
-                            "append_contained_task_terminal",
-                            RuntimeErrorCode::RuntimeFatal,
+                })
+                .collect::<Vec<_>>();
+            if let [committed_outcome] = terminals.as_slice() {
+                let rejected = self
+                    .append_event_under_fact_gate(
+                        EventSeverity::Error,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                        links.clone(),
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::TerminalRejected {
+                                committed_outcome: *committed_outcome,
+                                attempted_outcome: draft.outcome,
+                                reason: "terminal_already_committed".to_string(),
+                            },
+                            AuditInput::new(),
                         ),
-                    ));
-                }
-                let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) =
-                    event.payload()
-                else {
-                    return Err(RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            "capture_summary_state_inconsistent",
-                            "append_contained_task_terminal",
-                            RuntimeErrorCode::RuntimeFatal,
-                        ),
-                    ));
-                };
-                Ok(payload.summary())
-            })
-            .transpose()?;
-        let requested_summary = draft
-            .capture_summary
-            .as_ref()
-            .map(capture_summary_record)
-            .transpose()
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    error.code(),
-                    "append_contained_task_terminal",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
-        if let (Some(existing), Some(requested)) = (existing_summary, requested_summary.as_ref())
-            && existing != requested
-        {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "capture_summary_state_conflict",
-                    "append_contained_task_terminal",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let scheduling_disposition = select_scheduling_disposition(
-            &chain_events,
-            draft.outcome,
-            draft.final_page.as_deref(),
-            draft.executed_steps,
-            draft.scheduling_outcome.as_ref(),
-            draft.selected_scheduling_outcome.as_deref(),
-        )?;
-        let mut appended = Vec::with_capacity(3);
-        if existing_summary.is_none()
-            && let Some(summary) = requested_summary
-        {
-            appended.push(
-                self.append_event_under_fact_gate(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::CapturePipeline,
-                    EventActor::Runtime,
-                    links.clone(),
-                    CapturePayloadDraft::summary_committed(summary, AuditInput::new()),
-                )
-                .map_err(RequestFailure::poison_without_terminal)?,
-            );
-        }
-        if !draft.intent_already_recorded {
-            appended.push(
-                self.append_event_under_fact_gate(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    links.clone(),
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::Finalizing {
-                            outcome: draft.outcome,
-                        },
-                        AuditInput::new(),
+                    )
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                self.synchronize_fact_store_under_gate()
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                drop(gate);
+                self.observe_pipeline_event(&rejected)
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "contained_task_terminal_already_committed",
+                        "append_contained_task_terminal",
+                        RuntimeErrorCode::InvalidRequest,
                     ),
-                )
-                .map_err(RequestFailure::poison_without_terminal)?,
-            );
-        }
-        let severity = match (draft.outcome, draft.failure_severity) {
-            (TaskOutcome::Success, None) => EventSeverity::Info,
-            (TaskOutcome::Failure, None) => EventSeverity::Error,
-            (
-                TaskOutcome::Failure,
-                Some(severity @ (EventSeverity::Warning | EventSeverity::Fatal)),
-            ) => severity,
-            (TaskOutcome::Cancelled, None) => EventSeverity::Warning,
-            _ => {
+                    RuntimeReceiptState::Denied,
+                    Some(terminal(&rejected)),
+                ));
+            }
+            if terminals.len() > 1 {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "contained_task_terminal_severity_invalid",
+                        "contained_task_terminal_state_inconsistent",
                         "append_contained_task_terminal",
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
             }
-        };
-        #[cfg(test)]
-        if draft.scheduling_outcome.is_some()
-            && self
-                .scheduling_terminal_append_failures
-                .swap(0, Ordering::AcqRel)
-                != 0
-        {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "scheduling_terminal_append_injected_failure",
-                    "append_contained_task_terminal",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let terminal_event = self
-            .append_event_under_fact_gate(
-                severity,
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-                links,
-                TaskPayloadDraft::semantic(
-                    TaskSemanticFact::TerminalCommitted {
-                        outcome: draft.outcome,
-                        final_page: draft.final_page,
-                        executed_steps: draft.executed_steps,
-                        failure_code: draft.failure_code.map(str::to_string),
-                        scheduling_disposition,
-                    },
-                    AuditInput::new(),
-                ),
-            )
-            .map_err(RequestFailure::poison_without_terminal)?;
-        appended.push(terminal_event.clone());
-        self.synchronize_fact_store_under_gate()
-            .map_err(RequestFailure::poison_without_terminal)?;
-        drop(gate);
-        for event in &appended {
-            self.observe_pipeline_event(event)
+            let existing_summary_events = chain_events
+                .iter()
+                .filter(|event| event.event_type() == EventType::CaptureSummaryCommitted)
+                .collect::<Vec<_>>();
+            if existing_summary_events.len() > 1 {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "capture_summary_state_inconsistent",
+                        "append_contained_task_terminal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+            let existing_summary = existing_summary_events
+                .first()
+                .map(|event| {
+                    if event.origin().source() != EventSource::Runtime
+                        || event.origin().module() != OriginModule::CapturePipeline
+                        || event.origin().actor() != EventActor::Runtime
+                    {
+                        return Err(RequestFailure::poison_without_terminal(
+                            RuntimeHostError::fatal(
+                                "capture_summary_state_conflict",
+                                "append_contained_task_terminal",
+                                RuntimeErrorCode::RuntimeFatal,
+                            ),
+                        ));
+                    }
+                    let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) =
+                        event.payload()
+                    else {
+                        return Err(RequestFailure::poison_without_terminal(
+                            RuntimeHostError::fatal(
+                                "capture_summary_state_inconsistent",
+                                "append_contained_task_terminal",
+                                RuntimeErrorCode::RuntimeFatal,
+                            ),
+                        ));
+                    };
+                    Ok(payload.summary())
+                })
+                .transpose()?;
+            let requested_summary = draft
+                .capture_summary
+                .as_ref()
+                .map(capture_summary_record)
+                .transpose()
+                .map_err(|error| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        error.code(),
+                        "append_contained_task_terminal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+            if let (Some(existing), Some(requested)) =
+                (existing_summary, requested_summary.as_ref())
+                && existing != requested
+            {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "capture_summary_state_conflict",
+                        "append_contained_task_terminal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+            let scheduling_disposition = select_scheduling_disposition(
+                &chain_events,
+                draft.outcome,
+                draft.final_page.as_deref(),
+                draft.executed_steps,
+                draft.scheduling_outcome.as_ref(),
+                draft.selected_scheduling_outcome.as_deref(),
+            )?;
+            let mut appended = Vec::with_capacity(3);
+            if existing_summary.is_none()
+                && let Some(summary) = requested_summary
+            {
+                appended.push(
+                    self.append_event_under_fact_gate(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::CapturePipeline,
+                        EventActor::Runtime,
+                        links.clone(),
+                        CapturePayloadDraft::summary_committed(summary, AuditInput::new()),
+                    )
+                    .map_err(RequestFailure::poison_without_terminal)?,
+                );
+            }
+            if !draft.intent_already_recorded {
+                appended.push(
+                    self.append_event_under_fact_gate(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                        links.clone(),
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::Finalizing {
+                                outcome: draft.outcome,
+                            },
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map_err(RequestFailure::poison_without_terminal)?,
+                );
+            }
+            let severity = match (draft.outcome, draft.failure_severity) {
+                (TaskOutcome::Success, None) => EventSeverity::Info,
+                (TaskOutcome::Failure, None) => EventSeverity::Error,
+                (
+                    TaskOutcome::Failure,
+                    Some(severity @ (EventSeverity::Warning | EventSeverity::Fatal)),
+                ) => severity,
+                (TaskOutcome::Cancelled, None) => EventSeverity::Warning,
+                _ => {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "contained_task_terminal_severity_invalid",
+                            "append_contained_task_terminal",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                }
+            };
+            #[cfg(test)]
+            if draft.scheduling_outcome.is_some()
+                && self
+                    .scheduling_terminal_append_failures
+                    .swap(0, Ordering::AcqRel)
+                    != 0
+            {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "scheduling_terminal_append_injected_failure",
+                        "append_contained_task_terminal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+            let terminal_event = self
+                .append_event_under_fact_gate(
+                    severity,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links,
+                    TaskPayloadDraft::semantic(
+                        TaskSemanticFact::TerminalCommitted {
+                            outcome: draft.outcome,
+                            final_page: draft.final_page,
+                            executed_steps: draft.executed_steps,
+                            failure_code: draft.failure_code.map(str::to_string),
+                            scheduling_disposition,
+                            task_timing: draft.task_timing,
+                        },
+                        AuditInput::new(),
+                    ),
+                )
                 .map_err(RequestFailure::poison_without_terminal)?;
-        }
-        Ok(terminal_event)
+            appended.push(terminal_event.clone());
+            self.synchronize_fact_store_under_gate()
+                .map_err(RequestFailure::poison_without_terminal)?;
+            drop(gate);
+            for event in &appended {
+                self.observe_pipeline_event(event)
+                    .map_err(RequestFailure::poison_without_terminal)?;
+            }
+            Ok(terminal_event)
+        })();
+        result.map_err(|mut failure: RequestFailure| {
+            if failure.error.lifecycle.task_timing.is_none() {
+                failure.error.lifecycle.task_timing = task_timing;
+            }
+            failure
+        })
     }
 
     fn issue_readonly_capability(
@@ -13089,6 +13106,7 @@ impl HostShared {
                 host_error.and_then(|error| error.lifecycle.native_detail.as_deref().cloned()),
             )
             .with_capacity(host_error.and_then(|error| error.lifecycle.capacity.clone()))
+            .with_task_timing(host_error.and_then(|error| error.lifecycle.task_timing.clone()))
             .with_raw_os_error(host_error.and_then(|error| error.lifecycle.raw_os_error))
             .with_cleanup_cause(host_error.and_then(|error| error.cleanup_cause().cloned()))
             .with_cause(cause.cloned());
@@ -15674,11 +15692,14 @@ impl RequestFailure {
     }
 
     fn replace_with_poison(self, error: RuntimeHostError) -> Self {
-        let error = if self.error.lifecycle.capacity.is_some() {
+        let mut error = if self.error.lifecycle.capacity.is_some() {
             error.with_related_failure("prior_capacity_admission", &self.error)
         } else {
             error
         };
+        if error.lifecycle.task_timing.is_none() {
+            error.lifecycle.task_timing = self.error.lifecycle.task_timing.clone();
+        }
         Self {
             state: RuntimeReceiptState::Failed,
             terminal: self.terminal,

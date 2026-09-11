@@ -1,5 +1,41 @@
 # Task diagnostic stream
 
+The existing task terminal may carry `task_timing`, a bounded observation of
+`recognition_evaluate` and `diagnostic_record_write`. Each has separate preflight,
+execution and finalization counts, error counts, accumulated/maximum microseconds
+and a last sample with its actual frame/recognition or record index. The clock is
+the current process's `std::time::Instant`. These spans do not share the origin of
+RuntimeClock step/dispatch values, summary `runtime_ms` or event Unix timestamps.
+The recognition result describes the outer page-batch Result; individual page
+failures remain in the original page outcomes. Home preflight does not measure
+this batch call and remains unobserved; entry recovery retains its own budget
+origin within the preflight phase.
+
+The kernel supplies its original start/deadline only for observation. A last
+sample records the task budget known before that call; absent/not-started budgets
+and incomplete conversions are explicit. A measured zero is a valid measurement,
+not a replacement for a missing sample. Checked count, duration or accumulation
+failure marks the observation incomplete without changing the original result.
+The original `TaskTimingFailure` remains in milliseconds and is also retained in
+the terminal observation with its phase and budget origin.
+
+The record-write span includes the original encode/framing/append call, including
+an Err return, and excludes the document footer and seal. It never writes its own
+measurement into that record. The existing task terminal receives the snapshot
+after the last diagnostic record returns. An existing permitted RuntimeFailed
+lifecycle record can carry the snapshot when diagnostics are aborted; the
+original deduplication and LedgerFailure prohibition are unchanged. Missing
+terminal/failure evidence, interrupted execution and older records do not supply
+timing observations. No extra event or artifact write is introduced.
+
+Template deadline errors retain a typed `timing` observation through the original
+recognition error and diagnostic error record: exact/coarse/refinement,
+imageproc-returned or joint-template-color check stage, elapsed and limit in
+microseconds. The original five-second deadline, check positions and messages
+remain. Template PNG/ROI preparation precedes that deadline's original start.
+Forensic event reads expose the optional typed fields; a run summary copies
+`task_timing` only from its original terminal. Field absence means not recorded.
+
 `actingcommand.runtime.task-diagnostic.v1` is one immutable, task-scoped
 `DiagnosticJson` artifact produced by the Runtime through ArtifactStore. Its
 authority is the original GlobalLedger `ArtifactVerified` reference. Unpublished

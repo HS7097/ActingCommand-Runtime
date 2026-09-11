@@ -188,36 +188,64 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         mut record: TaskDiagnosticRecord,
     ) -> Result<u64, RequestFailure> {
-        let index = self
-            .diagnostic_records
-            .checked_add(1)
-            .ok_or_else(|| failure("record count overflow"))?;
-        record.index = index;
-        let stream = self
-            .diagnostic_stream
-            .as_mut()
-            .ok_or_else(|| failure("task diagnostic stream missing"))?;
-        let mut writer = RecordWriter { bytes: Vec::new() };
-        serde_json::to_writer(&mut writer, &record).map_err(failure)?;
-        let has_separator = self.diagnostic_records != 0;
-        let json_len = writer.bytes.len();
-        let framed_len = json_len
-            .checked_add(usize::from(has_separator))
-            .and_then(|len| len.checked_add(1))
-            .ok_or_else(|| failure("record framing length overflow"))?;
-        writer
-            .bytes
-            .try_reserve_exact(framed_len - json_len)
-            .map_err(failure)?;
-        if has_separator {
-            writer.bytes.insert(0, b',');
-        }
-        writer.bytes.push(b'\n');
-        stream
-            .append(&writer.bytes)
-            .map_err(online_observation::observation_artifact_failure)?;
-        self.diagnostic_records = index;
-        Ok(index)
+        let started = std::time::Instant::now();
+        let budget_before = self.task_timing.budget_at(started);
+        let frame_id = record.frame_id;
+        let recognition_id = (frame_id == self.last_frame_id.map(|id| *id.transport()))
+            .then(|| self.current_recognition_id.map(|id| *id.transport()))
+            .flatten();
+        let mut record_index = None;
+        let result = (|| {
+            let index = self
+                .diagnostic_records
+                .checked_add(1)
+                .ok_or_else(|| failure("record count overflow"))?;
+            record.index = index;
+            record_index = Some(index);
+            let stream = self
+                .diagnostic_stream
+                .as_mut()
+                .ok_or_else(|| failure("task diagnostic stream missing"))?;
+            let mut writer = RecordWriter { bytes: Vec::new() };
+            serde_json::to_writer(&mut writer, &record).map_err(failure)?;
+            let has_separator = self.diagnostic_records != 0;
+            let json_len = writer.bytes.len();
+            let framed_len = json_len
+                .checked_add(usize::from(has_separator))
+                .and_then(|len| len.checked_add(1))
+                .ok_or_else(|| failure("record framing length overflow"))?;
+            writer
+                .bytes
+                .try_reserve_exact(framed_len - json_len)
+                .map_err(failure)?;
+            if has_separator {
+                writer.bytes.insert(0, b',');
+            }
+            writer.bytes.push(b'\n');
+            stream
+                .append(&writer.bytes)
+                .map_err(online_observation::observation_artifact_failure)?;
+            self.diagnostic_records = index;
+            Ok(index)
+        })();
+        let elapsed_us = actingcommand_execution_kernel::observe_instant_span(
+            started,
+            std::time::Instant::now(),
+        );
+        self.task_timing
+            .record_write(actingcommand_contract::TaskTimingSample {
+                elapsed_us,
+                budget_before,
+                result: if result.is_ok() {
+                    actingcommand_contract::TaskTimingResult::Ok
+                } else {
+                    actingcommand_contract::TaskTimingResult::Err
+                },
+                record_index,
+                frame_id,
+                recognition_id,
+            });
+        result
     }
 
     fn diagnostic(&mut self, parent: Option<u64>, payload: Payload) -> Result<u64, RequestFailure> {

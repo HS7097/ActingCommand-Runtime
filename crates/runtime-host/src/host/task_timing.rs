@@ -3,9 +3,9 @@
 use actingcommand_contract::{
     FrameId, ObservedMicroseconds, RecognitionId, RequestId, RunId, TaskId,
     TaskTimingBudgetObservation, TaskTimingFailure, TaskTimingFailureObservation,
-    TaskTimingObservationState, TaskTimingObservations, TaskTimingPhase, TaskTimingPhaseObservations,
-    TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary, TimingObservationClock,
-    TimingObservationIssue,
+    TaskTimingObservationState, TaskTimingObservations, TaskTimingPhase,
+    TaskTimingPhaseObservations, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
+    TimingObservationClock, TimingObservationIssue,
 };
 use actingcommand_execution_kernel::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext};
 use std::time::Instant;
@@ -39,11 +39,8 @@ impl TaskTimingObserver {
         self.phase = TaskTimingPhase::Execution;
     }
 
-    pub(super) fn replace_context(
-        &mut self,
-        context: Option<ContainedTaskTimingContext>,
-    ) -> Option<ContainedTaskTimingContext> {
-        std::mem::replace(&mut self.context, context)
+    pub(super) fn replace_context(&mut self, context: Option<ContainedTaskTimingContext>) {
+        self.context = context;
     }
 
     pub(super) fn context(&self) -> Option<ContainedTaskTimingContext> {
@@ -65,9 +62,10 @@ impl TaskTimingObserver {
     }
 
     pub(super) fn budget_at(&self, observed: Instant) -> TaskTimingBudgetObservation {
-        self.context.map_or(TaskTimingBudgetObservation::NotStarted, |context| {
-            context.budget_at(observed)
-        })
+        self.context
+            .map_or(TaskTimingBudgetObservation::NotStarted, |context| {
+                context.budget_at(observed)
+            })
     }
 
     pub(super) fn record_evaluation(
@@ -105,7 +103,10 @@ impl TaskTimingObserver {
 }
 
 fn incomplete(summary: &mut TaskTimingSpanSummary, reason: TimingObservationIssue) {
-    if !matches!(summary.status, TaskTimingObservationState::Incomplete { .. }) {
+    if !matches!(
+        summary.status,
+        TaskTimingObservationState::Incomplete { .. }
+    ) {
         summary.status = TaskTimingObservationState::Incomplete { reason };
     }
 }
@@ -113,9 +114,9 @@ fn incomplete(summary: &mut TaskTimingSpanSummary, reason: TimingObservationIssu
 fn observe(summary: &mut TaskTimingSpanSummary, sample: TaskTimingSample) {
     let first = matches!(summary.status, TaskTimingObservationState::Unobserved);
     summary.attempts = summary.attempts.and_then(|count| count.checked_add(1));
-    summary.errors = summary.errors.and_then(|count| {
-        count.checked_add(u64::from(sample.result == TaskTimingResult::Err))
-    });
+    summary.errors = summary
+        .errors
+        .and_then(|count| count.checked_add(u64::from(sample.result == TaskTimingResult::Err)));
     if summary.attempts.is_none() || summary.errors.is_none() {
         incomplete(summary, TimingObservationIssue::CountOverflow);
     }
@@ -140,8 +141,14 @@ fn observe(summary: &mut TaskTimingSpanSummary, sample: TaskTimingSample) {
             incomplete(summary, reason);
         }
     }
+    if let TaskTimingBudgetObservation::Unavailable { reason, .. } = sample.budget_before {
+        incomplete(summary, reason);
+    }
     summary.last = Some(sample);
-    if !matches!(summary.status, TaskTimingObservationState::Incomplete { .. }) {
+    if !matches!(
+        summary.status,
+        TaskTimingObservationState::Incomplete { .. }
+    ) {
         summary.status = TaskTimingObservationState::Observed;
     }
 }

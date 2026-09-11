@@ -511,6 +511,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     executed_steps: Some(0),
                     failure_code: None,
                     scheduling_disposition: None,
+                    task_timing: None,
                 },
                 AuditInput::new(),
             )
@@ -538,6 +539,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                         )
                         .expect("mapped disposition"),
                     ),
+                    task_timing: None,
                 },
                 AuditInput::new(),
             )
@@ -565,6 +567,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                         )
                         .expect("mapped disposition"),
                     ),
+                    task_timing: None,
                 },
                 AuditInput::new(),
             )
@@ -586,6 +589,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     executed_steps: Some(0),
                     failure_code: Some("capture_transient".to_owned()),
                     scheduling_disposition: None,
+                    task_timing: None,
                 },
                 AuditInput::new(),
             )
@@ -607,6 +611,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     executed_steps: Some(0),
                     failure_code: Some("capture_fatal".to_owned()),
                     scheduling_disposition: None,
+                    task_timing: None,
                 },
                 AuditInput::new(),
             )
@@ -628,6 +633,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     executed_steps: Some(0),
                     failure_code: Some("capture_legacy".to_owned()),
                     scheduling_disposition: None,
+                    task_timing: None,
                 },
                 AuditInput::new(),
             )

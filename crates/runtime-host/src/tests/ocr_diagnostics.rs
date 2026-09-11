@@ -475,6 +475,52 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                 .clone(),
         )
         .expect("typed terminal readback");
+        let terminal_event = events
+            .iter()
+            .find(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::TaskCompleted | EventType::TaskFailed
+                )
+            })
+            .expect("original run terminal");
+        let ProjectionPayload::Full(payload) = &terminal_event.payload else {
+            panic!("original Forensic terminal payload")
+        };
+        let observed = payload.task_timing().expect("same-run timing observations");
+        assert_eq!(
+            Some(&observed.request_id),
+            terminal_event.links.request_id()
+        );
+        assert_eq!(Some(&observed.task_id), terminal_event.links.task_id());
+        assert_eq!(Some(&observed.run_id), terminal_event.links.run_id());
+        let final_write = observed
+            .finalization
+            .diagnostic_record_write
+            .last
+            .as_ref()
+            .unwrap();
+        assert_eq!(final_write.record_index, Some(terminal.index));
+        assert_eq!(
+            final_write.result,
+            actingcommand_contract::TaskTimingResult::Ok
+        );
+        assert!(matches!(
+            final_write.elapsed_us,
+            actingcommand_contract::ObservedMicroseconds::Measured { .. }
+        ));
+        assert_eq!(
+            observed.preflight.diagnostic_record_write.attempts.unwrap()
+                + observed.execution.diagnostic_record_write.attempts.unwrap()
+                + observed
+                    .finalization
+                    .diagnostic_record_write
+                    .attempts
+                    .unwrap(),
+            document["records"].as_array().unwrap().len() as u64,
+            "one measured call per original record, including its terminal"
+        );
+        assert!(observed.execution.recognition_evaluate.attempts.unwrap() > 0);
         if case != "success" {
             let actingcommand_contract::TaskDiagnosticPayload::Terminal(
                 actingcommand_contract::TaskDiagnosticTerminalData::TaskError {
@@ -488,6 +534,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                 panic!("original task error")
             };
             let timing = timing.as_ref().expect("actual timing decision");
+            assert_eq!(&observed.task_failure.as_ref().unwrap().timing, timing);
             let dispatched = u32::from(case == "post-delay-budget");
             assert_eq!(*executed_steps, Some(dispatched));
             assert_eq!(

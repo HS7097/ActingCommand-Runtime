@@ -407,9 +407,9 @@ fn exact_metric_match(
         deadline,
         TemplateMatchTimingStage::Exact,
     )?
-        .into_iter()
-        .next()
-        .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
+    .into_iter()
+    .next()
+    .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
     template_match_from_candidate(candidate, template, offset_x, offset_y)
 }
 
@@ -1197,6 +1197,11 @@ mod tests {
 
         assert_eq!(err.severity(), RecognitionErrorSeverity::Fatal);
         assert!(err.message().contains("deadline"));
+        let timing = err.timing().expect("original deadline check observation");
+        assert_eq!(timing.stage, TemplateMatchTimingStage::Coarse);
+        assert_eq!(timing.limit_us, Some(0));
+        assert!(timing.elapsed_us.is_some_and(|elapsed| elapsed > 0));
+        assert_eq!(timing.incomplete, None);
     }
 
     #[test]

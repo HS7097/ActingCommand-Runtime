@@ -1943,7 +1943,9 @@ impl PreparedContainedTask {
             started,
             task_deadline,
             match entry {
-                ContainedTaskEntry::Ordinary => actingcommand_contract::TaskTimingBudgetOrigin::Task,
+                ContainedTaskEntry::Ordinary => {
+                    actingcommand_contract::TaskTimingBudgetOrigin::Task
+                }
                 ContainedTaskEntry::BoundRecovery => {
                     actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery
                 }

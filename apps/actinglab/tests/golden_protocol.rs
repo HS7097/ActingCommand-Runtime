@@ -264,6 +264,12 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "ledger_path": "runtime-global-ledger/correlation_abcdef",
         "schema_version": "0.2",
         "confidence": 0.9876543,
+        "elapsed_us": {"state": "measured", "value": 23},
+        "remaining_us": 100,
+        "total_us": 23,
+        "max_us": 23,
+        "attempts": 1,
+        "expired": false,
         "evaluations": [{
             "evaluation_duration_ms": 27,
             "matched": true
@@ -296,6 +302,15 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["detector_id"], "detect_resolution");
     assert_eq!(value["schema_version"], "0.2");
     assert_eq!(value["confidence"], 0.9876543);
+    assert_eq!(
+        value["elapsed_us"],
+        json!({"state": "measured", "value": "<MICROSECONDS>"})
+    );
+    assert_eq!(value["remaining_us"], "<MICROSECONDS>");
+    assert_eq!(value["total_us"], "<MICROSECONDS>");
+    assert_eq!(value["max_us"], "<MICROSECONDS>");
+    assert_eq!(value["attempts"], 1);
+    assert_eq!(value["expired"], false);
     assert!(
         value["evaluations"][0]
             .get("evaluation_duration_ms")
@@ -574,6 +589,12 @@ fn normalize_value(
 ) {
     match value {
         Value::Object(object) => {
+            if matches!(key, Some("elapsed_us" | "limit_us"))
+                && object.get("state").and_then(Value::as_str) == Some("measured")
+                && object.get("value").is_some_and(Value::is_u64)
+            {
+                object.insert("value".to_owned(), json!("<MICROSECONDS>"));
+            }
             if configuration_artifacts
                 && key == Some("artifacts")
                 && object.get("kind").and_then(Value::as_str) == Some("diagnostic.json")
@@ -605,6 +626,9 @@ fn normalize_value(
             }
         }
         Value::String(text) => normalize_string(text, root, key),
+        Value::Number(_) if matches!(key, Some("remaining_us" | "total_us" | "max_us")) => {
+            *value = json!("<MICROSECONDS>");
+        }
         Value::Number(_)
             if key.is_some_and(|field| {
                 field.ends_with("_unix_ms")
