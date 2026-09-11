@@ -346,7 +346,10 @@ impl<B: DurableStorage> EventStore<B> {
     ) -> GlobalLedgerResult<PersistedEvent> {
         if !matches!(
             draft.event_type(),
-            EventType::CatalogActivated | EventType::CatalogRolledBack | EventType::StateMigrated
+            EventType::CatalogActivated
+                | EventType::CatalogRolledBack
+                | EventType::StateMigrated
+                | EventType::ApprovalDecision
         ) {
             return Err(GlobalLedgerError::request(
                 "joint_event_type_unsupported",
