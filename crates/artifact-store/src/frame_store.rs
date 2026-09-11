@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome, CapturePipelineCounts,
+    ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome,
+    CapturePipelineCounts,
 };
-use actingcommand_contract::{CapturePressureState, EvidenceCompleteness, PinnedFrameReason};
+use actingcommand_contract::{
+    ArtifactReference, CapturePressureState, EvidenceCompleteness, PinnedFrameReason,
+};
 use actingcommand_device::{Frame, PixelFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -372,6 +376,7 @@ impl BackpressureState {
 pub enum FrameStorageState {
     Memory,
     Segment,
+    Artifact,
     Dropped,
 }
 
@@ -380,6 +385,7 @@ impl FrameStorageState {
         match self {
             Self::Memory => "memory",
             Self::Segment => "segment",
+            Self::Artifact => "artifact",
             Self::Dropped => "dropped",
         }
     }
@@ -411,6 +417,7 @@ pub enum FrameStoreEvent {
     },
     DedupWindow {
         representative_frame_index: usize,
+        preserved_frame_index: Option<usize>,
         duplicate_count: u64,
         duration_ms: u64,
     },
@@ -472,6 +479,7 @@ pub struct FrameStore {
     spilled_bytes: u64,
     dropped_bytes: u64,
     entries: Vec<FrameEntry>,
+    protected_history: usize,
     timeline: Vec<Value>,
     events: Vec<FrameStoreEvent>,
     tier1_active: bool,
@@ -502,6 +510,7 @@ impl FrameStore {
             spilled_bytes: 0,
             dropped_bytes: 0,
             entries: Vec::new(),
+            protected_history: 0,
             timeline: Vec::new(),
             events: Vec::new(),
             tier1_active: false,
@@ -516,6 +525,73 @@ impl FrameStore {
         })
     }
 
+    /// Configure before accepting frames; the window keeps each original materializable.
+    pub fn protect_recent_frames(&mut self, count: usize) -> CliOutcome<()> {
+        if !self.entries.is_empty() || count > 64 {
+            return Err(CliError::usage(
+                "backtrace window must be set before capture and at most 64 frames",
+            ));
+        }
+        self.protected_history = count;
+        Ok(())
+    }
+
+    pub fn original_material(&self, frame_index: usize) -> Option<&FrameMaterialIdentity> {
+        self.entries
+            .iter()
+            .find(|entry| entry.frame_index == frame_index)
+            .map(|entry| &entry.material)
+    }
+
+    pub(crate) fn record_recognition(
+        &mut self,
+        frame_index: usize,
+        state: RecognitionState,
+    ) -> CliOutcome<()> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.frame_index == frame_index)
+            .ok_or_else(|| {
+                CliError::usage(format!("unknown frame index {frame_index} for recognition"))
+            })?;
+        let previous_matches = self.entries[..index]
+            .iter()
+            .rev()
+            .find(|entry| entry.retained)
+            .is_some_and(|entry| entry.recognition_state.can_dedupe_with(&state));
+        let entry = &mut self.entries[index];
+        entry.key_frame = entry.pinned_reason.is_some()
+            || entry.label == "initial"
+            || entry.label.contains("click")
+            || entry.label.contains("action")
+            || entry.label.contains("before")
+            || entry.label.contains("after")
+            || matches!(state, RecognitionState::Failed { .. })
+            || !previous_matches;
+        entry.recognition_state = state;
+        Ok(())
+    }
+
+    /// A pin cannot resurrect a perceptually similar representative as the original frame.
+    pub fn pin_frame(&mut self, frame_index: usize, reason: PinnedFrameReason) -> CliOutcome<()> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.frame_index == frame_index)
+            .ok_or_else(|| CliError::usage("pin frame identity is not in this capture"))?;
+        if !entry.retained || matches!(entry.storage, FrameStorage::Dropped) {
+            return Err(CliError::fatal(
+                "frame_material_unavailable",
+                "pin_frame",
+                "original frame material has already been released",
+            ));
+        }
+        entry.pinned_reason.get_or_insert(reason);
+        entry.key_frame = true;
+        Ok(())
+    }
+
     pub fn set_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
         let budget = MemoryBudget::build(&config)?;
         self.config = config;
@@ -527,6 +603,16 @@ impl FrameStore {
         self.refresh_budget()?;
         self.release_watermarks_if_needed();
         let mut warnings = Vec::new();
+        let original_png = input
+            .frame
+            .png_for_artifact()
+            .map_err(|error| CliError::device(error.to_string()))?;
+        let material = FrameMaterialIdentity {
+            frame_index: input.frame_index,
+            byte_count: original_png.len() as u64,
+            sha256: crate::store::canonical_sha256(&original_png),
+        };
+        drop(original_png);
         let file = format!("screenshots/{}", input.file_name);
         let key_frame = self.is_key_frame(&input);
         let pinned_reason = input.pinned_reason;
@@ -542,7 +628,7 @@ impl FrameStore {
         let projected = self.resident_bytes.saturating_add(estimate.total());
         if projected >= self.budget.tier1_bytes {
             self.activate_tier1(projected);
-            self.dedup_existing();
+            self.dedup_existing()?;
             backpressure_state = BackpressureState::Tier1Dedup;
         }
         let projected = self.resident_bytes.saturating_add(estimate.total());
@@ -565,7 +651,7 @@ impl FrameStore {
             tier3_triggered = true;
             self.activate_tier3(projected);
             if input.recognition_state.can_spill() {
-                match self.spill_admission_frame(&storage, &input.file_name, &file) {
+                match self.spill_admission_frame(&storage, &input.file_name, &file, &material) {
                     Ok(Some(spilled)) => {
                         storage = spilled;
                         resident_estimate = estimate.spilled_resident();
@@ -587,6 +673,7 @@ impl FrameStore {
         let segment_id = storage.segment_id();
         let segment_path = storage.segment_path();
         let entry = FrameEntry {
+            material,
             frame_index: input.frame_index,
             file_name: input.file_name,
             file: file.clone(),
@@ -600,6 +687,8 @@ impl FrameStore {
             key_frame,
             pinned_reason,
             artifact_persisted: false,
+            artifact_material: None,
+            similarity_recorded: false,
             merged_count: 0,
             dwell_ms: 0,
             delta_from_previous_ms: self.delta_from_previous_ms(captured_at),
@@ -637,7 +726,7 @@ impl FrameStore {
         }));
 
         if self.tier1_active {
-            self.dedup_existing();
+            self.dedup_existing()?;
         }
         if self.tier2_active {
             self.flush_resident_segment(&mut warnings);
@@ -692,33 +781,13 @@ impl FrameStore {
                 continue;
             }
             let destination = screenshots_dir.join(&entry.file_name);
-            match &entry.storage {
-                FrameStorage::Resident(frame) => {
-                    let png = frame
-                        .png_for_artifact()
-                        .map_err(|err| CliError::device(err.to_string()))?;
-                    fs::write(&destination, png).map_err(|err| {
-                        CliError::package_invalid(format!(
-                            "failed to write {}: {err}",
-                            destination.display()
-                        ))
-                    })?;
-                }
-                FrameStorage::Spilled {
-                    segment_path,
-                    zip_name,
-                    ..
-                } => {
-                    let png = read_segment_frame(segment_path, zip_name)?;
-                    fs::write(&destination, png).map_err(|err| {
-                        CliError::package_invalid(format!(
-                            "failed to write {}: {err}",
-                            destination.display()
-                        ))
-                    })?;
-                }
-                FrameStorage::Dropped => {}
-            }
+            let png = entry.original_png()?;
+            fs::write(&destination, png).map_err(|err| {
+                CliError::package_invalid(format!(
+                    "failed to write {}: {err}",
+                    destination.display()
+                ))
+            })?;
         }
         self.materialized_count = Some(materialized_count);
         Ok(())
@@ -862,6 +931,7 @@ impl FrameStore {
             json!({
                 "event": "frame_final",
                 "frame_index": entry.frame_index,
+                "original_material": entry.material,
                 "file": entry.file,
                 "retained": entry.retained,
                 "merged_into": entry.merged_into,
@@ -893,6 +963,9 @@ impl FrameStore {
     pub fn refresh_pressure(&mut self) -> CliOutcome<bool> {
         self.refresh_budget()?;
         let was_paused = self.tier3_active;
+        if self.tier1_active {
+            self.dedup_existing()?;
+        }
         self.release_watermarks_if_needed();
         Ok(was_paused && !self.tier3_active)
     }
@@ -901,50 +974,86 @@ impl FrameStore {
         &self,
         include_all_retained: bool,
     ) -> CliOutcome<Vec<FramePersistenceCandidate>> {
-        let mut candidates = Vec::new();
-        for entry in self.entries.iter().filter(|entry| {
-            entry.retained
-                && !entry.artifact_persisted
-                && (include_all_retained
-                    || entry.pinned_reason.is_some()
-                    || entry.storage_state == FrameStorageState::Segment)
-        }) {
-            let png = match &entry.storage {
-                FrameStorage::Resident(frame) => frame
-                    .png_for_artifact()
-                    .map_err(|error| CliError::device(error.to_string()))?,
-                FrameStorage::Spilled {
-                    segment_path,
-                    zip_name,
-                    ..
-                } => read_segment_frame(segment_path, zip_name)?,
-                FrameStorage::Dropped => continue,
-            };
-            candidates.push(FramePersistenceCandidate {
-                frame_index: entry.frame_index,
-                file_name: entry.file_name.clone(),
-                captured_at: entry.captured_at,
-                pinned_reason: entry.pinned_reason,
-                png,
-            });
-        }
-        Ok(candidates)
+        self.persistence_candidate_indexes(include_all_retained)
+            .into_iter()
+            .map(|frame_index| self.persistence_candidate(frame_index))
+            .collect()
     }
 
-    pub fn mark_artifact_persisted(&mut self, frame_index: usize) -> CliOutcome<()> {
+    pub(crate) fn persistence_candidate_indexes(&self, include_all_retained: bool) -> Vec<usize> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                entry.retained
+                    && !entry.artifact_persisted
+                    && (include_all_retained
+                        || entry.pinned_reason.is_some()
+                        || entry.storage_state == FrameStorageState::Segment)
+            })
+            .map(|entry| entry.frame_index)
+            .collect()
+    }
+
+    pub(crate) fn persistence_candidate(
+        &self,
+        frame_index: usize,
+    ) -> CliOutcome<FramePersistenceCandidate> {
         let entry = self
             .entries
-            .iter_mut()
+            .iter()
             .find(|entry| entry.frame_index == frame_index)
             .ok_or_else(|| {
                 CliError::usage(format!("unknown frame index {frame_index} for persistence"))
             })?;
         if !entry.retained {
+            return Err(CliError::fatal(
+                "frame_material_unavailable",
+                "persist_capture_frame",
+                "original frame is not retained",
+            ));
+        }
+        Ok(FramePersistenceCandidate {
+            frame_index,
+            file_name: entry.file_name.clone(),
+            captured_at: entry.captured_at,
+            pinned_reason: entry.pinned_reason,
+            png: entry.original_png()?,
+        })
+    }
+
+    pub(crate) fn mark_artifact_persisted(
+        &mut self,
+        frame_index: usize,
+        store: Arc<ArtifactStore>,
+        reference: ArtifactReference,
+    ) -> CliOutcome<()> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.frame_index == frame_index)
+            .ok_or_else(|| {
+                CliError::usage(format!("unknown frame index {frame_index} for persistence"))
+            })?;
+        let entry = &mut self.entries[index];
+        if !entry.retained {
             return Err(CliError::usage(format!(
                 "deduplicated frame index {frame_index} cannot be marked persisted"
             )));
         }
+        if reference.byte_count() != entry.material.byte_count
+            || reference.sha256() != entry.material.sha256
+        {
+            return Err(CliError::fatal(
+                "frame_material_hash_mismatch",
+                "mark_capture_frame_persisted",
+                "persisted artifact differs from the original PNG",
+            ));
+        }
         entry.artifact_persisted = true;
+        entry.artifact_material = Some(PersistedFrameMaterial { store, reference });
+        if matches!(entry.storage, FrameStorage::Spilled { .. }) {
+            self.release_persisted_memory(index)?;
+        }
         Ok(())
     }
 
@@ -1036,13 +1145,32 @@ impl FrameStore {
         }
     }
 
-    fn dedup_existing(&mut self) {
+    fn dedup_existing(&mut self) -> CliOutcome<()> {
         let mut previous_retained = None;
         for index in 0..self.entries.len() {
             if !self.entries[index].retained {
                 continue;
             }
+            if self.entries[index].artifact_persisted {
+                self.release_persisted_memory(index)?;
+                if !self.entries[index].key_frame
+                    && !self.entries[index].similarity_recorded
+                    && let Some(previous) = previous_retained
+                    && self.same_page_duplicate(previous, index)
+                {
+                    self.entries[index].similarity_recorded = true;
+                    self.events.push(FrameStoreEvent::DedupWindow {
+                        representative_frame_index: self.entries[previous].frame_index,
+                        preserved_frame_index: Some(self.entries[index].frame_index),
+                        duplicate_count: 1,
+                        duration_ms: self.entries[index].delta_from_previous_ms.max(1),
+                    });
+                }
+                previous_retained = Some(index);
+                continue;
+            }
             let should_keep = self.entries[index].key_frame
+                || index >= self.entries.len().saturating_sub(self.protected_history)
                 || previous_retained
                     .is_none_or(|previous| !self.same_page_duplicate(previous, index));
             if should_keep {
@@ -1051,6 +1179,35 @@ impl FrameStore {
                 self.drop_entry(index, previous);
             }
         }
+        Ok(())
+    }
+
+    fn release_persisted_memory(&mut self, index: usize) -> CliOutcome<()> {
+        if !matches!(
+            self.entries[index].storage,
+            FrameStorage::Resident(_) | FrameStorage::Spilled { .. }
+        ) {
+            return Ok(());
+        }
+        let Some(material) = self.entries[index].artifact_material.take() else {
+            return Err(CliError::fatal(
+                "frame_material_unavailable",
+                "release_persisted_frame_memory",
+                "persisted frame has no original material reference",
+            ));
+        };
+        let estimate = self.entries[index].resident_estimate;
+        self.entries[index].storage = FrameStorage::Artifact(material);
+        self.entries[index].storage_state = FrameStorageState::Artifact;
+        self.replace_resident_estimate(
+            index,
+            ResidentEstimate {
+                payload: 0,
+                encoder_workspace: 0,
+                ..estimate
+            },
+        );
+        Ok(())
     }
 
     fn same_page_duplicate(&self, previous: usize, current: usize) -> bool {
@@ -1078,6 +1235,7 @@ impl FrameStore {
         self.entries[index].storage_state = FrameStorageState::Dropped;
         self.events.push(FrameStoreEvent::DedupWindow {
             representative_frame_index: self.entries[target].frame_index,
+            preserved_frame_index: None,
             duplicate_count: 1,
             duration_ms: dropped_delta.max(1),
         });
@@ -1092,14 +1250,21 @@ impl FrameStore {
     }
 
     fn release_large_objects(&mut self, index: usize) -> u64 {
+        let metadata = self.entries[index].resident_estimate.metadata;
         let released =
             match std::mem::replace(&mut self.entries[index].storage, FrameStorage::Dropped) {
-                FrameStorage::Resident(_) | FrameStorage::Spilled { .. } => {
-                    self.replace_resident_estimate(index, ResidentEstimate::default())
-                }
+                FrameStorage::Resident(_)
+                | FrameStorage::Spilled { .. }
+                | FrameStorage::Artifact(_) => self.replace_resident_estimate(
+                    index,
+                    ResidentEstimate {
+                        metadata,
+                        ..ResidentEstimate::default()
+                    },
+                ),
                 FrameStorage::Dropped => 0,
             };
-        self.entries[index].thumb.values.clear();
+        self.entries[index].thumb.values = Vec::new();
         released
     }
 
@@ -1149,21 +1314,8 @@ impl FrameStore {
         &mut self,
         indexes: Vec<usize>,
     ) -> Result<SegmentWriteReport, SegmentWriteError> {
-        let mut encoded = Vec::new();
         let mut frame_failures = Vec::new();
-        for index in indexes {
-            let FrameStorage::Resident(frame) = &self.entries[index].storage else {
-                continue;
-            };
-            match frame.png_for_artifact() {
-                Ok(png) => encoded.push((index, png)),
-                Err(err) => frame_failures.push(SegmentFrameFailure {
-                    index,
-                    message: format!("spill_degraded: failed to encode frame: {err}"),
-                }),
-            }
-        }
-        if encoded.is_empty() {
+        if indexes.is_empty() {
             return Ok(SegmentWriteReport { frame_failures });
         }
 
@@ -1192,27 +1344,42 @@ impl FrameStore {
             }
         };
         self.active_segment_id = Some(segment_id);
-        let result = (|| -> Result<Vec<(usize, Vec<u8>)>, String> {
+        let result = (|| -> Result<Vec<(usize, u64)>, String> {
             let options =
                 FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             let mut zip = ZipWriter::new(file);
             let mut manifest = Vec::new();
-            for (index, png) in &encoded {
-                let zip_name = self.entries[*index].file_name.clone();
+            let mut written = Vec::new();
+            for index in indexes {
+                let png = match self.entries[index].original_png() {
+                    Ok(png) => png,
+                    Err(error) => {
+                        frame_failures.push(SegmentFrameFailure {
+                            index,
+                            message: format!(
+                                "spill_degraded: failed to encode or verify frame: {error}"
+                            ),
+                        });
+                        continue;
+                    }
+                };
+                let zip_name = self.entries[index].file_name.clone();
                 zip.start_file(&zip_name, options).map_err(|err| {
                     format!("spill_unavailable: failed to start segment entry: {err}")
                 })?;
-                zip.write_all(png).map_err(|err| {
+                zip.write_all(&png).map_err(|err| {
                     format!("spill_unavailable: failed to write segment frame bytes: {err}")
                 })?;
                 manifest.push(json!({
-                    "frame_index": self.entries[*index].frame_index,
-                    "file_name": self.entries[*index].file_name,
+                    "frame_index": self.entries[index].frame_index,
+                    "file_name": self.entries[index].file_name,
                     "zip_name": zip_name,
-                    "recognition_state": self.entries[*index].recognition_state.as_json(),
-                    "dwell_ms": self.entries[*index].dwell_ms,
-                    "merged_count": self.entries[*index].merged_count
+                    "original_material": self.entries[index].material,
+                    "recognition_state": self.entries[index].recognition_state.as_json(),
+                    "dwell_ms": self.entries[index].dwell_ms,
+                    "merged_count": self.entries[index].merged_count
                 }));
+                written.push((index, png.len() as u64));
             }
             zip.start_file("segment-manifest.json", options)
                 .map_err(|err| {
@@ -1225,18 +1392,35 @@ impl FrameStore {
             )
             .map_err(|err| format!("spill_unavailable: failed to write segment manifest: {err}"))?;
             zip.finish()
-                .map_err(|err| format!("spill_unavailable: failed to finish segment: {err}"))?;
+                .map_err(|err| format!("spill_unavailable: failed to finish segment: {err}"))?
+                .sync_all()
+                .map_err(|err| format!("spill_unavailable: failed to sync segment: {err}"))?;
+            for (index, _) in &written {
+                let entry = &self.entries[*index];
+                let png = read_segment_frame(&segment_path, &entry.file_name)
+                    .map_err(|err| format!("spill_unavailable: failed to verify segment: {err}"))?;
+                if png.len() as u64 != entry.material.byte_count
+                    || crate::store::canonical_sha256(&png) != entry.material.sha256
+                {
+                    return Err(
+                        "spill_unavailable: segment differs from original frame material"
+                            .to_string(),
+                    );
+                }
+            }
             self.append_segment_manifest(segment_id, &segment_path, &manifest)
                 .map_err(|err| {
                     format!("spill_unavailable: failed to append segment manifest: {err}")
                 })?;
-            Ok(encoded)
+            Ok(written)
         })();
         let encoded = match result {
             Ok(encoded) => encoded,
-            Err(message) => {
+            Err(mut message) => {
                 self.active_segment_id = None;
-                let _ = fs::remove_file(&segment_path);
+                if let Err(error) = fs::remove_file(&segment_path) {
+                    message.push_str(&format!("; failed segment cleanup: {error}"));
+                }
                 return Err(SegmentWriteError {
                     message,
                     frame_failures,
@@ -1244,8 +1428,8 @@ impl FrameStore {
             }
         };
 
-        for (index, png) in encoded {
-            self.mark_spilled(index, segment_id, &segment_path, png.len() as u64);
+        for (index, byte_count) in encoded {
+            self.mark_spilled(index, segment_id, &segment_path, byte_count);
         }
         self.active_segment_id = None;
         Ok(SegmentWriteReport { frame_failures })
@@ -1256,6 +1440,7 @@ impl FrameStore {
         storage: &FrameStorage,
         file_name: &str,
         file: &str,
+        material: &FrameMaterialIdentity,
     ) -> Result<Option<FrameStorage>, String> {
         let FrameStorage::Resident(frame) = storage else {
             return Ok(None);
@@ -1283,6 +1468,11 @@ impl FrameStore {
             let png = frame
                 .png_for_artifact()
                 .map_err(|err| format!("spill_degraded: failed to encode frame: {err}"))?;
+            if png.len() as u64 != material.byte_count
+                || crate::store::canonical_sha256(&png) != material.sha256
+            {
+                return Err("spill_degraded: frame differs from original material".to_string());
+            }
             zip.start_file(file_name, options).map_err(|err| {
                 format!("spill_unavailable: failed to start segment entry: {err}")
             })?;
@@ -1292,6 +1482,7 @@ impl FrameStore {
             let manifest = vec![json!({
                 "file": file,
                 "file_name": file_name,
+                "original_material": material,
                 "zip_name": file_name
             })];
             zip.start_file("segment-manifest.json", options)
@@ -1305,7 +1496,18 @@ impl FrameStore {
             )
             .map_err(|err| format!("spill_unavailable: failed to write segment manifest: {err}"))?;
             zip.finish()
-                .map_err(|err| format!("spill_unavailable: failed to finish segment: {err}"))?;
+                .map_err(|err| format!("spill_unavailable: failed to finish segment: {err}"))?
+                .sync_all()
+                .map_err(|err| format!("spill_unavailable: failed to sync segment: {err}"))?;
+            let restored = read_segment_frame(&segment_path, file_name)
+                .map_err(|err| format!("spill_unavailable: failed to verify segment: {err}"))?;
+            if restored.len() as u64 != material.byte_count
+                || crate::store::canonical_sha256(&restored) != material.sha256
+            {
+                return Err(
+                    "spill_unavailable: segment differs from original frame material".to_string(),
+                );
+            }
             self.append_segment_manifest(segment_id, &segment_path, &manifest)
                 .map_err(|err| {
                     format!("spill_unavailable: failed to append segment manifest: {err}")
@@ -1347,11 +1549,11 @@ impl FrameStore {
             });
             writeln!(file, "{row}")?;
         }
-        Ok(())
+        file.sync_all()
     }
 
     fn mark_spilled(&mut self, index: usize, segment_id: u64, segment_path: &Path, png_bytes: u64) {
-        let new_estimate = self.entries[index].resident_estimate.metadata_only();
+        let new_estimate = self.entries[index].resident_estimate.spilled_resident();
         let released = self.replace_resident_estimate(index, new_estimate);
         self.entries[index].storage = FrameStorage::Spilled {
             segment_id,
@@ -1528,7 +1730,15 @@ pub struct FrameStoreScreenshot {
     pub storage_state: FrameStorageState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FrameMaterialIdentity {
+    pub frame_index: usize,
+    pub byte_count: u64,
+    pub sha256: String,
+}
+
 struct FrameEntry {
+    material: FrameMaterialIdentity,
     frame_index: usize,
     file_name: String,
     file: String,
@@ -1542,6 +1752,8 @@ struct FrameEntry {
     key_frame: bool,
     pinned_reason: Option<PinnedFrameReason>,
     artifact_persisted: bool,
+    artifact_material: Option<PersistedFrameMaterial>,
+    similarity_recorded: bool,
     merged_count: u64,
     dwell_ms: u64,
     delta_from_previous_ms: u64,
@@ -1561,6 +1773,47 @@ struct SegmentWriteReport {
     frame_failures: Vec<SegmentFrameFailure>,
 }
 
+impl FrameEntry {
+    fn original_png(&self) -> CliOutcome<Vec<u8>> {
+        let png = match &self.storage {
+            FrameStorage::Resident(frame) => frame
+                .png_for_artifact()
+                .map_err(|error| CliError::device(error.to_string()))?,
+            FrameStorage::Spilled {
+                segment_path,
+                zip_name,
+                ..
+            } => read_segment_frame(segment_path, zip_name)?,
+            FrameStorage::Artifact(material) => {
+                material.store.read_verified(&material.reference)?
+            }
+            FrameStorage::Dropped => {
+                return Err(CliError::fatal(
+                    "frame_material_unavailable",
+                    "read_original_frame",
+                    "original frame material is unavailable",
+                ));
+            }
+        };
+        if png.len() as u64 != self.material.byte_count
+            || crate::store::canonical_sha256(&png) != self.material.sha256
+        {
+            return Err(CliError::fatal(
+                "frame_material_hash_mismatch",
+                "read_original_frame",
+                "materialized frame differs from its original PNG",
+            ));
+        }
+        Ok(png)
+    }
+}
+
+#[derive(Clone)]
+struct PersistedFrameMaterial {
+    store: Arc<ArtifactStore>,
+    reference: ArtifactReference,
+}
+
 struct SegmentWriteError {
     message: String,
     frame_failures: Vec<SegmentFrameFailure>,
@@ -1573,6 +1826,7 @@ struct SegmentFrameFailure {
 
 enum FrameStorage {
     Resident(Frame),
+    Artifact(PersistedFrameMaterial),
     Spilled {
         segment_id: u64,
         segment_path: PathBuf,
@@ -1585,14 +1839,14 @@ impl FrameStorage {
     fn segment_id(&self) -> Option<u64> {
         match self {
             Self::Spilled { segment_id, .. } => Some(*segment_id),
-            Self::Resident(_) | Self::Dropped => None,
+            Self::Resident(_) | Self::Artifact(_) | Self::Dropped => None,
         }
     }
 
     fn segment_path(&self) -> Option<PathBuf> {
         match self {
             Self::Spilled { segment_path, .. } => Some(segment_path.clone()),
-            Self::Resident(_) | Self::Dropped => None,
+            Self::Resident(_) | Self::Artifact(_) | Self::Dropped => None,
         }
     }
 }
@@ -1618,17 +1872,13 @@ impl ResidentEstimate {
             .saturating_add(self.encoder_workspace)
     }
 
-    fn metadata_only(self) -> Self {
+    fn spilled_resident(self) -> Self {
         Self {
             payload: 0,
             metadata: self.metadata.saturating_add(SEGMENT_METADATA_BYTES),
-            thumbnail: 0,
+            thumbnail: self.thumbnail,
             encoder_workspace: 0,
         }
-    }
-
-    fn spilled_resident(self) -> Self {
-        self.metadata_only()
     }
 
     fn without_encoder_workspace(self) -> Self {

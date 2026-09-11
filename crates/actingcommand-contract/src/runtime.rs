@@ -2011,6 +2011,9 @@ impl RuntimeSubscriptionRequest {
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
+        self.query
+            .validate()
+            .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
         if self.wait_ms > MAX_RUNTIME_SUBSCRIPTION_WAIT_MS
             || self.max_events == 0
             || self.max_events > MAX_RUNTIME_SUBSCRIPTION_EVENTS
@@ -2111,11 +2114,17 @@ pub struct RuntimeEventQueryPageRequest {
     limit: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<RuntimeEventQueryCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot_position: Option<u64>,
 }
 
 impl RuntimeEventQueryPageRequest {
     pub fn new(limit: u16, cursor: Option<RuntimeEventQueryCursor>) -> RuntimeContractResult<Self> {
-        let request = Self { limit, cursor };
+        let request = Self {
+            limit,
+            cursor,
+            snapshot_position: None,
+        };
         request.validate()?;
         Ok(request)
     }
@@ -2128,6 +2137,14 @@ impl RuntimeEventQueryPageRequest {
         }
         if let Some(cursor) = &self.cursor {
             cursor.validate()?;
+            if self
+                .snapshot_position
+                .is_some_and(|position| position != cursor.snapshot_ledger_position())
+            {
+                return Err(RuntimeContractError::new(
+                    "invalid_runtime_event_query_snapshot",
+                ));
+            }
         }
         Ok(())
     }
@@ -2139,6 +2156,16 @@ impl RuntimeEventQueryPageRequest {
     pub const fn cursor(&self) -> Option<&RuntimeEventQueryCursor> {
         self.cursor.as_ref()
     }
+
+    pub fn at_snapshot(mut self, position: u64) -> RuntimeContractResult<Self> {
+        self.snapshot_position = Some(position);
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub const fn snapshot_position(&self) -> Option<u64> {
+        self.snapshot_position
+    }
 }
 
 impl Default for RuntimeEventQueryPageRequest {
@@ -2146,6 +2173,7 @@ impl Default for RuntimeEventQueryPageRequest {
         Self {
             limit: DEFAULT_RUNTIME_EVENT_QUERY_EVENTS,
             cursor: None,
+            snapshot_position: None,
         }
     }
 }
@@ -2160,6 +2188,10 @@ pub struct RuntimeEventQueryPage {
     has_more: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     next_cursor: Option<RuntimeEventQueryCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read_scope: Option<crate::LedgerReadScope>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    run_recovery: Vec<crate::LedgerRunRecovery>,
 }
 
 impl RuntimeEventQueryPage {
@@ -2179,6 +2211,8 @@ impl RuntimeEventQueryPage {
             returned_count,
             has_more,
             next_cursor,
+            read_scope: None,
+            run_recovery: Vec::new(),
         };
         page.validate()?;
         Ok(page)
@@ -2204,6 +2238,19 @@ impl RuntimeEventQueryPage {
                 ));
             }
             previous = event.sequence;
+            let mut artifacts = std::collections::BTreeSet::new();
+            for observation in &event.artifact_evictions {
+                observation.validate().map_err(|_| {
+                    RuntimeContractError::new("invalid_runtime_artifact_eviction_observation")
+                })?;
+                if observation.through_sequence > self.snapshot_ledger_position
+                    || !artifacts.insert(observation.artifact_id)
+                {
+                    return Err(RuntimeContractError::new(
+                        "invalid_runtime_artifact_eviction_observation",
+                    ));
+                }
+            }
         }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;
@@ -2213,6 +2260,60 @@ impl RuntimeEventQueryPage {
                 return Err(RuntimeContractError::new(
                     "invalid_runtime_event_query_page",
                 ));
+            }
+        }
+        if let Some(scope) = &self.read_scope {
+            if scope.scanned_through_position > self.snapshot_ledger_position
+                || self
+                    .events
+                    .last()
+                    .is_some_and(|event| event.sequence > scope.scanned_through_position)
+                || scope.read_complete
+                    == scope
+                        .limits
+                        .contains(&crate::LedgerPageLimit::SourceIncomplete)
+                || (self.has_more
+                    != (scope.limits.contains(&crate::LedgerPageLimit::EventCount)
+                        || scope
+                            .limits
+                            .contains(&crate::LedgerPageLimit::ResponseBytes)))
+            {
+                return Err(RuntimeContractError::new(
+                    "invalid_runtime_event_read_scope",
+                ));
+            }
+        } else if !self.run_recovery.is_empty() {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_read_scope",
+            ));
+        }
+        let mut runs = std::collections::BTreeSet::new();
+        for group in &self.run_recovery {
+            if !runs.insert(group.run_id)
+                || !self
+                    .events
+                    .iter()
+                    .any(|event| event.links.run_id() == Some(&group.run_id))
+                || (group.state == crate::LedgerRecoveryState::Unknown) == group.gaps.is_empty()
+                || (group.state == crate::LedgerRecoveryState::Recovered
+                    && (group.evidence.is_empty()
+                        || group.evidence.iter().any(|item| item.success.is_none())))
+            {
+                return Err(RuntimeContractError::new("invalid_runtime_event_recovery"));
+            }
+            let mut previous_failure = 0;
+            for item in &group.evidence {
+                if item.failure.sequence <= previous_failure
+                    || item.failure.sequence > self.snapshot_ledger_position
+                    || item.success.is_some_and(|success| {
+                        success.sequence <= item.failure.sequence
+                            || success.sequence > self.snapshot_ledger_position
+                            || success.event_id == item.failure.event_id
+                    })
+                {
+                    return Err(RuntimeContractError::new("invalid_runtime_event_recovery"));
+                }
+                previous_failure = item.failure.sequence;
             }
         }
         let encoded = serde_json::to_vec(self)
@@ -2248,12 +2349,34 @@ impl RuntimeEventQueryPage {
     pub const fn next_cursor(&self) -> Option<&RuntimeEventQueryCursor> {
         self.next_cursor.as_ref()
     }
+
+    pub fn with_projection_context(
+        mut self,
+        scope: crate::LedgerReadScope,
+        run_recovery: Vec<crate::LedgerRunRecovery>,
+    ) -> RuntimeContractResult<Self> {
+        self.read_scope = Some(scope);
+        self.run_recovery = run_recovery;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub const fn read_scope(&self) -> Option<&crate::LedgerReadScope> {
+        self.read_scope.as_ref()
+    }
+
+    pub fn run_recovery(&self) -> &[crate::LedgerRunRecovery] {
+        &self.run_recovery
+    }
 }
 
 fn event_query_fingerprint(
     query: &EventQuery,
     profile: ProjectionProfile,
 ) -> RuntimeContractResult<String> {
+    query
+        .validate()
+        .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
     let bytes = serde_json::to_vec(&(query, profile))
         .map_err(|_| RuntimeContractError::new("runtime_event_query_fingerprint_failed"))?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
@@ -2519,7 +2642,12 @@ impl RuntimeOperation {
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::CancelContainedTask { .. } => Ok(()),
-            Self::QueryEvents { page, .. } => page.validate(),
+            Self::QueryEvents { query, page, .. } => {
+                query
+                    .validate()
+                    .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
+                page.validate()
+            }
             Self::ProjectInterface { request } => request
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),

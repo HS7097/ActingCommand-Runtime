@@ -12,6 +12,7 @@ publish = false
 sqlite-candidate = []
 
 [dependencies]
+actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
 actingcommand-contract = { workspace = true }
 actingcommand-runtime-database = { workspace = true }
 rusqlite = { workspace = true }
@@ -20,7 +21,6 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 
 [dev-dependencies]
-actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
 actingcommand-runtime-database = { workspace = true }
 rusqlite = { workspace = true }
 tempfile = "3"

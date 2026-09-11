@@ -124,6 +124,10 @@ struct BackupBinding {
     state_sha256: String,
     source: Option<LedgerSourceIdentity>,
     artifacts: Vec<ProjectedArtifactReference>,
+    #[serde(default)]
+    artifact_evictions: Vec<actingcommand_contract::ArtifactEvictionProof>,
+    #[serde(default)]
+    artifact_material_included: bool,
 }
 
 pub(crate) fn run(
@@ -201,8 +205,34 @@ fn run_locked(
     match request.operation {
         LedgerMaintenanceOperation::Verify => {
             if ledger == LedgerStorageStatus::Missing {
-                maintenance
+                let source = maintenance
                     .source(|reference| artifacts.verify_recovery_reference(reference).ok())?;
+                if !source.artifact_evictions().is_empty() {
+                    return Err(failure(
+                        "maintenance_artifact_material_unavailable",
+                        "verify_complete_artifact_material",
+                    ));
+                }
+            } else {
+                let snapshot = maintenance.read_formal(&database, |reference| {
+                    artifacts.verify_recovery_reference(reference).ok()
+                })?;
+                if snapshot
+                    .events()
+                    .iter()
+                    .flat_map(actingcommand_ledger::PersistedEvent::artifacts)
+                    .any(|artifact| {
+                        !matches!(
+                            artifact.availability(),
+                            actingcommand_ledger::ArtifactAvailability::Available(_)
+                        )
+                    })
+                {
+                    return Err(failure(
+                        "maintenance_artifact_material_unavailable",
+                        "verify_complete_artifact_material",
+                    ));
+                }
             }
             Ok(receipt(
                 if ledger == LedgerStorageStatus::Missing {
@@ -336,10 +366,14 @@ fn binding(
     ledger: LedgerStorageStatus,
     state_sha256: String,
 ) -> Result<BackupBinding> {
-    let (source, references) = if ledger == LedgerStorageStatus::Missing {
+    let (source, references, artifact_evictions) = if ledger == LedgerStorageStatus::Missing {
         let source =
             maintenance.source(|reference| artifacts.verify_recovery_reference(reference).ok())?;
-        (Some(source.identity().clone()), source.artifacts())
+        (
+            Some(source.identity().clone()),
+            source.artifacts(),
+            source.artifact_evictions(),
+        )
     } else {
         let snapshot = maintenance.read_formal(database, |reference| {
             artifacts.verify_recovery_reference(reference).ok()
@@ -356,6 +390,14 @@ fn binding(
                         .map(|reference| reference.project(true))
                 })
                 .collect(),
+            snapshot
+                .events()
+                .iter()
+                .flat_map(actingcommand_ledger::PersistedEvent::artifact_evictions)
+                .map(|proof| (proof.identity.artifact.artifact_id, proof.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_values()
+                .collect(),
         )
     };
     Ok(BackupBinding {
@@ -363,6 +405,8 @@ fn binding(
         state_sha256,
         source,
         artifacts: references,
+        artifact_evictions,
+        artifact_material_included: false,
     })
 }
 
@@ -380,6 +424,9 @@ fn verify_backup_binding(
     }
     let expected: BackupBinding = serde_json::from_value(backup.binding.clone())
         .map_err(|_| failure("backup_binding_invalid", "decode_backup_binding"))?;
+    if expected.artifact_material_included {
+        return Err(failure("backup_binding_invalid", "verify_backup_binding"));
+    }
     let archived_database = Arc::new(RuntimeDatabase::open_existing(backup_root, true)?);
     let state = RuntimeStateStore::from_database(Arc::clone(&archived_database))?;
     let state_sha256 = state.maintenance_digest(limits, deadline)?;
@@ -431,6 +478,12 @@ fn restore(
         request.limits,
         deadline,
     )?;
+    if !expected.artifact_evictions.is_empty() {
+        return Err(failure(
+            "restore_artifact_material_unavailable",
+            "admit_database_restore",
+        ));
+    }
     if current_state != expected.state_sha256 {
         return Err(failure(
             "restore_state_has_advanced",

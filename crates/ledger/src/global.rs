@@ -4,14 +4,24 @@
 
 mod evidence;
 mod migration;
-pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
+mod planning;
+pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
+pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;
 mod read_only;
+mod retention;
+pub use retention::{
+    ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
+};
 mod sqlite;
 mod storage;
 mod store;
 pub use migration::*;
-pub use sqlite::SqliteLedgerReadOnly;
+pub use sqlite::{
+    RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
+    VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
+    verify_release_source_reference, verify_transaction_event,
+};
 
 pub(crate) use projection::query_matches;
 
@@ -30,9 +40,9 @@ use crate::PersistedEvent;
 use actingcommand_contract::{
     CorrelationId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
     PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    SanitizationError, SanitizedEventDraft, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
-    VerifiedArtifactReference,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, SanitizationError, SanitizedEventDraft,
+    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, SecretField, SecretFingerprinter,
+    Sha256Fingerprint, SubscriptionCursor, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -65,9 +75,53 @@ pub struct GlobalLedgerError {
     operation: &'static str,
     detail: Option<String>,
     terminal: bool,
+    rolled_back_work: Option<Box<TransactionWorkError>>,
+}
+
+/// Error from a named Runtime business owner; only a confirmed SQL rollback exposes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionWorkError {
+    pub code: &'static str,
+    pub operation: &'static str,
+    pub fatal: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionStateObservation {
+    Applied,
+    Unchanged,
+    Unknown,
+}
+
+/// Trusted crate adapter. No RPC, CLI, resource or SQL-text callback entry exists.
+pub trait LedgerTransactionWork: Send + 'static {
+    fn apply(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+        event: &PersistedEvent,
+    ) -> Result<(), TransactionWorkError>;
+    fn observe(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> Result<TransactionStateObservation, TransactionWorkError>;
 }
 
 impl GlobalLedgerError {
+    pub fn rolled_back_work(&self) -> Option<&TransactionWorkError> {
+        self.rolled_back_work.as_deref()
+    }
+
+    fn work_failure(error: TransactionWorkError) -> Self {
+        Self {
+            code: error.code,
+            operation: error.operation,
+            detail: Some(error.detail.clone()),
+            terminal: false,
+            rolled_back_work: Some(Box::new(error)),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         self.code
     }
@@ -90,6 +144,7 @@ impl GlobalLedgerError {
             operation,
             detail: None,
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -99,6 +154,7 @@ impl GlobalLedgerError {
             operation,
             detail: None,
             terminal: false,
+            rolled_back_work: None,
         }
     }
 
@@ -108,6 +164,7 @@ impl GlobalLedgerError {
             operation,
             detail: Some(error.to_string()),
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -117,6 +174,7 @@ impl GlobalLedgerError {
             operation,
             detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -311,6 +369,25 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 }
 
 enum WriterCommand {
+    RetentionCandidates {
+        after: Option<actingcommand_contract::ArtifactId>,
+        response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
+    },
+    AdmitArtifactEviction {
+        guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
+        response: SyncSender<GlobalLedgerResult<ArtifactEvictionAdmission>>,
+    },
+    FinishArtifactEviction {
+        permit: Box<ArtifactEvictionPermit>,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
+    AppendTransaction {
+        draft: Box<SanitizedEventDraft>,
+        work: Box<dyn LedgerTransactionWork>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
     Append {
         draft: Box<SanitizedEventDraft>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
@@ -329,6 +406,12 @@ enum WriterCommand {
         through_sequence: u64,
         page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
+    ProjectViewPage {
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+        response: SyncSender<GlobalLedgerResult<RuntimeEventQueryPage>>,
     },
     ProjectSchedulingOutcomes {
         expected: Box<SchedulingOutcomeIdentity>,
@@ -800,6 +883,29 @@ impl GlobalLedger {
         }
     }
 
+    /// Commits one fact and its named internal database work on the existing writer.
+    pub fn append_transaction(
+        &self,
+        draft: SanitizedEventDraft,
+        work: Box<dyn LedgerTransactionWork>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_transaction"))?;
+        send_command(
+            sender,
+            WriterCommand::AppendTransaction {
+                draft: Box::new(draft),
+                work,
+                response,
+            },
+            "append_transaction",
+        )?;
+        receive_response(receiver, "append_transaction")?
+    }
+
     pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
@@ -844,6 +950,9 @@ impl GlobalLedger {
     }
 
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "query_events")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -864,6 +973,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "query_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -881,6 +993,35 @@ impl GlobalLedger {
             "query_event_page",
         )?;
         receive_response(receiver, "query_event_page")?
+    }
+
+    pub fn project_view_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_ledger_view_page")
+        })?;
+        request.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
+        })?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal("writer_unavailable", "project_ledger_view_page")
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ProjectViewPage {
+                query,
+                profile,
+                request,
+                response,
+            },
+            "project_ledger_view_page",
+        )?;
+        receive_response(receiver, "project_ledger_view_page")?
     }
 
     pub fn project_scheduling_outcomes(
@@ -957,6 +1098,9 @@ impl GlobalLedger {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_events")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -982,6 +1126,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1073,8 +1220,82 @@ fn writer_loop<S: LedgerStore>(
     let mut subscribers = Vec::new();
     while let Ok(command) = receiver.recv() {
         match command {
+            WriterCommand::RetentionCandidates { after, response } => {
+                let _ = response.send(Ok(store.retention_candidates(after)));
+            }
+            WriterCommand::AdmitArtifactEviction { guard, response } => {
+                match store.admit_artifact_eviction(*guard) {
+                    Ok((admission, appended)) => {
+                        for event in &appended {
+                            deliver_live_event(&mut subscribers, event);
+                        }
+                        let _ = response.send(Ok(admission));
+                    }
+                    Err(error) => {
+                        let terminal = error.terminal();
+                        let _ = response.send(Err(error.clone()));
+                        if terminal {
+                            notify_terminal_failure(&mut subscribers, error.clone());
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            WriterCommand::FinishArtifactEviction {
+                permit,
+                disposition,
+                io,
+                response,
+            } => {
+                let result = store.finish_artifact_eviction(*permit, disposition, io);
+                let result = match result {
+                    Ok(event) => {
+                        deliver_live_event(&mut subscribers, &event);
+                        if disposition
+                            == actingcommand_contract::ArtifactEvictionDisposition::Failed
+                        {
+                            Err(GlobalLedgerError::fatal(
+                                "artifact_eviction_failed",
+                                "finish_artifact_eviction",
+                            ))
+                        } else {
+                            Ok(event)
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = &result
+                    && error.terminal()
+                {
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error.clone());
+                }
+                let _ = response.send(result);
+            }
             WriterCommand::Append { draft, response } => {
                 let result = store.append(*draft);
+                let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
+                if let Ok(event) = &result {
+                    let _ = response.send(Ok(event.clone()));
+                    deliver_live_event(&mut subscribers, event);
+                }
+                if terminal {
+                    let error = result.expect_err("terminal append result must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
+                if let Err(error) = result {
+                    let _ = response.send(Err(error));
+                }
+            }
+            WriterCommand::AppendTransaction {
+                draft,
+                response,
+                work,
+            } => {
+                let result = store.append_transaction(*draft, work.as_ref());
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
                 if let Ok(event) = &result {
                     let _ = response.send(Ok(event.clone()));
@@ -1132,6 +1353,21 @@ fn writer_loop<S: LedgerStore>(
                         "query_event_page",
                     ))
                 };
+                let _ = response.send(result);
+            }
+            WriterCommand::ProjectViewPage {
+                query,
+                profile,
+                request,
+                response,
+            } => {
+                let result = store.project_view_page(&query, profile, &request);
+                if result.as_ref().is_err_and(GlobalLedgerError::terminal) {
+                    let error = result.expect_err("terminal view query must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
                 let _ = response.send(result);
             }
             WriterCommand::ProjectSchedulingOutcomes {
@@ -1283,7 +1519,7 @@ fn writer_loop<S: LedgerStore>(
                     Ok(store
                         .query_page(&query, after_sequence, through_sequence, page_events)
                         .iter()
-                        .map(|event| projection::project(event, profile))
+                        .map(|event| projection::project_at(event, profile, through_sequence))
                         .collect())
                 } else {
                     Err(GlobalLedgerError::request(
