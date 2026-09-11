@@ -1,14 +1,102 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_artifact_store::{ArtifactStore, try_artifact_delete_guard};
-use actingcommand_contract::{
-    ArtifactId, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS, RETENTION_ROUND_START_BUDGET_MS,
-    RuntimeErrorCode,
+use actingcommand_artifact_store::{
+    ArtifactStore, ArtifactStoreError, ArtifactStoreResult, try_artifact_delete_guard,
 };
-use actingcommand_ledger::{ArtifactEvictionAdmission, GlobalLedger, GlobalLedgerError};
+use actingcommand_contract::{
+    ArtifactId, ArtifactKind, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
+    ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput, EventActor, EventLinksDraft,
+    EventSeverity, EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, OriginModule,
+    OwnerEpoch, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS, RETENTION_ROUND_START_BUDGET_MS,
+    RuntimeErrorCode, TerminalEvent,
+};
+use actingcommand_ledger::{
+    ArtifactEvictionAdmission, GlobalLedger, GlobalLedgerError, PersistedEvent,
+};
 use std::time::{Duration, Instant};
 
-use crate::{RuntimeHostError, RuntimeHostResult};
+use crate::{RuntimeHostError, RuntimeHostResult, events::RuntimeEvents};
+
+/// The publication sink calls this while the original material publication guard is held.
+pub(super) fn pin_published_frames(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    owner_epoch: OwnerEpoch,
+    verified: &PersistedEvent,
+    reason: ArtifactPinReason,
+) -> ArtifactStoreResult<()> {
+    if verified.event_type() != EventType::ArtifactVerified {
+        return Err(pin_failure("artifact_pin_source_not_verified"));
+    }
+    let links = verified.links();
+    for artifact in verified
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+    {
+        let identity = ArtifactRetentionIdentity {
+            artifact: artifact.project(true),
+            owner_epoch,
+            instance_id: *links
+                .instance_id()
+                .ok_or_else(|| pin_failure("artifact_pin_instance_missing"))?,
+            request_id: *links
+                .request_id()
+                .ok_or_else(|| pin_failure("artifact_pin_request_missing"))?,
+            correlation_id: *links
+                .correlation_id()
+                .ok_or_else(|| pin_failure("artifact_pin_correlation_missing"))?,
+            run_id: links.run_id().copied(),
+            lease_id: links.lease_id().copied(),
+            policy_version: FRAME_RETENTION_POLICY_VERSION,
+        };
+        let draft = events
+            .draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::ArtifactStore,
+                EventActor::Runtime,
+                EventLinksDraft::default(),
+                ArtifactPayloadDraft::retention(
+                    ArtifactRetentionFact::PinRecorded(ArtifactPinRecord {
+                        identity,
+                        reason,
+                        trigger: TerminalEvent {
+                            event_id: *verified.event_id(),
+                            sequence: verified.sequence(),
+                        },
+                    }),
+                    AuditInput::new(),
+                ),
+            )
+            .and_then(|draft| events.sanitize(draft))
+            .map_err(|error| {
+                ArtifactStoreError::fatal(error.code(), "pin_published_frame", error.to_string())
+            })?;
+        let draft = links
+            .artifact_retention_source()
+            .apply_to(draft)
+            .map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_pin_source_conflict",
+                    "pin_published_frame",
+                    error.to_string(),
+                )
+            })?;
+        ledger.append(draft).map_err(|error| {
+            ArtifactStoreError::fatal(error.code(), "pin_published_frame", error.to_string())
+        })?;
+    }
+    Ok(())
+}
+
+fn pin_failure(code: &'static str) -> ArtifactStoreError {
+    ArtifactStoreError::fatal(
+        code,
+        "pin_published_frame",
+        "verified frame source lacks its originating identity",
+    )
+}
 
 /// Only the scan cursor lives here. Eligibility and recovery state belong to GlobalLedger.
 #[derive(Default)]

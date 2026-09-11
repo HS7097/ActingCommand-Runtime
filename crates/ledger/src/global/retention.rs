@@ -262,7 +262,7 @@ impl RetentionIndex {
         Self::from_events_checked(events, &mut |_| Ok(()))
     }
 
-    fn from_events_checked<E: LedgerEventRead>(
+    pub(super) fn from_events_checked<E: LedgerEventRead>(
         events: &[E],
         check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
     ) -> GlobalLedgerResult<Self> {
@@ -1229,9 +1229,25 @@ where
     let mut events = Vec::with_capacity(records.len());
     for record in records {
         check(events.len() + 1)?;
+        let event = retention.restore_record(record, verifier)?;
+        check(events.len() + 1)?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+impl RetentionIndex {
+    pub(super) fn restore_record<F>(
+        &self,
+        record: StoredEventRecord,
+        verifier: &mut Option<F>,
+    ) -> GlobalLedgerResult<PersistedEvent>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
         let mut event = record
             .into_event_with_artifact_availability(&mut |reference| {
-                let proof = retention
+                let proof = self
                     .proof(reference)
                     .map_err(|error| FactValidationError::new(error.code()))?;
                 if let Some(proof) = proof {
@@ -1256,9 +1272,7 @@ where
                     ))
             })
             .map_err(|error| invalid(error.code()))?;
-        retention.annotate_event(&mut event);
-        check(events.len() + 1)?;
-        events.push(event);
+        self.annotate_event(&mut event);
+        Ok(event)
     }
-    Ok(events)
 }
