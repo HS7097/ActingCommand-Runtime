@@ -270,6 +270,7 @@ fn read_source_head(
         (0 | FORMAL_FORMAT_VERSION, 4) => {}
         _ => return Err(failure("ledger_schema_incomplete", OPERATION)),
     }
+    views::installed(connection)?;
     let meta = read_meta(connection)?;
     let marker = SqliteMarker::parse(&meta)?;
     let expected_format = if marker.state == "ready" {

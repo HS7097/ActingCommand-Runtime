@@ -1440,7 +1440,11 @@
               "sensitivity": "internal",
               "sequence": 18,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [
