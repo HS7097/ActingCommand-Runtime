@@ -521,6 +521,61 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             "one measured call per original record, including its terminal"
         );
         assert!(observed.execution.recognition_evaluate.attempts.unwrap() > 0);
+        for phase in [
+            &observed.preflight,
+            &observed.execution,
+            &observed.finalization,
+        ] {
+            assert!(phase.recognition_evaluate.subphases.is_none());
+            let writes = &phase.diagnostic_record_write;
+            let Some(subphases) = &writes.subphases else {
+                assert_eq!(writes.attempts, Some(0));
+                continue;
+            };
+            assert_eq!(subphases.encode.attempts, writes.attempts);
+            assert_eq!(subphases.framing.attempts, writes.attempts);
+            assert!(subphases.file_write.attempts.unwrap() >= writes.attempts.unwrap());
+            assert_eq!(
+                subphases.capacity_admit.attempts,
+                subphases.file_write.attempts
+            );
+            assert_eq!(
+                subphases.material_update.attempts,
+                subphases.file_write.attempts
+            );
+            for subphase in [
+                &subphases.encode,
+                &subphases.framing,
+                &subphases.capacity_admit,
+                &subphases.file_write,
+                &subphases.material_update,
+            ] {
+                assert_eq!(
+                    subphase.status,
+                    actingcommand_contract::TaskTimingObservationState::Observed
+                );
+                assert_eq!(subphase.errors, Some(0));
+                let last = subphase.last.as_ref().unwrap();
+                assert_eq!(
+                    last.record_index,
+                    writes.last.as_ref().unwrap().record_index
+                );
+                assert_eq!(last.result, actingcommand_contract::TaskTimingResult::Ok);
+                assert!(matches!(
+                    last.elapsed_us,
+                    actingcommand_contract::ObservedMicroseconds::Measured { .. }
+                ));
+            }
+            let last_bytes = subphases
+                .file_write
+                .last
+                .as_ref()
+                .unwrap()
+                .returned_bytes
+                .unwrap();
+            assert!(last_bytes > 0);
+            assert!(subphases.file_write.successful_returned_bytes.unwrap() >= last_bytes);
+        }
         if case != "success" {
             let actingcommand_contract::TaskDiagnosticPayload::Terminal(
                 actingcommand_contract::TaskDiagnosticTerminalData::TaskError {

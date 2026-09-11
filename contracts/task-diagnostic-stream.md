@@ -28,6 +28,32 @@ original deduplication and LedgerFailure prohibition are unchanged. Missing
 terminal/failure evidence, interrupted execution and older records do not supply
 timing observations. No extra event or artifact write is introduced.
 
+The optional `diagnostic_record_write.subphases` contains exactly `encode`,
+`framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the
+original serde call (including its typed `to_value` conversion) and checked
+framing/reserve/comma/newline work. ArtifactStream returns in-memory observations
+of entered calls within that same single append: the complete original capacity
+decision/binding/Drain check, the actual file write, and the original hash/count
+update of only the successfully returned bytes. Each short-write iteration keeps
+its own admission and file/material call in the fixed cumulative counts and last
+sample. Host adds the actual record index and merges into the original phase/run.
+
+Every subphase retains attempts/errors/total/max/last with checked microseconds
+and accumulation. Unentered calls have `unobserved` status and absent elapsed
+values; zero attempt/error/byte counts are counts, not measured zero durations.
+File `successful_returned_bytes` sums only successful file returns, including a
+zero return; its last `returned_bytes` is absent on Err. It does not claim how
+many physical bytes an errored OS operation wrote. WriteZero and material errors
+retain the original write failure even when the file call itself returned Ok.
+Cleanup and other unmeasured overhead are outside these five items; their cause
+cannot be inferred by subtracting subphase totals from the outer span.
+
+The optional append observer is taken after the original append returns, before
+owner abort, including on Err. Other stream calls keep observation disabled.
+No state is borrowed from a previous append, stream or record. The same terminal
+or permitted failure snapshot includes the last record's subphases; an absent
+field in older facts means unrecorded and strict typed decoding remains in force.
+
 Template deadline errors retain a typed `timing` observation through the original
 recognition error and diagnostic error record: exact/coarse/refinement,
 imageproc-returned or joint-template-color check stage, elapsed and limit in

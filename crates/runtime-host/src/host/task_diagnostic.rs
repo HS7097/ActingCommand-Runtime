@@ -11,6 +11,7 @@ use actingcommand_contract::{
     TaskDiagnosticStepElapsedData, TaskDiagnosticStepStartedData, TaskDiagnosticTargetData,
     TaskDiagnosticTargetFailure, TaskDiagnosticTargetSource, TaskDiagnosticTemplateData,
     TaskDiagnosticTerminalData, TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage,
+    TaskRecordSubphases, TaskTimingResult,
 };
 use actingcommand_page_detector::{PageBatchResult, PageOutcome, PageTargetEvaluation};
 use actingcommand_recognition_pack::{
@@ -195,6 +196,7 @@ impl RuntimeContainedTask<'_> {
             .then(|| self.current_recognition_id.map(|id| *id.transport()))
             .flatten();
         let mut record_index = None;
+        let mut subphases = TaskRecordSubphases::default();
         let result = (|| {
             let index = self
                 .diagnostic_records
@@ -207,24 +209,57 @@ impl RuntimeContainedTask<'_> {
                 .as_mut()
                 .ok_or_else(|| failure("task diagnostic stream missing"))?;
             let mut writer = RecordWriter { bytes: Vec::new() };
-            serde_json::to_writer(&mut writer, &record).map_err(failure)?;
-            let has_separator = self.diagnostic_records != 0;
-            let json_len = writer.bytes.len();
-            let framed_len = json_len
-                .checked_add(usize::from(has_separator))
-                .and_then(|len| len.checked_add(1))
-                .ok_or_else(|| failure("record framing length overflow"))?;
-            writer
-                .bytes
-                .try_reserve_exact(framed_len - json_len)
-                .map_err(failure)?;
-            if has_separator {
-                writer.bytes.insert(0, b',');
-            }
-            writer.bytes.push(b'\n');
-            stream
-                .append(&writer.bytes)
-                .map_err(online_observation::observation_artifact_failure)?;
+            let encode_started = std::time::Instant::now();
+            let encoded = serde_json::to_writer(&mut writer, &record);
+            subphases.encode.observe(
+                actingcommand_execution_kernel::observe_instant_span(
+                    encode_started,
+                    std::time::Instant::now(),
+                ),
+                if encoded.is_ok() {
+                    TaskTimingResult::Ok
+                } else {
+                    TaskTimingResult::Err
+                },
+                None,
+            );
+            encoded.map_err(failure)?;
+            let framing_started = std::time::Instant::now();
+            let framed: Result<(), RequestFailure> = (|| {
+                let has_separator = self.diagnostic_records != 0;
+                let json_len = writer.bytes.len();
+                let framed_len = json_len
+                    .checked_add(usize::from(has_separator))
+                    .and_then(|len| len.checked_add(1))
+                    .ok_or_else(|| failure("record framing length overflow"))?;
+                writer
+                    .bytes
+                    .try_reserve_exact(framed_len - json_len)
+                    .map_err(failure)?;
+                if has_separator {
+                    writer.bytes.insert(0, b',');
+                }
+                writer.bytes.push(b'\n');
+                Ok(())
+            })();
+            subphases.framing.observe(
+                actingcommand_execution_kernel::observe_instant_span(
+                    framing_started,
+                    std::time::Instant::now(),
+                ),
+                if framed.is_ok() {
+                    TaskTimingResult::Ok
+                } else {
+                    TaskTimingResult::Err
+                },
+                None,
+            );
+            framed?;
+            let (appended, timing) = stream.append_observed(&writer.bytes);
+            subphases.capacity_admit = timing.capacity_admit;
+            subphases.file_write = timing.file_write;
+            subphases.material_update = timing.material_update;
+            appended.map_err(online_observation::observation_artifact_failure)?;
             self.diagnostic_records = index;
             Ok(index)
         })();
@@ -232,8 +267,8 @@ impl RuntimeContainedTask<'_> {
             started,
             std::time::Instant::now(),
         );
-        self.task_timing
-            .record_write(actingcommand_contract::TaskTimingSample {
+        self.task_timing.record_write(
+            actingcommand_contract::TaskTimingSample {
                 elapsed_us,
                 budget_before,
                 result: if result.is_ok() {
@@ -244,7 +279,9 @@ impl RuntimeContainedTask<'_> {
                 record_index,
                 frame_id,
                 recognition_id,
-            });
+            },
+            subphases,
+        );
         result
     }
 

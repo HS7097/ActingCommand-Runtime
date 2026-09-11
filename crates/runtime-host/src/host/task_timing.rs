@@ -2,10 +2,10 @@
 
 use actingcommand_contract::{
     CorrelationId, FrameId, ObservedMicroseconds, RecognitionId, RequestId, RunId, TaskId,
-    TaskTimingBudgetObservation, TaskTimingFailure, TaskTimingFailureObservation,
-    TaskTimingObservationState, TaskTimingObservations, TaskTimingPhase,
-    TaskTimingPhaseObservations, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
-    TimingObservationClock, TimingObservationIssue,
+    TaskRecordSubphases, TaskTimingBudgetObservation, TaskTimingFailure,
+    TaskTimingFailureObservation, TaskTimingObservationState, TaskTimingObservations,
+    TaskTimingPhase, TaskTimingPhaseObservations, TaskTimingResult, TaskTimingSample,
+    TaskTimingSpanSummary, TimingObservationClock, TimingObservationIssue,
 };
 use actingcommand_execution_kernel::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext};
 use std::time::Instant;
@@ -93,8 +93,17 @@ impl TaskTimingObserver {
         observe(&mut self.current().recognition_evaluate, sample);
     }
 
-    pub(super) fn record_write(&mut self, sample: TaskTimingSample) {
-        observe(&mut self.current().diagnostic_record_write, sample);
+    pub(super) fn record_write(
+        &mut self,
+        sample: TaskTimingSample,
+        subphases: TaskRecordSubphases,
+    ) {
+        let summary = &mut self.current().diagnostic_record_write;
+        summary
+            .subphases
+            .get_or_insert_with(Default::default)
+            .merge_record(subphases, sample.record_index);
+        observe(summary, sample);
     }
 
     pub(super) fn snapshot(&self) -> Box<TaskTimingObservations> {
