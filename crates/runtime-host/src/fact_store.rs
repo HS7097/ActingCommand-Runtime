@@ -172,6 +172,10 @@ fn fact_work_error(error: actingcommand_runtime_state::RuntimeStateError) -> Tra
     }
 }
 
+fn fact_state_error(error: actingcommand_runtime_state::RuntimeStateError) -> RuntimeHostError {
+    RuntimeHostError::state(&error).with_native_detail(error.to_string())
+}
+
 pub(crate) fn fact_transaction_error(
     error: actingcommand_ledger::GlobalLedgerError,
 ) -> RuntimeHostError {
@@ -420,7 +424,7 @@ impl InstanceFactStore {
         store
             .state
             .recover_fact_projections(&events)
-            .map_err(|error| RuntimeHostError::state(&error))?;
+            .map_err(fact_state_error)?;
         for event in events {
             store.replay_event(&event, ledger)?;
         }
@@ -458,7 +462,7 @@ impl InstanceFactStore {
         let state = self
             .state
             .prepare_fact_projection(&pending.data, published, trigger)
-            .map_err(|error| RuntimeHostError::state(&error))?;
+            .map_err(fact_state_error)?;
         Ok(FactTransaction { state })
     }
 
@@ -989,19 +993,19 @@ impl InstanceFactStore {
         key: &str,
         source_snapshot_id: &str,
     ) -> RuntimeHostResult<Option<InvalidationTombstone>> {
-        let entry_key = fact_tombstone_key(scope, key, source_snapshot_id)
-            .map_err(|error| RuntimeHostError::state(&error))?;
+        let entry_key =
+            fact_tombstone_key(scope, key, source_snapshot_id).map_err(fact_state_error)?;
         let Some(entry) = self
             .state
             .read_projection_entry(FACT_TOMBSTONE_NAMESPACE, &entry_key)
-            .map_err(|error| RuntimeHostError::state(&error))?
+            .map_err(fact_state_error)?
         else {
             return Ok(None);
         };
         let original = original_at(ledger, entry.ledger_sequence())?;
         self.state
             .verify_fact_projection_entry(&entry, &original)
-            .map_err(|error| RuntimeHostError::state(&error))?;
+            .map_err(fact_state_error)?;
         let data = serde_json::from_slice::<FactInvalidationEventData>(entry.payload())
             .map_err(|_| fact_fatal("fact_tombstone_projection_invalid", "read_fact_tombstone"))?;
         if &data.scope != scope || data.key != key || data.source_snapshot_id != source_snapshot_id
