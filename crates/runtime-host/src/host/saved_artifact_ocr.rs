@@ -235,6 +235,7 @@ impl HostShared {
             ledger: &self.ledger,
             events: &self.events,
             verified: None,
+            frame_retention: None,
         };
         let stored = self
             .artifacts

@@ -37,8 +37,8 @@ use actingcommand_artifact_store::{
     CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
     EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
     FrameStoreFrameInput, PackageVerification, PersistedFrameEvidence, PinnedFrameEvidence,
-    PreparedArtifact, RecognitionState, StoredArtifact, build_capture_pipeline_summary,
-    capture_summary_record, read_projected_verified,
+    PreparedArtifact, RecognitionState, build_capture_pipeline_summary, capture_summary_record,
+    read_projected_verified,
 };
 use actingcommand_contract::{
     ActionId, AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
