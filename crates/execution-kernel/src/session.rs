@@ -92,26 +92,47 @@ enum SessionCommand {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionResourceCloseOutcome {
     resource_count: u16,
+    vendor_stdio: Vec<crate::ExecutionStdioObservation>,
 }
 
 impl ExecutionResourceCloseOutcome {
     pub(crate) const fn confirmed(resource_count: u16) -> Self {
-        Self { resource_count }
+        Self {
+            resource_count,
+            vendor_stdio: Vec::new(),
+        }
     }
 
-    pub const fn quiescence(self) -> ResourceQuiescence {
+    fn from_device(outcome: actingcommand_device::DeviceResourceCloseOutcome) -> Self {
+        Self {
+            resource_count: outcome.resource_count(),
+            vendor_stdio: outcome
+                .vendor_stdio()
+                .iter()
+                .map(crate::ExecutionStdioObservation::from_device)
+                .collect(),
+        }
+    }
+
+    pub fn vendor_stdio(&self) -> &[crate::ExecutionStdioObservation] {
+        &self.vendor_stdio
+    }
+
+    pub const fn quiescence(&self) -> ResourceQuiescence {
         ResourceQuiescence::Confirmed
     }
 
-    pub const fn resource_count(self) -> u16 {
+    pub const fn resource_count(&self) -> u16 {
         self.resource_count
     }
 
-    fn combine(self, other: Self) -> Self {
-        Self::confirmed(self.resource_count.saturating_add(other.resource_count))
+    fn combine(mut self, other: Self) -> Self {
+        self.resource_count = self.resource_count.saturating_add(other.resource_count);
+        crate::error::merge_stdio_observations(&mut self.vendor_stdio, &other.vendor_stdio);
+        self
     }
 }
 
@@ -312,7 +333,8 @@ impl ExecutionSession {
         });
         let result = match (close_result, join_session(&mut state)) {
             (Ok(outcome), Ok(())) => Ok(outcome),
-            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(outcome), Err(error)) => Err(error.with_stdio_observations(outcome.vendor_stdio())),
             (Err(primary), Err(secondary)) => Err(ExecutionKernelError::merge(primary, secondary)),
         };
         state.close_result = Some(result.clone());
@@ -512,9 +534,10 @@ fn run_session(
                 );
                 if response.send(result.clone()).is_err() {
                     return match result {
-                        Ok(_) => Err(ExecutionKernelError::fatal(
+                        Ok(outcome) => Err(ExecutionKernelError::fatal(
                             "execution_session_response_lost",
-                        )),
+                        )
+                        .with_stdio_observations(outcome.vendor_stdio())),
                         Err(error) => Err(ExecutionKernelError::merge(
                             error,
                             ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -551,7 +574,10 @@ fn close_retained_after_failure(
                 let result = close_resources(capture.take(), input.take(), authority, order);
                 if response.send(result.clone()).is_err() {
                     return Err(match result {
-                        Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
+                        Ok(outcome) => {
+                            ExecutionKernelError::fatal("execution_session_response_lost")
+                                .with_stdio_observations(outcome.vendor_stdio())
+                        }
                         Err(cleanup) => cleanup,
                     });
                 }
@@ -686,7 +712,7 @@ fn close_after_failure(
     authority: DeviceCloseAuthority,
 ) -> ExecutionKernelError {
     match close_resources(capture, input, authority, order) {
-        Ok(_) => primary,
+        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
         Err(secondary) => ExecutionKernelError::merge_cleanup(primary, secondary),
     }
 }
@@ -709,7 +735,9 @@ fn close_resources(
     };
     match (first, second) {
         (Ok(first), Ok(second)) => Ok(first.combine(second)),
-        (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(outcome)) | (Ok(outcome), Err(error)) => {
+            Err(error.with_stdio_observations(outcome.vendor_stdio()))
+        }
         (Err(primary), Err(secondary)) => {
             Err(ExecutionKernelError::merge_cleanup(primary, secondary))
         }
@@ -729,9 +757,7 @@ fn close_capture(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
         });
     match result {
-        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::confirmed(
-            outcome.resource_count(),
-        )),
+        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(outcome)),
         Err(error) => {
             let quiescence = error
                 .resource_quiescence()
@@ -773,9 +799,7 @@ fn close_input(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
         });
     match result {
-        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::confirmed(
-            outcome.resource_count(),
-        )),
+        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(outcome)),
         Err(error) => {
             let quiescence = error
                 .resource_quiescence()

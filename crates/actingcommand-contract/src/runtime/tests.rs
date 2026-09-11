@@ -376,8 +376,11 @@ fn resource_quiescence_causes_roundtrip_and_project() {
             }),
             after: None,
             related: None,
+            target_retirement: None,
         }],
         dropped_count: 0,
+        paths: Vec::new(),
+        restart_manager: None,
     };
     let lifecycle = RuntimeLifecycleFailureDraft::new(
         epoch,

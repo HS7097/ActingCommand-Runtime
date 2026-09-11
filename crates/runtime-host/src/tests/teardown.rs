@@ -185,8 +185,11 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             before: None,
             after: None,
             related: None,
+            target_retirement: None,
         }],
         dropped_count: 0,
+        paths: Vec::new(),
+        restart_manager: None,
     });
     for close_error in [
         DeviceError::fatal("injected unconfirmed capture close"),

@@ -24,6 +24,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) vendor_stdio: Vec<actingcommand_execution_kernel::ExecutionStdioObservation>,
     pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
     pub(crate) raw_os_error: Option<i32>,
@@ -201,6 +202,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                vendor_stdio: error.vendor_stdio().to_vec(),
                 task_timing: None,
                 capacity: None,
                 raw_os_error: None,
@@ -253,6 +255,16 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        for observation in &other.lifecycle.vendor_stdio {
+            if !self
+                .lifecycle
+                .vendor_stdio
+                .iter()
+                .any(|current| Arc::ptr_eq(&current.recorded_event, &observation.recorded_event))
+            {
+                self.lifecycle.vendor_stdio.push(observation.clone());
+            }
+        }
         if self.lifecycle.task_timing.is_none() {
             self.lifecycle.task_timing = other.lifecycle.task_timing.clone();
         }
