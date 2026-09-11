@@ -113,8 +113,30 @@ fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
     let (release, sources) = release_set(root.path(), "1.0.0", 'c');
-    let state =
-        RuntimeStateStore::open(root.path(), b"different-bootstrap-seed").expect("runtime state");
+    let database = Arc::new(
+        RuntimeStateStore::open_database(root.path(), b"different-bootstrap-seed")
+            .expect("runtime database"),
+    );
+    let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+    let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+        root.path(),
+        true,
+        limits,
+        limits.deadline().expect("maintenance deadline"),
+    )
+    .expect("empty Ledger maintenance");
+    maintenance
+        .initialize_empty(&database)
+        .expect("empty Ledger");
+    let ledger = maintenance
+        .open_writer(
+            Arc::clone(&database),
+            "legacy-release-spec".to_owned(),
+            |_| None,
+        )
+        .expect("empty Ledger writer");
+    ledger.close().expect("close empty Ledger writer");
+    let state = RuntimeStateStore::from_database(database).expect("runtime state");
     state
         .stage_release(release.clone(), &sources)
         .expect("stage legacy release");

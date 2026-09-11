@@ -32,6 +32,10 @@ mod approval;
 pub use approval::*;
 mod release;
 pub use release::*;
+mod planning;
+pub use planning::*;
+mod fact;
+pub use fact::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDocument {
@@ -638,9 +642,23 @@ impl RuntimeStateStore {
         payload: &[u8],
     ) -> RuntimeStateResult<ProjectionEntry> {
         release::reject_release_namespace(namespace)?;
+        if namespace == FACT_TOMBSTONE_NAMESPACE {
+            return Err(request(
+                "fact_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
         if namespace == APPROVAL_PROJECTION_NAMESPACE {
             return Err(request(
                 "approval_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
+        if namespace == PLANNING_SIGNAL_PROJECTION_NAMESPACE
+            || namespace == DETECTION_QUOTA_PROJECTION_NAMESPACE
+        {
+            return Err(request(
+                "planning_projection_owner_required",
                 "write_projection_entry",
             ));
         }
@@ -2652,18 +2670,21 @@ mod tests {
     fn projection_entries_are_latest_by_identity_and_tamper_evident() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
-        assert_eq!(
-            store
-                .write_projection_entry(
-                    APPROVAL_PROJECTION_NAMESPACE,
-                    "approval-a",
-                    7,
-                    br#"{"state":"approved"}"#
-                )
-                .expect_err("approval projection requires its verified fact owner")
-                .code(),
-            "approval_projection_owner_required"
-        );
+        for (namespace, code) in [
+            (
+                APPROVAL_PROJECTION_NAMESPACE,
+                "approval_projection_owner_required",
+            ),
+            (FACT_TOMBSTONE_NAMESPACE, "fact_projection_owner_required"),
+        ] {
+            assert_eq!(
+                store
+                    .write_projection_entry(namespace, "approval-a", 7, br#"{"state":"approved"}"#)
+                    .expect_err("projection requires its verified fact owner")
+                    .code(),
+                code,
+            );
+        }
         let first = store
             .write_projection_entry(
                 "fixture.latest.v1",

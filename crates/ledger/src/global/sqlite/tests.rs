@@ -205,6 +205,12 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
         .expect("writer");
         let first = ledger.append(draft(1)).expect("first");
         let second = ledger.append(draft(2)).expect("second");
+        let planning_page = ledger
+            .planning_signal_recovery_page(0, second.sequence())
+            .expect("complete original interval");
+        assert_eq!(planning_page.after_sequence(), 0);
+        assert_eq!(planning_page.through_sequence(), second.sequence());
+        assert_eq!(planning_page.planning_events().count(), 0);
         {
             let mut connection = database.connection("original row specification").unwrap();
             let before = connection.total_changes();
@@ -222,6 +228,13 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
                     .expect_err("Command facts cannot become Release source references")
                     .code(),
                 "release_ledger_source_type_unsupported"
+            );
+            crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 0)
+                .expect("complete interval in borrowed transaction");
+            assert!(
+                crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 1)
+                    .expect_err("exact previous checkpoint")
+                    .is_fatal()
             );
             assert!(!transaction.is_autocommit());
             assert_eq!(transaction.total_changes(), before);
@@ -246,14 +259,28 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
                 !format!("{baseline_error:?} {baseline_error}").contains("token-secret"),
                 "{label}: baseline disclosure"
             );
+            let range_error =
+                crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 0)
+                    .expect_err("changed original interval must fail");
+            assert!(range_error.is_fatal(), "{label}: {range_error}");
+            assert!(
+                !format!("{range_error:?} {range_error}").contains("token-secret"),
+                "{label}: range disclosure"
+            );
             let failures = [&first, &second]
                 .into_iter()
                 .filter_map(|event| verify_transaction_event(&database, &borrowed, event).err())
                 .collect::<Vec<_>>();
-            assert!(
-                !failures.is_empty(),
-                "{label}: changed original rows must fail"
-            );
+            match label {
+                "partial view schema" | "changed view schema" => assert!(
+                    failures.is_empty(),
+                    "{label}: view declarations do not change original fact rows"
+                ),
+                _ => assert!(
+                    !failures.is_empty(),
+                    "{label}: changed original rows must fail"
+                ),
+            }
             for error in failures {
                 assert!(error.is_fatal(), "{label}: {error}");
                 assert!(

@@ -4,7 +4,9 @@
 
 mod evidence;
 mod migration;
+mod planning;
 pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
+pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;
 mod read_only;
 mod retention;
