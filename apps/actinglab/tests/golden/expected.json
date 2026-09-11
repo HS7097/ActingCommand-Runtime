@@ -2044,6 +2044,70 @@
                               },
                               "max_us": "<MICROSECONDS>",
                               "status": { "state": "observed" },
+                              "subphases": {
+                                "capacity_admit": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "encode": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "file_write": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok",
+                                    "returned_bytes": 481
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "successful_returned_bytes": 882,
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "framing": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "material_update": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                }
+                              },
                               "total_us": "<MICROSECONDS>"
                             },
                             "recognition_evaluate": {
@@ -2092,6 +2156,70 @@
                               },
                               "max_us": "<MICROSECONDS>",
                               "status": { "state": "observed" },
+                              "subphases": {
+                                "capacity_admit": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "encode": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "file_write": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok",
+                                    "returned_bytes": 252
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "successful_returned_bytes": 2477,
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "framing": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "material_update": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                }
+                              },
                               "total_us": "<MICROSECONDS>"
                             },
                             "recognition_evaluate": {
