@@ -7,20 +7,24 @@ use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalPayload, ApprovalTarget, EventActor, EventPayload, EventQuery,
     EventSource, EventType, OriginModule, RuntimeErrorCode,
 };
-use actingcommand_ledger::GlobalLedger;
+use actingcommand_ledger::{
+    GlobalLedger, GlobalLedgerError, LedgerTransactionWork, PersistedEvent,
+    TransactionStateObservation, TransactionWorkError,
+};
 use actingcommand_policy::DispatchIntent;
-use actingcommand_runtime_state::RuntimeStateStore;
-use sha2::{Digest, Sha256};
+use actingcommand_runtime_state::{
+    ApprovalStateObservation, PreparedApprovalProjection, RuntimeStateStore,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-const APPROVAL_PROJECTION_NAMESPACE: &str = "approval.latest.v1";
 const MAX_ACTIVE_APPROVAL_FACTS: usize = 256;
 const MAX_RECENT_APPROVAL_FACTS: usize = 256;
 
 pub(crate) struct ApprovalProjection {
     active: BTreeMap<String, ApprovalDecisionRecord>,
     recent: BTreeMap<String, (u64, ApprovalDecisionRecord)>,
+    latest: BTreeMap<String, PersistedEvent>,
     state: Arc<RuntimeStateStore>,
 }
 
@@ -59,7 +63,8 @@ impl ApprovalProjection {
         let mut active = BTreeMap::<String, ApprovalDecisionRecord>::new();
         let mut recent = BTreeMap::<String, (u64, ApprovalDecisionRecord)>::new();
         let mut recent_order = BTreeMap::<u64, String>::new();
-        for event in events {
+        let mut latest = BTreeMap::<String, PersistedEvent>::new();
+        for event in &events {
             if event.origin().module() != OriginModule::Governance
                 || event.origin().actor() != EventActor::User
                 || event.origin().source() != EventSource::Ui
@@ -73,10 +78,16 @@ impl ApprovalProjection {
             decision
                 .validate()
                 .map_err(|_| approval_fatal("approval_projection_record_invalid"))?;
-            validate_persisted_target(&state, decision)?;
-            if persist {
-                persist_approval(&state, event.sequence(), decision)?;
+            if let Some(previous) = latest.get(decision.approval_id()) {
+                let EventPayload::Approval(ApprovalPayload::Decision(payload)) = previous.payload()
+                else {
+                    return Err(approval_fatal("approval_projection_payload_mismatch"));
+                };
+                if payload.decision().target() != decision.target() {
+                    return Err(approval_fatal("approval_target_identity_conflict"));
+                }
             }
+            latest.insert(decision.approval_id().to_owned(), event.clone());
             if decision.disposition().grants_authority() {
                 active.insert(decision.approval_id().to_owned(), decision.clone());
             } else {
@@ -104,9 +115,15 @@ impl ApprovalProjection {
         if active.len() > MAX_ACTIVE_APPROVAL_FACTS {
             return Err(approval_fatal("approval_projection_capacity_exceeded"));
         }
+        if persist {
+            state
+                .recover_approval_projections(&events)
+                .map_err(approval_state_error)?;
+        }
         Ok(Self {
             active,
             recent,
+            latest,
             state,
         })
     }
@@ -118,13 +135,15 @@ impl ApprovalProjection {
         decision
             .validate()
             .map_err(|_| approval_request("approval_decision_invalid"))?;
-        validate_persisted_target(&self.state, decision).map_err(|error| {
-            if error.code() == "approval_target_identity_conflict" {
-                approval_request("approval_target_identity_conflict")
-            } else {
-                error
+        if let Some(previous) = self.latest.get(decision.approval_id()) {
+            let EventPayload::Approval(ApprovalPayload::Decision(payload)) = previous.payload()
+            else {
+                return Err(approval_fatal("approval_projection_payload_mismatch"));
+            };
+            if payload.decision().target() != decision.target() {
+                return Err(approval_request("approval_target_identity_conflict"));
             }
-        })?;
+        }
         if decision.disposition().grants_authority()
             && !self.active.contains_key(decision.approval_id())
             && self.active.len() >= MAX_ACTIVE_APPROVAL_FACTS
@@ -132,6 +151,16 @@ impl ApprovalProjection {
             return Err(approval_request("approval_projection_capacity_exceeded"));
         }
         Ok(())
+    }
+
+    pub(crate) fn prepare_decision(
+        &self,
+        decision: &ApprovalDecisionRecord,
+    ) -> RuntimeHostResult<Box<dyn LedgerTransactionWork>> {
+        self.state
+            .prepare_approval_projection(decision, self.latest.get(decision.approval_id()))
+            .map(|state| Box::new(ApprovalTransaction { state }) as Box<dyn LedgerTransactionWork>)
+            .map_err(approval_state_error)
     }
 
     pub(crate) fn records(&self) -> Vec<ApprovalDecisionRecord> {
@@ -202,51 +231,67 @@ impl ApprovalProjection {
     }
 }
 
-fn validate_persisted_target(
-    state: &RuntimeStateStore,
-    decision: &ApprovalDecisionRecord,
-) -> RuntimeHostResult<()> {
-    let key = approval_projection_key(decision.approval_id());
-    let Some(entry) = state
-        .read_projection_entry(APPROVAL_PROJECTION_NAMESPACE, &key)
-        .map_err(|error| RuntimeHostError::state(&error))?
-    else {
-        return Ok(());
-    };
-    let existing = serde_json::from_slice::<ApprovalDecisionRecord>(entry.payload())
-        .map_err(|_| approval_fatal("approval_projection_payload_invalid"))?;
-    existing
-        .validate()
-        .map_err(|_| approval_fatal("approval_projection_payload_invalid"))?;
-    if existing.approval_id() != decision.approval_id() {
-        return Err(approval_fatal("approval_projection_identity_mismatch"));
-    }
-    if existing.target() != decision.target() {
-        return Err(approval_fatal("approval_target_identity_conflict"));
-    }
-    Ok(())
+struct ApprovalTransaction {
+    state: PreparedApprovalProjection,
 }
 
-fn persist_approval(
-    state: &RuntimeStateStore,
-    sequence: u64,
-    decision: &ApprovalDecisionRecord,
-) -> RuntimeHostResult<()> {
-    let payload = serde_json::to_vec(decision)
-        .map_err(|_| approval_fatal("approval_projection_encode_failed"))?;
-    state
-        .write_projection_entry(
-            APPROVAL_PROJECTION_NAMESPACE,
-            &approval_projection_key(decision.approval_id()),
-            sequence,
-            &payload,
+impl LedgerTransactionWork for ApprovalTransaction {
+    fn apply(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+        event: &PersistedEvent,
+    ) -> Result<(), TransactionWorkError> {
+        self.state
+            .apply(transaction, event)
+            .map_err(approval_work_error)
+    }
+
+    fn observe(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> Result<TransactionStateObservation, TransactionWorkError> {
+        self.state
+            .observe(transaction)
+            .map(|observation| match observation {
+                ApprovalStateObservation::Applied => TransactionStateObservation::Applied,
+                ApprovalStateObservation::Unchanged => TransactionStateObservation::Unchanged,
+                ApprovalStateObservation::Unknown => TransactionStateObservation::Unknown,
+            })
+            .map_err(approval_work_error)
+    }
+}
+
+fn approval_state_error(error: actingcommand_runtime_state::RuntimeStateError) -> RuntimeHostError {
+    RuntimeHostError::state(&error).with_native_detail(error.to_string())
+}
+
+fn approval_work_error(
+    error: actingcommand_runtime_state::RuntimeStateError,
+) -> TransactionWorkError {
+    TransactionWorkError {
+        code: error.code(),
+        operation: error.operation(),
+        fatal: error.is_fatal(),
+        detail: error.to_string(),
+    }
+}
+
+pub(crate) fn approval_transaction_error(error: GlobalLedgerError) -> RuntimeHostError {
+    if let Some(work) = error.rolled_back_work() {
+        let mapped = if work.fatal {
+            RuntimeHostError::fatal(work.code, work.operation, RuntimeErrorCode::RuntimeFatal)
+        } else {
+            RuntimeHostError::request(work.code, work.operation, RuntimeErrorCode::InvalidRequest)
+        };
+        mapped.with_native_detail(work.detail.clone())
+    } else {
+        RuntimeHostError::fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::LedgerFailure,
         )
-        .map_err(|error| RuntimeHostError::state(&error))?;
-    Ok(())
-}
-
-fn approval_projection_key(approval_id: &str) -> String {
-    format!("{:x}", Sha256::digest(approval_id.as_bytes()))
+        .with_native_detail(format!("{error}; detail={:?}", error.detail()))
+    }
 }
 
 fn target_matches_dispatch(target: &ApprovalTarget, intent: &DispatchIntent) -> bool {

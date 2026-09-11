@@ -28,6 +28,9 @@ const MAX_STATE_DOCUMENT_BYTES: usize = 1024 * 1024;
 const MAX_PROJECTION_ENTRY_BYTES: usize = 64 * 1024;
 static RELEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+mod approval;
+pub use approval::*;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDocument {
     state_key: String,
@@ -631,18 +634,49 @@ impl RuntimeStateStore {
         ledger_sequence: u64,
         payload: &[u8],
     ) -> RuntimeStateResult<ProjectionEntry> {
+        if namespace == APPROVAL_PROJECTION_NAMESPACE {
+            return Err(request(
+                "approval_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
         validate_projection_input(namespace, entry_key, ledger_sequence, payload)?;
         let payload_sha256 = sha256(payload);
         let mut connection = self.connection("write_projection_entry")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| fatal("state_transaction_begin_failed", "write_projection_entry"))?;
-        if let Some(existing) = query_projection_entry(&transaction, namespace, entry_key)? {
+        let entry = self.write_projection_in_transaction(
+            &transaction,
+            namespace,
+            entry_key,
+            ledger_sequence,
+            payload,
+            &payload_sha256,
+        )?;
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "write_projection_entry"))?;
+        Ok(entry)
+    }
+
+    fn write_projection_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        namespace: &str,
+        entry_key: &str,
+        ledger_sequence: u64,
+        payload: &[u8],
+        payload_sha256: &str,
+    ) -> RuntimeStateResult<ProjectionEntry> {
+        let sqlite_sequence = sqlite_integer(
+            ledger_sequence,
+            "projection_sequence_overflow",
+            "write_projection_entry",
+        )?;
+        if let Some(existing) = query_projection_entry(transaction, namespace, entry_key)? {
             let existing = self.validate_projection_row(existing, "write_projection_entry")?;
             if existing.ledger_sequence > ledger_sequence {
-                transaction.commit().map_err(|_| {
-                    fatal("state_transaction_commit_failed", "write_projection_entry")
-                })?;
                 return Ok(existing);
             }
             if existing.ledger_sequence == ledger_sequence {
@@ -652,9 +686,6 @@ impl RuntimeStateStore {
                         "write_projection_entry",
                     ));
                 }
-                transaction.commit().map_err(|_| {
-                    fatal("state_transaction_commit_failed", "write_projection_entry")
-                })?;
                 return Ok(existing);
             }
         }
@@ -669,11 +700,6 @@ impl RuntimeStateStore {
                 payload_sha256.as_bytes(),
             ],
         );
-        let sqlite_sequence = sqlite_integer(
-            ledger_sequence,
-            "projection_sequence_overflow",
-            "write_projection_entry",
-        )?;
         transaction
             .execute(
                 "INSERT INTO projection_entries
@@ -694,15 +720,12 @@ impl RuntimeStateStore {
                 ],
             )
             .map_err(|_| fatal("projection_entry_write_failed", "write_projection_entry"))?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "write_projection_entry"))?;
         Ok(ProjectionEntry {
             namespace: namespace.to_owned(),
             entry_key: entry_key.to_owned(),
             ledger_sequence,
             payload: payload.to_vec(),
-            payload_sha256,
+            payload_sha256: payload_sha256.to_owned(),
         })
     }
 
@@ -2577,9 +2600,21 @@ mod tests {
     fn projection_entries_are_latest_by_identity_and_tamper_evident() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        assert_eq!(
+            store
+                .write_projection_entry(
+                    APPROVAL_PROJECTION_NAMESPACE,
+                    "approval-a",
+                    7,
+                    br#"{"state":"approved"}"#
+                )
+                .expect_err("approval projection requires its verified fact owner")
+                .code(),
+            "approval_projection_owner_required"
+        );
         let first = store
             .write_projection_entry(
-                "approval.latest.v1",
+                "fixture.latest.v1",
                 "approval-a",
                 7,
                 br#"{"state":"approved"}"#,
@@ -2588,7 +2623,7 @@ mod tests {
         assert_eq!(first.ledger_sequence(), 7);
         assert_eq!(
             store
-                .read_projection_entry("approval.latest.v1", "approval-a")
+                .read_projection_entry("fixture.latest.v1", "approval-a")
                 .expect("read projection")
                 .expect("projection")
                 .payload(),
@@ -2597,7 +2632,7 @@ mod tests {
 
         let older = store
             .write_projection_entry(
-                "approval.latest.v1",
+                "fixture.latest.v1",
                 "approval-a",
                 6,
                 br#"{"state":"rejected"}"#,
@@ -2607,7 +2642,7 @@ mod tests {
         assert_eq!(
             store
                 .write_projection_entry(
-                    "approval.latest.v1",
+                    "fixture.latest.v1",
                     "approval-a",
                     7,
                     br#"{"state":"rejected"}"#,
@@ -2623,7 +2658,7 @@ mod tests {
         connection
             .execute(
                 "UPDATE projection_entries SET payload = ?1
-                 WHERE namespace = 'approval.latest.v1' AND entry_key = 'approval-a'",
+                 WHERE namespace = 'fixture.latest.v1' AND entry_key = 'approval-a'",
                 [br#"{"state":"revoked"}"#.as_slice()],
             )
             .expect("tamper projection");
