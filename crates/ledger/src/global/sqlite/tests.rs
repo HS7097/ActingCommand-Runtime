@@ -250,10 +250,16 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
                 .into_iter()
                 .filter_map(|event| verify_transaction_event(&database, &borrowed, event).err())
                 .collect::<Vec<_>>();
-            assert!(
-                !failures.is_empty(),
-                "{label}: changed original rows must fail"
-            );
+            match label {
+                "partial view schema" | "changed view schema" => assert!(
+                    failures.is_empty(),
+                    "{label}: view declarations do not change original fact rows"
+                ),
+                _ => assert!(
+                    !failures.is_empty(),
+                    "{label}: changed original rows must fail"
+                ),
+            }
             for error in failures {
                 assert!(error.is_fatal(), "{label}: {error}");
                 assert!(
