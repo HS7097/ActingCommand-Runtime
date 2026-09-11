@@ -733,6 +733,9 @@ fn referenced_frames<E: LedgerEventRead>(event: &E) -> BTreeSet<FrameId> {
                 .and_then(|provenance| provenance.before_frame_id),
         );
     }
+    if let EventPayload::Capture(CapturePayload::DedupWindow(window)) = event.payload() {
+        frames.extend(window.preserved_frame_id().copied());
+    }
     frames
 }
 

@@ -1877,6 +1877,8 @@ pub struct CaptureDedupWindowPayload {
     action: EventAction,
     duplicate_count: u64,
     duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserved_frame_id: Option<crate::FrameId>,
     audit: SanitizedAudit,
 }
 
@@ -4230,6 +4232,10 @@ impl CapturePressurePayload {
 }
 
 impl CaptureDedupWindowPayload {
+    pub fn preserved_frame_id(&self) -> Option<&crate::FrameId> {
+        self.preserved_frame_id.as_ref()
+    }
+
     pub const fn duplicate_count(&self) -> u64 {
         self.duplicate_count
     }
@@ -4875,6 +4881,8 @@ struct CaptureDedupWindowDraft {
     action: EventAction,
     duplicate_count: u64,
     duration_ms: u64,
+    preserved_frame_id: Option<crate::FrameId>,
+    preserving_material: bool,
     audit: AuditInput,
 }
 
@@ -6566,7 +6574,10 @@ impl CaptureDedupWindowDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<CaptureDedupWindowPayload, SanitizationError> {
-        if self.duplicate_count == 0 || self.duration_ms == 0 {
+        if self.duplicate_count == 0
+            || self.duration_ms == 0
+            || (self.preserving_material && self.preserved_frame_id.is_none())
+        {
             return Err(SanitizationError::new(
                 "invalid_capture_dedup_window",
                 "duplicate_count",
@@ -6576,6 +6587,7 @@ impl CaptureDedupWindowDraft {
             action: self.action,
             duplicate_count: self.duplicate_count,
             duration_ms: self.duration_ms,
+            preserved_frame_id: self.preserved_frame_id,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7470,6 +7482,24 @@ impl CapturePayloadDraft {
             action: EventAction::CaptureDedup,
             duplicate_count,
             duration_ms,
+            preserved_frame_id: None,
+            preserving_material: false,
+            audit,
+        }))
+    }
+
+    /// Records a perceptual relation while the original frame remains materialized.
+    pub fn dedup_window_preserving_material(
+        original_frame: &crate::EventLinksDraft,
+        duration_ms: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::DedupWindow(CaptureDedupWindowDraft {
+            action: EventAction::CaptureDedup,
+            duplicate_count: 1,
+            duration_ms,
+            preserved_frame_id: original_frame.frame_id().cloned(),
+            preserving_material: true,
             audit,
         }))
     }

@@ -224,6 +224,7 @@ pub struct CapturePipeline {
     missing_pinned: BTreeSet<usize>,
     counts: CapturePipelineCounts,
     retention_class: RetentionClass,
+    artifact_producer: ArtifactProducer,
     redaction_state: ArtifactRedactionState,
     paused: bool,
 }
@@ -293,6 +294,11 @@ impl CapturePipeline {
             missing_pinned: BTreeSet::new(),
             counts: CapturePipelineCounts::default(),
             retention_class: config.retention_class,
+            artifact_producer: if protected_history > 0 {
+                ArtifactProducer::CaptureStore
+            } else {
+                ArtifactProducer::CapturePipeline
+            },
             redaction_state: config.redaction_state,
             paused: false,
         };
@@ -383,14 +389,9 @@ impl CapturePipeline {
     ) -> ArtifactStoreResult<ArtifactReference> {
         self.frame_store.pin_frame(frame_index, reason)?;
         self.pinned.entry(frame_index).or_insert(reason);
-        self.persist_candidates(false, sink)?;
-        self.persisted.get(&frame_index).cloned().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "frame_material_unavailable",
-                "pin_capture_frame",
-                "pinned original frame was not persisted",
-            )
-        })
+        let reference = self.persist_frame(frame_index, sink)?;
+        self.artifact_store.read_verified(&reference)?;
+        Ok(reference)
     }
 
     /// Existing capture/receipt consumers require the exact frame synchronously.
@@ -399,14 +400,38 @@ impl CapturePipeline {
         frame_index: usize,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<ArtifactReference> {
-        self.persist_candidates(true, sink)?;
-        self.persisted.get(&frame_index).cloned().ok_or_else(|| {
+        if let Some(reference) = self.persisted.get(&frame_index) {
+            return Ok(reference.clone());
+        }
+        let candidate = self.frame_store.persistence_candidate(frame_index)?;
+        let artifact = match self.persist_candidate(&candidate, sink) {
+            Ok(artifact) => artifact,
+            Err(mut error) => {
+                if candidate.pinned_reason.is_some() {
+                    self.missing_pinned.insert(frame_index);
+                    if let Err(event_error) = self.record_pinned_failure(frame_index, sink) {
+                        error = error.with_secondary(&event_error);
+                    }
+                }
+                return Err(error);
+            }
+        };
+        let reference = artifact.reference().clone();
+        self.frame_store.mark_artifact_persisted(
+            frame_index,
+            Arc::clone(&self.artifact_store),
+            reference.clone(),
+        )?;
+        self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
             ArtifactStoreError::fatal(
-                "frame_material_unavailable",
+                "capture_summary_count_overflow",
                 "persist_capture_frame",
-                "referenced original frame was not retained",
+                "persisted frame count exceeds u64",
             )
-        })
+        })?;
+        self.missing_pinned.remove(&frame_index);
+        self.persisted.insert(frame_index, reference.clone());
+        Ok(reference)
     }
 
     pub fn record_pressure_skip(&mut self, skipped_intervals: u64) -> ArtifactStoreResult<()> {
@@ -505,38 +530,10 @@ impl CapturePipeline {
     ) -> ArtifactStoreResult<Vec<ArtifactReference>> {
         let candidates = self
             .frame_store
-            .persistence_candidates(include_all_retained)?;
+            .persistence_candidate_indexes(include_all_retained);
         let mut stored = Vec::new();
-        for candidate in candidates {
-            match self.persist_candidate(&candidate, sink) {
-                Ok(artifact) => {
-                    self.frame_store
-                        .mark_artifact_persisted(candidate.frame_index)?;
-                    self.counts.persisted =
-                        self.counts.persisted.checked_add(1).ok_or_else(|| {
-                            ArtifactStoreError::fatal(
-                                "capture_summary_count_overflow",
-                                "persist_capture_frame",
-                                "persisted frame count exceeds u64",
-                            )
-                        })?;
-                    self.missing_pinned.remove(&candidate.frame_index);
-                    self.persisted
-                        .insert(candidate.frame_index, artifact.reference().clone());
-                    stored.push(artifact.reference().clone());
-                }
-                Err(mut error) => {
-                    if candidate.pinned_reason.is_some() {
-                        self.missing_pinned.insert(candidate.frame_index);
-                        if let Err(event_error) =
-                            self.record_pinned_failure(candidate.frame_index, sink)
-                        {
-                            error = error.with_secondary(&event_error);
-                        }
-                    }
-                    return Err(error);
-                }
-            }
+        for frame_index in candidates {
+            stored.push(self.persist_frame(frame_index, sink)?);
         }
         Ok(stored)
     }
@@ -559,7 +556,7 @@ impl CapturePipeline {
                 &candidate.png,
                 context.clone(),
                 ArtifactIssuePolicy::new(
-                    ArtifactProducer::CapturePipeline,
+                    self.artifact_producer,
                     self.retention_class,
                     self.redaction_state,
                 ),
@@ -615,20 +612,23 @@ impl CapturePipeline {
                 ),
                 FrameStoreEvent::DedupWindow {
                     representative_frame_index,
+                    preserved_frame_index,
                     duplicate_count,
                     duration_ms,
                 } => {
-                    self.counts.deduplicated = self
-                        .counts
-                        .deduplicated
-                        .checked_add(duplicate_count)
-                        .ok_or_else(|| {
-                            ArtifactStoreError::fatal(
-                                "capture_summary_count_overflow",
-                                "emit_capture_dedup_window",
-                                "deduplicated frame count exceeds u64",
-                            )
-                        })?;
+                    if preserved_frame_index.is_none() {
+                        self.counts.deduplicated = self
+                            .counts
+                            .deduplicated
+                            .checked_add(duplicate_count)
+                            .ok_or_else(|| {
+                                ArtifactStoreError::fatal(
+                                    "capture_summary_count_overflow",
+                                    "emit_capture_dedup_window",
+                                    "deduplicated frame count exceeds u64",
+                                )
+                            })?;
+                    }
                     let representative = self.contexts.get(&representative_frame_index).ok_or_else(
                         || {
                             ArtifactStoreError::fatal(
@@ -640,14 +640,29 @@ impl CapturePipeline {
                             )
                         },
                     )?;
-                    (
-                        representative.event_links().clone(),
-                        CapturePayloadDraft::dedup_window(
+                    let payload = match preserved_frame_index {
+                        Some(frame_index) => {
+                            let frame_context =
+                                self.contexts.get(&frame_index).ok_or_else(|| {
+                                    ArtifactStoreError::fatal(
+                                        "missing_frame_context",
+                                        "emit_capture_similarity",
+                                        "preserved original frame has no typed identity",
+                                    )
+                                })?;
+                            CapturePayloadDraft::dedup_window_preserving_material(
+                                frame_context.event_links(),
+                                duration_ms,
+                                AuditInput::new(),
+                            )
+                        }
+                        None => CapturePayloadDraft::dedup_window(
                             duplicate_count,
                             duration_ms,
                             AuditInput::new(),
                         ),
-                    )
+                    };
+                    (representative.event_links().clone(), payload)
                 }
             };
             self.append_event(
