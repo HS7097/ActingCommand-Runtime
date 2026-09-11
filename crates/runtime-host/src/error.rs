@@ -24,6 +24,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) vendor_stdio: Vec<actingcommand_execution_kernel::ExecutionStdioObservation>,
     pub(crate) adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
@@ -188,6 +189,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                vendor_stdio: error.vendor_stdio().to_vec(),
                 adb_recovery: error.adb_recovery().cloned().map(Box::new),
                 incomplete_device_diagnostic_summary: None,
                 diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
@@ -237,6 +239,16 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        for observation in &other.lifecycle.vendor_stdio {
+            if !self
+                .lifecycle
+                .vendor_stdio
+                .iter()
+                .any(|current| Arc::ptr_eq(&current.recorded_event, &observation.recorded_event))
+            {
+                self.lifecycle.vendor_stdio.push(observation.clone());
+            }
+        }
         if self.code == other.code
             && self.operation == other.operation
             && self.lifecycle.native_detail == other.lifecycle.native_detail

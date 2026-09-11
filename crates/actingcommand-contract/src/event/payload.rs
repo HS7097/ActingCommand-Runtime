@@ -1628,6 +1628,9 @@ impl ArtifactFailureRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
+    VendorStdioClose {
+        instance_id: Option<InstanceId>,
+    },
     AdbTargetRecovery,
     DeviceDiagnosticDetail,
     DeviceDiagnosticSummary,
@@ -1656,6 +1659,8 @@ pub enum RuntimeLifecyclePhase {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecyclePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     action: EventAction,
     owner_epoch: OwnerEpoch,
@@ -1666,6 +1671,10 @@ pub struct RuntimeLifecyclePayload {
 }
 
 impl RuntimeLifecyclePayload {
+    pub fn vendor_stdio(&self) -> Option<&VendorStdioFacts> {
+        self.vendor_stdio.as_deref()
+    }
+
     pub fn adb_recovery(&self) -> Option<&AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
@@ -6701,6 +6710,7 @@ enum RuntimeDraftKind {
 }
 
 struct RuntimeLifecycleDraft {
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
@@ -6713,7 +6723,11 @@ impl RuntimeLifecycleDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<RuntimeLifecyclePayload, SanitizationError> {
+        if let Some(facts) = &self.vendor_stdio {
+            facts.validate()?;
+        }
         Ok(RuntimeLifecyclePayload {
+            vendor_stdio: self.vendor_stdio,
             adb_recovery: self.adb_recovery,
             action: EventAction::RuntimeAction,
             owner_epoch: self.owner_epoch,
@@ -6771,6 +6785,7 @@ impl RuntimePayloadDraft {
         summary: bool,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
             phase: if summary {
@@ -6805,6 +6820,7 @@ impl RuntimePayloadDraft {
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
             phase,
@@ -6821,9 +6837,25 @@ impl RuntimePayloadDraft {
 
     pub fn adb_target_recovery(owner_epoch: OwnerEpoch, recovery: AdbTargetRecovery) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             owner_epoch,
             phase: RuntimeLifecyclePhase::AdbTargetRecovery,
             adb_recovery: Some(Box::new(recovery)),
+            device_diagnostics: None,
+            audit: AuditInput::new(),
+        }))
+    }
+
+    pub fn vendor_stdio_close(
+        owner_epoch: OwnerEpoch,
+        instance_id: Option<InstanceId>,
+        facts: VendorStdioFacts,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: Some(Box::new(facts)),
+            owner_epoch,
+            phase: RuntimeLifecyclePhase::VendorStdioClose { instance_id },
+            adb_recovery: None,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -9229,7 +9261,7 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
-        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some())
+        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some() || value.vendor_stdio.is_some())
         {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -9392,6 +9424,17 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            if matches!(value.phase, RuntimeLifecyclePhase::VendorStdioClose { .. })
+                != value.vendor_stdio.is_some()
+            {
+                return Err(SanitizationError::new(
+                    "invalid_vendor_stdio_phase",
+                    "runtime_payload",
+                ));
+            }
+            if let Some(facts) = &value.vendor_stdio {
+                facts.validate()?;
+            }
             if (value.phase == RuntimeLifecyclePhase::AdbTargetRecovery)
                 != value.adb_recovery.is_some()
             {
