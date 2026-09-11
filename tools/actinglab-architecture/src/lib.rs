@@ -465,6 +465,37 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
                 append_methods.push(method);
                 continue;
             }
+            if method.sig.ident == "append_transaction" && is_public(&method.vis) {
+                let typed = method
+                    .sig
+                    .inputs
+                    .iter()
+                    .filter_map(|input| match input {
+                        FnArg::Receiver(_) => None,
+                        FnArg::Typed(argument) => Some(argument),
+                    })
+                    .collect::<Vec<_>>();
+                let typed_work = typed.get(1).is_some_and(|argument| {
+                    let Type::Path(path) = argument.ty.as_ref() else { return false; };
+                    let Some(segment) = path.path.segments.last() else { return false; };
+                    if segment.ident != "Box" { return false; }
+                    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else { return false; };
+                    if arguments.args.len() != 1 { return false; }
+                    let Some(syn::GenericArgument::Type(Type::TraitObject(object))) = arguments.args.first() else { return false; };
+                    object.dyn_token.is_some() && object.bounds.len() == 1 && matches!(object.bounds.first(),
+                        Some(syn::TypeParamBound::Trait(bound)) if bound.path.segments.last().is_some_and(|segment| segment.ident == "LedgerTransactionWork"))
+                });
+                if typed.len() == 2
+                    && method.sig.generics.params.is_empty()
+                    && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
+                    && type_last_ident(&typed[0].ty)
+                        .is_some_and(|ident| ident == "SanitizedEventDraft")
+                    && pattern_ident(&typed[1].pat).is_some_and(|ident| ident == "work")
+                    && typed_work
+                {
+                    continue;
+                }
+            }
             if is_public(&method.vis)
                 && (method.sig.ident.to_string().starts_with("append")
                     || method_accepts_event_ingress(method))
@@ -2509,6 +2540,27 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        let joint = r#"
+            impl GlobalLedger {
+                pub fn append(&self, draft: SanitizedEventDraft) {}
+                pub fn append_transaction(&self, draft: SanitizedEventDraft, work: Box<dyn LedgerTransactionWork>) {}
+            }
+        "#;
+        assert!(
+            super::inspect_global_append_ingress("fixture.rs", joint)
+                .unwrap()
+                .is_empty()
+        );
+        for invalid in [
+            joint.replace("draft: SanitizedEventDraft,", "draft: serde_json::Value,"),
+            joint.replace("Box<dyn LedgerTransactionWork>", "Box<dyn Fn()>"),
+        ] {
+            assert!(
+                !super::inspect_global_append_ingress("fixture.rs", &invalid)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
