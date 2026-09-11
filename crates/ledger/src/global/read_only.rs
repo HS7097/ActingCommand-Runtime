@@ -209,6 +209,7 @@ pub(super) struct ReadOnlySnapshot<E> {
     pub(super) repairs: Vec<GlobalLedgerRepairRecord>,
     pub(super) corrupt_tail: Option<GlobalLedgerCorruptTail>,
     pub(super) storage_snapshot: GlobalLedgerStorageSnapshot,
+    segment_snapshots: Vec<ReadOnlySegmentSnapshot>,
 }
 
 pub(super) fn open_metadata(
@@ -221,6 +222,7 @@ pub(super) fn open_metadata(
         })
     })?;
     let bytes = snapshot.storage_snapshot.read_bytes;
+    snapshot.segment_snapshots.clear();
     super::retention::annotate_metadata_checked(&mut snapshot.events, |count| {
         check_read_budget(budget, bytes, count)
     })?;
@@ -282,6 +284,7 @@ fn open_snapshot<E: LedgerEventRead>(
             &mut events,
             &mut parse,
             config.budget,
+            None,
         )? {
             storage_snapshot.verified_prefix_bytes = storage_snapshot
                 .verified_prefix_bytes
@@ -309,6 +312,7 @@ fn open_snapshot<E: LedgerEventRead>(
         repairs,
         corrupt_tail,
         storage_snapshot,
+        segment_snapshots,
     })
 }
 
@@ -321,17 +325,58 @@ impl GlobalLedgerReadOnly {
         F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
     {
         let budget = config.budget;
-        let snapshot = open_metadata(config)?;
+        let mut snapshot = open_snapshot(config, |line| {
+            parse_record(line)?.into_metadata().map_err(|error| {
+                GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
+            })
+        })?;
         let bytes = snapshot.storage_snapshot.read_bytes;
-        let records = snapshot
-            .events
-            .into_iter()
-            .map(LedgerEventMetadata::into_record)
-            .collect();
-        let events =
-            super::retention::restore_records(records, &mut Some(verify_artifact), |count| {
-                check_read_budget(budget, bytes, count)
-            })?;
+        let retention = super::retention::RetentionIndex::from_events_checked(
+            &snapshot.events,
+            &mut |count| check_read_budget(budget, bytes, count),
+        )?;
+        let mut verifier = Some(verify_artifact);
+        let mut events = Vec::with_capacity(snapshot.events.len());
+        let mut event_ids = BTreeSet::new();
+        let mut next_sequence = 1;
+        let mut parse = |line: &[u8]| retention.restore_record(parse_record(line)?, &mut verifier);
+        let mut material_prefix_bytes = 0_u64;
+        // Metadata and proof validation finished above. Reuse the already bounded bytes;
+        // the ordinary scanner retains its exact first-tail position and failure behavior.
+        for segment in &snapshot.segment_snapshots {
+            if events.len() == snapshot.events.len() {
+                break;
+            }
+            check_read_budget(budget, bytes, events.len())?;
+            if let Some(corruption) = scan_segment(
+                segment,
+                &mut next_sequence,
+                &mut event_ids,
+                &mut events,
+                &mut parse,
+                budget,
+                Some(snapshot.events.len()),
+            )? {
+                snapshot.storage_snapshot.verified_prefix_bytes = material_prefix_bytes
+                    .checked_add(corruption.byte_offset)
+                    .ok_or_else(|| {
+                        GlobalLedgerError::fatal(
+                            "ledger_snapshot_overflow",
+                            "count_verified_prefix_bytes",
+                        )
+                    })?;
+                snapshot.corrupt_tail = Some(corruption);
+                break;
+            }
+            material_prefix_bytes = material_prefix_bytes
+                .checked_add(segment.bytes.len() as u64)
+                .ok_or_else(|| {
+                    GlobalLedgerError::fatal(
+                        "ledger_snapshot_overflow",
+                        "count_verified_prefix_bytes",
+                    )
+                })?;
+        }
         Ok(Self {
             indexes: EventIndexes::from_events(&events),
             events,
@@ -562,10 +607,14 @@ fn scan_segment<E: LedgerEventRead>(
     events: &mut Vec<E>,
     parse: &mut impl FnMut(&[u8]) -> GlobalLedgerResult<E>,
     budget: Option<(u64, usize, Instant)>,
+    authenticated_event_count: Option<usize>,
 ) -> GlobalLedgerResult<Option<GlobalLedgerCorruptTail>> {
     let complete_len = complete_record_len(&snapshot.bytes);
     let mut record_start = 0_usize;
     while record_start < complete_len {
+        if authenticated_event_count == Some(events.len()) {
+            return Ok(None);
+        }
         check_read_budget(budget, 0, events.len().saturating_add(1))?;
         let newline = snapshot.bytes[record_start..complete_len]
             .iter()
@@ -596,7 +645,10 @@ fn scan_segment<E: LedgerEventRead>(
         record_start = newline + 1;
     }
 
-    if snapshot.bytes.len() > complete_len || (!snapshot.is_final && snapshot.bytes.is_empty()) {
+    if authenticated_event_count != Some(events.len())
+        && (snapshot.bytes.len() > complete_len
+            || (!snapshot.is_final && snapshot.bytes.is_empty()))
+    {
         return corrupt_tail("corrupt_segment", snapshot, complete_len).map(Some);
     }
     Ok(None)

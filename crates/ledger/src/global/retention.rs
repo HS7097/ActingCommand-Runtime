@@ -28,6 +28,7 @@ pub(super) struct RetentionIndex {
     scheduled_runs: BTreeSet<RunId>,
     owner_epochs: BTreeMap<u64, OwnerEpoch>,
     closures: BTreeMap<ClosureScope, ClosureFacts>,
+    released_leases: BTreeMap<(OwnerEpoch, InstanceId, LeaseId), TerminalEvent>,
     pending_objects: BTreeSet<ArtifactId>,
     unlinked_warning: bool,
     through_sequence: u64,
@@ -217,7 +218,7 @@ impl RetentionIndex {
         let Some(closure) = self.closures.get(&ClosureScope::from_identity(identity)) else {
             return Ok(None);
         };
-        let (Some(success), Some(close)) = (&closure.success, &closure.close) else {
+        let (Some(success), Some(close)) = (&closure.success, self.close_for(identity)) else {
             return Ok(None);
         };
         if verified.sequence > success.sequence
@@ -243,11 +244,25 @@ impl RetentionIndex {
         Ok(Some(intent))
     }
 
+    fn close_for(&self, identity: &ArtifactRetentionIdentity) -> Option<&TerminalEvent> {
+        if identity.run_id.is_none()
+            && let Some(lease) = identity.lease_id
+        {
+            return self
+                .released_leases
+                .get(&(identity.owner_epoch, identity.instance_id, lease));
+        }
+        self.closures
+            .get(&ClosureScope::from_identity(identity))?
+            .close
+            .as_ref()
+    }
+
     pub(super) fn from_events<E: LedgerEventRead>(events: &[E]) -> GlobalLedgerResult<Self> {
         Self::from_events_checked(events, &mut |_| Ok(()))
     }
 
-    fn from_events_checked<E: LedgerEventRead>(
+    pub(super) fn from_events_checked<E: LedgerEventRead>(
         events: &[E],
         check: &mut impl FnMut(usize) -> GlobalLedgerResult<()>,
     ) -> GlobalLedgerResult<Self> {
@@ -398,7 +413,7 @@ impl RetentionIndex {
                     return Err(invalid("artifact_pin_not_releasable"));
                 }
                 let close = source(events, &release.release)?;
-                if !same_scope(close, identity)
+                if !same_close_scope(close, identity)
                     || !successful_close(close, identity)
                     || self.owner_at(close.sequence()) != Some(identity.owner_epoch)
                 {
@@ -449,7 +464,7 @@ impl RetentionIndex {
         let close = source(events, &intent.close)?;
         if !same_scope(verified, &intent.identity)
             || !same_scope(success, &intent.identity)
-            || !same_scope(close, &intent.identity)
+            || !same_close_scope(close, &intent.identity)
             || indexes.lab_related(verified, self.through_sequence)
             || [verified, success, close]
                 .iter()
@@ -510,6 +525,18 @@ impl RetentionIndex {
     pub(super) fn apply<E: LedgerEventRead>(&mut self, event: &E) {
         if let Some(epoch) = recorded_owner(event) {
             self.owner_epochs.insert(event.sequence(), epoch);
+        }
+        if event.links().run_id().is_none()
+            && let (Some(owner), Some(instance), Some(lease)) = (
+                self.owner_at(event.sequence()),
+                event.links().instance_id(),
+                event.links().lease_id(),
+            )
+            && matches!(event.payload(), EventPayload::Lease(LeasePayload::Released(payload))
+                if payload.effect_disposition() == EffectDisposition::Performed)
+        {
+            self.released_leases
+                .insert((owner, *instance, *lease), terminal(event));
         }
         if let Some(scope) = self
             .owner_at(event.sequence())
@@ -733,6 +760,9 @@ fn referenced_frames<E: LedgerEventRead>(event: &E) -> BTreeSet<FrameId> {
                 .and_then(|provenance| provenance.before_frame_id),
         );
     }
+    if let EventPayload::Capture(CapturePayload::DedupWindow(window)) = event.payload() {
+        frames.extend(window.preserved_frame_id().copied());
+    }
     frames
 }
 
@@ -824,6 +854,15 @@ fn same_links<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentit
         && event.links().frame_id() == identity.artifact.frame_id.as_ref()
         && event.links().request_id() == Some(&identity.request_id)
         && event.links().correlation_id() == Some(&identity.correlation_id)
+}
+
+fn same_close_scope<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
+    if identity.run_id.is_none() && identity.lease_id.is_some() {
+        return event.links().instance_id() == Some(&identity.instance_id)
+            && event.links().lease_id() == identity.lease_id.as_ref()
+            && event.links().run_id().is_none();
+    }
+    same_scope(event, identity)
 }
 
 fn successful_close<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
@@ -934,9 +973,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         let verified = verified.clone();
         let releases = self
             .retention
-            .closures
-            .get(&ClosureScope::from_identity(&identity))
-            .and_then(|closure| closure.close.as_ref())
+            .close_for(&identity)
             .map(|close| {
                 object
                     .pins
@@ -1192,9 +1229,25 @@ where
     let mut events = Vec::with_capacity(records.len());
     for record in records {
         check(events.len() + 1)?;
+        let event = retention.restore_record(record, verifier)?;
+        check(events.len() + 1)?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+impl RetentionIndex {
+    pub(super) fn restore_record<F>(
+        &self,
+        record: StoredEventRecord,
+        verifier: &mut Option<F>,
+    ) -> GlobalLedgerResult<PersistedEvent>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
         let mut event = record
             .into_event_with_artifact_availability(&mut |reference| {
-                let proof = retention
+                let proof = self
                     .proof(reference)
                     .map_err(|error| FactValidationError::new(error.code()))?;
                 if let Some(proof) = proof {
@@ -1219,9 +1272,7 @@ where
                     ))
             })
             .map_err(|error| invalid(error.code()))?;
-        retention.annotate_event(&mut event);
-        check(events.len() + 1)?;
-        events.push(event);
+        self.annotate_event(&mut event);
+        Ok(event)
     }
-    Ok(events)
 }
