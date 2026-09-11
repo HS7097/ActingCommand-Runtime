@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::resource_declaration::{
+    ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
+};
 use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, InstanceId};
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
@@ -90,31 +93,6 @@ struct PolicyCatalogConfigFile {
     pools: PathBuf,
     activity: PathBuf,
     timeline: PathBuf,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProcedureBindingConfigFile {
-    procedure_ref: String,
-    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
-    package_digest: actingcommand_contract::PackageRef,
-    operation_id: String,
-    yield_points: Vec<String>,
-    #[serde(default)]
-    scheduled_execution: Option<ScheduledExecutionConfigFile>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-enum ScheduledExecutionConfigFile {
-    FixtureSimulation {
-        #[serde(default)]
-        package_path: Option<PathBuf>,
-    },
-    DeviceRegistry {
-        #[serde(default)]
-        package_path: Option<PathBuf>,
-    },
 }
 
 #[derive(Deserialize)]
@@ -360,7 +338,7 @@ impl PolicyConfigFile {
         let mut bindings = Vec::with_capacity(self.procedure_manifest.len());
         let mut scheduled_tasks = BTreeMap::new();
         for configured in self.procedure_manifest {
-            let (binding, scheduled_task) = configured.binding(source_root)?;
+            let (binding, scheduled_task) = procedure_binding(configured, source_root)?;
             if let Some((procedure_ref, request)) = scheduled_task
                 && scheduled_tasks.insert(procedure_ref, request).is_some()
             {
@@ -473,44 +451,45 @@ impl PolicyCatalogConfigFile {
     }
 }
 
-impl ProcedureBindingConfigFile {
-    fn binding(self, source_root: &Path) -> Result<AssembledProcedureBinding, &'static str> {
-        let Self {
-            procedure_ref,
-            package_digest,
-            operation_id,
-            yield_points,
-            scheduled_execution,
-        } = self;
-        if yield_points.len() > MAX_REFERENCES_PER_TASK {
-            return Err("procedure_binding_size_invalid");
-        }
-        let binding = ProcedureBinding::new(
-            procedure_ref.clone(),
-            package_digest.clone(),
-            operation_id,
-            yield_points,
-        )
-        .map_err(|_| "procedure_binding_invalid")?;
-        let scheduled_task = match scheduled_execution {
-            None => None,
-            Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => Some((
-                procedure_ref,
-                ScheduledProcedureTask {
-                    request: contained_task_request(source_root, &package_digest, package_path)?,
-                    mode: ScheduledExecutionMode::FixtureSimulation,
-                },
-            )),
-            Some(ScheduledExecutionConfigFile::DeviceRegistry { package_path }) => Some((
-                procedure_ref,
-                ScheduledProcedureTask {
-                    request: contained_task_request(source_root, &package_digest, package_path)?,
-                    mode: ScheduledExecutionMode::DeviceRegistry,
-                },
-            )),
-        };
-        Ok((binding, scheduled_task))
+fn procedure_binding(
+    configured: ProcedureBindingConfigFile,
+    source_root: &Path,
+) -> Result<AssembledProcedureBinding, &'static str> {
+    let ProcedureBindingConfigFile {
+        procedure_ref,
+        package_digest,
+        operation_id,
+        yield_points,
+        scheduled_execution,
+    } = configured;
+    if yield_points.len() > MAX_REFERENCES_PER_TASK {
+        return Err("procedure_binding_size_invalid");
     }
+    let binding = ProcedureBinding::new(
+        procedure_ref.clone(),
+        package_digest.clone(),
+        operation_id,
+        yield_points,
+    )
+    .map_err(|_| "procedure_binding_invalid")?;
+    let scheduled_task = match scheduled_execution {
+        None => None,
+        Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => Some((
+            procedure_ref,
+            ScheduledProcedureTask {
+                request: contained_task_request(source_root, &package_digest, package_path)?,
+                mode: ScheduledExecutionMode::FixtureSimulation,
+            },
+        )),
+        Some(ScheduledExecutionConfigFile::DeviceRegistry { package_path }) => Some((
+            procedure_ref,
+            ScheduledProcedureTask {
+                request: contained_task_request(source_root, &package_digest, package_path)?,
+                mode: ScheduledExecutionMode::DeviceRegistry,
+            },
+        )),
+    };
+    Ok((binding, scheduled_task))
 }
 
 fn contained_task_request(

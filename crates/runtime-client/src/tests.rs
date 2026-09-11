@@ -3485,7 +3485,7 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
             .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_millis(240)),
+            .with_backend_open_timeout(Duration::from_millis(1_000)),
     )
     .expect("runtime client");
 

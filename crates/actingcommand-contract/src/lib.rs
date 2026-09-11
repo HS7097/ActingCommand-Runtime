@@ -21,6 +21,7 @@ pub mod performance;
 pub mod primitive;
 pub mod project;
 pub mod proposal;
+pub mod resource_declaration;
 pub mod runtime;
 pub mod runtime_observation;
 pub mod state;

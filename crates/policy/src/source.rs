@@ -32,6 +32,55 @@ pub struct CatalogSources {
     pub timeline: CatalogDocumentSource,
 }
 
+/// Parse one scheduling declaration with the same wire parser used by production compilation.
+pub fn validate_catalog_declaration(
+    source: &CatalogDocumentSource,
+    kind: SchedulingDocumentKind,
+) -> Result<(), Box<CatalogDiagnostic>> {
+    let (version, catalog, source_map) = match kind {
+        SchedulingDocumentKind::Tasks => {
+            let parsed = parse_document::<crate::TasksDocument>(source, kind)?;
+            (
+                parsed.value.schema_version,
+                parsed.value.catalog,
+                parsed.source_map,
+            )
+        }
+        SchedulingDocumentKind::Pools => {
+            let parsed = parse_document::<crate::PoolsDocument>(source, kind)?;
+            (
+                parsed.value.schema_version,
+                parsed.value.catalog,
+                parsed.source_map,
+            )
+        }
+        SchedulingDocumentKind::Activity => {
+            let parsed = parse_document::<crate::ActivityDocument>(source, kind)?;
+            (
+                parsed.value.schema_version,
+                parsed.value.catalog,
+                parsed.source_map,
+            )
+        }
+        SchedulingDocumentKind::Timeline => {
+            let parsed = parse_document::<crate::TimelineDocument>(source, kind)?;
+            (
+                parsed.value.schema_version,
+                parsed.value.catalog,
+                parsed.source_map,
+            )
+        }
+    };
+    match crate::validation::validate_schema_version(
+        &version,
+        Some((&catalog.catalog_id, catalog.catalog_version)),
+        &source_map,
+    ) {
+        Some(error) => Err(Box::new(error)),
+        None => Ok(()),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Position {
     line: u32,
