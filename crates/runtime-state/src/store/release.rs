@@ -8,7 +8,7 @@ use actingcommand_ledger::{PersistedEvent, ReleaseLedgerSourceReference};
 use actingcommand_runtime_database::RuntimeTransaction;
 use serde::{Deserialize, Serialize};
 
-pub const RELEASE_BASELINE_STATE_KEY: &str = "release.legacy.baseline";
+pub use actingcommand_ledger::RELEASE_BASELINE_STATE_KEY;
 const MEMBERS: &str = "release.legacy.members.v1";
 const SOURCES: &str = "release.sources.v1";
 const FROM_SCHEMA: &str = "release.state.v1";
