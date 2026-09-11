@@ -54,6 +54,17 @@ observations, not event identity or portable equality inputs.
 
 ## Reads, projections and subscriptions
 
+`verify_transaction_event(&RuntimeDatabase, &RuntimeTransaction, &PersistedEvent)`
+checks an already verified opaque fact synchronously inside the same owner's
+borrowed transaction. It authenticates the ledger metadata/format and compares the
+exact sequence's canonical row, identity, hash/tag, predecessor hash, link row and
+ordered artifact metadata through the Ledger's existing private representation.
+Missing or inconsistent rows and a different Database identity fail explicitly.
+The caller retains transaction/rollback ownership. The check does not acquire a
+Database lock, send a writer command, commit, append or read artifact bytes. It is
+an exact-row check for derived-state work; complete ledger recovery remains the
+source of the opaque input and the authority for full-history validity.
+
 Store reads operate on the verified committed snapshot already materialized at
 open and maintained by append. They perform no fallible storage I/O, so this
 private interface returns values directly. A future backend using this boundary
@@ -98,6 +109,56 @@ An interrupted multi-event continuation is recovered from facts; S0 does not
 claim an atomic multi-event transaction.
 
 ## Recovery, artifacts and forensic consumers
+
+`GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig)` returns an immutable
+`GlobalLedgerMetadata` for an explicit Runtime state root. It selects the formal
+SQLite or Segment reader through existing metadata and retains the supplied read
+budget. SQLite validates canonical records, sequence and IDs, integrity tags,
+relation indexes, head metadata and the complete migration marker/prefix. Segment
+uses its original bounded snapshot scan and reports the verified prefix and any
+corrupt tail. Neither path opens referenced artifact content.
+
+Only the Ledger can construct its private `LedgerEventMetadata`. It retains the
+typed envelope/payload and structurally valid `ProjectedArtifactReference` values
+with their original object keys. It has no conversion to `PersistedEvent` or
+`VerifiedArtifactReference`. The ordinary recovery and export APIs still require
+the ArtifactStore verifier and exact verified-reference equality.
+
+`GlobalLedgerMetadata::project_view_page(&EventQuery, ProjectionProfile,
+&RuntimeEventQueryPageRequest)` and the online
+`GlobalLedger::project_view_page(EventQuery, ProjectionProfile,
+RuntimeEventQueryPageRequest)` share the existing neutral projector and return
+`GlobalLedgerResult<RuntimeEventQueryPage>`. Online requests use one read-only
+writer command forwarding to `LedgerStore::project_view_page`; append, settlement
+and notification order are unchanged. The projector receives the verified full
+snapshot boundary and completeness, preserves complete related-run context, then
+applies the output profile. Pages report `material_read: not_requested`; source
+incompleteness is separate from count/byte pagination. The snapshot also exposes
+`latest_sequence`, `read_complete`, `writer_metadata`, `backend` and `corrupt_tail`
+without granting material access. CLI metadata pagination uses this entry rather
+than a material-verifying evidence open.
+
+SQLite page selection uses the six `ledger_view_*_v1` SQL views generated from
+`LedgerView::definition()`, with indexes for type, source, module, severity
+and time. Their versioned definitions are checked as one derived schema. Initial
+creation, import and the existing writer's schema upgrade deploy them in one
+transaction; the authenticated fact format, marker and ordered-u64 encoding stay
+unchanged. Supported offline roots predating this read schema execute the same
+definitions as read-only CTEs. Partial or conflicting derived definitions fail
+closed. Offline opening and pagination never create schema objects.
+
+The physical `RuntimeDatabase` owner supplies one read transaction for full
+record/index/marker verification, SQL filtering, Lab links and page context. All
+typed query conditions are conjoined through bindings. Diagnostic-code selection
+uses the original typed payload projection from that verified snapshot. Lab's
+closed request/correlation paths, directly or through the same run, share their
+definition with the neutral selector; the earliest valid relation position keeps
+future anchors and run links outside an older snapshot. Offline pages retain the
+opened prefix hash and boundary while revalidating the current complete ledger.
+An excluded corrupt row or changed prefix fails the read. A terminal online read
+failure reaches subscribers and terminates the writer through its existing error
+path. SQL candidate rows do not replace the full related-run recovery context or
+its 1024-event bound. An empty match retains the verified global snapshot position.
 
 Segment recovery validates strict typed records, schemas, sequence continuity,
 unique EventIds and payload/link/reference consistency before rebuilding indexes.
@@ -234,3 +295,60 @@ owner's typed module probe, then proposes exact retirements and CI changes in th
 assigned stage. Duplicate ordinary evidence can retire only after its replacement
 is established. Invariants, fail-closed cases, original failures and historical
 evidence remain protected. This plan authorizes no deletion or CI gate removal.
+
+
+## Catalog SQL transactions
+
+The existing GlobalLedger writer accepts one sanitized catalog outcome or State migration
+fact together with bounded, typed Runtime State work. The SQLite owner lends its exact
+Immediate transaction to that work; a different database owner or unsupported backend
+is rejected. State work cannot publish caches, call Host/GlobalLedger, or commit itself.
+The independently durable catalog intent remains unchanged. Event rows, links, meta/tag
+and the reserved `policy.catalog.active` document/history (plus its migration row when
+applicable) commit once before Ledger indexes/statistics, ack/live and policy caches move.
+
+A State/CAS error is returned as business rejection only after confirmed rollback. The
+caller records the original failure fact while preserving Request/Fatal identity. Failed
+rollback, uncertain COMMIT and incomplete post-commit publication stop the affected writer
+or Host; they never claim NotPerformed or resend the successful operation. Commit readback
+uses the same event position with ordered-u64-v1 encoding, exact event/link/artifact/meta
+rows and State document/history/migration comparisons. Connection acquisition is nonblocking;
+scans use the existing query row ceiling, 2 MiB and a checked two-second deadline, preserving
+the database owner's native SQLite busy timeout. Unavailable, expired or conflicting evidence
+remains Unknown. State's positive integer position encoding and integrity tags are unchanged.
+
+Only the catalog owner writes the reserved key. Generic State document write, migration
+and rollback APIs reject it with a Request error. Startup and historical catalog reads use
+one ordered fold of matched intent/outcome and validated migration facts. Current State
+must equal the latest effective source, including catalog identity/version and verified
+material; an older matching hash is insufficient. File publication/removal, Provider,
+device effects and capacity sampling remain outside the SQL transaction. The original
+performance monitor and Business/Drain admission retain their own committed-fact boundary.
+
+## Release source references
+
+Release State persists a versioned `ReleaseLedgerSourceReference` containing the original
+event identity, sequence and canonical-record digest. `capture_release_source_reference`
+checks the opaque fact against the same borrowed RuntimeDatabase transaction before
+generating the locator. Deserialization confers no fact authority. Each later
+`verify_release_source_reference` checks the original record, native typed metadata,
+canonical hash/tag, predecessor, indexed fields, links and ordered artifact metadata in
+the caller's transaction. The returned opaque relationship exposes the original origin,
+links and typed payload, with no material access capability. Only ReleaseStaged,
+ReleaseActivated, ReleaseRolledBack and StateMigrated for `release.legacy.baseline` are
+eligible; the Release owner checks the corresponding manifest, transition or migration.
+
+`read_release_baseline_source` verifies the fixed authenticated global prefix in pages
+of at most 256 original records before returning absence or one exact baseline source.
+It reads every original record so damaged filter columns cannot conceal a boundary,
+checks the chain/head and complete native index counts, and reports duplicate boundaries
+with both original locators. No new fact is written. A standalone State database can
+return absence only with format zero and no Ledger tables or other Ledger schema objects;
+partial schema, existing format/metadata declarations and invalid rows fail. A persisted
+locator always fails when its Ledger storage is absent. State also checks all its own
+boundary/source/migration records before permitting first capture.
+
+These synchronous interfaces borrow the existing transaction and neither acquire a new
+connection nor wait for the writer, read artifact bytes, publish an event or commit.
+Their module verification does not replace the complete Release consumer's recovery,
+atomicity and required CI evidence.

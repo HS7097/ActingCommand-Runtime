@@ -2,6 +2,9 @@
 
 //! Runtime-owned catalog generations and replayable policy admission state.
 
+mod catalog_transaction;
+pub(crate) use catalog_transaction::catalog_ledger_error;
+
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
     is_availability_denial,
@@ -674,9 +677,11 @@ impl PolicyHost {
         state: Arc<RuntimeStateStore>,
         ledger: &GlobalLedger,
         cadence: PolicyCadence,
+        events: &crate::events::RuntimeEvents,
     ) -> RuntimeHostResult<Self> {
         let store = CatalogStore::open(state_root, state)?;
-        let active = store.load_active()?;
+        store.migrate_legacy_active_pointer(ledger, events)?;
+        let active = store.load_verified_active(ledger)?;
         let mut host = Self {
             store,
             active,
@@ -728,40 +733,7 @@ impl PolicyHost {
                 "project_policy_catalog",
             ));
         }
-        let events = ledger
-            .query(EventQuery {
-                to_sequence: Some(ledger_position),
-                ..EventQuery::default()
-            })
-            .map_err(|_| fatal("catalog_projection_query_failed", "project_policy_catalog"))?;
-        let mut projected = None;
-        for event in events {
-            let transition = match event.payload() {
-                EventPayload::Catalog(CatalogPayload::Activated(payload))
-                | EventPayload::Catalog(CatalogPayload::RolledBack(payload)) => payload,
-                _ => continue,
-            };
-            projected = Some((
-                transition.catalog_id().to_owned(),
-                transition.catalog_version(),
-                transition.catalog_hash().to_owned(),
-            ));
-        }
-        let Some((catalog_id, catalog_version, catalog_hash)) = projected else {
-            return Ok(None);
-        };
-        let loaded = self.store.load_generation(&catalog_hash)?;
-        let generation = loaded.generation();
-        if generation.catalog_id() != catalog_id
-            || generation.catalog_version() != catalog_version
-            || generation.catalog_hash() != catalog_hash
-        {
-            return Err(fatal(
-                "catalog_projection_identity_mismatch",
-                "project_policy_catalog",
-            ));
-        }
-        Ok(Some(loaded))
+        self.store.project_catalog_source(ledger, ledger_position)
     }
 
     pub(crate) fn project_dispatches(
@@ -958,25 +930,26 @@ impl PolicyHost {
             .collect()
     }
 
-    pub(crate) fn switch_active(
-        &mut self,
-        catalog: LoadedCatalog,
+    pub(crate) fn prepare_active_transaction(
+        &self,
+        catalog: &LoadedCatalog,
         expected_active_hash: Option<&str>,
-    ) -> RuntimeHostResult<()> {
-        let active_hash = self
-            .active
-            .as_ref()
-            .map(|active| active.generation.catalog_hash.as_str());
-        if active_hash != expected_active_hash {
-            return Err(request(
-                "catalog_active_generation_changed",
-                "switch_active_catalog",
-            ));
-        }
-        self.store.write_active_pointer(&catalog.generation)?;
+    ) -> Box<dyn actingcommand_ledger::LedgerTransactionWork> {
+        Box::new(
+            self.store.prepare_transition(
+                catalog,
+                expected_active_hash,
+                self.active
+                    .as_ref()
+                    .map(|value| value.generation.catalog_hash.as_str())
+                    == expected_active_hash,
+            ),
+        )
+    }
+
+    pub(crate) fn publish_active(&mut self, catalog: LoadedCatalog) {
         self.active = Some(catalog);
         self.cadence.catalog_changed();
-        Ok(())
     }
 
     pub(crate) fn evaluate(
@@ -2684,7 +2657,6 @@ impl CatalogStore {
             generations,
             state,
         };
-        store.migrate_legacy_active_pointer()?;
         Ok(store)
     }
 
@@ -3028,63 +3000,6 @@ impl CatalogStore {
             ));
         }
         Ok(CatalogDocumentSource::new(record.source_uri.clone(), bytes))
-    }
-
-    fn write_active_pointer(&self, generation: &CatalogGeneration) -> RuntimeHostResult<()> {
-        let pointer = CatalogPointer {
-            schema_version: CATALOG_STATE_SCHEMA.to_owned(),
-            generation: generation.clone(),
-        };
-        let bytes = serde_json::to_vec(&pointer)
-            .map_err(|_| fatal("catalog_pointer_encode_failed", "switch_active_catalog"))?;
-        let current = self
-            .state
-            .read_json_document(ACTIVE_POINTER_STATE_KEY)
-            .map_err(|error| RuntimeHostError::state(&error))?;
-        self.state
-            .write_json_document(
-                ACTIVE_POINTER_STATE_KEY,
-                CATALOG_STATE_SCHEMA,
-                &bytes,
-                current.as_ref().map(|document| document.payload_sha256()),
-            )
-            .map_err(|error| RuntimeHostError::state(&error))?;
-        Ok(())
-    }
-
-    fn migrate_legacy_active_pointer(&self) -> RuntimeHostResult<()> {
-        if !self.legacy_active_pointer.exists() {
-            return Ok(());
-        }
-        let bytes = read_bounded(&self.legacy_active_pointer, MAX_POINTER_BYTES)?;
-        let pointer: CatalogPointer = serde_json::from_slice(&bytes)
-            .map_err(|_| fatal("catalog_pointer_invalid", "migrate_active_catalog"))?;
-        if pointer.schema_version != CATALOG_STATE_SCHEMA {
-            return Err(fatal(
-                "catalog_pointer_version_unsupported",
-                "migrate_active_catalog",
-            ));
-        }
-        let loaded = self.load_generation(&pointer.generation.catalog_hash)?;
-        if loaded.generation != pointer.generation {
-            return Err(fatal(
-                "catalog_pointer_generation_mismatch",
-                "migrate_active_catalog",
-            ));
-        }
-        let canonical = serde_json::to_vec(&pointer)
-            .map_err(|_| fatal("catalog_pointer_encode_failed", "migrate_active_catalog"))?;
-        self.state
-            .migrate_legacy_json_document(
-                ACTIVE_POINTER_STATE_KEY,
-                LEGACY_CATALOG_POINTER_SCHEMA,
-                CATALOG_STATE_SCHEMA,
-                &canonical,
-            )
-            .map_err(|error| RuntimeHostError::state(&error))?;
-        fs::remove_file(&self.legacy_active_pointer)
-            .map_err(|_| fatal("catalog_pointer_cleanup_failed", "migrate_active_catalog"))?;
-        sync_directory(&self.root, "migrate_active_catalog")
     }
 
     fn generation_path(&self, hash: &str) -> RuntimeHostResult<PathBuf> {
