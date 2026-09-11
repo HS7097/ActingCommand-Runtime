@@ -54,6 +54,40 @@ observations, not event identity or portable equality inputs.
 
 ## Reads, projections and subscriptions
 
+`verify_transaction_event(&RuntimeDatabase, &RuntimeTransaction, &PersistedEvent)`
+checks an already verified opaque fact synchronously inside the same owner's
+borrowed transaction. It authenticates the ledger metadata/format and compares the
+exact sequence's canonical row, identity, hash/tag, predecessor hash, link row and
+ordered artifact metadata through the Ledger's existing private representation.
+Missing or inconsistent rows and a different Database identity fail explicitly.
+The caller retains transaction/rollback ownership. The check does not acquire a
+Database lock, send a writer command, commit, append or read artifact bytes. It is
+an exact-row check for derived-state work; complete ledger recovery remains the
+source of the opaque input and the authority for full-history validity.
+
+`planning_signal_recovery_page(after, upper)` returns an opaque interval of at most
+256 consecutive original facts. Non-planning facts remain inside the proof; the
+Planning consumer sees only this interval's planning signals. Recovery fixes the
+global upper sequence once, including an upper fact that is not a planning signal.
+`verify_transaction_planning_page(database, transaction, page, current_checkpoint)`
+checks the exact prior checkpoint, every original row in the complete interval and
+the verified upper anchor in the same borrowed transaction. It performs no writer
+call, material read, connection acquisition or write. Missing or inconsistent
+interval rows and a mismatched checkpoint fail explicitly.
+
+A new `PolicyPlanningSignalObserved` uses the existing joint append path with its
+State-owned signal, optional cumulative detection quota and checkpoint projections.
+Their namespaces, keys and encodings remain unchanged. State checks the prepared
+baselines and exact signal identity, quota position and checkpoint monotonicity
+before writing through the shared transaction. Host publishes its prepared quota
+cache after COMMIT and releases the policy lock before downstream observations and
+Timeline/Drift wakes. Historical recovery prepares and verifies each complete page,
+then commits its projections and checkpoint together without adding a new signal.
+Empty planning intervals still advance to their global through sequence; an empty
+ledger produces no checkpoint. Historical quota arithmetic uses the original
+catalog and recorded cumulative usage. Rollback/COMMIT uncertainty stays fatal
+with original details, and post-commit failures retain the actual committed fact.
+
 Store reads operate on the verified committed snapshot already materialized at
 open and maintained by append. They perform no fallible storage I/O, so this
 private interface returns values directly. A future backend using this boundary
@@ -234,3 +268,32 @@ owner's typed module probe, then proposes exact retirements and CI changes in th
 assigned stage. Duplicate ordinary evidence can retire only after its replacement
 is established. Invariants, fail-closed cases, original failures and historical
 evidence remain protected. This plan authorizes no deletion or CI gate removal.
+
+
+## Catalog SQL transactions
+
+The existing GlobalLedger writer accepts one sanitized catalog outcome or State migration
+fact together with bounded, typed Runtime State work. The SQLite owner lends its exact
+Immediate transaction to that work; a different database owner or unsupported backend
+is rejected. State work cannot publish caches, call Host/GlobalLedger, or commit itself.
+The independently durable catalog intent remains unchanged. Event rows, links, meta/tag
+and the reserved `policy.catalog.active` document/history (plus its migration row when
+applicable) commit once before Ledger indexes/statistics, ack/live and policy caches move.
+
+A State/CAS error is returned as business rejection only after confirmed rollback. The
+caller records the original failure fact while preserving Request/Fatal identity. Failed
+rollback, uncertain COMMIT and incomplete post-commit publication stop the affected writer
+or Host; they never claim NotPerformed or resend the successful operation. Commit readback
+uses the same event position with ordered-u64-v1 encoding, exact event/link/artifact/meta
+rows and State document/history/migration comparisons. Connection acquisition is nonblocking;
+scans use the existing query row ceiling, 2 MiB and a checked two-second deadline, preserving
+the database owner's native SQLite busy timeout. Unavailable, expired or conflicting evidence
+remains Unknown. State's positive integer position encoding and integrity tags are unchanged.
+
+Only the catalog owner writes the reserved key. Generic State document write, migration
+and rollback APIs reject it with a Request error. Startup and historical catalog reads use
+one ordered fold of matched intent/outcome and validated migration facts. Current State
+must equal the latest effective source, including catalog identity/version and verified
+material; an older matching hash is insufficient. File publication/removal, Provider,
+device effects and capacity sampling remain outside the SQL transaction. The original
+performance monitor and Business/Drain admission retain their own committed-fact boundary.

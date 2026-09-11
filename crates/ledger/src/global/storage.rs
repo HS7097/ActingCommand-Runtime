@@ -151,6 +151,16 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
 
 pub(super) trait DurableStorage: Send + 'static {
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>>;
+    fn persist_transaction(
+        &mut self,
+        _event: &PersistedEvent,
+        _work: &dyn super::LedgerTransactionWork,
+    ) -> GlobalLedgerResult<Option<u64>> {
+        Err(GlobalLedgerError::request(
+            "ledger_joint_transaction_unsupported",
+            "append_transaction",
+        ))
+    }
     fn close(&mut self) -> GlobalLedgerResult<()>;
 }
 
@@ -327,6 +337,38 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         self.append_with_event_id(draft, None)
+    }
+
+    pub(super) fn append_transaction(
+        &mut self,
+        draft: SanitizedEventDraft,
+        work: &dyn super::LedgerTransactionWork,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        if !matches!(
+            draft.event_type(),
+            EventType::CatalogActivated
+                | EventType::CatalogRolledBack
+                | EventType::StateMigrated
+                | EventType::ApprovalDecision
+                | EventType::PolicyPlanningSignalObserved
+        ) {
+            return Err(GlobalLedgerError::request(
+                "joint_event_type_unsupported",
+                "append_transaction",
+            ));
+        }
+        let event = PersistedEvent::from_sanitized(self.next_sequence, draft).map_err(|error| {
+            GlobalLedgerError::request(error.code(), "validate_sanitized_event")
+        })?;
+        let following_sequence = increment_sequence(self.next_sequence)?;
+        if self.indexes.contains_event_id(event.event_id()) {
+            return Err(GlobalLedgerError::request(
+                "duplicate_event_id",
+                "append_transaction",
+            ));
+        }
+        let write_sync_ns = self.backend.persist_transaction(&event, work)?;
+        self.publish_committed(event, following_sequence, write_sync_ns)
     }
 
     /// The only ledger-owned continuation for a persisted scheduled policy settlement.
@@ -1122,6 +1164,15 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         let write_sync_ns = self.backend.persist(&event)?;
+        self.publish_committed(event, following_sequence, write_sync_ns)
+    }
+
+    fn publish_committed(
+        &mut self,
+        event: PersistedEvent,
+        following_sequence: u64,
+        write_sync_ns: Option<u64>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         self.next_sequence = following_sequence;
         self.indexes.insert(&event, self.events.len());
         self.events.push(event.clone());
