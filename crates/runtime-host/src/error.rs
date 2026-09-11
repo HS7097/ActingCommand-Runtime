@@ -24,6 +24,9 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
+    pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
+    pub(crate) raw_os_error: Option<i32>,
     pub(crate) adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
@@ -85,12 +88,22 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
-        let mut result = Self::fatal(
-            error.code(),
-            error.operation(),
-            RuntimeErrorCode::RuntimeFatal,
-        );
+        let mut result = if error.is_fatal() {
+            Self::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        } else {
+            Self::request(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::InvalidRequest,
+            )
+        };
         result.lifecycle.native_detail = Some(Box::new(error.native_detail()));
+        result.lifecycle.capacity = error.capacity().cloned();
+        result.lifecycle.raw_os_error = error.raw_os_error();
         result
     }
     pub const fn code(&self) -> &'static str {
@@ -188,6 +201,9 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                task_timing: None,
+                capacity: None,
+                raw_os_error: None,
                 adb_recovery: error.adb_recovery().cloned().map(Box::new),
                 incomplete_device_diagnostic_summary: None,
                 diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
@@ -237,6 +253,12 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        if self.lifecycle.task_timing.is_none() {
+            self.lifecycle.task_timing = other.lifecycle.task_timing.clone();
+        }
+        if self.lifecycle.capacity.is_none() {
+            self.lifecycle.capacity = other.lifecycle.capacity.clone();
+        }
         if self.code == other.code
             && self.operation == other.operation
             && self.lifecycle.native_detail == other.lifecycle.native_detail

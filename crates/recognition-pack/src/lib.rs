@@ -52,6 +52,8 @@ pub struct RecognitionPackError {
     #[serde(skip_serializing_if = "Option::is_none")]
     region: Option<Box<OcrRegionEvidence>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    timing: Option<actingcommand_contract::TemplateMatchTimingObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
@@ -66,6 +68,7 @@ impl RecognitionPackError {
             code,
             message: message.into(),
             region: None,
+            timing: None,
             declaration_issue: None,
         }
     }
@@ -84,6 +87,10 @@ impl RecognitionPackError {
 
     pub fn region(&self) -> Option<&OcrRegionEvidence> {
         self.region.as_deref()
+    }
+
+    pub fn timing(&self) -> Option<&actingcommand_contract::TemplateMatchTimingObservation> {
+        self.timing.as_ref()
     }
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
@@ -834,6 +841,7 @@ impl SceneEvaluation<'_> {
                 code: RecognitionPackErrorCode::RegionUnresolved,
                 message: format!("OCR target '{}' region unresolved: {reason:?}", target.id),
                 region: Some(Box::new(region)),
+                timing: None,
                 declaration_issue: None,
             }
         };
@@ -2723,9 +2731,42 @@ fn ocr_text_matches(text: &str, expected: &str, target: &OcrTarget) -> bool {
 }
 
 fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> RecognitionPackError {
-    RecognitionPackError::fatal(format!(
+    use actingcommand_contract::{
+        ObservedMicroseconds, TemplateMatchTimingObservation, TemplateMatchTimingStage,
+        TimingObservationClock, TimingObservationIssue,
+    };
+    let mut error = RecognitionPackError::fatal(format!(
         "recognition primitive failed for target '{target_id}': {err}"
-    ))
+    ));
+    error.timing = err.timing().map(|timing| TemplateMatchTimingObservation {
+        clock: TimingObservationClock::ProcessInstant,
+        stage: match timing.stage {
+            recognition::TemplateMatchTimingStage::Exact => TemplateMatchTimingStage::Exact,
+            recognition::TemplateMatchTimingStage::Coarse => TemplateMatchTimingStage::Coarse,
+            recognition::TemplateMatchTimingStage::Refinement => {
+                TemplateMatchTimingStage::Refinement
+            }
+            recognition::TemplateMatchTimingStage::ImageprocReturned => {
+                TemplateMatchTimingStage::ImageprocReturned
+            }
+            recognition::TemplateMatchTimingStage::JointTemplateColor => {
+                TemplateMatchTimingStage::JointTemplateColor
+            }
+        },
+        elapsed_us: timing.elapsed_us.map_or(
+            ObservedMicroseconds::Unavailable {
+                reason: TimingObservationIssue::DurationOverflow,
+            },
+            |value| ObservedMicroseconds::Measured { value },
+        ),
+        limit_us: timing.limit_us.map_or(
+            ObservedMicroseconds::Unavailable {
+                reason: TimingObservationIssue::DurationOverflow,
+            },
+            |value| ObservedMicroseconds::Measured { value },
+        ),
+    });
+    error
 }
 
 fn unsupported_template_reason(target: &TemplateTarget) -> Option<String> {

@@ -4179,6 +4179,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         ));
     }
     validate_task_terminal(task_event, execution.outcome())?;
+    let task_timing = full_payload(task_event)?.task_timing();
     validate_admitted_package(events, &lab_request_id, intent.package_digest())?;
     let simulated_effect_count = validate_fixture_simulation(events)?;
     let result = result.unwrap_or(if simulated_effect_count == 0 {
@@ -4186,7 +4187,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     } else {
         "would_effect"
     });
-    Ok(json!({
+    let mut summary = json!({
         "schema_version": "actingcommand.run-summary.v1",
         "status": status,
         "run_id": run_id,
@@ -4235,7 +4236,12 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         "simulated_effect_count": simulated_effect_count,
         "event_count": events.len(),
         "completed_sequence": completed_event.sequence
-    }))
+    });
+    if let Some(timing) = task_timing {
+        summary["task_timing"] = serde_json::to_value(timing)
+            .map_err(|_| RuntimeClientError::fatal("run_summary_encode_failed", "summarize_run"))?;
+    }
+    Ok(summary)
 }
 
 fn validate_task_terminal(
