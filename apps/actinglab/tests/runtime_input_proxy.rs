@@ -1565,7 +1565,12 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     assert!(watch["data"]["progress"].get("percent").is_none());
     assert!(watch["data"]["progress"].get("completed").is_none());
     let first = &watch["data"]["events"][0];
-    let sequence = first["sequence"].as_u64().unwrap().to_string();
+    let target_sequence = first["sequence"].as_u64().expect("watch event sequence");
+    let predecessor_sequence = target_sequence
+        .checked_sub(1)
+        .expect("watch event must have a positive sequence");
+    let sequence = target_sequence.to_string();
+    let after = predecessor_sequence.to_string();
     let filtered = run_actinglab_json(
         &config_path,
         &runtime_root,
@@ -1589,13 +1594,39 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "--to-sequence",
             &sequence,
             "--after",
-            "0",
+            &after,
             "--wait-ms",
             "1",
             "--max-events",
             "1",
         ],
     );
+    if filtered["data"]["events"] != json!([first])
+        || filtered["data"]["filter"]["correlation_id"] != correlation_id
+        || filtered["data"]["filter"]["origin_module"] != first["origin"]["module"]
+    {
+        let mut context = [0_u8; 4 * 1024];
+        let mut remaining = &mut context[..];
+        let formatted = writeln!(
+            remaining,
+            "filtered subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}",
+            filtered["data"]["progress"]["next_sequence"],
+            filtered["data"]["progress"]["state"],
+            filtered["data"]["filter"],
+        );
+        let used = 4 * 1024 - remaining.len();
+        let text = match std::str::from_utf8(&context[..used]) {
+            Ok(text) => text,
+            Err(error) => std::str::from_utf8(&context[..error.valid_up_to()])
+                .expect("valid subscription context prefix"),
+        };
+        eprint!("{text}");
+        if let Err(error) = formatted {
+            eprintln!(
+                "\nfiltered subscription context truncated or formatting failed (4-KiB buffer): {error}"
+            );
+        }
+    }
     assert_eq!(filtered["data"]["events"], json!([first]));
     assert_eq!(filtered["data"]["filter"]["correlation_id"], correlation_id);
     assert_eq!(
@@ -1618,12 +1649,37 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             &sequence,
             "--to-sequence",
             &sequence,
+            "--after",
+            &after,
             "--wait-ms",
             "1",
             "--max-events",
             "1",
         ],
     );
+    if absent["data"]["events"] != json!([]) || absent["data"]["progress"]["state"] != "idle" {
+        let mut context = [0_u8; 4 * 1024];
+        let mut remaining = &mut context[..];
+        let formatted = writeln!(
+            remaining,
+            "absent subscription: S={target_sequence}; P={predecessor_sequence}; progress.next_sequence={}; progress.state={}; filter={}",
+            absent["data"]["progress"]["next_sequence"],
+            absent["data"]["progress"]["state"],
+            absent["data"]["filter"],
+        );
+        let used = 4 * 1024 - remaining.len();
+        let text = match std::str::from_utf8(&context[..used]) {
+            Ok(text) => text,
+            Err(error) => std::str::from_utf8(&context[..error.valid_up_to()])
+                .expect("valid subscription context prefix"),
+        };
+        eprint!("{text}");
+        if let Err(error) = formatted {
+            eprintln!(
+                "\nabsent subscription context truncated or formatting failed (4-KiB buffer): {error}"
+            );
+        }
+    }
     assert_eq!(absent["data"]["events"], json!([]));
     assert_eq!(absent["data"]["progress"]["state"], "idle");
     for invalid in [
