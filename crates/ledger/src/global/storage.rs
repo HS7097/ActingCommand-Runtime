@@ -350,6 +350,7 @@ impl<B: DurableStorage> EventStore<B> {
                 | EventType::CatalogRolledBack
                 | EventType::StateMigrated
                 | EventType::ApprovalDecision
+                | EventType::PolicyPlanningSignalObserved
         ) {
             return Err(GlobalLedgerError::request(
                 "joint_event_type_unsupported",

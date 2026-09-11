@@ -144,6 +144,12 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
         .expect("writer");
         let first = ledger.append(draft(1)).expect("first");
         let second = ledger.append(draft(2)).expect("second");
+        let planning_page = ledger
+            .planning_signal_recovery_page(0, second.sequence())
+            .expect("complete original interval");
+        assert_eq!(planning_page.after_sequence(), 0);
+        assert_eq!(planning_page.through_sequence(), second.sequence());
+        assert_eq!(planning_page.planning_events().count(), 0);
         {
             let mut connection = database.connection("original row specification").unwrap();
             let before = connection.total_changes();
@@ -151,6 +157,13 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             let borrowed = database.borrow_transaction(&transaction);
             verify_transaction_event(&database, &borrowed, &first).expect("first original row");
             verify_transaction_event(&database, &borrowed, &second).expect("second original row");
+            crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 0)
+                .expect("complete interval in borrowed transaction");
+            assert!(
+                crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 1)
+                    .expect_err("exact previous checkpoint")
+                    .is_fatal()
+            );
             assert!(!transaction.is_autocommit());
             assert_eq!(transaction.total_changes(), before);
             transaction.rollback().unwrap();
@@ -165,6 +178,14 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             let mut connection = database.connection("changed original rows").unwrap();
             let transaction = connection.transaction().unwrap();
             let borrowed = database.borrow_transaction(&transaction);
+            let range_error =
+                crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 0)
+                    .expect_err("changed original interval must fail");
+            assert!(range_error.is_fatal(), "{label}: {range_error}");
+            assert!(
+                !format!("{range_error:?} {range_error}").contains("token-secret"),
+                "{label}: range disclosure"
+            );
             let failures = [&first, &second]
                 .into_iter()
                 .filter_map(|event| verify_transaction_event(&database, &borrowed, event).err())
