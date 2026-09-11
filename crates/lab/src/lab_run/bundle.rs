@@ -49,26 +49,21 @@ fn load_lab_resources_from_bundle(
     let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
         CliError::package_invalid("missing recognition evaluator for Lab package")
     })?;
-    let detector = bundle
+    bundle
         .detector()
         .cloned()
         .ok_or_else(|| CliError::package_invalid("missing page detector for Lab package"))?;
     let navigation_path = bundle.navigation_path().map(PathBuf::from);
-    let navigation = bundle.navigation().cloned();
 
     Ok(LabResources {
-        bundle,
         resource_root,
         manifest_path,
-        manifest,
         operation_path,
         operation_bundle,
         pack_path,
         pages_path,
         evaluator,
-        detector,
         navigation_path,
-        navigation,
     })
 }
 fn validate_manifest_entry_task_id(
@@ -157,32 +152,42 @@ struct LabControl {
     #[serde(default)]
     capture_interval_ms: Option<u64>,
     #[serde(default)]
-    timeout_ms: Option<u64>,
+    #[serde(rename = "timeout_ms")]
+    _timeout_ms: Option<u64>,
     #[serde(default)]
-    step_timeout_ms: Option<u64>,
+    #[serde(rename = "step_timeout_ms")]
+    _step_timeout_ms: Option<u64>,
     #[serde(default)]
-    max_steps: Option<usize>,
+    #[serde(rename = "max_steps")]
+    _max_steps: Option<usize>,
     #[serde(default)]
-    stop_on_error: Option<bool>,
+    #[serde(rename = "stop_on_error")]
+    _stop_on_error: Option<bool>,
     #[serde(default)]
-    stop_on_confirmation: Option<bool>,
+    #[serde(rename = "stop_on_confirmation")]
+    _stop_on_confirmation: Option<bool>,
     #[serde(default)]
     allow_placeholder_coords: Option<bool>,
     #[serde(default)]
-    output: Option<Value>,
+    #[serde(rename = "output")]
+    _output: Option<Value>,
     #[serde(default)]
     capture_backend: Option<String>,
     #[serde(default)]
     frame_store: FrameStoreControl,
     #[serde(default)]
-    producer: Option<Value>,
+    #[serde(rename = "producer")]
+    _producer: Option<Value>,
     #[serde(default)]
-    trusted_execution: Option<Value>,
+    #[serde(rename = "trusted_execution")]
+    _trusted_execution: Option<Value>,
 }
 
 impl LabControl {
     fn validate(&self) -> CliOutcome<()> {
-        if self.schema_version != CONTROL_SCHEMA && self.schema_version != actingcommand_contract::PHASED_CONTROL_SCHEMA {
+        if self.schema_version != CONTROL_SCHEMA
+            && self.schema_version != actingcommand_contract::PHASED_CONTROL_SCHEMA
+        {
             return Err(CliError::package_invalid(format!(
                 "unsupported control schema_version '{}', expected {CONTROL_SCHEMA}",
                 self.schema_version
@@ -228,14 +233,6 @@ impl LabControl {
             .map_err(CliError::package_invalid)?;
         Ok(())
     }
-
-    fn capture_backend_choice(&self) -> CliOutcome<Option<CaptureBackendChoice>> {
-        self.capture_backend
-            .as_deref()
-            .map(CaptureBackendChoice::parse)
-            .transpose()
-            .map_err(|err| CliError::package_invalid(err.to_string()))
-    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -246,48 +243,14 @@ struct Resolution {
 
 #[derive(Debug)]
 struct LabResources {
-    bundle: LoadedBundle,
     resource_root: PathBuf,
     manifest_path: PathBuf,
-    manifest: Value,
     operation_path: PathBuf,
     operation_bundle: OperationBundle,
     pack_path: PathBuf,
     pages_path: PathBuf,
     evaluator: RecognitionEvaluator,
-    detector: PageDetector,
     navigation_path: Option<PathBuf>,
-    navigation: Option<Value>,
-}
-
-impl LabResources {
-    fn has_operation_bundle(&self, task_id: &str) -> CliOutcome<bool> {
-        let path = format!("operations/{task_id}/task.json");
-        match self.bundle.resource_entry(&path) {
-            Ok(_) => Ok(true),
-            Err(ContainmentError::MissingEntry { .. }) => Ok(false),
-            Err(err) => Err(containment_error(err)),
-        }
-    }
-
-    fn operation_asset_for_task(&self, task_id: &str, relative: &str) -> CliOutcome<&[u8]> {
-        self.bundle
-            .resource_entry(&format!("operations/{}/{}", task_id, relative))
-            .or_else(|err| match err {
-                ContainmentError::MissingEntry { .. } => self.bundle.resource_entry(relative),
-                other => Err(other),
-            })
-            .map_err(containment_error)
-    }
-
-}
-
-#[derive(Debug)]
-struct RunState {
-    control: LabControl,
-    resources: LabResources,
-    current_page: Option<String>,
-    failed_step_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -298,18 +261,21 @@ struct OperationBundle {
     #[serde(default)]
     server_scope: Vec<String>,
     #[serde(default)]
-    goal: String,
+    #[serde(rename = "goal")]
+    _goal: String,
     coordinate_space: Resolution,
     #[serde(default)]
     defaults: OperationDefaults,
     #[serde(default)]
     anchors: Vec<OperationAnchor>,
     #[serde(default)]
-    entry_page: Option<String>,
+    #[serde(rename = "entry_page")]
+    _entry_page: Option<String>,
     #[serde(default)]
     target_page: Option<NormalizedPageSet>,
     #[serde(default)]
-    error_pages: Vec<String>,
+    #[serde(rename = "error_pages")]
+    _error_pages: Vec<String>,
     #[serde(default)]
     recovery: Option<TaskRecovery>,
     #[serde(default)]
@@ -317,7 +283,8 @@ struct OperationBundle {
     #[serde(default)]
     on_exhausted: Option<String>,
     #[serde(default)]
-    page_rules: BTreeMap<String, Value>,
+    #[serde(rename = "page_rules")]
+    _page_rules: BTreeMap<String, Value>,
     operations: Vec<Operation>,
 }
 
@@ -495,9 +462,11 @@ impl TaskRecovery {
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct OperationDefaults {
     #[serde(default = "default_template_threshold")]
-    template_threshold: f32,
+    #[serde(rename = "template_threshold")]
+    _template_threshold: f32,
     #[serde(default)]
-    color_max_distance: Option<f32>,
+    #[serde(rename = "color_max_distance")]
+    _color_max_distance: Option<f32>,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -505,27 +474,31 @@ struct OperationDefaults {
     #[serde(default)]
     retry_interval_ms: Option<u64>,
     #[serde(default)]
-    pre_delay_ms: Option<u64>,
+    #[serde(rename = "pre_delay_ms")]
+    _pre_delay_ms: Option<u64>,
     #[serde(default)]
-    post_delay_ms: Option<u64>,
+    #[serde(rename = "post_delay_ms")]
+    _post_delay_ms: Option<u64>,
     #[serde(default)]
-    pre_wait_freezes_ms: Option<u64>,
+    #[serde(rename = "pre_wait_freezes_ms")]
+    _pre_wait_freezes_ms: Option<u64>,
     #[serde(default)]
-    post_wait_freezes_ms: Option<u64>,
+    #[serde(rename = "post_wait_freezes_ms")]
+    _post_wait_freezes_ms: Option<u64>,
 }
 
 impl Default for OperationDefaults {
     fn default() -> Self {
         Self {
-            template_threshold: DEFAULT_TEMPLATE_THRESHOLD,
-            color_max_distance: None,
+            _template_threshold: DEFAULT_TEMPLATE_THRESHOLD,
+            _color_max_distance: None,
             timeout_ms: None,
             max_attempts: None,
             retry_interval_ms: None,
-            pre_delay_ms: None,
-            post_delay_ms: None,
-            pre_wait_freezes_ms: None,
-            post_wait_freezes_ms: None,
+            _pre_delay_ms: None,
+            _post_delay_ms: None,
+            _pre_wait_freezes_ms: None,
+            _post_wait_freezes_ms: None,
         }
     }
 }
@@ -545,20 +518,6 @@ impl OperationDefaults {
         }
         Ok(())
     }
-
-    fn to_json(self) -> Value {
-        json!({
-            "template_threshold": self.template_threshold,
-            "color_max_distance": self.color_max_distance,
-            "timeout_ms": self.timeout_ms,
-            "max_attempts": self.max_attempts,
-            "retry_interval_ms": self.retry_interval_ms,
-            "pre_delay_ms": self.pre_delay_ms,
-            "post_delay_ms": self.post_delay_ms,
-            "pre_wait_freezes_ms": self.pre_wait_freezes_ms,
-            "post_wait_freezes_ms": self.post_wait_freezes_ms
-        })
-    }
 }
 
 fn default_template_threshold() -> f32 {
@@ -574,7 +533,8 @@ struct OperationAnchor {
 #[derive(Debug, Clone, Deserialize)]
 struct Operation {
     id: String,
-    purpose: String,
+    #[serde(rename = "purpose")]
+    _purpose: String,
     from: String,
     #[serde(default)]
     to: Option<NormalizedPageSet>,
@@ -590,15 +550,20 @@ struct Operation {
     #[serde(default)]
     retry_interval_ms: Option<u64>,
     #[serde(default)]
-    pre_delay_ms: Option<u64>,
+    #[serde(rename = "pre_delay_ms")]
+    _pre_delay_ms: Option<u64>,
     #[serde(default)]
-    post_delay_ms: Option<u64>,
+    #[serde(rename = "post_delay_ms")]
+    _post_delay_ms: Option<u64>,
     #[serde(default)]
-    pre_wait_freezes_ms: Option<u64>,
+    #[serde(rename = "pre_wait_freezes_ms")]
+    _pre_wait_freezes_ms: Option<u64>,
     #[serde(default)]
-    post_wait_freezes_ms: Option<u64>,
+    #[serde(rename = "post_wait_freezes_ms")]
+    _post_wait_freezes_ms: Option<u64>,
     #[serde(default)]
-    retryable: Option<bool>,
+    #[serde(rename = "retryable")]
+    _retryable: Option<bool>,
     #[serde(default)]
     effect: Option<String>,
     #[serde(default)]
@@ -608,13 +573,17 @@ struct Operation {
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
     #[serde(default)]
-    consumes: Vec<String>,
+    #[serde(rename = "consumes")]
+    _consumes: Vec<String>,
     #[serde(default)]
-    produces: Vec<String>,
+    #[serde(rename = "produces")]
+    _produces: Vec<String>,
     #[serde(default)]
-    verified_live: Option<bool>,
+    #[serde(rename = "verified_live")]
+    _verified_live: Option<bool>,
     #[serde(default)]
-    provenance: Option<Value>,
+    #[serde(rename = "provenance")]
+    _provenance: Option<Value>,
 }
 
 impl Operation {
@@ -703,20 +672,6 @@ impl Operation {
         Ok(())
     }
 
-    fn input_action(
-        &self,
-        resolution: &Resolution,
-        seed_base: u64,
-        target: Option<&TargetEvaluation>,
-    ) -> CliOutcome<LabInputAction> {
-        self.click.input_action(
-            resolution,
-            seed_base ^ hash_text(&self.id),
-            self.guard.as_ref(),
-            target,
-        )
-    }
-
     fn validate_guard(&self, control: &LabControl) -> CliOutcome<()> {
         match (&self.guard, self.unguarded_trusted_coordinate) {
             (Some(_), true) => Err(CliError::package_invalid(format!(
@@ -739,89 +694,16 @@ impl Operation {
             .as_ref()
             .map(|expectation| expectation.page_id.as_slice());
         match (to, expected) {
-            (Some(to), Some(expected)) if to != expected => Err(CliError::package_invalid(
-                format!(
+            (Some(to), Some(expected)) if to != expected => {
+                Err(CliError::package_invalid(format!(
                     "operation '{}' has conflicting to and expect_after destinations",
                     self.id
-                ),
-            )),
+                )))
+            }
             (Some(to), _) => Ok(to),
             (None, Some(expected)) => Ok(expected),
             (None, None) => Ok(&[]),
         }
-    }
-
-    fn after_timeout_ms(&self, defaults: OperationDefaults, default_timeout_ms: u64) -> u64 {
-        self.timeout_ms
-            .or(defaults.timeout_ms)
-            .or_else(|| {
-                self.expect_after
-                    .as_ref()
-                    .and_then(|expectation| expectation.timeout_ms)
-            })
-            .unwrap_or(default_timeout_ms)
-    }
-
-    fn flow_policy(&self, defaults: OperationDefaults) -> OperationFlowPolicy {
-        let retryable = self.retryable.unwrap_or_else(|| self.is_navigation_only());
-        let requested_attempts = self
-            .max_attempts
-            .or(defaults.max_attempts)
-            .unwrap_or(if retryable { 3 } else { 1 });
-        OperationFlowPolicy {
-            retryable,
-            max_attempts: if retryable {
-                requested_attempts.max(1)
-            } else {
-                1
-            },
-            retry_interval_ms: self
-                .retry_interval_ms
-                .or(defaults.retry_interval_ms)
-                .unwrap_or(DEFAULT_RETRY_INTERVAL_MS),
-            pre_delay_ms: self.pre_delay_ms.or(defaults.pre_delay_ms).unwrap_or(0),
-            post_delay_ms: self.post_delay_ms.or(defaults.post_delay_ms).unwrap_or(0),
-            pre_wait_freezes_ms: self
-                .pre_wait_freezes_ms
-                .or(defaults.pre_wait_freezes_ms)
-                .unwrap_or(0),
-            post_wait_freezes_ms: self
-                .post_wait_freezes_ms
-                .or(defaults.post_wait_freezes_ms)
-                .unwrap_or(DEFAULT_POST_WAIT_FREEZES_MS),
-        }
-    }
-
-    fn is_navigation_only(&self) -> bool {
-        self.effect.as_deref() == Some("navigation_only")
-            || (self.to.is_some()
-                && self.consumes.is_empty()
-                && self.produces.is_empty())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OperationFlowPolicy {
-    retryable: bool,
-    max_attempts: u32,
-    retry_interval_ms: u64,
-    pre_delay_ms: u64,
-    post_delay_ms: u64,
-    pre_wait_freezes_ms: u64,
-    post_wait_freezes_ms: u64,
-}
-
-impl OperationFlowPolicy {
-    fn to_json(self) -> Value {
-        json!({
-            "retryable": self.retryable,
-            "max_attempts": self.max_attempts,
-            "retry_interval_ms": self.retry_interval_ms,
-            "pre_delay_ms": self.pre_delay_ms,
-            "post_delay_ms": self.post_delay_ms,
-            "pre_wait_freezes_ms": self.pre_wait_freezes_ms,
-            "post_wait_freezes_ms": self.post_wait_freezes_ms
-        })
     }
 }
 
@@ -850,14 +732,6 @@ impl OperationExpectation {
             )));
         }
         Ok(())
-    }
-
-    fn to_json(&self) -> Value {
-        json!({
-            "page_id": self.page_id,
-            "timeout_ms": self.timeout_ms,
-            "interval_ms": self.interval_ms
-        })
     }
 }
 
@@ -972,16 +846,6 @@ impl OperationGuard {
             )));
         }
         Ok(())
-    }
-
-    fn to_json(&self) -> Value {
-        json!({
-            "page_id": self.page_id.as_str(),
-            "target_id": self.target_id.as_str(),
-            "expected_rect": rect_json(self.expected_rect),
-            "verify_template": self.verify_template.as_deref(),
-            "color_probe": self.color_probe.as_deref()
-        })
     }
 }
 
@@ -1171,162 +1035,6 @@ impl OperationClick {
         self.validate_for_schema(control, "0.6")
     }
 
-    fn input_action(
-        &self,
-        resolution: &Resolution,
-        seed: u64,
-        guard: Option<&OperationGuard>,
-        target: Option<&TargetEvaluation>,
-    ) -> CliOutcome<LabInputAction> {
-        match self.kind.as_str() {
-            "rect" | "specific_rect" => {
-                let rect = derive_absolute_coordinate_rect(
-                    self.kind.as_str(),
-                    self.required_rect()?,
-                    guard,
-                    target,
-                )?;
-                validate_click_rect(rect, resolution, false)?;
-                Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
-            }
-            "point" => {
-                let rect = derive_absolute_coordinate_rect(
-                    "point",
-                    self.required_point_rect("point")?,
-                    guard,
-                    target,
-                )?;
-                validate_click_rect(rect, resolution, false)?;
-                Ok(LabInputAction::Tap(actual_explicit_point(rect, seed)))
-            }
-            "long_press" | "long_tap" => {
-                let rect = derive_absolute_coordinate_rect(
-                    "long_press",
-                    self.required_point_rect("long_press")?,
-                    guard,
-                    target,
-                )?;
-                validate_click_rect(rect, resolution, false)?;
-                Ok(LabInputAction::LongTap {
-                    point: actual_explicit_point(rect, seed),
-                    duration_ms: self.duration_ms.unwrap_or(600),
-                })
-            }
-            "offset" => {
-                let guard = guard.ok_or_else(|| {
-                    CliError::package_invalid("offset click requires guard metadata")
-                })?;
-                let target = target.ok_or_else(|| {
-                    CliError::package_invalid("offset click requires matched template target")
-                })?;
-                if target.id != guard.target_id {
-                    return Err(CliError::package_invalid(format!(
-                        "offset click matched target '{}' does not match guard target_id '{}'",
-                        target.id, guard.target_id
-                    )));
-                }
-                let matched_rect = matched_template_rect(target)?;
-                let offset = self
-                    .offset
-                    .ok_or_else(|| CliError::package_invalid("offset click missing offset rect"))?;
-                let rect = PackRect {
-                    x: matched_rect.x + offset.x,
-                    y: matched_rect.y + offset.y,
-                    width: offset.width,
-                    height: offset.height,
-                };
-                validate_click_rect(rect, resolution, false)?;
-                Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
-            }
-            "target" | "target_center" => {
-                let guard = guard.ok_or_else(|| {
-                    CliError::package_invalid("target click requires guard metadata")
-                })?;
-                let target = target.ok_or_else(|| {
-                    CliError::package_invalid("target click requires matched template target")
-                })?;
-                if target.id != guard.target_id {
-                    return Err(CliError::package_invalid(format!(
-                        "target click matched target '{}' does not match guard target_id '{}'",
-                        target.id, guard.target_id
-                    )));
-                }
-                let matched_rect = matched_template_rect(target)?;
-                let rect = if let Some(offset) = self.offset {
-                    PackRect {
-                        x: matched_rect.x + offset.x,
-                        y: matched_rect.y + offset.y,
-                        width: offset.width,
-                        height: offset.height,
-                    }
-                } else {
-                    matched_rect
-                };
-                validate_click_rect(rect, resolution, false)?;
-                let point = if self.kind == "target_center" {
-                    actual_center_point(rect, seed)
-                } else {
-                    actual_click_point(rect, seed)
-                };
-                Ok(LabInputAction::Tap(point))
-            }
-            "drag" => {
-                let declared_from = self
-                    .from_rect
-                    .ok_or_else(|| CliError::package_invalid("drag click missing from rect"))?;
-                let to = self
-                    .to_rect
-                    .ok_or_else(|| CliError::package_invalid("drag click missing to rect"))?;
-                let from = derive_absolute_coordinate_rect("drag", declared_from, guard, target)?;
-                let to = derive_absolute_coordinate_rect("drag", to, guard, target)?;
-                validate_click_rect(from, resolution, false)?;
-                validate_click_rect(to, resolution, false)?;
-                Ok(LabInputAction::Drag {
-                    from: actual_click_point(from, seed ^ hash_text("drag.from")),
-                    to: actual_click_point(to, seed ^ hash_text("drag.to")),
-                    duration_ms: self.duration_ms.unwrap_or(300),
-                })
-            }
-            "single_touch_drag_with_vertical_brake_v1" => {
-                let fields = self.segmented_swipe_fields()?;
-                let from = self.from_rect.ok_or_else(|| {
-                    CliError::package_invalid(
-                        "single_touch_drag_with_vertical_brake_v1 missing from_rect",
-                    )
-                })?;
-                let corner = fields.corner_rect;
-                validate_click_rect(from, resolution, false)?;
-                validate_click_rect(corner, resolution, false)?;
-                let (from, corner) = actual_segmented_points(from, corner, seed);
-                let end_y = corner.y.checked_sub(fields.brake_distance_px).ok_or_else(|| {
-                    CliError::package_invalid(
-                        "single_touch_drag_with_vertical_brake_v1 brake endpoint is out of bounds",
-                    )
-                })?;
-                Ok(LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
-                    from,
-                    corner,
-                    end: ActualClickPoint {
-                        seed,
-                        algorithm: "derived_vertical_brake_v1",
-                        rect: corner.rect,
-                        x: corner.x,
-                        y: end_y,
-                    },
-                    horizontal_duration_ms: fields.horizontal_duration_ms,
-                    corner_hold_ms: fields.corner_hold_ms,
-                    brake_distance_px: fields.brake_distance_px,
-                    brake_duration_ms: fields.brake_duration_ms,
-                    slope_in: 2,
-                    slope_out: 0,
-                })
-            }
-            other => Err(CliError::package_invalid(format!(
-                "unknown operation click kind '{other}'"
-            ))),
-        }
-    }
-
     fn required_rect(&self) -> CliOutcome<PackRect> {
         Ok(PackRect {
             x: self
@@ -1343,223 +1051,6 @@ impl OperationClick {
                 .ok_or_else(|| CliError::package_invalid("rect click missing height"))?,
         })
     }
-
-    fn required_point_rect(&self, kind: &str) -> CliOutcome<PackRect> {
-        Ok(PackRect {
-            x: self
-                .x
-                .ok_or_else(|| CliError::package_invalid(format!("{kind} click missing x")))?,
-            y: self
-                .y
-                .ok_or_else(|| CliError::package_invalid(format!("{kind} click missing y")))?,
-            width: 1,
-            height: 1,
-        })
-    }
-}
-
-fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
-    if target.kind != TargetKind::Template {
-        return Err(CliError::package_invalid(format!(
-            "template-target matched_rect required, got {:?}",
-            target.kind
-        )));
-    }
-    let template = target
-        .template
-        .ok_or_else(|| CliError::package_invalid("template target missing matched_rect"))?;
-    if !target.passed {
-        return Err(CliError::package_invalid(format!(
-            "template target '{}' did not pass guard evaluation",
-            target.id
-        )));
-    }
-    let rect = PackRect {
-        x: template.x,
-        y: template.y,
-        width: template.width,
-        height: template.height,
-    };
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::package_invalid(format!(
-            "matched_rect dimensions must be positive: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    Ok(rect)
-}
-
-fn derive_absolute_coordinate_rect(
-    kind: &str,
-    declared: PackRect,
-    guard: Option<&OperationGuard>,
-    target: Option<&TargetEvaluation>,
-) -> CliOutcome<PackRect> {
-    let Some(guard) = guard else {
-        return Ok(declared);
-    };
-    let target =
-        target.ok_or_else(|| CliError::package_invalid(format!("{kind} requires guard target")))?;
-    if target.id != guard.target_id {
-        return Err(CliError::package_invalid(format!(
-            "{kind} matched target '{}' does not match guard target_id '{}'",
-            target.id, guard.target_id
-        )));
-    }
-    Ok(declared)
-}
-
-#[derive(Debug, Clone, Copy)]
-enum LabInputAction {
-    Tap(ActualClickPoint),
-    LongTap {
-        point: ActualClickPoint,
-        duration_ms: u64,
-    },
-    Drag {
-        from: ActualClickPoint,
-        to: ActualClickPoint,
-        duration_ms: u64,
-    },
-    SingleTouchDragWithVerticalBrakeV1 {
-        from: ActualClickPoint,
-        corner: ActualClickPoint,
-        end: ActualClickPoint,
-        horizontal_duration_ms: u64,
-        corner_hold_ms: u64,
-        brake_distance_px: i32,
-        brake_duration_ms: u64,
-        slope_in: u8,
-        slope_out: u8,
-    },
-}
-
-impl LabInputAction {
-    fn to_json(self) -> Value {
-        match self {
-            LabInputAction::Tap(point) => {
-                json!({"kind": "tap", "actual_click_point": point.to_json()})
-            }
-            LabInputAction::Drag {
-                from,
-                to,
-                duration_ms,
-            } => {
-                json!({"kind": "drag", "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms})
-            }
-            LabInputAction::LongTap { point, duration_ms } => {
-                json!({"kind": "long_tap", "actual_click_point": point.to_json(), "duration_ms": duration_ms})
-            }
-            LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
-                from,
-                corner,
-                end,
-                horizontal_duration_ms,
-                corner_hold_ms,
-                brake_distance_px,
-                brake_duration_ms,
-                slope_in,
-                slope_out,
-            } => json!({
-                "kind": "single_touch_drag_with_vertical_brake_v1",
-                "from": from.to_json(),
-                "corner": corner.to_json(),
-                "end": end.to_json(),
-                "horizontal_duration_ms": horizontal_duration_ms,
-                "corner_hold_ms": corner_hold_ms,
-                "brake_distance_px": brake_distance_px,
-                "brake_duration_ms": brake_duration_ms,
-                "slope_in": slope_in,
-                "slope_out": slope_out
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ActualClickPoint {
-    seed: u64,
-    algorithm: &'static str,
-    rect: PackRect,
-    x: i32,
-    y: i32,
-}
-
-impl ActualClickPoint {
-    fn to_json(self) -> Value {
-        json!({
-            "seed": self.seed,
-            "algorithm": self.algorithm,
-            "rect": rect_json(self.rect),
-            "point": {"x": self.x, "y": self.y}
-        })
-    }
-}
-
-fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
-    let mut state = if seed == 0 {
-        0x9e37_79b9_7f4a_7c15
-    } else {
-        seed
-    };
-    let x_offset = next_u64(&mut state) % rect.width as u64;
-    let y_offset = next_u64(&mut state) % rect.height as u64;
-    ActualClickPoint {
-        seed,
-        algorithm: "xorshift64_uniform_rect_v1",
-        rect,
-        x: rect.x + x_offset as i32,
-        y: rect.y + y_offset as i32,
-    }
-}
-
-fn actual_segmented_points(
-    from: PackRect,
-    corner: PackRect,
-    seed: u64,
-) -> (ActualClickPoint, ActualClickPoint) {
-    let mut state = if seed == 0 {
-        0x9e37_79b9_7f4a_7c15
-    } else {
-        seed
-    };
-    let sample = |rect: PackRect, state: &mut u64| ActualClickPoint {
-        seed,
-        algorithm: "xorshift64_uniform_rect_v1",
-        rect,
-        x: rect.x + (next_u64(state) % rect.width as u64) as i32,
-        y: rect.y + (next_u64(state) % rect.height as u64) as i32,
-    };
-    (sample(from, &mut state), sample(corner, &mut state))
-}
-
-fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
-    ActualClickPoint {
-        seed,
-        algorithm: "explicit_point_v1",
-        rect,
-        x: rect.x,
-        y: rect.y,
-    }
-}
-
-fn actual_center_point(rect: PackRect, seed: u64) -> ActualClickPoint {
-    ActualClickPoint {
-        seed,
-        algorithm: "center_point_v1",
-        rect,
-        x: rect.x + rect.width / 2,
-        y: rect.y + rect.height / 2,
-    }
-}
-
-fn next_u64(state: &mut u64) -> u64 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *state = x;
-    x
 }
 
 fn validate_click_rect(
@@ -1634,16 +1125,6 @@ fn validate_click_point(
         return Err(CliError::package_invalid(
             "click point 0,0 is treated as unresolved coordinates",
         ));
-    }
-    Ok(())
-}
-
-fn validate_frame_resolution(control: &LabControl, width: u32, height: u32) -> CliOutcome<()> {
-    if width != control.resolution.width || height != control.resolution.height {
-        return Err(CliError::device(format!(
-            "device frame resolution {width}x{height} does not match package resolution {}x{}",
-            control.resolution.width, control.resolution.height
-        )));
     }
     Ok(())
 }

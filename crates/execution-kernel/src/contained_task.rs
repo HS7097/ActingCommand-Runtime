@@ -8156,6 +8156,117 @@ mod retry_wiring_tests {
         }
     }
 
+    #[test]
+    fn pre_execution_guard_passes_when_page_and_target_match() {
+        let task = omitted_policy_task(false, false);
+        let observation = PageObservation {
+            page_label: "neutral/home".to_owned(),
+            scene: scene_from_frame(&page_frame("home")).expect("scene"),
+            stability_sample: None,
+        };
+        let mut runtime = ScriptedRuntime::new("home");
+        let (outcome, target) = task.program.operations[0]
+            .guard_outcome(&task.control, &observation, &task.evaluator, &mut runtime)
+            .expect("guard evaluation");
+        assert_eq!(
+            outcome,
+            ContainedTaskGuardOutcome::Passed {
+                page_label: "neutral/home".to_owned(),
+                target_id: "guard/ready".to_owned(),
+                target_kind: "color".to_owned(),
+            }
+        );
+        let target = target.expect("guard target");
+        assert!(target.passed);
+        assert_eq!(target.id, "guard/ready");
+    }
+
+    #[test]
+    fn pre_execution_guard_rejects_changed_execution_page() {
+        let task = omitted_policy_task(false, false);
+        let observation = PageObservation {
+            page_label: "neutral/terminal".to_owned(),
+            scene: scene_from_frame(&page_frame("terminal")).expect("scene"),
+            stability_sample: None,
+        };
+        assert!(
+            task.evaluator
+                .evaluate_target(&observation.scene, "guard/ready")
+                .expect("target")
+                .passed
+        );
+        let mut runtime = ScriptedRuntime::new("terminal");
+        let Err(ContainedTaskRunError::Task(error)) = task.program.operations[0].guard_outcome(
+            &task.control,
+            &observation,
+            &task.evaluator,
+            &mut runtime,
+        ) else {
+            panic!("changed page must fail");
+        };
+        assert_eq!(error.code(), "contained_task_guard_refused");
+        assert_eq!(
+            error.detail(),
+            Some("operation=open_terminal expected_page=home observed_page=neutral/terminal")
+        );
+    }
+
+    #[test]
+    fn pre_execution_guard_allows_any_page_guard_when_target_matches() {
+        let mut task = omitted_policy_task(false, false);
+        task.program.operations[0].from = "any".to_owned();
+        task.program.operations[0]
+            .guard
+            .as_mut()
+            .expect("guard")
+            .page_id = "any".to_owned();
+        let observation = PageObservation {
+            page_label: "neutral/terminal".to_owned(),
+            scene: scene_from_frame(&page_frame("terminal")).expect("scene"),
+            stability_sample: None,
+        };
+        let mut runtime = ScriptedRuntime::new("terminal");
+        let (outcome, target) = task.program.operations[0]
+            .guard_outcome(&task.control, &observation, &task.evaluator, &mut runtime)
+            .expect("guard evaluation");
+        assert_eq!(
+            outcome,
+            ContainedTaskGuardOutcome::Passed {
+                page_label: "neutral/terminal".to_owned(),
+                target_id: "guard/ready".to_owned(),
+                target_kind: "color".to_owned(),
+            }
+        );
+        let target = target.expect("guard target");
+        assert!(target.passed);
+        assert_eq!(target.id, "guard/ready");
+    }
+
+    #[test]
+    fn pre_execution_guard_rejects_target_mismatch_on_same_page() {
+        let task = omitted_policy_task(false, false);
+        let mut frame = page_frame("home");
+        frame.pixels[3..6].fill(0);
+        let observation = PageObservation {
+            page_label: "neutral/home".to_owned(),
+            scene: scene_from_frame(&frame).expect("scene"),
+            stability_sample: None,
+        };
+        let mut runtime = ScriptedRuntime::new("home");
+        let Err(ContainedTaskRunError::Task(error)) = task.program.operations[0].guard_outcome(
+            &task.control,
+            &observation,
+            &task.evaluator,
+            &mut runtime,
+        ) else {
+            panic!("target mismatch must fail");
+        };
+        assert_eq!(error.code(), "contained_task_guard_refused");
+        assert_eq!(
+            error.detail(),
+            Some("operation=open_terminal target=guard/ready")
+        );
+    }
     fn page_frame(page: &str) -> Frame {
         let page_color = match page {
             "home" => [255, 0, 0],

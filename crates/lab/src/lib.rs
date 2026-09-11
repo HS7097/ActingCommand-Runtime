@@ -5,6 +5,10 @@
 //! Production Runtime, scheduler, device, and ledger ownership live outside this
 //! crate. Lab consumes stable contracts and injected ports so production remains
 //! buildable and runnable when this crate is excluded.
+//!
+//! Package inspection uses `Lab::lab_validate` or `validate_lab_package_bytes`.
+//! Execution clients submit contained tasks through the Runtime client; the
+//! `actinglab lab run` command uses that same Runtime-owned execution path.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
@@ -70,10 +74,6 @@ impl<P: LabPorts> Lab<P> {
 
     pub fn ports(&self) -> &P {
         &self.ports
-    }
-
-    pub(crate) fn ports_mut(&mut self) -> &mut P {
-        &mut self.ports
     }
 
     pub fn state(&self) -> &LabState {
