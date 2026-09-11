@@ -16,7 +16,7 @@ use actingcommand_contract::{
     EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference, RecoveryReason,
     VerifiedArtifactReference,
 };
-use actingcommand_runtime_database::{RuntimeDatabase, RuntimeDatabaseError};
+use actingcommand_runtime_database::{RuntimeDatabase, RuntimeDatabaseError, RuntimeTransaction};
 use rusqlite::{
     Connection, TransactionBehavior, params_from_iter,
     types::{Value as SqlValue, ValueRef},
@@ -36,6 +36,105 @@ const ARTIFACT_COLUMNS: &str = "sequence,ordinal,artifact_id,kind,run_id,frame_i
 const META_COLUMNS: &str = "singleton,schema_version,next_sequence,head_sequence,head_record_sha256,storage_backend,migration_id,cutover_state,integer_encoding,integrity_tag,migration_record";
 type SqlRow = Vec<SqlValue>;
 type ReadBudget = Option<(u64, usize, Instant)>;
+
+/// Checks an already verified opaque fact against its rows in the caller's transaction.
+/// This synchronous read borrows the existing owner; it does not lock, commit, append,
+/// or read artifact bytes. Full-ledger recovery remains the source of the input fact.
+pub fn verify_transaction_event(
+    database: &RuntimeDatabase,
+    transaction: &RuntimeTransaction<'_, '_>,
+    event: &PersistedEvent,
+) -> GlobalLedgerResult<()> {
+    const OPERATION: &str = "verify_transaction_event";
+    if !transaction.belongs_to(database) {
+        return Err(failure("ledger_transaction_owner_mismatch", OPERATION));
+    }
+    let connection = transaction.sql();
+    let meta = read_meta(connection)?;
+    let marker = SqliteMarker::parse(&meta)?;
+    let expected_format = if marker.state == "ready" {
+        FORMAL_FORMAT_VERSION
+    } else {
+        0
+    };
+    if format_version(connection)? != expected_format {
+        return Err(failure("ledger_format_marker_mismatch", OPERATION));
+    }
+    let (
+        Some(SqlValue::Integer(next)),
+        Some(SqlValue::Integer(head)),
+        Some(SqlValue::Text(head_hash)),
+    ) = (meta.get(2), meta.get(3), meta.get(4))
+    else {
+        return Err(failure("ledger_meta_mismatch", OPERATION));
+    };
+    let head = decode(*head);
+    if head == 0
+        || decode(*next) != increment_sequence(head)?
+        || meta != meta_row_with_marker(database, decode(*next), head, Some(head_hash), &marker)
+    {
+        return Err(failure("ledger_meta_mismatch", OPERATION));
+    }
+    if event.sequence() == 0 || event.sequence() > head {
+        return Err(failure("ledger_record_missing", OPERATION));
+    }
+    let sequence = encode(event.sequence());
+    let mut bytes = 0;
+    let rows = read_rows(
+        connection,
+        &format!("SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence={sequence}"),
+        None,
+        &mut bytes,
+        true,
+    )?;
+    let [row] = rows.as_slice() else {
+        return Err(failure("ledger_record_missing", OPERATION));
+    };
+    let previous = if event.sequence() == 1 {
+        None
+    } else {
+        let previous_sequence = encode(event.sequence() - 1);
+        let rows = read_rows(
+            connection,
+            &format!("SELECT record_sha256 FROM ledger_events WHERE sequence={previous_sequence}"),
+            None,
+            &mut bytes,
+            true,
+        )?;
+        match rows.as_slice() {
+            [row] => match row.as_slice() {
+                [SqlValue::Text(hash)] => Some(hash.clone()),
+                _ => return Err(failure("ledger_record_mismatch", OPERATION)),
+            },
+            _ => return Err(failure("ledger_record_missing", OPERATION)),
+        }
+    };
+    let projected = project_record(database, event, previous.as_deref())?;
+    if *row != projected.event || (event.sequence() == head && projected.hash != *head_hash) {
+        return Err(failure("ledger_record_mismatch", OPERATION));
+    }
+    let links = read_rows(
+        connection,
+        &format!("SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence={sequence}"),
+        None,
+        &mut bytes,
+        true,
+    )?;
+    let artifact_limit = event.artifacts().len().saturating_add(1);
+    let artifacts = read_rows(
+        connection,
+        &format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence={sequence} ORDER BY ordinal LIMIT {artifact_limit}"
+        ),
+        None,
+        &mut bytes,
+        false,
+    )?;
+    if links != vec![projected.links] || artifacts != projected.artifacts {
+        return Err(failure("ledger_index_mismatch", OPERATION));
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 struct SqliteMarker {

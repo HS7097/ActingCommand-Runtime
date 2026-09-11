@@ -11,7 +11,7 @@ mod sqlite;
 mod storage;
 mod store;
 pub use migration::*;
-pub use sqlite::SqliteLedgerReadOnly;
+pub use sqlite::{SqliteLedgerReadOnly, verify_transaction_event};
 
 pub(crate) use projection::query_matches;
 
