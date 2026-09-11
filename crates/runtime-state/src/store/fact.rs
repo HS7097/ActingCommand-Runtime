@@ -285,7 +285,7 @@ pub fn fact_tombstone_key(
 ) -> RuntimeStateResult<String> {
     let identity = serde_json::to_vec(&(scope, key, snapshot))
         .map_err(|_| fact_error("fact_tombstone_identity_encode_failed"))?;
-    Ok(sha256(&identity))
+    Ok(format!("{:x}", Sha256::digest(identity)))
 }
 
 fn require_entry(entry: &ProjectionEntry, event: &PersistedEvent) -> RuntimeStateResult<()> {
