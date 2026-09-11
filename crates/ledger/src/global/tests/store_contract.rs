@@ -240,6 +240,15 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
 
     let filters = [
         EventQuery {
+            view: Some(actingcommand_contract::LedgerView::Errors),
+            ..EventQuery::default()
+        },
+        EventQuery {
+            minimum_severity: Some(EventSeverity::Error),
+            maximum_severity: Some(EventSeverity::Error),
+            ..EventQuery::default()
+        },
+        EventQuery {
             origin_module: Some(OriginModule::Runtime),
             ..EventQuery::default()
         },
@@ -289,6 +298,20 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
         },
     ];
     for filter in filters {
+        let page = ledger
+            .project_view_page(
+                filter.clone(),
+                ProjectionProfile::Ui,
+                actingcommand_contract::RuntimeEventQueryPageRequest::default(),
+            )
+            .expect("typed filtered page");
+        assert_eq!(
+            page.events()
+                .iter()
+                .map(|event| event.event_id)
+                .collect::<Vec<_>>(),
+            vec![*correlated.event_id()]
+        );
         assert_eq!(
             ledger.query(filter).expect("query"),
             vec![correlated.clone()]
@@ -305,6 +328,10 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
         vec![correlated.clone()]
     );
     let combined = EventQuery {
+        view: Some(actingcommand_contract::LedgerView::Errors),
+        from_timestamp_unix_ms: Some(correlated.timestamp_unix_ms()),
+        to_timestamp_unix_ms: Some(correlated.timestamp_unix_ms() + 1),
+        maximum_severity: Some(EventSeverity::Fatal),
         from_sequence: Some(correlated.sequence()),
         to_sequence: Some(correlated.sequence()),
         event_type: Some(correlated.event_type()),
@@ -328,6 +355,66 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
         vec![correlated.clone()]
     );
     assert!(project_subscription_event(&correlated, &combined, ProjectionProfile::Lab).is_some());
+    let all_events = ledger.query(EventQuery::default()).unwrap();
+    let projection_indexes = projection::EventIndexes::from_events(&all_events);
+    let view_page = ledger
+        .project_view_page(
+            combined.clone(),
+            ProjectionProfile::Ui,
+            actingcommand_contract::RuntimeEventQueryPageRequest::new(1, None)
+                .unwrap()
+                .at_snapshot(correlated.sequence())
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(view_page.events().len(), 1);
+    assert_eq!(
+        view_page.events()[0].views,
+        vec![
+            actingcommand_contract::LedgerView::Events,
+            actingcommand_contract::LedgerView::Changes,
+            actingcommand_contract::LedgerView::Errors,
+        ]
+    );
+    assert_eq!(
+        view_page.run_recovery()[0].state,
+        actingcommand_contract::LedgerRecoveryState::Unknown
+    );
+    assert_eq!(
+        view_page.run_recovery()[0].evidence[0].failure.event_id,
+        *correlated.event_id()
+    );
+    assert_eq!(
+        view_page.read_scope().unwrap().scanned_through_position,
+        correlated.sequence()
+    );
+    assert!(view_page.read_scope().unwrap().read_complete);
+    let empty_page = projection_indexes
+        .project_view_page(
+            &all_events,
+            &EventQuery {
+                view: Some(actingcommand_contract::LedgerView::Health),
+                ..combined.clone()
+            },
+            ProjectionProfile::Ui,
+            &actingcommand_contract::RuntimeEventQueryPageRequest::default(),
+            actingcommand_contract::LedgerReadScope {
+                source: actingcommand_contract::LedgerReadSource::Offline,
+                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
+                scanned_through_position: all_events.last().unwrap().sequence(),
+                read_complete: false,
+                limits: Vec::new(),
+            },
+            all_events.last().unwrap().sequence().into(),
+        )
+        .unwrap();
+    assert!(empty_page.events().is_empty());
+    assert!(!empty_page.has_more());
+    assert!(!empty_page.read_scope().unwrap().read_complete);
+    assert_eq!(
+        empty_page.read_scope().unwrap().limits,
+        vec![actingcommand_contract::LedgerPageLimit::SourceIncomplete]
+    );
     let snapshot =
         read(GlobalLedgerReadOnlyConfig::new(temp.path())).expect("read-only query index");
     assert_eq!(snapshot.query(&combined), vec![correlated.clone()]);
@@ -340,6 +427,22 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
             .unwrap(),
     );
     for mismatch in [
+        EventQuery {
+            view: Some(actingcommand_contract::LedgerView::Observation),
+            ..combined.clone()
+        },
+        EventQuery {
+            maximum_severity: Some(EventSeverity::Warning),
+            ..combined.clone()
+        },
+        EventQuery {
+            to_timestamp_unix_ms: Some(correlated.timestamp_unix_ms()),
+            ..combined.clone()
+        },
+        EventQuery {
+            from_timestamp_unix_ms: Some(correlated.timestamp_unix_ms() + 1),
+            ..combined.clone()
+        },
         EventQuery {
             origin_module: Some(OriginModule::Actingctl),
             ..combined.clone()
@@ -387,6 +490,72 @@ pub(super) fn query_pages_are_bounded_ordered_and_pinned_to_the_requested_snapsh
         );
     }
     let snapshot = expected[6].sequence();
+    let query = EventQuery {
+        view: Some(actingcommand_contract::LedgerView::Changes),
+        ..EventQuery::default()
+    };
+    let first_view = ledger
+        .project_view_page(
+            query.clone(),
+            ProjectionProfile::Ui,
+            actingcommand_contract::RuntimeEventQueryPageRequest::new(3, None)
+                .unwrap()
+                .at_snapshot(snapshot)
+                .unwrap(),
+        )
+        .unwrap();
+    let second_view = ledger
+        .project_view_page(
+            query.clone(),
+            ProjectionProfile::Ui,
+            actingcommand_contract::RuntimeEventQueryPageRequest::new(
+                3,
+                first_view.next_cursor().cloned(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let third_view = ledger
+        .project_view_page(
+            query.clone(),
+            ProjectionProfile::Ui,
+            actingcommand_contract::RuntimeEventQueryPageRequest::new(
+                3,
+                second_view.next_cursor().cloned(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        first_view
+            .events()
+            .iter()
+            .chain(second_view.events())
+            .chain(third_view.events())
+            .map(|event| event.event_id)
+            .collect::<Vec<_>>(),
+        expected[..7]
+            .iter()
+            .map(|event| *event.event_id())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(third_view.snapshot_ledger_position(), snapshot);
+    assert!(!third_view.has_more());
+    assert_eq!(
+        ledger
+            .project_view_page(
+                query.clone(),
+                ProjectionProfile::Lab,
+                actingcommand_contract::RuntimeEventQueryPageRequest::new(
+                    3,
+                    first_view.next_cursor().cloned()
+                )
+                .unwrap()
+            )
+            .expect_err("profile remains bound to cursor")
+            .code(),
+        "runtime_event_query_cursor_invalid"
+    );
 
     let first = ledger
         .query_page(EventQuery::default(), 0, snapshot, 3)

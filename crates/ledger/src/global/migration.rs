@@ -33,9 +33,20 @@ impl FrozenLedgerSource {
         &self.identity
     }
     pub fn artifacts(&self) -> Vec<ProjectedArtifactReference> {
-        self.verified
+        self.events
             .iter()
-            .map(|(reference, _)| reference.clone())
+            .flat_map(PersistedEvent::artifacts)
+            .map(|reference| reference.project(true))
+            .collect()
+    }
+
+    pub fn artifact_evictions(&self) -> Vec<actingcommand_contract::ArtifactEvictionProof> {
+        self.events
+            .iter()
+            .flat_map(PersistedEvent::artifact_evictions)
+            .map(|proof| (proof.identity.artifact.artifact_id, proof.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_values()
             .collect()
     }
 
@@ -338,14 +349,29 @@ impl LedgerMaintenance {
 }
 
 pub(super) fn canonical_record(event: &PersistedEvent) -> GlobalLedgerResult<Vec<u8>> {
-    serde_json::to_vec(&crate::fact::StoredEventRecord::from_event(event)).map_err(|error| {
+    canonical_stored_record(&crate::fact::StoredEventRecord::from_event(event))
+}
+pub(super) fn canonical_stored_record(
+    record: &crate::fact::StoredEventRecord,
+) -> GlobalLedgerResult<Vec<u8>> {
+    serde_json::to_vec(record).map_err(|error| {
         GlobalLedgerError::json("migration_record_invalid", "encode_import_record", &error)
     })
 }
 pub(super) fn canonical_digest(events: &[PersistedEvent]) -> GlobalLedgerResult<String> {
+    canonical_stored_digest(
+        &events
+            .iter()
+            .map(crate::fact::StoredEventRecord::from_event)
+            .collect::<Vec<_>>(),
+    )
+}
+pub(super) fn canonical_stored_digest(
+    events: &[crate::fact::StoredEventRecord],
+) -> GlobalLedgerResult<String> {
     let mut hash = Sha256::new();
     for event in events {
-        let bytes = canonical_record(event)?;
+        let bytes = canonical_stored_record(event)?;
         hash.update((bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
     }

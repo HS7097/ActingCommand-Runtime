@@ -5,7 +5,10 @@
 use super::storage::{DurableStorage, EventStore};
 use super::{CommitStatistics, GlobalLedgerResult};
 use crate::PersistedEvent;
-use actingcommand_contract::{EventQuery, PolicyExecutionEventData, SanitizedEventDraft};
+use actingcommand_contract::{
+    EventQuery, PolicyExecutionEventData, ProjectionProfile, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, SanitizedEventDraft,
+};
 use std::sync::Arc;
 
 /// One opened, recovered store moves to the existing GlobalLedger writer.
@@ -13,11 +16,30 @@ use std::sync::Arc;
 /// Reads address the verified committed snapshot and do no fallible storage I/O.
 /// Projection, subscriptions and public request validation belong to GlobalLedger.
 pub(super) trait LedgerStore: Send + 'static {
+    fn retention_candidates(
+        &self,
+        after: Option<actingcommand_contract::ArtifactId>,
+    ) -> super::ArtifactRetentionCandidates;
+    fn admit_artifact_eviction(
+        &mut self,
+        guard: actingcommand_artifact_store::ArtifactDeleteGuard,
+    ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)>;
+    fn finish_artifact_eviction(
+        &mut self,
+        permit: super::ArtifactEvictionPermit,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+    ) -> GlobalLedgerResult<PersistedEvent>;
     fn commit_statistics(&self) -> Arc<CommitStatistics>;
 
     /// Success means durable persistence, index visibility and commit accounting.
     /// An error does not prove that no bytes or facts were committed.
     fn append(&mut self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent>;
+    fn append_transaction(
+        &mut self,
+        draft: SanitizedEventDraft,
+        work: &dyn super::LedgerTransactionWork,
+    ) -> GlobalLedgerResult<PersistedEvent>;
 
     /// Revalidates persisted admission/effect/release facts. Returns the existing
     /// or new completion, plus only newly appended events in sequence order.
@@ -35,6 +57,12 @@ pub(super) trait LedgerStore: Send + 'static {
         page_events: usize,
     ) -> Vec<PersistedEvent>;
     fn latest_sequence(&self) -> u64;
+    fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage>;
     fn replay_page(
         &self,
         after_sequence: u64,
@@ -45,12 +73,40 @@ pub(super) trait LedgerStore: Send + 'static {
 }
 
 impl<B: DurableStorage> LedgerStore for EventStore<B> {
+    fn retention_candidates(
+        &self,
+        after: Option<actingcommand_contract::ArtifactId>,
+    ) -> super::ArtifactRetentionCandidates {
+        Self::retention_candidates(self, after)
+    }
+    fn admit_artifact_eviction(
+        &mut self,
+        guard: actingcommand_artifact_store::ArtifactDeleteGuard,
+    ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
+        Self::admit_artifact_eviction(self, guard)
+    }
+    fn finish_artifact_eviction(
+        &mut self,
+        permit: super::ArtifactEvictionPermit,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        Self::finish_artifact_eviction(self, permit, disposition, io)
+    }
     fn commit_statistics(&self) -> Arc<CommitStatistics> {
         Arc::clone(&self.commit_statistics)
     }
 
     fn append(&mut self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
         Self::append(self, draft)
+    }
+
+    fn append_transaction(
+        &mut self,
+        draft: SanitizedEventDraft,
+        work: &dyn super::LedgerTransactionWork,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        Self::append_transaction(self, draft, work)
     }
 
     fn reconcile_scheduled_policy_settlement(
@@ -76,6 +132,15 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
 
     fn latest_sequence(&self) -> u64 {
         Self::latest_sequence(self)
+    }
+
+    fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        Self::project_view_page(self, query, profile, request)
     }
 
     fn replay_page(

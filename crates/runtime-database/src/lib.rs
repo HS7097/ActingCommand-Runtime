@@ -32,7 +32,33 @@ pub struct RuntimeDatabase {
     integrity_key: Box<[u8]>,
 }
 
+/// Borrowed only for a trusted Runtime owner's work in the writer's transaction.
+/// It cannot own, commit or retain the transaction beyond the call.
+pub struct RuntimeTransaction<'a, 'connection> {
+    database: &'a RuntimeDatabase,
+    transaction: &'a rusqlite::Transaction<'connection>,
+}
+
+impl<'connection> RuntimeTransaction<'_, 'connection> {
+    pub fn belongs_to(&self, database: &RuntimeDatabase) -> bool {
+        std::ptr::eq(self.database, database)
+    }
+
+    pub fn sql(&self) -> &rusqlite::Transaction<'connection> {
+        self.transaction
+    }
+}
+
 impl RuntimeDatabase {
+    pub fn borrow_transaction<'a, 'connection>(
+        &'a self,
+        transaction: &'a rusqlite::Transaction<'connection>,
+    ) -> RuntimeTransaction<'a, 'connection> {
+        RuntimeTransaction {
+            database: self,
+            transaction,
+        }
+    }
     /// Opens the existing state database with its caller-owned schema and version.
     /// Root preparation runs before the key or connection is opened, preserving
     /// the state owner's release-file preparation and its original error order.
@@ -217,6 +243,17 @@ impl RuntimeDatabase {
         self.connection
             .lock()
             .map_err(|_| failure("state_connection_poisoned", operation))
+    }
+
+    /// Error readback must not wait behind another owner of the connection.
+    pub fn try_connection(
+        &self,
+        operation: &'static str,
+    ) -> RuntimeDatabaseResult<MutexGuard<'_, Connection>> {
+        self.connection.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => failure("state_connection_busy", operation),
+            std::sync::TryLockError::Poisoned(_) => failure("state_connection_poisoned", operation),
+        })
     }
 
     /// Does not acquire the connection lock; transactions may validate keyed rows.

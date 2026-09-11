@@ -376,8 +376,10 @@ name = "actingcommand-runtime-state"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+ "actingcommand-ledger",
  "actingcommand-runtime-database",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
