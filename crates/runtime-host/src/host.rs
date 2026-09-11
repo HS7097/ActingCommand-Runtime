@@ -13584,10 +13584,9 @@ impl HostShared {
                     .and_then(|()| {
                         self.observe_device_diagnostics_under_fact_gate(&persisted, &links)
                     })
-                    .map_err(|error| {
+                    .inspect_err(|error| {
                         self.lifecycle_append_failed.store(true, Ordering::Release);
                         let _ = error.lifecycle.recorded_event.set(*persisted.event_id());
-                        error
                     })?;
             }
             Ok(())
