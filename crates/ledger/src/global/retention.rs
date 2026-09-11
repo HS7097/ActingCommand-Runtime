@@ -398,7 +398,10 @@ impl RetentionIndex {
                     return Err(invalid("artifact_pin_not_releasable"));
                 }
                 let close = source(events, &release.release)?;
-                if !same_scope(close, identity) || !successful_close(close, identity) {
+                if !same_scope(close, identity)
+                    || !successful_close(close, identity)
+                    || self.owner_at(close.sequence()) != Some(identity.owner_epoch)
+                {
                     return Err(invalid("artifact_pin_release_not_closed"));
                 }
             }
@@ -1129,12 +1132,13 @@ impl super::GlobalLedger {
         &self,
         mut permit: Box<ArtifactEvictionPermit>,
     ) -> GlobalLedgerResult<PersistedEvent> {
-        let (disposition, io) = permit.perform();
-        let (response, receiver) = std::sync::mpsc::sync_channel(1);
+        self.check_writer_health()?;
         let sender = self
             .sender
             .as_ref()
             .ok_or_else(|| invalid("writer_unavailable"))?;
+        let (disposition, io) = permit.perform();
+        let (response, receiver) = std::sync::mpsc::sync_channel(1);
         super::send_command(
             sender,
             super::WriterCommand::FinishArtifactEviction {

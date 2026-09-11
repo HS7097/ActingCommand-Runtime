@@ -1146,11 +1146,11 @@ impl<B: DurableStorage> EventStore<B> {
         self.persist_retention_checked(event, false)
     }
 
-    pub(super) fn persist_retention_checked(
-        &mut self,
-        event: PersistedEvent,
+    pub(super) fn validate_retention_admission(
+        &self,
+        event: &PersistedEvent,
         guarded: bool,
-    ) -> GlobalLedgerResult<PersistedEvent> {
+    ) -> GlobalLedgerResult<()> {
         if self.recovering_retention
             && event.event_type() != EventType::LedgerRecovered
             && !(guarded && event.event_type() == EventType::ArtifactEvictionOutcome)
@@ -1160,6 +1160,15 @@ impl<B: DurableStorage> EventStore<B> {
                 "append_event",
             ));
         }
+        self.retention
+            .validate(event, &self.events, &self.indexes, guarded)
+    }
+
+    pub(super) fn persist_retention_checked(
+        &mut self,
+        event: PersistedEvent,
+        guarded: bool,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
@@ -1167,8 +1176,7 @@ impl<B: DurableStorage> EventStore<B> {
                 "append_event",
             ));
         }
-        self.retention
-            .validate(&event, &self.events, &self.indexes, guarded)?;
+        self.validate_retention_admission(&event, guarded)?;
         let write_sync_ns = self.backend.persist(&event)?;
         self.next_sequence = following_sequence;
         self.retention.apply(&event);
