@@ -763,7 +763,11 @@
               "sensitivity": "public",
               "sequence": 4,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -797,7 +801,12 @@
               "sensitivity": "public",
               "sequence": 5,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -832,7 +841,12 @@
               "sensitivity": "public",
               "sequence": 6,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -868,7 +882,12 @@
               "sensitivity": "sensitive",
               "sequence": 7,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -904,7 +923,12 @@
               "sensitivity": "sensitive",
               "sequence": 8,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -942,7 +966,12 @@
               "sensitivity": "sensitive",
               "sequence": 9,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -981,7 +1010,12 @@
               "sensitivity": "sensitive",
               "sequence": 10,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1034,7 +1068,11 @@
               "sensitivity": "internal",
               "sequence": 11,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1087,7 +1125,11 @@
               "sensitivity": "internal",
               "sequence": 12,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1132,7 +1174,12 @@
               "sensitivity": "public",
               "sequence": 13,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1172,7 +1219,12 @@
               "sensitivity": "public",
               "sequence": 14,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1210,7 +1262,12 @@
               "sensitivity": "public",
               "sequence": 15,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1265,7 +1322,11 @@
               "sensitivity": "internal",
               "sequence": 16,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1320,7 +1381,11 @@
               "sensitivity": "internal",
               "sequence": 17,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1430,7 +1495,11 @@
               "sensitivity": "internal",
               "sequence": 19,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1471,7 +1540,12 @@
               "sensitivity": "public",
               "sequence": 20,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1514,7 +1588,12 @@
               "sensitivity": "public",
               "sequence": 21,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1553,7 +1632,12 @@
               "sensitivity": "public",
               "sequence": 22,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1600,7 +1684,12 @@
               "sensitivity": "public",
               "sequence": 23,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1643,7 +1732,12 @@
               "sensitivity": "public",
               "sequence": 24,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1691,7 +1785,12 @@
               "sensitivity": "public",
               "sequence": 25,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1732,7 +1831,12 @@
               "sensitivity": "public",
               "sequence": 26,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1785,7 +1889,11 @@
               "sensitivity": "secret",
               "sequence": 27,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [
@@ -1838,7 +1946,11 @@
               "sensitivity": "secret",
               "sequence": 28,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1883,7 +1995,12 @@
               "sensitivity": "internal",
               "sequence": 29,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -1987,7 +2104,12 @@
               "sensitivity": "internal",
               "sequence": 30,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -2030,7 +2152,12 @@
               "sensitivity": "public",
               "sequence": 31,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -2067,7 +2194,12 @@
               "sensitivity": "sensitive",
               "sequence": 32,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -2105,7 +2237,12 @@
               "sensitivity": "sensitive",
               "sequence": 33,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             },
             {
               "artifacts": [],
@@ -2144,7 +2281,12 @@
               "sensitivity": "sensitive",
               "sequence": 34,
               "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
             }
           ],
           "receipt": {

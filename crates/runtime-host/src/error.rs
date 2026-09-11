@@ -36,6 +36,9 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) native_detail: Option<Box<actingcommand_contract::LifecycleNativeDetail>>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
     pub(crate) policy_rejection: Option<Box<actingcommand_contract::PolicyDispatchRejection>>,
+    pub(crate) resource_declaration:
+        Option<Box<actingcommand_contract::ResourceDeclarationRejection>>,
+    pub(crate) resource_declaration_event: Option<actingcommand_contract::TerminalEvent>,
 }
 
 impl PartialEq for RuntimeHostError {
@@ -46,6 +49,9 @@ impl PartialEq for RuntimeHostError {
             && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
             && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
             && self.lifecycle.policy_rejection == other.lifecycle.policy_rejection
+            && self.lifecycle.resource_declaration == other.lifecycle.resource_declaration
+            && self.lifecycle.resource_declaration_event
+                == other.lifecycle.resource_declaration_event
             && self.lifecycle.incomplete_device_diagnostic_summary
                 == other.lifecycle.incomplete_device_diagnostic_summary
     }
@@ -113,6 +119,12 @@ impl RuntimeHostError {
 
     pub const fn projection(&self) -> &RuntimeErrorProjection {
         &self.projection
+    }
+
+    pub fn resource_declaration(
+        &self,
+    ) -> Option<&actingcommand_contract::ResourceDeclarationRejection> {
+        self.lifecycle.resource_declaration.as_deref()
     }
 
     pub(crate) fn into_fatal(mut self) -> Self {
@@ -200,6 +212,8 @@ impl RuntimeHostError {
                 native_detail: error.native_detail().cloned().map(Box::new),
                 resource_quiescence: error.resource_quiescence(),
                 policy_rejection: None,
+                resource_declaration: None,
+                resource_declaration_event: None,
             }),
         };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {

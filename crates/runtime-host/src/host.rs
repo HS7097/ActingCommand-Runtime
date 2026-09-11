@@ -71,18 +71,17 @@ use actingcommand_contract::{
     ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
     RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
     RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
-    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase,
-    RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
-    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimePolicyInputIdentity,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
-    SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
-    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    Sensitivity, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
-    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
+    RuntimeEvidenceScreenshotCounts, RuntimeForwardProjectionRequest, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
+    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
+    SchedulingOutcomeProjection, Sensitivity, StatePayload, StatePayloadDraft,
+    TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload,
+    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
@@ -5317,19 +5316,24 @@ impl HostShared {
             OriginModule::Runtime,
             EventActor::Runtime,
             links.clone(),
-            RuntimePayloadDraft::failed(
-                DiagnosticCode::RuntimeDiagnostic,
-                EffectDisposition::Indeterminate,
-                DiagnosticDetailDraft::new(
-                    "policy_driver",
-                    RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
-                    "runtime_host",
-                    error.operation(),
-                    error.code(),
-                    Sensitivity::Internal,
+            match error.resource_declaration() {
+                Some(rejection) => {
+                    RuntimePayloadDraft::resource_declaration_rejected(rejection.clone())
+                }
+                None => RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::Indeterminate,
+                    DiagnosticDetailDraft::new(
+                        "policy_driver",
+                        RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
+                        "runtime_host",
+                        error.operation(),
+                        error.code(),
+                        Sensitivity::Internal,
+                    ),
+                    AuditInput::new(),
                 ),
-                AuditInput::new(),
-            ),
+            },
         )?;
         self.record_required_failure(error, &failure, links)
     }
@@ -9843,7 +9847,7 @@ impl HostShared {
                 .map_err(ContainedTaskRunError::Boundary)?,
         ) {
             Ok(recovery) => recovery,
-            Err(failure) => {
+            Err(mut failure) => {
                 let code = failure.error.code();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
@@ -9851,6 +9855,35 @@ impl HostShared {
                         failure_code: code.to_owned(),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
+                if let Some(rejection) = failure.error.resource_declaration().cloned() {
+                    let links = runtime.links();
+                    let event = self
+                        .append_event(
+                            EventSeverity::Warning,
+                            EventSource::Runtime,
+                            OriginModule::Runtime,
+                            EventActor::Runtime,
+                            links.clone(),
+                            RuntimePayloadDraft::resource_declaration_rejected(rejection),
+                        )
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    self.record_required_failure(&failure.error, &event, links)
+                        .map_err(RequestFailure::poison_without_terminal)
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    failure.error.lifecycle.resource_declaration_event = Some(terminal(&event));
+                    runtime
+                        .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                            disposition: TaskEntryTargetDisposition::FailClosed,
+                            failure_code: Some(code.to_owned()),
+                        })
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    failure.state = RuntimeReceiptState::Failed;
+                    failure.task_failure = Some(TaskFailureEvidence {
+                        code,
+                        severity: EventSeverity::Warning,
+                    });
+                    return Err(ContainedTaskRunError::Boundary(failure));
+                }
                 return fail_contained_task_entry(runtime, code);
             }
         };
@@ -16422,7 +16455,7 @@ fn prepare_contained_task(
             vision_provider,
             deadline,
         )
-        .map_err(|error| contained_task_package_failure(error.code()));
+        .map_err(|error| contained_task_declaration_failure(request, error));
     }
     let path = fs::canonicalize(path)
         .map_err(|_| contained_task_package_failure("contained_task_package_open_failed"))?;
@@ -16449,7 +16482,29 @@ fn prepare_contained_task(
         ),
         None => PreparedContainedTask::load(instance_alias, &bytes, expected),
     }
-    .map_err(|error| contained_task_package_failure(error.code()))
+    .map_err(|error| contained_task_declaration_failure(request, error))
+}
+
+fn contained_task_declaration_failure(
+    request: &ContainedTaskRequest,
+    error: actingcommand_execution_kernel::ContainedTaskError,
+) -> RequestFailure {
+    let mut failure = contained_task_package_failure(error.code());
+    if let Some(issue) = error.declaration_issue() {
+        // Declaration parsing happens only after the source snapshot or ZIP identity was verified.
+        failure.error.lifecycle.resource_declaration = Some(Box::new(
+            actingcommand_contract::ResourceDeclarationRejection {
+                declared_package: request.expected_sha256().clone(),
+                verified_package: Some(request.expected_sha256().clone()),
+                program_version: format!(
+                    "actingcommand-runtime-host/{}",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                issue: issue.clone(),
+            },
+        ));
+    }
+    failure
 }
 
 fn contained_task_package_failure(code: &'static str) -> RequestFailure {

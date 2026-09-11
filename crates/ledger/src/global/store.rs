@@ -5,7 +5,10 @@
 use super::storage::{DurableStorage, EventStore};
 use super::{CommitStatistics, GlobalLedgerResult};
 use crate::PersistedEvent;
-use actingcommand_contract::{EventQuery, PolicyExecutionEventData, SanitizedEventDraft};
+use actingcommand_contract::{
+    EventQuery, PolicyExecutionEventData, ProjectionProfile, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, SanitizedEventDraft,
+};
 use std::sync::Arc;
 
 /// One opened, recovered store moves to the existing GlobalLedger writer.
@@ -40,6 +43,12 @@ pub(super) trait LedgerStore: Send + 'static {
         page_events: usize,
     ) -> Vec<PersistedEvent>;
     fn latest_sequence(&self) -> u64;
+    fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage>;
     fn replay_page(
         &self,
         after_sequence: u64,
@@ -89,6 +98,15 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
 
     fn latest_sequence(&self) -> u64 {
         Self::latest_sequence(self)
+    }
+
+    fn project_view_page(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        Self::project_view_page(self, query, profile, request)
     }
 
     fn replay_page(

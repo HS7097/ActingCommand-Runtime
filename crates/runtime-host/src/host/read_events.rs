@@ -41,9 +41,60 @@ impl HostShared {
             first_receive = false;
             match subscription.recv_timeout(timeout) {
                 Ok(event) => {
-                    if let Some(projected) =
-                        project_subscription_event(&event, request.query(), request.profile())
-                    {
+                    let projected =
+                        if request.query().view == Some(actingcommand_contract::LedgerView::Lab) {
+                            // Lab membership needs the ledger's request/correlation/run context.
+                            let mut query = request.query().clone();
+                            query.view = None;
+                            if project_subscription_event(
+                                &event,
+                                &query,
+                                actingcommand_contract::ProjectionProfile::Concise,
+                            )
+                            .is_none()
+                            {
+                                continue;
+                            }
+                            query.view = request.query().view;
+                            query.from_sequence =
+                                Some(query.from_sequence.unwrap_or(0).max(event.sequence()));
+                            query.to_sequence =
+                                Some(query.to_sequence.unwrap_or(u64::MAX).min(event.sequence()));
+                            let page = RuntimeEventQueryPageRequest::new(1, None)
+                                .and_then(|page| page.at_snapshot(event.sequence()))
+                                .map_err(|_| {
+                                    RequestFailure::poison(
+                                        protocol_error("project_runtime_subscription"),
+                                        None,
+                                    )
+                                })?;
+                            self.ledger
+                                .project_view_page(query, request.profile(), page)
+                                .map_err(|error| {
+                                    if error.is_fatal() {
+                                        RequestFailure::poison(
+                                            ledger_error("project_runtime_subscription"),
+                                            None,
+                                        )
+                                    } else {
+                                        RequestFailure::request(
+                                            RuntimeHostError::request(
+                                                error.code(),
+                                                "project_runtime_subscription",
+                                                RuntimeErrorCode::ProtocolInvalid,
+                                            ),
+                                            RuntimeReceiptState::Denied,
+                                            None,
+                                        )
+                                    }
+                                })?
+                                .events()
+                                .first()
+                                .cloned()
+                        } else {
+                            project_subscription_event(&event, request.query(), request.profile())
+                        };
+                    if let Some(projected) = projected {
                         events.push(projected);
                     }
                 }
@@ -75,106 +126,14 @@ impl HostShared {
         profile: actingcommand_contract::ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let current_ledger_position = self.ledger.latest_sequence().map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error("query_runtime_event_position"))
-        })?;
-        let (snapshot_ledger_position, after_sequence) = match request.cursor() {
-            Some(cursor) => {
-                if cursor.snapshot_ledger_position() > current_ledger_position
-                    || !cursor.matches(query, profile).map_err(|_| {
-                        RequestFailure::request(
-                            RuntimeHostError::request(
-                                "runtime_event_query_cursor_invalid",
-                                "query_runtime_events",
-                                RuntimeErrorCode::ProtocolInvalid,
-                            ),
-                            RuntimeReceiptState::Denied,
-                            None,
-                        )
-                    })?
-                {
-                    return Err(RequestFailure::request(
-                        RuntimeHostError::request(
-                            "runtime_event_query_cursor_invalid",
-                            "query_runtime_events",
-                            RuntimeErrorCode::ProtocolInvalid,
-                        ),
-                        RuntimeReceiptState::Denied,
-                        None,
-                    ));
-                }
-                (cursor.snapshot_ledger_position(), cursor.after_sequence())
-            }
-            None => (current_ledger_position, 0),
-        };
-        let fetch_limit = usize::from(request.limit())
-            .checked_add(1)
-            .ok_or_else(|| RequestFailure::poison(protocol_error("query_runtime_events"), None))?;
-        let mut events = self
+        let page = self
             .ledger
-            .project_page(
-                query.clone(),
-                profile,
-                after_sequence,
-                snapshot_ledger_position,
-                fetch_limit,
-            )
-            .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None))?;
-        let source_has_more = events.len() > usize::from(request.limit());
-        if source_has_more {
-            events.pop();
-        }
-        let original_count = events.len();
-        loop {
-            let has_more = source_has_more || events.len() < original_count;
-            let next_cursor = if has_more {
-                let last = events.last().ok_or_else(|| {
+            .project_view_page(query.clone(), profile, request.clone())
+            .map_err(|error| {
+                if error.is_fatal() {
+                    RequestFailure::poison(ledger_error("query_runtime_events"), None)
+                } else {
                     RequestFailure::request(
-                        RuntimeHostError::request(
-                            "runtime_event_query_response_too_large",
-                            "query_runtime_events",
-                            RuntimeErrorCode::ProtocolInvalid,
-                        ),
-                        RuntimeReceiptState::Denied,
-                        None,
-                    )
-                })?;
-                Some(
-                    RuntimeEventQueryCursor::new(
-                        snapshot_ledger_position,
-                        last.sequence,
-                        query,
-                        profile,
-                    )
-                    .map_err(|_| {
-                        RequestFailure::poison(protocol_error("query_runtime_events"), None)
-                    })?,
-                )
-            } else {
-                None
-            };
-            match RuntimeEventQueryPage::new(
-                events.clone(),
-                snapshot_ledger_position,
-                request.limit(),
-                has_more,
-                next_cursor,
-            ) {
-                Ok(page) => {
-                    return Ok(OperationSuccess {
-                        state: RuntimeReceiptState::Completed,
-                        terminal: None,
-                        result: RuntimeResult::EventPage { page },
-                    });
-                }
-                Err(error)
-                    if error.code() == "runtime_event_query_response_too_large"
-                        && events.len() > 1 =>
-                {
-                    events.pop();
-                }
-                Err(error) => {
-                    return Err(RequestFailure::request(
                         RuntimeHostError::request(
                             error.code(),
                             "query_runtime_events",
@@ -182,10 +141,14 @@ impl HostShared {
                         ),
                         RuntimeReceiptState::Denied,
                         None,
-                    ));
+                    )
                 }
-            }
-        }
+            })?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::EventPage { page },
+        })
     }
 
     pub(super) fn control_plane_status(
