@@ -1856,9 +1856,14 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         let mut context = [0_u8; 16 * 1024];
         let mut remaining = &mut context[..16 * 1024 - 128];
         let formatted = (|| -> std::io::Result<()> {
+            write!(
+                remaining,
+                "First run event page precondition failure; existing page only: run_id="
+            )?;
+            serde_json::to_writer(&mut remaining, &run_id).map_err(std::io::Error::other)?;
             writeln!(
                 remaining,
-                "First run event page precondition failure; existing page only: run_id={run_id:?}, returned_count={}, has_more={}, snapshot_ledger_position={}, continuation_present={}",
+                ", returned_count={}, has_more={}, snapshot_ledger_position={}, continuation_present={}",
                 first_page.returned_count(),
                 first_page.has_more(),
                 first_page.snapshot_ledger_position(),
