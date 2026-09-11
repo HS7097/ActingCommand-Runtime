@@ -16,6 +16,20 @@ use std::sync::Arc;
 /// Reads address the verified committed snapshot and do no fallible storage I/O.
 /// Projection, subscriptions and public request validation belong to GlobalLedger.
 pub(super) trait LedgerStore: Send + 'static {
+    fn retention_candidates(
+        &self,
+        after: Option<actingcommand_contract::ArtifactId>,
+    ) -> super::ArtifactRetentionCandidates;
+    fn admit_artifact_eviction(
+        &mut self,
+        guard: actingcommand_artifact_store::ArtifactDeleteGuard,
+    ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)>;
+    fn finish_artifact_eviction(
+        &mut self,
+        permit: super::ArtifactEvictionPermit,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+    ) -> GlobalLedgerResult<PersistedEvent>;
     fn commit_statistics(&self) -> Arc<CommitStatistics>;
 
     /// Success means durable persistence, index visibility and commit accounting.
@@ -59,6 +73,26 @@ pub(super) trait LedgerStore: Send + 'static {
 }
 
 impl<B: DurableStorage> LedgerStore for EventStore<B> {
+    fn retention_candidates(
+        &self,
+        after: Option<actingcommand_contract::ArtifactId>,
+    ) -> super::ArtifactRetentionCandidates {
+        Self::retention_candidates(self, after)
+    }
+    fn admit_artifact_eviction(
+        &mut self,
+        guard: actingcommand_artifact_store::ArtifactDeleteGuard,
+    ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
+        Self::admit_artifact_eviction(self, guard)
+    }
+    fn finish_artifact_eviction(
+        &mut self,
+        permit: super::ArtifactEvictionPermit,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        Self::finish_artifact_eviction(self, permit, disposition, io)
+    }
     fn commit_statistics(&self) -> Arc<CommitStatistics> {
         Arc::clone(&self.commit_statistics)
     }

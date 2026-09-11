@@ -4679,6 +4679,7 @@ mod run_summary_package_tests {
         .expect("sanitize package admission");
         ProjectedEvent {
             views: Vec::new(),
+            artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),
@@ -4787,6 +4788,7 @@ mod run_summary_settlement_tests {
         .expect("sanitize settlement fixture");
         ProjectedEvent {
             views: Vec::new(),
+            artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_owned(),
             sequence,
             event_id: *sanitized.event_id(),

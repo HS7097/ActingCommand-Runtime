@@ -14,6 +14,7 @@ const MAX_RECOVERY_CONTEXT_EVENTS: usize = super::super::MAX_QUERY_PAGE_EVENTS;
 pub(in crate::global) struct PageSelection<'a> {
     pub through_sequence: u64,
     pub sequences: Option<&'a [u64]>,
+    pub retention: Option<&'a crate::global::retention::RetentionIndex>,
 }
 
 impl From<u64> for PageSelection<'_> {
@@ -21,6 +22,7 @@ impl From<u64> for PageSelection<'_> {
         Self {
             through_sequence,
             sequences: None,
+            retention: None,
         }
     }
 }
@@ -119,7 +121,10 @@ impl EventIndexes {
         let mut rows: Vec<_> = selected
             .iter()
             .map(|event| {
-                let mut row = project(event, profile);
+                let mut row = project_at(event, profile, snapshot);
+                if let Some(retention) = selection.retention {
+                    row.artifact_evictions = retention.observations(event, snapshot);
+                }
                 row.views = LedgerView::memberships(
                     event.event_type(),
                     event.severity(),

@@ -9,6 +9,10 @@ pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedge
 pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;
 mod read_only;
+mod retention;
+pub use retention::{
+    ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
+};
 mod sqlite;
 mod storage;
 mod store;
@@ -365,6 +369,20 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 }
 
 enum WriterCommand {
+    RetentionCandidates {
+        after: Option<actingcommand_contract::ArtifactId>,
+        response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
+    },
+    AdmitArtifactEviction {
+        guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
+        response: SyncSender<GlobalLedgerResult<ArtifactEvictionAdmission>>,
+    },
+    FinishArtifactEviction {
+        permit: Box<ArtifactEvictionPermit>,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
     AppendTransaction {
         draft: Box<SanitizedEventDraft>,
         work: Box<dyn LedgerTransactionWork>,
@@ -1202,6 +1220,59 @@ fn writer_loop<S: LedgerStore>(
     let mut subscribers = Vec::new();
     while let Ok(command) = receiver.recv() {
         match command {
+            WriterCommand::RetentionCandidates { after, response } => {
+                let _ = response.send(Ok(store.retention_candidates(after)));
+            }
+            WriterCommand::AdmitArtifactEviction { guard, response } => {
+                match store.admit_artifact_eviction(*guard) {
+                    Ok((admission, appended)) => {
+                        for event in &appended {
+                            deliver_live_event(&mut subscribers, event);
+                        }
+                        let _ = response.send(Ok(admission));
+                    }
+                    Err(error) => {
+                        let terminal = error.terminal();
+                        let _ = response.send(Err(error.clone()));
+                        if terminal {
+                            notify_terminal_failure(&mut subscribers, error.clone());
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            WriterCommand::FinishArtifactEviction {
+                permit,
+                disposition,
+                io,
+                response,
+            } => {
+                let result = store.finish_artifact_eviction(*permit, disposition, io);
+                let result = match result {
+                    Ok(event) => {
+                        deliver_live_event(&mut subscribers, &event);
+                        if disposition
+                            == actingcommand_contract::ArtifactEvictionDisposition::Failed
+                        {
+                            Err(GlobalLedgerError::fatal(
+                                "artifact_eviction_failed",
+                                "finish_artifact_eviction",
+                            ))
+                        } else {
+                            Ok(event)
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = &result {
+                    if error.terminal() {
+                        notify_terminal_failure(&mut subscribers, error.clone());
+                        let _ = response.send(Err(error.clone()));
+                        return Err(error.clone());
+                    }
+                }
+                let _ = response.send(result);
+            }
             WriterCommand::Append { draft, response } => {
                 let result = store.append(*draft);
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
@@ -1448,7 +1519,7 @@ fn writer_loop<S: LedgerStore>(
                     Ok(store
                         .query_page(&query, after_sequence, through_sequence, page_events)
                         .iter()
-                        .map(|event| projection::project(event, profile))
+                        .map(|event| projection::project_at(event, profile, through_sequence))
                         .collect())
                 } else {
                     Err(GlobalLedgerError::request(

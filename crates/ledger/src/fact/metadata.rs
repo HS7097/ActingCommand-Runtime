@@ -19,6 +19,7 @@ pub(crate) struct LedgerEventMetadata {
     payload_schema: String,
     payload: EventPayload,
     artifacts: Vec<ProjectedArtifactReference>,
+    artifact_evictions: Vec<actingcommand_contract::ArtifactEvictionProof>,
 }
 
 /// Read-only fields shared by material-verified facts and ledger-verified metadata.
@@ -35,9 +36,13 @@ pub(crate) trait LedgerEventRead: Clone {
     fn payload_schema(&self) -> &str;
     fn payload(&self) -> &EventPayload;
     fn projected_artifacts(&self, include_object_key: bool) -> Vec<ProjectedArtifactReference>;
+    fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof];
 }
 
 impl LedgerEventRead for PersistedEvent {
+    fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof] {
+        self.artifact_evictions()
+    }
     fn schema_version(&self) -> &str {
         self.schema_version()
     }
@@ -80,6 +85,9 @@ impl LedgerEventRead for PersistedEvent {
 }
 
 impl LedgerEventRead for LedgerEventMetadata {
+    fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof] {
+        &self.artifact_evictions
+    }
     fn schema_version(&self) -> &str {
         &self.schema_version
     }
@@ -147,6 +155,7 @@ impl StoredEventRecord {
                 .iter()
                 .map(StoredArtifactRecord::projected)
                 .collect(),
+            artifact_evictions: Vec::new(),
         };
         validate(&event)?;
         Ok(event)
@@ -203,4 +212,47 @@ pub(super) fn validate(event: &impl LedgerEventRead) -> Result<(), FactValidatio
         return Err(invalid("invalid_artifact_reference"));
     }
     Ok(())
+}
+
+impl LedgerEventMetadata {
+    pub(crate) fn apply_artifact_evictions(
+        &mut self,
+        proofs: Vec<actingcommand_contract::ArtifactEvictionProof>,
+    ) {
+        self.artifact_evictions = proofs;
+    }
+    pub(crate) fn into_record(self) -> StoredEventRecord {
+        StoredEventRecord {
+            schema_version: self.schema_version,
+            event_id: self.event_id,
+            sequence: self.sequence,
+            timestamp_unix_ms: self.timestamp_unix_ms,
+            event_type: self.event_type,
+            severity: self.severity,
+            sensitivity: self.sensitivity,
+            origin: self.origin,
+            links: self.links,
+            payload_schema: self.payload_schema,
+            payload: self.payload,
+            artifacts: self
+                .artifacts
+                .into_iter()
+                .map(|reference| StoredArtifactRecord {
+                    artifact_id: reference.artifact_id,
+                    kind: reference.kind,
+                    run_id: reference.run_id,
+                    frame_id: reference.frame_id,
+                    correlation_id: reference.correlation_id,
+                    object_key: reference.object_key.expect("validated metadata object key"),
+                    media_type: reference.media_type,
+                    byte_count: reference.byte_count,
+                    sha256: reference.sha256,
+                    created_at_unix_ms: reference.created_at_unix_ms,
+                    producer: reference.producer,
+                    retention_class: reference.retention_class,
+                    redaction_state: reference.redaction_state,
+                })
+                .collect(),
+        }
+    }
 }

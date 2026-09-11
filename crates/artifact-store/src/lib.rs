@@ -22,6 +22,7 @@ mod pipeline;
 #[cfg(feature = "capture")]
 mod portable_archive;
 mod store;
+mod usage;
 
 pub use error::*;
 #[cfg(feature = "evidence-archive")]
@@ -37,3 +38,4 @@ pub use pipeline::*;
 #[cfg(feature = "capture")]
 pub use portable_archive::*;
 pub use store::*;
+pub use usage::*;

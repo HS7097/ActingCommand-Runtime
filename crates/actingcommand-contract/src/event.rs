@@ -112,6 +112,7 @@ mod codes;
 mod envelope;
 mod ids;
 mod payload;
+mod retention;
 mod views;
 
 pub use artifact::*;
@@ -119,6 +120,7 @@ pub use codes::*;
 pub use envelope::*;
 pub use ids::*;
 pub use payload::*;
+pub use retention::*;
 pub use views::*;
 
 use serde::{Deserialize, Serialize};
@@ -346,6 +348,14 @@ pub enum EventType {
     RecognitionCompleted,
     #[serde(rename = "recognition.failed")]
     RecognitionFailed,
+    #[serde(rename = "artifact.pin_recorded")]
+    ArtifactPinRecorded,
+    #[serde(rename = "artifact.pin_released")]
+    ArtifactPinReleased,
+    #[serde(rename = "artifact.eviction_intent")]
+    ArtifactEvictionIntent,
+    #[serde(rename = "artifact.eviction_outcome")]
+    ArtifactEvictionOutcome,
     #[serde(rename = "artifact.created")]
     ArtifactCreated,
     #[serde(rename = "artifact.verified")]
@@ -492,7 +502,11 @@ impl EventType {
             Self::RecognitionRequested | Self::RecognitionCompleted | Self::RecognitionFailed => {
                 EventFamily::Recognition
             }
-            Self::ArtifactCreated
+            Self::ArtifactPinRecorded
+            | Self::ArtifactPinReleased
+            | Self::ArtifactEvictionIntent
+            | Self::ArtifactEvictionOutcome
+            | Self::ArtifactCreated
             | Self::ArtifactVerified
             | Self::ArtifactStoreFailed
             | Self::ArtifactVerificationFailed
@@ -638,6 +652,8 @@ pub struct ProjectedEvent {
     pub payload_schema: String,
     pub payload: ProjectionPayload,
     pub artifacts: Vec<ProjectedArtifactReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_evictions: Vec<ArtifactEvictionObservation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<LedgerView>,
 }

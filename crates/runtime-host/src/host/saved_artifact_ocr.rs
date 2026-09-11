@@ -317,11 +317,44 @@ fn prove_source<'a>(
     let verified = locate(source.verified, EventType::ArtifactVerified)?;
     let captured = locate(source.captured, EventType::CaptureCompleted)?;
     for event in [created, verified] {
-        if !event
+        let artifact = event
             .artifacts()
             .iter()
-            .any(|artifact| artifact.project(true) == source.artifact)
-            || event.links().run_id() != captured.links().run_id()
+            .find(|artifact| artifact.project(true) == source.artifact)
+            .ok_or_else(|| {
+                source_error(
+                    "saved_source_artifact_mismatch",
+                    "source artifact identity does not match",
+                )
+            })?;
+        match artifact.availability() {
+            actingcommand_ledger::ArtifactAvailability::Available(_) => {}
+            actingcommand_ledger::ArtifactAvailability::Evicted(_) => {
+                return Err(source_error(
+                    "saved_source_artifact_evicted",
+                    "source pixels are unavailable under the recorded eviction proof",
+                ));
+            }
+            actingcommand_ledger::ArtifactAvailability::PendingEviction(_) => {
+                return Err(source_error(
+                    "saved_source_artifact_pending_eviction",
+                    "source pixels await the original Runtime retention recovery",
+                ));
+            }
+            actingcommand_ledger::ArtifactAvailability::FailedEviction(_) => {
+                return Err(source_error(
+                    "saved_source_artifact_eviction_failed",
+                    "source material has an unresolved recorded deletion failure",
+                ));
+            }
+            actingcommand_ledger::ArtifactAvailability::Unrecorded => {
+                return Err(source_error(
+                    "saved_source_artifact_unverified",
+                    "source pixels have not been verified",
+                ));
+            }
+        }
+        if event.links().run_id() != captured.links().run_id()
             || event.links().correlation_id() != captured.links().correlation_id()
             || event.links().request_id() != captured.links().request_id()
         {

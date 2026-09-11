@@ -33,9 +33,20 @@ impl FrozenLedgerSource {
         &self.identity
     }
     pub fn artifacts(&self) -> Vec<ProjectedArtifactReference> {
-        self.verified
+        self.events
             .iter()
-            .map(|(reference, _)| reference.clone())
+            .flat_map(PersistedEvent::artifacts)
+            .map(|reference| reference.project(true))
+            .collect()
+    }
+
+    pub fn artifact_evictions(&self) -> Vec<actingcommand_contract::ArtifactEvictionProof> {
+        self.events
+            .iter()
+            .flat_map(PersistedEvent::artifact_evictions)
+            .map(|proof| (proof.identity.artifact.artifact_id, proof.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_values()
             .collect()
     }
 

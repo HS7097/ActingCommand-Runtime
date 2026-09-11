@@ -250,7 +250,7 @@ impl EventIndexes {
             })
     }
 
-    fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
+    pub(super) fn lab_related<E: LedgerEventRead>(&self, event: &E, snapshot: u64) -> bool {
         let links = event.links();
         let request_matches = |request: &RequestId| {
             self.lab_requests
@@ -288,6 +288,14 @@ impl EventIndexes {
 }
 
 pub(super) fn project<E: LedgerEventRead>(event: &E, profile: ProjectionProfile) -> ProjectedEvent {
+    project_at(event, profile, u64::MAX)
+}
+
+pub(super) fn project_at<E: LedgerEventRead>(
+    event: &E,
+    profile: ProjectionProfile,
+    snapshot: u64,
+) -> ProjectedEvent {
     let (payload, include_object_key) = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => (ProjectionPayload::Omitted, false),
         ProjectionProfile::Lab | ProjectionProfile::Verbose
@@ -323,6 +331,11 @@ pub(super) fn project<E: LedgerEventRead>(event: &E, profile: ProjectionProfile)
         payload_schema: event.payload_schema().to_string(),
         payload,
         artifacts: event.projected_artifacts(include_object_key),
+        artifact_evictions: event
+            .artifact_evictions()
+            .iter()
+            .filter_map(|proof| proof.observation(snapshot))
+            .collect(),
         // Snapshot-aware page projection fills the complete overlapping membership.
         views: Vec::new(),
     }

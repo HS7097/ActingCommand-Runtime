@@ -472,6 +472,7 @@ pub struct FrameStore {
     spilled_bytes: u64,
     dropped_bytes: u64,
     entries: Vec<FrameEntry>,
+    protected_history: usize,
     timeline: Vec<Value>,
     events: Vec<FrameStoreEvent>,
     tier1_active: bool,
@@ -502,6 +503,7 @@ impl FrameStore {
             spilled_bytes: 0,
             dropped_bytes: 0,
             entries: Vec::new(),
+            protected_history: 0,
             timeline: Vec::new(),
             events: Vec::new(),
             tier1_active: false,
@@ -516,6 +518,43 @@ impl FrameStore {
         })
     }
 
+    /// Configure before accepting frames; the window keeps each original materializable.
+    pub fn protect_recent_frames(&mut self, count: usize) -> CliOutcome<()> {
+        if !self.entries.is_empty() || count > 64 {
+            return Err(CliError::usage(
+                "backtrace window must be set before capture and at most 64 frames",
+            ));
+        }
+        self.protected_history = count;
+        Ok(())
+    }
+
+    pub fn original_material(&self, frame_index: usize) -> Option<&FrameMaterialIdentity> {
+        self.entries
+            .iter()
+            .find(|entry| entry.frame_index == frame_index)
+            .map(|entry| &entry.material)
+    }
+
+    /// A pin cannot resurrect a perceptually similar representative as the original frame.
+    pub fn pin_frame(&mut self, frame_index: usize, reason: PinnedFrameReason) -> CliOutcome<()> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.frame_index == frame_index)
+            .ok_or_else(|| CliError::usage("pin frame identity is not in this capture"))?;
+        if !entry.retained || matches!(entry.storage, FrameStorage::Dropped) {
+            return Err(CliError::fatal(
+                "frame_material_unavailable",
+                "pin_frame",
+                "original frame material has already been released",
+            ));
+        }
+        entry.pinned_reason.get_or_insert(reason);
+        entry.key_frame = true;
+        Ok(())
+    }
+
     pub fn set_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
         let budget = MemoryBudget::build(&config)?;
         self.config = config;
@@ -527,6 +566,16 @@ impl FrameStore {
         self.refresh_budget()?;
         self.release_watermarks_if_needed();
         let mut warnings = Vec::new();
+        let original_png = input
+            .frame
+            .png_for_artifact()
+            .map_err(|error| CliError::device(error.to_string()))?;
+        let material = FrameMaterialIdentity {
+            frame_index: input.frame_index,
+            byte_count: original_png.len() as u64,
+            sha256: crate::store::canonical_sha256(&original_png),
+        };
+        drop(original_png);
         let file = format!("screenshots/{}", input.file_name);
         let key_frame = self.is_key_frame(&input);
         let pinned_reason = input.pinned_reason;
@@ -587,6 +636,7 @@ impl FrameStore {
         let segment_id = storage.segment_id();
         let segment_path = storage.segment_path();
         let entry = FrameEntry {
+            material,
             frame_index: input.frame_index,
             file_name: input.file_name,
             file: file.clone(),
@@ -862,6 +912,7 @@ impl FrameStore {
             json!({
                 "event": "frame_final",
                 "frame_index": entry.frame_index,
+                "original_material": entry.material,
                 "file": entry.file,
                 "retained": entry.retained,
                 "merged_into": entry.merged_into,
@@ -920,6 +971,15 @@ impl FrameStore {
                 } => read_segment_frame(segment_path, zip_name)?,
                 FrameStorage::Dropped => continue,
             };
+            if png.len() as u64 != entry.material.byte_count
+                || crate::store::canonical_sha256(&png) != entry.material.sha256
+            {
+                return Err(CliError::fatal(
+                    "frame_material_hash_mismatch",
+                    "persist_capture_frame",
+                    "materialized frame differs from its original PNG",
+                ));
+            }
             candidates.push(FramePersistenceCandidate {
                 frame_index: entry.frame_index,
                 file_name: entry.file_name.clone(),
@@ -1043,6 +1103,7 @@ impl FrameStore {
                 continue;
             }
             let should_keep = self.entries[index].key_frame
+                || index >= self.entries.len().saturating_sub(self.protected_history)
                 || previous_retained
                     .is_none_or(|previous| !self.same_page_duplicate(previous, index));
             if should_keep {
@@ -1528,7 +1589,15 @@ pub struct FrameStoreScreenshot {
     pub storage_state: FrameStorageState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FrameMaterialIdentity {
+    pub frame_index: usize,
+    pub byte_count: u64,
+    pub sha256: String,
+}
+
 struct FrameEntry {
+    material: FrameMaterialIdentity,
     frame_index: usize,
     file_name: String,
     file: String,
