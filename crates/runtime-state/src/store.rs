@@ -32,6 +32,8 @@ mod approval;
 pub use approval::*;
 mod release;
 pub use release::*;
+mod planning;
+pub use planning::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDocument {
@@ -641,6 +643,14 @@ impl RuntimeStateStore {
         if namespace == APPROVAL_PROJECTION_NAMESPACE {
             return Err(request(
                 "approval_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
+        if namespace == PLANNING_SIGNAL_PROJECTION_NAMESPACE
+            || namespace == DETECTION_QUOTA_PROJECTION_NAMESPACE
+        {
+            return Err(request(
+                "planning_projection_owner_required",
                 "write_projection_entry",
             ));
         }
