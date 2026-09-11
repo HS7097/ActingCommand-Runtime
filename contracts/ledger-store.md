@@ -65,6 +65,29 @@ Database lock, send a writer command, commit, append or read artifact bytes. It 
 an exact-row check for derived-state work; complete ledger recovery remains the
 source of the opaque input and the authority for full-history validity.
 
+`planning_signal_recovery_page(after, upper)` returns an opaque interval of at most
+256 consecutive original facts. Non-planning facts remain inside the proof; the
+Planning consumer sees only this interval's planning signals. Recovery fixes the
+global upper sequence once, including an upper fact that is not a planning signal.
+`verify_transaction_planning_page(database, transaction, page, current_checkpoint)`
+checks the exact prior checkpoint, every original row in the complete interval and
+the verified upper anchor in the same borrowed transaction. It performs no writer
+call, material read, connection acquisition or write. Missing or inconsistent
+interval rows and a mismatched checkpoint fail explicitly.
+
+A new `PolicyPlanningSignalObserved` uses the existing joint append path with its
+State-owned signal, optional cumulative detection quota and checkpoint projections.
+Their namespaces, keys and encodings remain unchanged. State checks the prepared
+baselines and exact signal identity, quota position and checkpoint monotonicity
+before writing through the shared transaction. Host publishes its prepared quota
+cache after COMMIT and releases the policy lock before downstream observations and
+Timeline/Drift wakes. Historical recovery prepares and verifies each complete page,
+then commits its projections and checkpoint together without adding a new signal.
+Empty planning intervals still advance to their global through sequence; an empty
+ledger produces no checkpoint. Historical quota arithmetic uses the original
+catalog and recorded cumulative usage. Rollback/COMMIT uncertainty stays fatal
+with original details, and post-commit failures retain the actual committed fact.
+
 Store reads operate on the verified committed snapshot already materialized at
 open and maintained by append. They perform no fallible storage I/O, so this
 private interface returns values directly. A future backend using this boundary
