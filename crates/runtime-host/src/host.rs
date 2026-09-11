@@ -4482,9 +4482,11 @@ impl HostShared {
         let result: RuntimeHostResult<EventId> = (|| {
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
             self.synchronize_fact_store_under_gate()?;
-            if let Some(event_id) = lock(&self.facts, "publish_fact")?
-                .preview_observation(&observation, self.clock.sample()?.unix_ms)?
-            {
+            if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_observation(
+                &observation,
+                self.clock.sample()?.unix_ms,
+                &self.ledger,
+            )? {
                 return Ok(event_id);
             }
             let scope = &observation.records[0].scope;
@@ -13410,15 +13412,40 @@ impl HostShared {
             let mut facts = lock(&self.facts, "synchronize_fact_store")?;
             facts.synchronize(&self.ledger)?;
             for invalidation in facts.pending_invalidations() {
-                let persisted = self.append_event_under_fact_gate(
+                if self.lifecycle_append_failed.load(Ordering::Acquire) {
+                    return Err(ledger_error("append_fact_transaction"));
+                }
+                let work = facts.prepare_invalidation(&self.ledger, &invalidation)?;
+                let links = self.events.system_links()?;
+                let draft = self.events.draft(
                     EventSeverity::Info,
                     EventSource::Runtime,
                     OriginModule::FactStore,
                     EventActor::Runtime,
-                    self.events.system_links()?,
-                    FactPayloadDraft::invalidated(invalidation.clone(), AuditInput::new()),
+                    links.clone(),
+                    FactPayloadDraft::invalidated(invalidation.data.clone(), AuditInput::new()),
                 )?;
-                facts.acknowledge_generated_invalidation(&invalidation, persisted.sequence())?;
+                let draft = self.events.sanitize(draft)?;
+                let persisted = self
+                    .ledger
+                    .append_transaction(draft, Box::new(work))
+                    .map_err(|error| {
+                        let error = crate::fact_store::fact_transaction_error(error);
+                        if error.is_fatal() {
+                            self.lifecycle_append_failed.store(true, Ordering::Release);
+                        }
+                        error
+                    })?;
+                facts
+                    .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
+                    .and_then(|()| {
+                        self.observe_device_diagnostics_under_fact_gate(&persisted, &links)
+                    })
+                    .map_err(|error| {
+                        self.lifecycle_append_failed.store(true, Ordering::Release);
+                        let _ = error.lifecycle.recorded_event.set(*persisted.event_id());
+                        error
+                    })?;
             }
             Ok(())
         })();

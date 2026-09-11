@@ -383,6 +383,7 @@ impl<B: DurableStorage> EventStore<B> {
                 | EventType::ReleaseActivated
                 | EventType::ReleaseRolledBack
                 | EventType::PolicyPlanningSignalObserved
+                | EventType::FactInvalidated
         ) {
             return Err(GlobalLedgerError::request(
                 "joint_event_type_unsupported",
