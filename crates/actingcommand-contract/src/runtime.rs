@@ -2238,6 +2238,19 @@ impl RuntimeEventQueryPage {
                 ));
             }
             previous = event.sequence;
+            let mut artifacts = std::collections::BTreeSet::new();
+            for observation in &event.artifact_evictions {
+                observation.validate().map_err(|_| {
+                    RuntimeContractError::new("invalid_runtime_artifact_eviction_observation")
+                })?;
+                if observation.through_sequence > self.snapshot_ledger_position
+                    || !artifacts.insert(observation.artifact_id)
+                {
+                    return Err(RuntimeContractError::new(
+                        "invalid_runtime_artifact_eviction_observation",
+                    ));
+                }
+            }
         }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;

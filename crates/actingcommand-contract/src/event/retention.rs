@@ -210,7 +210,55 @@ pub struct ArtifactEvictionProof {
     pub through_sequence: u64,
 }
 
+/// Read-time source positions for the original artifact metadata in a projected event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactEvictionObservation {
+    pub artifact_id: super::ArtifactId,
+    pub intent: TerminalEvent,
+    pub outcome: Option<TerminalEvent>,
+    pub disposition: Option<ArtifactEvictionDisposition>,
+    pub through_sequence: u64,
+}
+
+impl ArtifactEvictionObservation {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        event(&self.intent)?;
+        if self.intent.sequence > self.through_sequence
+            || self.outcome.is_some() != self.disposition.is_some()
+        {
+            return Err(invalid("observation"));
+        }
+        if let Some(outcome) = &self.outcome {
+            event(outcome)?;
+            if outcome.sequence <= self.intent.sequence || outcome.sequence > self.through_sequence
+            {
+                return Err(invalid("observation_order"));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ArtifactEvictionProof {
+    pub fn observation(&self, through_sequence: u64) -> Option<ArtifactEvictionObservation> {
+        let through_sequence = through_sequence.min(self.through_sequence);
+        if self.intent.sequence > through_sequence {
+            return None;
+        }
+        let outcome = self
+            .outcome
+            .as_ref()
+            .filter(|outcome| outcome.sequence <= through_sequence)
+            .cloned();
+        Some(ArtifactEvictionObservation {
+            artifact_id: self.identity.artifact.artifact_id,
+            intent: self.intent.clone(),
+            disposition: outcome.as_ref().and(self.disposition),
+            outcome,
+            through_sequence,
+        })
+    }
     pub fn validate(&self) -> Result<(), SanitizationError> {
         self.identity.validate()?;
         event(&self.intent)?;

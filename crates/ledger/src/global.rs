@@ -1416,7 +1416,7 @@ fn writer_loop<S: LedgerStore>(
                     Ok(store
                         .query_page(&query, after_sequence, through_sequence, page_events)
                         .iter()
-                        .map(|event| projection::project(event, profile))
+                        .map(|event| projection::project_at(event, profile, through_sequence))
                         .collect())
                 } else {
                     Err(GlobalLedgerError::request(

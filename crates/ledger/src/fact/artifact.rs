@@ -3,6 +3,17 @@
 use super::*;
 use actingcommand_contract::ArtifactEvictionProof;
 
+/// A read projection is excluded from historical fact identity and serialization.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ArtifactRetentionReadState(pub(crate) Vec<ArtifactEvictionProof>);
+
+impl PartialEq for ArtifactRetentionReadState {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+impl Eq for ArtifactRetentionReadState {}
+
 /// Original Ledger metadata. This value is not a material verification capability.
 #[derive(Debug, Clone, Serialize)]
 pub struct LedgerArtifactReference {
@@ -26,9 +37,26 @@ pub enum ArtifactAvailability {
     Available(VerifiedArtifactReference),
     Evicted(Box<ArtifactEvictionProof>),
     PendingEviction(Box<ArtifactEvictionProof>),
+    FailedEviction(Box<ArtifactEvictionProof>),
 }
 
 impl LedgerArtifactReference {
+    pub(crate) fn apply_retention_proof(&mut self, proof: &ArtifactEvictionProof) {
+        match proof.disposition {
+            Some(
+                actingcommand_contract::ArtifactEvictionDisposition::Deleted
+                | actingcommand_contract::ArtifactEvictionDisposition::RecoveryAbsent,
+            ) => {
+                self.availability = ArtifactAvailability::Evicted(Box::new(proof.clone()));
+            }
+            None => {
+                self.availability = ArtifactAvailability::PendingEviction(Box::new(proof.clone()));
+            }
+            Some(actingcommand_contract::ArtifactEvictionDisposition::Failed) => {
+                self.availability = ArtifactAvailability::FailedEviction(Box::new(proof.clone()));
+            }
+        }
+    }
     pub(crate) fn recorded(
         reference: ProjectedArtifactReference,
     ) -> Result<Self, FactValidationError> {
@@ -89,7 +117,7 @@ impl LedgerArtifactReference {
                     && proof.validate().is_ok()
                     && proof.outcome.is_none()
             }
-            ArtifactAvailability::Unrecorded => false,
+            ArtifactAvailability::Unrecorded | ArtifactAvailability::FailedEviction(_) => false,
         };
         if !valid {
             return Err(FactValidationError {

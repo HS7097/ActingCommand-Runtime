@@ -19,6 +19,7 @@ pub(crate) struct LedgerEventMetadata {
     payload_schema: String,
     payload: EventPayload,
     artifacts: Vec<ProjectedArtifactReference>,
+    artifact_evictions: Vec<actingcommand_contract::ArtifactEvictionProof>,
 }
 
 /// Read-only fields shared by material-verified facts and ledger-verified metadata.
@@ -35,9 +36,13 @@ pub(crate) trait LedgerEventRead: Clone {
     fn payload_schema(&self) -> &str;
     fn payload(&self) -> &EventPayload;
     fn projected_artifacts(&self, include_object_key: bool) -> Vec<ProjectedArtifactReference>;
+    fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof];
 }
 
 impl LedgerEventRead for PersistedEvent {
+    fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof] {
+        self.artifact_evictions()
+    }
     fn schema_version(&self) -> &str {
         self.schema_version()
     }
@@ -80,6 +85,9 @@ impl LedgerEventRead for PersistedEvent {
 }
 
 impl LedgerEventRead for LedgerEventMetadata {
+    fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof] {
+        &self.artifact_evictions
+    }
     fn schema_version(&self) -> &str {
         &self.schema_version
     }
@@ -147,6 +155,7 @@ impl StoredEventRecord {
                 .iter()
                 .map(StoredArtifactRecord::projected)
                 .collect(),
+            artifact_evictions: Vec::new(),
         };
         validate(&event)?;
         Ok(event)
@@ -206,6 +215,12 @@ pub(super) fn validate(event: &impl LedgerEventRead) -> Result<(), FactValidatio
 }
 
 impl LedgerEventMetadata {
+    pub(crate) fn apply_artifact_evictions(
+        &mut self,
+        proofs: Vec<actingcommand_contract::ArtifactEvictionProof>,
+    ) {
+        self.artifact_evictions = proofs;
+    }
     pub(crate) fn into_record(self) -> StoredEventRecord {
         StoredEventRecord {
             schema_version: self.schema_version,

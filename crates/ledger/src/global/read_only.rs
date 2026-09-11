@@ -214,11 +214,17 @@ pub(super) struct ReadOnlySnapshot<E> {
 pub(super) fn open_metadata(
     config: GlobalLedgerReadOnlyConfig,
 ) -> GlobalLedgerResult<ReadOnlySnapshot<LedgerEventMetadata>> {
-    open_snapshot(config, |line| {
+    let budget = config.budget;
+    let mut snapshot = open_snapshot(config, |line| {
         parse_record(line)?.into_metadata().map_err(|error| {
             GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
         })
-    })
+    })?;
+    let bytes = snapshot.storage_snapshot.read_bytes;
+    super::retention::annotate_metadata_checked(&mut snapshot.events, |count| {
+        check_read_budget(budget, bytes, count)
+    })?;
+    Ok(snapshot)
 }
 
 fn open_snapshot<E: LedgerEventRead>(

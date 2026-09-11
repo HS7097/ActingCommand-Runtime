@@ -658,6 +658,9 @@ pub(super) fn open_metadata(
                 .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
         );
     }
+    super::retention::annotate_metadata_checked(&mut events, |count| {
+        check_read_budget(budget, bytes, count)
+    })?;
     check_read_budget(budget, bytes, events.len())?;
     Ok((
         events,
@@ -724,6 +727,9 @@ impl SqliteViewSnapshot {
                         .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
                 );
             }
+            super::retention::annotate_metadata_checked(&mut events, |count| {
+                check_read_budget(self.budget, bytes, count)
+            })?;
             let sequences = views::select_sequences(
                 &transaction,
                 &events,
@@ -749,6 +755,7 @@ impl SqliteViewSnapshot {
                 super::projection::PageSelection {
                     through_sequence: self.through_sequence,
                     sequences: Some(&sequences),
+                    retention: None,
                 },
             )?;
             check_read_budget(self.budget, bytes, events.len())?;

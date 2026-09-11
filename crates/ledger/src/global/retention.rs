@@ -106,6 +106,7 @@ pub struct ArtifactRetentionCandidates {
     pub references: Vec<ProjectedArtifactReference>,
     pub next_after: Option<ArtifactId>,
     pub through_sequence: u64,
+    pub recovery_pending: bool,
 }
 
 /// The original writer returns this only after committing or validating the sealed intent.
@@ -122,26 +123,71 @@ pub enum ArtifactEvictionAdmission {
 }
 
 impl RetentionIndex {
+    fn event_proofs<E: LedgerEventRead>(&self, event: &E) -> Vec<ArtifactEvictionProof> {
+        let mut seen = BTreeSet::new();
+        material_references(event)
+            .into_iter()
+            .filter(|reference| seen.insert(reference.artifact_id))
+            .filter_map(|reference| self.objects.get(&reference.artifact_id)?.proof.clone())
+            .map(|mut proof| {
+                proof.through_sequence = self.through_sequence;
+                proof
+            })
+            .collect()
+    }
+
+    pub(super) fn annotate_event(&self, event: &mut PersistedEvent) {
+        event.apply_artifact_evictions(self.event_proofs(event));
+    }
+
+    pub(super) fn observations<E: LedgerEventRead>(
+        &self,
+        event: &E,
+        snapshot: u64,
+    ) -> Vec<actingcommand_contract::ArtifactEvictionObservation> {
+        self.event_proofs(event)
+            .iter()
+            .filter_map(|proof| proof.observation(snapshot))
+            .collect()
+    }
+
     pub(super) fn has_pending(&self) -> bool {
         !self.pending_objects.is_empty()
     }
 
-    pub(super) fn candidates(&self, after: Option<ArtifactId>) -> ArtifactRetentionCandidates {
+    pub(super) fn candidates(
+        &self,
+        after: Option<ArtifactId>,
+        recovery_only: bool,
+    ) -> ArtifactRetentionCandidates {
         use std::ops::Bound::{Excluded, Unbounded};
-        let mut objects = self
-            .objects
-            .range((after.map_or(Unbounded, Excluded), Unbounded));
-        let references = objects
-            .by_ref()
-            .take(RETENTION_ROUND_OBJECTS)
-            .map(|(_, object)| object.reference.clone())
-            .collect::<Vec<_>>();
+        let bounds = (after.map_or(Unbounded, Excluded), Unbounded);
+        let references = if recovery_only {
+            self.pending_objects
+                .range(bounds)
+                .take(RETENTION_ROUND_OBJECTS)
+                .map(|id| {
+                    self.objects
+                        .get(id)
+                        .expect("pending object identity validated")
+                        .reference
+                        .clone()
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.objects
+                .range(bounds)
+                .take(RETENTION_ROUND_OBJECTS)
+                .map(|(_, object)| object.reference.clone())
+                .collect::<Vec<_>>()
+        };
         let next_after = (references.len() == RETENTION_ROUND_OBJECTS)
             .then(|| references.last().expect("nonempty full page").artifact_id);
         ArtifactRetentionCandidates {
             references,
             next_after,
             through_sequence: self.through_sequence,
+            recovery_pending: recovery_only,
         }
     }
 
@@ -270,8 +316,8 @@ impl RetentionIndex {
             }
         }
         if retention.is_none() {
-            if let Some(frame) = event.links().frame_id() {
-                if self.frames.get(frame).is_some_and(|ids| {
+            for frame in referenced_frames(event) {
+                if self.frames.get(&frame).is_some_and(|ids| {
                     ids.iter().any(|id| {
                         self.objects
                             .get(id)
@@ -629,14 +675,23 @@ impl RetentionIndex {
     /// The per-scope ring counts exact first-observed frames and never scans history.
     fn protection_targets<E: LedgerEventRead>(&self, event: &E) -> BTreeSet<ArtifactId> {
         let mut targets = direct_evidence(event);
+        if let EventPayload::Input(actingcommand_contract::InputPayload::Intent(input)) =
+            event.payload()
+            && let Some(frame) = input
+                .provenance()
+                .and_then(|provenance| provenance.before_frame_id)
+            && let Some(ids) = self.frames.get(&frame)
+        {
+            targets.extend(ids);
+        }
         if event.severity() >= EventSeverity::Warning {
             targets.extend(
                 material_references(event)
                     .iter()
                     .map(|reference| reference.artifact_id),
             );
-            if let Some(frame) = event.links().frame_id() {
-                if let Some(ids) = self.frames.get(frame) {
+            for frame in referenced_frames(event) {
+                if let Some(ids) = self.frames.get(&frame) {
                     targets.extend(ids)
                 }
             }
@@ -657,6 +712,25 @@ impl RetentionIndex {
         }
         targets
     }
+}
+
+fn referenced_frames<E: LedgerEventRead>(event: &E) -> BTreeSet<FrameId> {
+    let mut frames = event
+        .links()
+        .frame_id()
+        .copied()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if let EventPayload::Input(actingcommand_contract::InputPayload::Intent(input)) =
+        event.payload()
+    {
+        frames.extend(
+            input
+                .provenance()
+                .and_then(|provenance| provenance.before_frame_id),
+        );
+    }
+    frames
 }
 
 fn material_references<E: LedgerEventRead>(event: &E) -> Vec<ProjectedArtifactReference> {
@@ -806,7 +880,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         &self,
         after: Option<ArtifactId>,
     ) -> ArtifactRetentionCandidates {
-        self.retention.candidates(after)
+        self.retention.candidates(after, self.recovering_retention)
     }
 
     /// The material guard arrived before this command; the writer performs no material I/O.
@@ -1079,6 +1153,18 @@ fn sealed() -> GlobalLedgerError {
     GlobalLedgerError::request("artifact_material_admission_closed", "append_event")
 }
 
+pub(super) fn annotate_metadata_checked(
+    events: &mut [crate::fact::LedgerEventMetadata],
+    mut check: impl FnMut(usize) -> GlobalLedgerResult<()>,
+) -> GlobalLedgerResult<()> {
+    let retention = RetentionIndex::from_events_checked(events, &mut check)?;
+    for (position, event) in events.iter_mut().enumerate() {
+        check(position + 1)?;
+        event.apply_artifact_evictions(retention.event_proofs(event));
+    }
+    Ok(())
+}
+
 /// Authentication and typed proof derivation precede every material read in the same snapshot.
 pub(super) fn restore_records<F>(
     records: Vec<StoredEventRecord>,
@@ -1102,7 +1188,7 @@ where
     let mut events = Vec::with_capacity(records.len());
     for record in records {
         check(events.len() + 1)?;
-        let event = record
+        let mut event = record
             .into_event_with_artifact_availability(&mut |reference| {
                 let proof = retention
                     .proof(reference)
@@ -1129,6 +1215,7 @@ where
                     ))
             })
             .map_err(|error| invalid(error.code()))?;
+        retention.annotate_event(&mut event);
         check(events.len() + 1)?;
         events.push(event);
     }

@@ -44,6 +44,8 @@ pub struct PersistedEvent {
     payload_schema: String,
     payload: EventPayload,
     artifacts: Vec<LedgerArtifactReference>,
+    #[serde(skip)]
+    artifact_evictions: artifact::ArtifactRetentionReadState,
 }
 
 impl PersistedEvent {
@@ -77,6 +79,7 @@ impl PersistedEvent {
                 .iter()
                 .map(LedgerArtifactReference::from_issued)
                 .collect(),
+            artifact_evictions: artifact::ArtifactRetentionReadState::default(),
         };
         event.validate()?;
         Ok(event)
@@ -128,6 +131,25 @@ impl PersistedEvent {
 
     pub fn artifacts(&self) -> &[LedgerArtifactReference] {
         &self.artifacts
+    }
+
+    pub fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof] {
+        &self.artifact_evictions.0
+    }
+
+    pub(crate) fn apply_artifact_evictions(
+        &mut self,
+        proofs: Vec<actingcommand_contract::ArtifactEvictionProof>,
+    ) {
+        for artifact in &mut self.artifacts {
+            if let Some(proof) = proofs
+                .iter()
+                .find(|proof| &proof.identity.artifact.artifact_id == artifact.artifact_id())
+            {
+                artifact.apply_retention_proof(proof);
+            }
+        }
+        self.artifact_evictions.0 = proofs;
     }
 
     fn validate(&self) -> Result<(), FactValidationError> {
@@ -308,6 +330,7 @@ impl StoredEventRecord {
             payload_schema: self.payload_schema,
             payload: self.payload,
             artifacts,
+            artifact_evictions: artifact::ArtifactRetentionReadState::default(),
         };
         event.validate()?;
         Ok(event)

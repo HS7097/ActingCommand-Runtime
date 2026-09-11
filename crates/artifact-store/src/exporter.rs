@@ -390,6 +390,34 @@ impl EvidenceExporter {
         let mut frames = request.pipeline.frames.clone();
         frames.sort_by_key(|frame| frame.frame_index);
         for frame in frames {
+            if let Some(observation) = request
+                .events
+                .iter()
+                .flat_map(|event| &event.artifact_evictions)
+                .find(|observation| &observation.artifact_id == frame.artifact.artifact_id())
+            {
+                observation.validate().map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        "evidence_retention_observation_invalid",
+                        "build_evidence_entries",
+                        error.to_string(),
+                    )
+                })?;
+                return Err(ArtifactStoreError::fatal(
+                    match observation.disposition {
+                        Some(
+                            actingcommand_contract::ArtifactEvictionDisposition::Deleted
+                            | actingcommand_contract::ArtifactEvictionDisposition::RecoveryAbsent,
+                        ) => "evidence_artifact_evicted",
+                        Some(actingcommand_contract::ArtifactEvictionDisposition::Failed) => {
+                            "evidence_artifact_eviction_failed"
+                        }
+                        None => "evidence_artifact_pending_eviction",
+                    },
+                    "build_evidence_entries",
+                    "complete evidence export requires every original frame material",
+                ));
+            }
             if frame.artifact.kind() != ArtifactKind::CaptureFrame {
                 return Err(ArtifactStoreError::fatal(
                     "evidence_artifact_invalid",
@@ -1537,6 +1565,7 @@ mod tests {
         .expect("sanitize capture summary");
         ProjectedEvent {
             views: Vec::new(),
+            artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),
@@ -1597,6 +1626,7 @@ mod tests {
         .expect("sanitize terminal");
         ProjectedEvent {
             views: Vec::new(),
+            artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),

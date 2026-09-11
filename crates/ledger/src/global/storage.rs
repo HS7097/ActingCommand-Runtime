@@ -1151,6 +1151,15 @@ impl<B: DurableStorage> EventStore<B> {
         event: PersistedEvent,
         guarded: bool,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        if self.recovering_retention
+            && event.event_type() != EventType::LedgerRecovered
+            && !(guarded && event.event_type() == EventType::ArtifactEvictionOutcome)
+        {
+            return Err(GlobalLedgerError::request(
+                "artifact_retention_recovery_pending",
+                "append_event",
+            ));
+        }
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
@@ -1171,7 +1180,11 @@ impl<B: DurableStorage> EventStore<B> {
     }
 
     pub(super) fn query(&self, query: &actingcommand_contract::EventQuery) -> Vec<PersistedEvent> {
-        self.indexes.query(&self.events, query)
+        let mut events = self.indexes.query(&self.events, query);
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        events
     }
 
     pub(super) fn query_page(
@@ -1181,13 +1194,17 @@ impl<B: DurableStorage> EventStore<B> {
         through_sequence: u64,
         page_events: usize,
     ) -> Vec<PersistedEvent> {
-        self.indexes.query_page(
+        let mut events = self.indexes.query_page(
             &self.events,
             query,
             after_sequence,
             through_sequence,
             page_events,
-        )
+        );
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        events
     }
 
     pub(super) fn latest_sequence(&self) -> u64 {
@@ -1215,7 +1232,11 @@ impl<B: DurableStorage> EventStore<B> {
                 read_complete: true,
                 limits: Vec::new(),
             },
-            self.latest_sequence().into(),
+            super::projection::PageSelection {
+                through_sequence: self.latest_sequence(),
+                sequences: None,
+                retention: Some(&self.retention),
+            },
         )
     }
 
@@ -1228,12 +1249,16 @@ impl<B: DurableStorage> EventStore<B> {
         let start = self
             .events
             .partition_point(|event| event.sequence() <= after_sequence);
-        self.events[start..]
+        let mut events = self.events[start..]
             .iter()
             .take_while(|event| event.sequence() <= through_sequence)
             .take(page_events)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        events
     }
 
     pub(super) fn close(mut self) -> GlobalLedgerResult<()> {

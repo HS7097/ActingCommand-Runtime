@@ -653,6 +653,8 @@ pub struct ProjectedEvent {
     pub payload: ProjectionPayload,
     pub artifacts: Vec<ProjectedArtifactReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_evictions: Vec<ArtifactEvictionObservation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<LedgerView>,
 }
 
