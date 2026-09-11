@@ -7678,7 +7678,7 @@ impl RecognitionPayloadDraft {
 }
 
 enum ArtifactDraftKind {
-    Retention(crate::ArtifactRetentionFact, AuditInput),
+    Retention(Box<crate::ArtifactRetentionFact>, AuditInput),
     Created(OutcomeDraft),
     Verified(OutcomeDraft),
     StoreFailed(DiagnosticOutcomeDraft),

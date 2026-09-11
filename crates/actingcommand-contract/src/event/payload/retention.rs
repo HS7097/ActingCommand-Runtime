@@ -8,7 +8,7 @@ pub const ARTIFACT_RETENTION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artif
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactRetentionPayload {
-    record: ArtifactRetentionFact,
+    record: Box<ArtifactRetentionFact>,
     audit: SanitizedAudit,
 }
 
@@ -62,28 +62,28 @@ impl ArtifactRetentionPayload {
     pub(super) fn public_summary(&self) -> ArtifactRetentionPublicSummary {
         let mut artifact = self.record.identity().artifact.clone();
         artifact.object_key = None;
-        let fact = match &self.record {
+        let fact = match self.record.as_ref() {
             ArtifactRetentionFact::PinRecorded(value) => ArtifactRetentionPublicFact::PinRecorded {
                 reason: value.reason,
-                trigger: value.trigger.clone(),
+                trigger: value.trigger,
             },
             ArtifactRetentionFact::PinReleased(value) => ArtifactRetentionPublicFact::PinReleased {
-                pin: value.pin.clone(),
-                release: value.release.clone(),
+                pin: value.pin,
+                release: value.release,
             },
             ArtifactRetentionFact::EvictionIntent(value) => {
                 ArtifactRetentionPublicFact::EvictionIntent {
-                    verified: value.verified.clone(),
-                    success: value.success.clone(),
-                    close: value.close.clone(),
-                    capture_summary: value.capture_summary.clone(),
-                    settlement: value.settlement.clone(),
+                    verified: value.verified,
+                    success: value.success,
+                    close: value.close,
+                    capture_summary: value.capture_summary,
+                    settlement: value.settlement,
                     through_sequence: value.through_sequence,
                 }
             }
             ArtifactRetentionFact::EvictionOutcome(value) => {
                 ArtifactRetentionPublicFact::EvictionOutcome {
-                    intent: value.intent.clone(),
+                    intent: value.intent,
                     disposition: value.disposition,
                     io_kind: value.io.as_ref().map(|io| io.kind.clone()),
                     raw_os_error: value.io.as_ref().and_then(|io| io.raw_os_error),
@@ -103,7 +103,7 @@ impl ArtifactRetentionPayload {
             ArtifactRedactionState::Pending => Sensitivity::Secret,
             ArtifactRedactionState::Applied => Sensitivity::Sensitive,
             ArtifactRedactionState::NotRequired => {
-                if matches!(&self.record, ArtifactRetentionFact::EvictionOutcome(value) if value.io.is_some())
+                if matches!(self.record.as_ref(), ArtifactRetentionFact::EvictionOutcome(value) if value.io.is_some())
                 {
                     Sensitivity::Sensitive
                 } else {
@@ -114,7 +114,7 @@ impl ArtifactRetentionPayload {
     }
 
     pub(super) fn sanitize(
-        record: ArtifactRetentionFact,
+        record: Box<ArtifactRetentionFact>,
         audit: AuditInput,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<Self, SanitizationError> {
@@ -126,7 +126,7 @@ impl ArtifactRetentionPayload {
     }
 
     pub(super) fn event_type(&self) -> EventType {
-        match self.record {
+        match self.record.as_ref() {
             ArtifactRetentionFact::PinRecorded(_) => EventType::ArtifactPinRecorded,
             ArtifactRetentionFact::PinReleased(_) => EventType::ArtifactPinReleased,
             ArtifactRetentionFact::EvictionIntent(_) => EventType::ArtifactEvictionIntent,
@@ -140,7 +140,7 @@ impl PayloadDetail for ArtifactRetentionPayload {
         EventAction::ArtifactRetention
     }
     fn diagnostic_code(&self) -> Option<DiagnosticCode> {
-        match &self.record {
+        match self.record.as_ref() {
             ArtifactRetentionFact::EvictionOutcome(outcome)
                 if outcome.disposition == ArtifactEvictionDisposition::Failed =>
             {
@@ -150,7 +150,7 @@ impl PayloadDetail for ArtifactRetentionPayload {
         }
     }
     fn effect_disposition(&self) -> Option<EffectDisposition> {
-        match &self.record {
+        match self.record.as_ref() {
             ArtifactRetentionFact::EvictionOutcome(outcome) => match outcome.disposition {
                 ArtifactEvictionDisposition::Deleted => Some(EffectDisposition::Performed),
                 ArtifactEvictionDisposition::Failed => Some(EffectDisposition::Indeterminate),
@@ -166,7 +166,7 @@ impl PayloadDetail for ArtifactRetentionPayload {
 
 impl ArtifactPayloadDraft {
     pub fn retention(record: ArtifactRetentionFact, audit: AuditInput) -> Self {
-        Self(ArtifactDraftKind::Retention(record, audit))
+        Self(ArtifactDraftKind::Retention(Box::new(record), audit))
     }
 }
 

@@ -253,7 +253,7 @@ impl ArtifactEvictionProof {
             .cloned();
         Some(ArtifactEvictionObservation {
             artifact_id: self.identity.artifact.artifact_id,
-            intent: self.intent.clone(),
+            intent: self.intent,
             disposition: outcome.as_ref().and(self.disposition),
             outcome,
             through_sequence,
