@@ -292,9 +292,30 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         assert_eq!(transaction.total_changes(), before);
         transaction.rollback().unwrap();
     }
+    let frozen_metadata =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path())).unwrap();
     imported
         .append(event("after-cutover"))
         .expect("formal append preserves marker");
+    let frozen_page = frozen_metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Ui,
+            &actingcommand_contract::RuntimeEventQueryPageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(frozen_page.snapshot_ledger_position(), 3);
+    assert_eq!(
+        frozen_page
+            .events()
+            .iter()
+            .map(|event| event.event_id)
+            .collect::<Vec<_>>(),
+        facts
+            .iter()
+            .map(|event| *event.event_id())
+            .collect::<Vec<_>>()
+    );
     let view = GlobalLedger::open_evidence(
         GlobalLedgerEvidenceConfig::new(imported_root.path()),
         |_| None,
@@ -304,7 +325,102 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     assert!(view.is_complete());
     assert_eq!(&view.events()[..2], &expected);
     assert_eq!(view.latest_sequence(), 4);
+    let metadata =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path()))
+            .expect("metadata source verifies the imported prefix and marker");
+    assert_eq!(metadata.backend(), "sqlite");
+    assert!(metadata.read_complete());
+    assert_eq!(metadata.latest_sequence(), view.latest_sequence());
+    let request = actingcommand_contract::RuntimeEventQueryPageRequest::default();
+    let projected = metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Forensic,
+            &request,
+        )
+        .expect("metadata page");
+    let online = imported
+        .project_view_page(EventQuery::default(), ProjectionProfile::Forensic, request)
+        .expect("writer page");
+    assert_eq!(projected.events(), online.events());
+    assert_eq!(
+        projected.snapshot_ledger_position(),
+        online.snapshot_ledger_position()
+    );
+    assert_eq!(
+        projected.read_scope().unwrap().material_read,
+        actingcommand_contract::LedgerMaterialReadState::NotRequested
+    );
+    let bounded_metadata = GlobalLedger::open_metadata(
+        GlobalLedgerEvidenceConfig::new(imported_root.path()).with_budget(1, 1, deadline),
+    )
+    .err()
+    .expect("bounded metadata read");
+    assert_eq!(
+        (
+            bounded_metadata.code(),
+            bounded_metadata.operation(),
+            bounded_metadata.is_fatal(),
+        ),
+        ("ledger_read_budget_exceeded", "read_only_snapshot", false)
+    );
     imported.close().expect("formal writer close");
+    {
+        let connection = imported_database
+            .connection("supported pre-view offline root")
+            .unwrap();
+        let objects = connection
+            .prepare("SELECT type,name FROM sqlite_schema WHERE name GLOB 'ledger_view_*'")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(objects.iter().filter(|(kind, _)| kind == "view").count(), 6);
+        for (kind, name) in objects {
+            connection
+                .execute_batch(&format!("DROP {kind} {name}"))
+                .unwrap();
+        }
+    }
+    let prior_schema =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path())).unwrap();
+    for ledger_view in actingcommand_contract::LedgerView::ALL {
+        let query = EventQuery {
+            view: Some(ledger_view),
+            ..EventQuery::default()
+        };
+        let request = actingcommand_contract::RuntimeEventQueryPageRequest::default();
+        let page = prior_schema
+            .project_view_page(&query, ProjectionProfile::Forensic, &request)
+            .unwrap();
+        let expected = view.query(&query);
+        assert_eq!(
+            page.events()
+                .iter()
+                .map(|event| event.event_id)
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|event| *event.event_id())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(page.snapshot_ledger_position(), 4);
+    }
+    assert_eq!(
+        imported_database
+            .connection("read-only view schema unchanged")
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name GLOB 'ledger_view_*'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
     let reopened = LedgerMaintenance::acquire(imported_root.path(), false, limits, deadline)
         .expect("formal lock released");
     assert!(matches!(
@@ -326,6 +442,12 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         reopened
             .status(&imported_database, |_| None)
             .expect_err("malformed marker is fatal")
+            .is_fatal()
+    );
+    assert!(
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path()))
+            .err()
+            .expect("metadata does not skip malformed marker")
             .is_fatal()
     );
     imported_database.connection("remove schema in existing integrity specification").unwrap().execute_batch("DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta;").unwrap();

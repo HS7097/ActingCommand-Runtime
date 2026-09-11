@@ -4,7 +4,7 @@
 
 mod evidence;
 mod migration;
-pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
+pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
 mod projection;
 mod read_only;
 mod sqlite;
@@ -30,9 +30,9 @@ use crate::PersistedEvent;
 use actingcommand_contract::{
     CorrelationId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
     PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    SanitizationError, SanitizedEventDraft, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
-    VerifiedArtifactReference,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, SanitizationError, SanitizedEventDraft,
+    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, SecretField, SecretFingerprinter,
+    Sha256Fingerprint, SubscriptionCursor, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -382,6 +382,12 @@ enum WriterCommand {
         through_sequence: u64,
         page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
+    ProjectViewPage {
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+        response: SyncSender<GlobalLedgerResult<RuntimeEventQueryPage>>,
     },
     ProjectSchedulingOutcomes {
         expected: Box<SchedulingOutcomeIdentity>,
@@ -920,6 +926,9 @@ impl GlobalLedger {
     }
 
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "query_events")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -940,6 +949,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "query_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -957,6 +969,35 @@ impl GlobalLedger {
             "query_event_page",
         )?;
         receive_response(receiver, "query_event_page")?
+    }
+
+    pub fn project_view_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_ledger_view_page")
+        })?;
+        request.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
+        })?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal("writer_unavailable", "project_ledger_view_page")
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ProjectViewPage {
+                query,
+                profile,
+                request,
+                response,
+            },
+            "project_ledger_view_page",
+        )?;
+        receive_response(receiver, "project_ledger_view_page")?
     }
 
     pub fn project_scheduling_outcomes(
@@ -1033,6 +1074,9 @@ impl GlobalLedger {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_events")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1058,6 +1102,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1229,6 +1276,21 @@ fn writer_loop<S: LedgerStore>(
                         "query_event_page",
                     ))
                 };
+                let _ = response.send(result);
+            }
+            WriterCommand::ProjectViewPage {
+                query,
+                profile,
+                request,
+                response,
+            } => {
+                let result = store.project_view_page(&query, profile, &request);
+                if result.as_ref().is_err_and(GlobalLedgerError::terminal) {
+                    let error = result.expect_err("terminal view query must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
                 let _ = response.send(result);
             }
             WriterCommand::ProjectSchedulingOutcomes {
