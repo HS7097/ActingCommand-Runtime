@@ -171,6 +171,12 @@ impl HostShared {
             .close_instance(token.instance_id(), DeviceCloseAuthority::FencedDeviceWrite)
         {
             Ok(outcome) => {
+                self.append_stdio_close_observations(
+                    outcome.vendor_stdio(),
+                    Some(token.instance_id()),
+                    links.clone(),
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
                 let owner_disposition = self.record_owner_resource_close()?;
                 self.append_lifecycle_observed(
                     RuntimeLifecyclePhase::ResourceQuiescence {
