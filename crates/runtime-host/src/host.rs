@@ -5931,7 +5931,7 @@ impl HostShared {
             let attempt_event_id = *draft.event_id();
             let persisted = self
                 .ledger
-                .append_transaction(draft, work)
+                .append_transaction(draft, Box::new(work))
                 .map_err(|error| {
                     let error = crate::policy_host::planning_transaction_error(error);
                     if error.is_fatal() {
