@@ -75,7 +75,7 @@ pub(crate) fn publication_guard(
         ));
     };
     lock.try_lock_shared()
-        .map_err(|error| failure("artifact_use_lock_failed", error))?;
+        .map_err(|error| lock_failure("artifact_use_lock_failed", error))?;
     Ok(ArtifactUseGuard { _lock: Some(lock) })
 }
 
@@ -87,13 +87,13 @@ pub(crate) fn reader_guard(
     let lock = open_lock(root, reference, false)?;
     if let Some(lock) = &lock {
         lock.try_lock_shared()
-            .map_err(|error| failure("artifact_use_lock_failed", error))?;
+            .map_err(|error| lock_failure("artifact_use_lock_failed", error))?;
     }
     // Existing offline roots need no new lock file. The material lock also fences
     // a deleter that first creates the fixed lock while this reader is open.
     material
         .try_lock_shared()
-        .map_err(|error| failure("artifact_use_lock_failed", error))?;
+        .map_err(|error| lock_failure("artifact_use_lock_failed", error))?;
     Ok(ArtifactUseGuard { _lock: lock })
 }
 
@@ -105,13 +105,15 @@ pub fn try_artifact_delete_guard(
     let root = root
         .as_ref()
         .canonicalize()
-        .map_err(|error| failure("artifact_root_failed", error))?;
+        .map_err(|error| io_failure("artifact_root_failed", error))?;
     let lock = open_lock(&root, reference, true)?
         .ok_or_else(|| failure("artifact_use_lock_missing", "delete lock was not created"))?;
     match lock.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => return Ok(None),
-        Err(TryLockError::Error(error)) => return Err(failure("artifact_use_lock_failed", error)),
+        Err(TryLockError::Error(error)) => {
+            return Err(io_failure("artifact_use_lock_failed", error));
+        }
     }
     let key = reference
         .object_key()
@@ -123,13 +125,13 @@ pub fn try_artifact_delete_guard(
                 Ok(()) => {}
                 Err(TryLockError::WouldBlock) => return Ok(None),
                 Err(TryLockError::Error(error)) => {
-                    return Err(failure("artifact_use_lock_failed", error));
+                    return Err(io_failure("artifact_use_lock_failed", error));
                 }
             }
             let material = ArtifactMaterial::read_from(
                 &mut (&mut file).take(reference.byte_count.saturating_add(1)),
             )
-            .map_err(|error| failure("artifact_read_failed", error))?;
+            .map_err(|error| io_failure("artifact_read_failed", error))?;
             if material.byte_count() != reference.byte_count
                 || material.sha256() != reference.sha256
             {
@@ -141,7 +143,7 @@ pub fn try_artifact_delete_guard(
             Some(file)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(failure("artifact_read_failed", error)),
+        Err(error) => return Err(io_failure("artifact_read_failed", error)),
     };
     Ok(Some(ArtifactDeleteGuard {
         root,
@@ -170,12 +172,12 @@ fn open_lock(
     let directory = root.join("artifact-use-locks");
     if create {
         fs::create_dir_all(&directory)
-            .map_err(|error| failure("artifact_use_lock_failed", error))?;
+            .map_err(|error| io_failure("artifact_use_lock_failed", error))?;
     }
     let directory_meta = match fs::symlink_metadata(&directory) {
         Ok(metadata) => metadata,
         Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(failure("artifact_use_lock_failed", error)),
+        Err(error) => return Err(io_failure("artifact_use_lock_failed", error)),
     };
     if !directory_meta.is_dir() || is_link(&directory_meta) {
         return Err(failure(
@@ -193,7 +195,7 @@ fn open_lock(
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(failure("artifact_use_lock_failed", error)),
+        Err(error) => return Err(io_failure("artifact_use_lock_failed", error)),
     }
     match OpenOptions::new()
         .read(true)
@@ -204,12 +206,23 @@ fn open_lock(
     {
         Ok(file) => Ok(Some(file)),
         Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(failure("artifact_use_lock_failed", error)),
+        Err(error) => Err(io_failure("artifact_use_lock_failed", error)),
     }
 }
 
 fn failure(code: &'static str, detail: impl ToString) -> ArtifactStoreError {
     ArtifactStoreError::fatal(code, "artifact_material_use", detail.to_string())
+}
+
+fn io_failure(code: &'static str, error: std::io::Error) -> ArtifactStoreError {
+    failure(code, format!("{:?}: {error}", error.kind())).with_raw_os_error(error.raw_os_error())
+}
+
+fn lock_failure(code: &'static str, error: TryLockError) -> ArtifactStoreError {
+    match error {
+        TryLockError::WouldBlock => failure(code, "WouldBlock: artifact material is in use"),
+        TryLockError::Error(error) => io_failure(code, error),
+    }
 }
 
 fn is_link(metadata: &fs::Metadata) -> bool {
