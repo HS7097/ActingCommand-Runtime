@@ -98,6 +98,68 @@ pub struct LabError {
     pub details: Option<Value>,
 }
 
+/// Declaration location only; resource operation values are never diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDeclarationIssue {
+    pub declaration_file: String,
+    pub field_path: String,
+    pub schema_version: Option<String>,
+    pub reason: ResourceDeclarationReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceDeclarationReason {
+    UnknownField,
+    UnconsumedField,
+    MissingField,
+    InvalidType,
+    InvalidValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDeclarationRejection {
+    pub declared_package: crate::PackageRef,
+    pub verified_package: Option<crate::PackageRef>,
+    pub program_version: String,
+    pub issue: ResourceDeclarationIssue,
+}
+
+impl ResourceDeclarationRejection {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.declared_package
+            .validate()
+            .map_err(|_| "invalid_resource_declaration_identity")?;
+        if let Some(verified) = &self.verified_package {
+            verified
+                .validate()
+                .map_err(|_| "invalid_resource_declaration_identity")?;
+            if verified != &self.declared_package {
+                return Err("invalid_resource_declaration_identity");
+            }
+        }
+        let bounded =
+            |text: &str, limit: usize| text.len() <= limit && !text.chars().any(char::is_control);
+        if self.program_version.is_empty()
+            || !bounded(&self.program_version, 128)
+            || !crate::safe_source_path(&self.issue.declaration_file)
+            || !bounded(&self.issue.declaration_file, 4096)
+            || !bounded(&self.issue.field_path, 4096)
+            || (!self.issue.field_path.is_empty() && !self.issue.field_path.starts_with('/'))
+            || self
+                .issue
+                .schema_version
+                .as_deref()
+                .is_some_and(|value| !bounded(value, 128))
+        {
+            return Err("invalid_resource_declaration_diagnostic");
+        }
+        Ok(())
+    }
+}
+
 impl LabError {
     pub fn usage(message: impl Into<String>) -> Self {
         Self::new(

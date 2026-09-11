@@ -61,16 +61,55 @@ impl HostShared {
         approvals
             .validate_transition(decision)
             .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None))?;
-        let persisted = self.append_event(
-            EventSeverity::Info,
-            EventSource::Ui,
-            OriginModule::Governance,
-            EventActor::User,
-            validated.event_links(None, None, None),
-            ApprovalPayloadDraft::decision(decision.clone(), AuditInput::new()),
-        )?;
-        ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+        let work = approvals
+            .prepare_decision(decision)
             .map_err(RequestFailure::poison_without_terminal)?;
+        let fact_gate = lock(&self.fact_write_gate, "append_approval_transaction")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(RequestFailure::poison_without_terminal(ledger_error(
+                "append_approval_transaction",
+            )));
+        }
+        let links = validated.event_links(None, None, None);
+        let draft = self
+            .events
+            .draft(
+                EventSeverity::Info,
+                EventSource::Ui,
+                OriginModule::Governance,
+                EventActor::User,
+                links.clone(),
+                ApprovalPayloadDraft::decision(decision.clone(), AuditInput::new()),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let draft = self
+            .events
+            .sanitize(draft)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let persisted = self
+            .ledger
+            .append_transaction(draft, work)
+            .map_err(|error| {
+                let error = crate::approval::approval_transaction_error(error);
+                if error.is_fatal() {
+                    self.lifecycle_append_failed.store(true, Ordering::Release);
+                    RequestFailure::poison_without_terminal(error)
+                } else {
+                    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                }
+            })?;
+        let observed = self
+            .observe_device_diagnostics_under_fact_gate(&persisted, &links)
+            .and_then(|()| self.synchronize_fact_store_under_gate());
+        drop(fact_gate);
+        observed
+            .and_then(|()| self.observe_pipeline_event(&persisted))
+            .map_err(|error| {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+                let _ = error.lifecycle.recorded_event.set(*persisted.event_id());
+                RequestFailure::poison(error, Some(terminal(&persisted)))
+            })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&persisted)),

@@ -1736,15 +1736,17 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
     let started = Instant::now();
     loop {
         let completed = client
-            .query_events(
+            .query_event_page(
                 EventQuery {
                     event_type: Some(EventType::PolicyDispatchCompleted),
                     ..EventQuery::default()
                 },
                 ProjectionProfile::Forensic,
+                RuntimeEventQueryPageRequest::new(1, None).expect("completion page request"),
             )
             .expect("query policy completion");
-        if !completed.is_empty() {
+        let snapshot_ledger_position = completed.snapshot_ledger_position();
+        if !completed.events().is_empty() {
             break;
         }
         if let Some(status) = child.0.try_wait().expect("process state") {
@@ -1755,10 +1757,71 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             }
             panic!("actingd exited before paginated run completed with {status}: {stderr}");
         }
-        assert!(
-            started.elapsed() < Duration::from_secs(20),
-            "paginated policy run timed out"
-        );
+        let completion_wait = std::panic::catch_unwind(|| {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "paginated policy run timed out"
+            );
+        });
+        if let Err(original) = completion_wait {
+            eprintln!(
+                "paginated policy run timed out; elapsed_after_failure={:?}; child_state=running at preceding process-state read; last_successful_snapshot={snapshot_ledger_position}",
+                started.elapsed(),
+            );
+            if snapshot_ledger_position == 0 {
+                eprintln!("No observed ledger facts; failure fragment query skipped.");
+            } else {
+                let from_sequence = snapshot_ledger_position.saturating_sub(31).max(1);
+                eprintln!(
+                    "One Forensic ledger fragment: from_sequence={from_sequence}, to_sequence={snapshot_ledger_position}, limit=32; original 500-ms I/O budget; no continuation or retry. Uncovered events remain unknown."
+                );
+                let fragment = client.query_event_page(
+                    EventQuery {
+                        from_sequence: Some(from_sequence),
+                        to_sequence: Some(snapshot_ledger_position),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                    RuntimeEventQueryPageRequest::new(32, None).expect("failure fragment request"),
+                );
+                let mut output = [0_u8; 60 * 1024];
+                let mut remaining = &mut output[..];
+                let mut serialization_error = None;
+                let formatted = match fragment {
+                    Ok(page) => {
+                        let header = writeln!(
+                            remaining,
+                            "Fragment returned_count={}, has_more={}, snapshot_ledger_position={}; actual page JSON:",
+                            page.returned_count(),
+                            page.has_more(),
+                            page.snapshot_ledger_position(),
+                        );
+                        if header.is_ok() {
+                            serialization_error =
+                                serde_json::to_writer(&mut remaining, &page).err();
+                        }
+                        header
+                    }
+                    Err(error) => writeln!(remaining, "Fragment query failed: {error:#?}"),
+                };
+                let used = 60 * 1024 - remaining.len();
+                let text = match std::str::from_utf8(&output[..used]) {
+                    Ok(text) => text,
+                    Err(error) => std::str::from_utf8(&output[..error.valid_up_to()])
+                        .expect("valid diagnostic prefix"),
+                };
+                eprint!("{text}");
+                if formatted.is_err() {
+                    eprintln!("\nFailure output incomplete: 60-KiB diagnostic limit reached.");
+                }
+                if let Some(error) = serialization_error {
+                    eprintln!(
+                        "\nFailure page serialization/write error: {error}; output may be truncated at the 60-KiB diagnostic limit."
+                    );
+                }
+            }
+            std::panic::resume_unwind(original);
+        }
         thread::sleep(Duration::from_millis(20));
     }
     let intents = client

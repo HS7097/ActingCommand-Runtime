@@ -51,6 +51,8 @@ pub struct RecognitionPackError {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     region: Option<Box<OcrRegionEvidence>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
 impl RecognitionPackError {
@@ -64,6 +66,7 @@ impl RecognitionPackError {
             code,
             message: message.into(),
             region: None,
+            declaration_issue: None,
         }
     }
 
@@ -81,6 +84,24 @@ impl RecognitionPackError {
 
     pub fn region(&self) -> Option<&OcrRegionEvidence> {
         self.region.as_deref()
+    }
+
+    pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
+        self.declaration_issue.as_deref()
+    }
+
+    fn at_declaration(
+        mut self,
+        pointer: String,
+        reason: actingcommand_contract::ResourceDeclarationReason,
+    ) -> Self {
+        self.declaration_issue = Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+            declaration_file: "recognition.pack.json".to_string(),
+            field_path: pointer,
+            schema_version: None,
+            reason,
+        }));
+        self
     }
 
     fn with_region(mut self, region: &OcrRegionEvidence) -> Self {
@@ -688,9 +709,12 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
         })?
         .to_string();
 
-    if schema_version == "0.6" {
-        validate_v06_wire_shape(&value)?;
-    }
+    validate_wire_shape(&value, &schema_version).map_err(|mut error| {
+        if let Some(issue) = &mut error.declaration_issue {
+            issue.schema_version = Some(schema_version.clone());
+        }
+        error
+    })?;
 
     let pack: RecognitionPack = serde_json::from_value(value).map_err(|err| {
         RecognitionPackError::fatal(format!("failed to parse recognition pack JSON: {err}"))
@@ -810,6 +834,7 @@ impl SceneEvaluation<'_> {
                 code: RecognitionPackErrorCode::RegionUnresolved,
                 message: format!("OCR target '{}' region unresolved: {reason:?}", target.id),
                 region: Some(Box::new(region)),
+                declaration_issue: None,
             }
         };
         if !evaluated.passed {
@@ -1692,17 +1717,25 @@ impl RecognitionTarget {
     }
 }
 
-fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
+fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()> {
     let root = value.as_object().ok_or_else(|| {
         RecognitionPackError::fatal("schema 0.6 recognition pack root must be an object")
     })?;
+    for field in ["converter_schema_version", "generated", "generated_by"] {
+        if root.contains_key(field) {
+            return Err(RecognitionPackError::fatal(format!(
+                "recognition pack contains unconsumed field '{field}'"
+            ))
+            .at_declaration(
+                format!("/{field}"),
+                actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+    }
     reject_unknown_fields(
         root,
         &[
             "schema_version",
-            "converter_schema_version",
-            "generated",
-            "generated_by",
             "game",
             "server",
             "locale",
@@ -1710,37 +1743,18 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
             "defaults",
             "targets",
         ],
-        "schema 0.6 recognition pack",
+        "",
     )?;
-    for field in ["converter_schema_version", "generated_by"] {
-        if root.get(field).is_some_and(|value| !value.is_string()) {
-            return Err(RecognitionPackError::fatal(format!(
-                "schema 0.6 recognition pack field '{field}' must be a string"
-            )));
-        }
-    }
-    if root
-        .get("generated")
-        .is_some_and(|value| !value.is_boolean())
-    {
-        return Err(RecognitionPackError::fatal(
-            "schema 0.6 recognition pack field 'generated' must be a boolean",
-        ));
-    }
     if let Some(coordinate_space) = root.get("coordinate_space")
         && !coordinate_space.is_null()
     {
-        validate_strict_object(
-            coordinate_space,
-            &["width", "height"],
-            "schema 0.6 coordinate_space",
-        )?;
+        validate_strict_object(coordinate_space, &["width", "height"], "/coordinate_space")?;
     }
     if let Some(defaults) = root.get("defaults") {
         validate_strict_object(
             defaults,
             &["template_threshold", "color_max_distance", "match_metric"],
-            "schema 0.6 defaults",
+            "/defaults",
         )?;
     }
     let targets = root
@@ -1756,15 +1770,16 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
         })?;
         let allowed = match target_type {
             "template" => {
-                if object.contains_key("mask") {
+                if schema == "0.6" && object.contains_key("mask") {
                     return Err(RecognitionPackError::fatal_with_code(
                         RecognitionPackErrorCode::UnsupportedTarget,
                         format!(
                             "schema 0.6 target[{index}].mask is deprecated_in_vNext and must be migrated"
                         ),
-                    ));
+                    ).at_declaration(format!("/targets/{index}/mask"), actingcommand_contract::ResourceDeclarationReason::UnconsumedField));
                 }
                 if let Some(method) = object.get("method").and_then(Value::as_str)
+                    && schema == "0.6"
                     && method != "ncc"
                 {
                     return Err(RecognitionPackError::fatal_with_code(
@@ -1772,7 +1787,7 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
                         format!(
                             "schema 0.6 target[{index}].method='{method}' is deprecated_in_vNext and must be migrated"
                         ),
-                    ));
+                    ).at_declaration(format!("/targets/{index}/method"), actingcommand_contract::ResourceDeclarationReason::UnconsumedField));
                 }
                 &[
                     "type",
@@ -1781,6 +1796,7 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
                     "region",
                     "threshold",
                     "method",
+                    "mask",
                     "rect_move",
                     "color_check",
                     "click",
@@ -1822,7 +1838,15 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
                 ));
             }
         };
-        reject_unknown_fields(object, allowed, &format!("schema 0.6 target[{index}]"))?;
+        reject_unknown_fields(object, allowed, &format!("/targets/{index}"))?;
+        if let Some(mask) = object.get("mask").filter(|mask| !mask.is_null()) {
+            let fields: &[&str] = match mask.get("type").and_then(Value::as_str) {
+                Some("range") => &["type", "lower", "upper"],
+                Some("bitmap") => &["type", "path"],
+                _ => return Err(RecognitionPackError::fatal("unknown recognition mask type")),
+            };
+            validate_strict_object(mask, fields, &format!("/targets/{index}/mask"))?;
+        }
         for field in ["region", "rect_move", "click"] {
             if let Some(rect) = object.get(field)
                 && !rect.is_null()
@@ -1837,21 +1861,21 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
                     validate_strict_object(
                         rect,
                         &["mode", "anchor_target_id", "offset", "width", "height"],
-                        "template_relative region",
+                        &format!("/targets/{index}/region"),
                     )?;
                     validate_strict_object(
                         rect.get("offset").ok_or_else(|| {
                             RecognitionPackError::fatal("relative region offset missing")
                         })?,
                         &["x", "y"],
-                        "template_relative offset",
+                        &format!("/targets/{index}/region/offset"),
                     )?;
                     continue;
                 }
                 validate_strict_object(
                     rect,
                     &["x", "y", "width", "height"],
-                    &format!("schema 0.6 target[{index}].{field}"),
+                    &format!("/targets/{index}/{field}"),
                 )?;
             }
         }
@@ -1861,27 +1885,27 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
             let color_check = validate_strict_object(
                 color_check,
                 &["region", "expected"],
-                &format!("schema 0.6 target[{index}].color_check"),
+                &format!("/targets/{index}/color_check"),
             )?;
             if let Some(region) = color_check.get("region") {
                 if region.get("mode").is_some() {
                     validate_strict_object(
                         region,
                         &["mode", "anchor_target_id", "offset", "width", "height"],
-                        "relative color region",
+                        &format!("/targets/{index}/color_check/region"),
                     )?;
                     validate_strict_object(
                         region.get("offset").ok_or_else(|| {
                             RecognitionPackError::fatal("relative color offset missing")
                         })?,
                         &["x", "y"],
-                        "relative color offset",
+                        &format!("/targets/{index}/color_check/region/offset"),
                     )?;
                 } else {
                     validate_strict_object(
                         region,
                         &["x", "y", "width", "height"],
-                        &format!("schema 0.6 target[{index}].color_check.region"),
+                        &format!("/targets/{index}/color_check/region"),
                     )?;
                 }
             }
@@ -1913,7 +1937,11 @@ fn reject_unknown_fields(
     {
         return Err(RecognitionPackError::fatal(format!(
             "{label} contains unknown field '{field}'"
-        )));
+        ))
+        .at_declaration(
+            format!("{label}/{}", field.replace('~', "~0").replace('/', "~1")),
+            actingcommand_contract::ResourceDeclarationReason::UnknownField,
+        ));
     }
     Ok(())
 }
@@ -2898,7 +2926,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_0_6_rejects_unknown_fields_without_changing_legacy_parsing() {
+    fn supported_schemas_reject_unknown_fields() {
         let legacy = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.5",
@@ -2914,10 +2942,10 @@ mod tests {
                 ]
             }"#,
         )
-        .expect("legacy unknown fields remain accepted");
-        assert_eq!(legacy.schema_version, "0.5");
+        .expect_err("unknown fields are rejected in every supported declaration format");
+        assert_fatal_contains(legacy, "unknown field 'legacy_extension'");
 
-        load_pack_from_json_str(
+        let err = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.6",
                 "converter_schema_version": "0.5",
@@ -2927,7 +2955,15 @@ mod tests {
                 "targets": []
             }"#,
         )
-        .expect("declared generator metadata remains valid in strict schema");
+        .expect_err("unconsumed metadata is rejected before recognition admission");
+        let issue = err
+            .declaration_issue()
+            .expect("structured declaration issue");
+        assert_eq!(issue.field_path, "/converter_schema_version");
+        assert_eq!(
+            issue.reason,
+            actingcommand_contract::ResourceDeclarationReason::UnconsumedField
+        );
 
         let err = load_pack_from_json_str(
             r#"{
@@ -2937,8 +2973,8 @@ mod tests {
                 "targets": []
             }"#,
         )
-        .expect_err("declared generator metadata retains its wire type");
-        assert_fatal_contains(err, "generated' must be a boolean");
+        .expect_err("unconsumed declaration is rejected regardless of its value");
+        assert_fatal_contains(err, "unconsumed field 'generated'");
 
         let err = load_pack_from_json_str(
             r#"{
