@@ -42,6 +42,17 @@ pub(super) fn run(subcommand: &str, global: &GlobalOptions, args: &[String]) -> 
 }
 
 pub(super) fn map_runtime_error(error: RuntimeClientError) -> CliError {
+    if let Some(receipt) = error.committed_receipt()
+        && receipt.resource_declaration().is_some()
+    {
+        return CliError::new(
+            ErrorKind::UsageValidation,
+            "resource_declaration_invalid",
+            "Runtime rejected an unconsumable resource declaration before execution",
+            &[],
+        )
+        .with_details(serde_json::json!({"receipt": receipt}));
+    }
     if error.projection().is_none() && error.code() == "run_summary_not_found" {
         return CliError::new(
             ErrorKind::UsageValidation,

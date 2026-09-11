@@ -3250,12 +3250,10 @@ fn write_runtime_owned_lab_package(path: &Path) {
                     "game":"neutral",
                     "server_scope":["test"],
                     "coordinate_space":{"width":2,"height":2},
-                    "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
+                    "defaults":{"max_attempts":1,"retry_interval_ms":1},
                     "entry_page":"home",
                     "target_page":"terminal",
                     "recovery":{"kind":"return_home","task_id":"return_home"},
-                    "max_task_retries":1,
-                    "on_exhausted":"pause",
                     "operations":[{
                         "id":"open_terminal",
                         "purpose":"force a sealed recovery suggestion",
@@ -3263,7 +3261,6 @@ fn write_runtime_owned_lab_package(path: &Path) {
                         "to":"terminal",
                         "click":{"kind":"point","x":1,"y":1},
                         "retryable":true,
-                        "effect":"navigation_only",
                         "unguarded_trusted_coordinate":true
                     }]
                 }"#,
@@ -3283,7 +3280,6 @@ fn write_runtime_owned_lab_package(path: &Path) {
                         "from":"any",
                         "to":"home",
                         "click":{"kind":"point","x":1,"y":1},
-                        "effect":"navigation_only",
                         "unguarded_trusted_coordinate":true
                     }]
                 }"#,
