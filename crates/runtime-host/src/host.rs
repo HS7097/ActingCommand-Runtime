@@ -741,6 +741,7 @@ impl RuntimeHost {
             Arc::clone(&state),
             &ledger,
             config.policy_cadence.clone(),
+            &events,
         )?;
         reconcile_policy_dispatches(&mut policy, &ledger, &events)?;
         let authoritative_policy_outcomes =
@@ -1087,16 +1088,24 @@ impl RuntimeHost {
         &self,
         sources: &CatalogSources,
         expected: CatalogGeneration,
-    ) -> RuntimeHostResult<CatalogGeneration> {
+    ) -> RuntimeHostResult<(
+        RuntimeHostResult<CatalogGeneration>,
+        Option<actingcommand_runtime_state::StateDocument>,
+    )> {
         let shared = self.shared_ref("activate_policy_catalog_with_expected_for_test")?;
         let catalog = lock(&shared.policy, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
-        shared.switch_policy_catalog(
+        let result = shared.switch_policy_catalog(
             catalog,
             Some(expected),
             EventAction::CatalogActivate,
             CatalogTransitionTarget::Activated,
             None,
-        )
+        );
+        let document = shared
+            .state
+            .read_json_document(actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY)
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok((result, document))
     }
 
     pub fn rollback_policy_catalog(
@@ -2475,6 +2484,16 @@ fn reconcile_runtime_state(
         .migrations()
         .map_err(|error| RuntimeHostError::state(&error))?
     {
+        if migration.state_key() == actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY {
+            if !migrated.contains(migration.migration_id()) {
+                return Err(RuntimeHostError::fatal(
+                    "catalog_migration_source_missing",
+                    "reconcile_runtime_state",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            continue;
+        }
         if !migrated.contains(migration.migration_id()) {
             append_runtime_state_event(
                 ledger,
@@ -3556,6 +3575,9 @@ impl HostShared {
     }
 
     fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
+        if let Some(error) = self.fatal.current()? {
+            return Err(error);
+        }
         Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
     }
 
@@ -3573,6 +3595,9 @@ impl HostShared {
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
             let policy = lock(&self.policy, "stage_policy_catalog")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
             let catalog = policy.stage(sources)?;
             let previous = policy.active_generation();
             (catalog, previous)
@@ -3605,6 +3630,9 @@ impl HostShared {
     fn rollback_policy_catalog(&self, catalog_hash: &str) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
             let policy = lock(&self.policy, "load_policy_catalog_rollback")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
             let previous = policy.active_generation().ok_or_else(|| {
                 RuntimeHostError::request(
                     "policy_catalog_unavailable",
@@ -3644,106 +3672,174 @@ impl HostShared {
         target: CatalogTransitionTarget,
         promotion: Option<CatalogPromotionAuthorization>,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        let generation = catalog.generation().clone();
-        let expected_active_hash = previous
-            .as_ref()
-            .map(|value| value.catalog_hash().to_owned());
-        let data = CatalogTransitionEventData {
-            catalog_id: generation.catalog_id().to_owned(),
-            catalog_version: generation.catalog_version(),
-            catalog_hash: generation.catalog_hash().to_owned(),
-            previous_catalog_hash: previous
+        let result = (|| -> RuntimeHostResult<CatalogGeneration> {
+            let generation = catalog.generation().clone();
+            let expected_active_hash = previous
                 .as_ref()
-                .map(|value| value.catalog_hash().to_owned()),
-            promotion,
-        };
-        let links = self.events.system_links()?;
-        let intent = self.events.draft(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Policy,
-            EventActor::Runtime,
-            links.clone(),
-            CatalogPayloadDraft::transition_intent(action, data.clone(), AuditInput::new()),
-        )?;
-        let intent = self.events.sanitize(intent)?;
-        let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
+                .map(|value| value.catalog_hash().to_owned());
+            let data = CatalogTransitionEventData {
+                catalog_id: generation.catalog_id().to_owned(),
+                catalog_version: generation.catalog_version(),
+                catalog_hash: generation.catalog_hash().to_owned(),
+                previous_catalog_hash: previous
+                    .as_ref()
+                    .map(|value| value.catalog_hash().to_owned()),
+                promotion,
+            };
+            let links = self.events.system_links()?;
+            let intent = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Policy,
+                EventActor::Runtime,
+                links.clone(),
+                CatalogPayloadDraft::transition_intent(action, data.clone(), AuditInput::new()),
+            )?;
+            let intent = self.events.sanitize(intent)?;
+            let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
+                .map_err(|_| critical_plan_error())?;
+            let mut policy = lock(&self.policy, "switch_active_policy_catalog")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
+            let intent = self
+                .ledger
+                .append(plan.intent().clone())
+                .map_err(|error| crate::policy_host::catalog_ledger_error(&error))?;
+            let work = policy.prepare_active_transaction(&catalog, expected_active_hash.as_deref());
+            let success = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Policy,
+                EventActor::Runtime,
+                links.clone(),
+                match target {
+                    CatalogTransitionTarget::Activated => {
+                        CatalogPayloadDraft::activated(data.clone(), AuditInput::new())
+                    }
+                    CatalogTransitionTarget::RolledBack => {
+                        CatalogPayloadDraft::rolled_back(data.clone(), AuditInput::new())
+                    }
+                },
+            )?;
+            let success = self.events.sanitize(success)?;
+            actingcommand_ledger::critical::validate_catalog_outcome(
+                target, &intent, &success, true,
+            )
             .map_err(|_| critical_plan_error())?;
-        let success_links = links.clone();
-        let failure_links = links;
-        let success_data = data.clone();
-        let failure_data = data;
-        let result = execute_critical(
-            &self.ledger,
-            self.events.fingerprinter(),
-            plan,
-            || match lock(&self.policy, "switch_active_policy_catalog").and_then(|mut policy| {
-                policy.switch_active(catalog, expected_active_hash.as_deref())
-            }) {
-                Ok(()) => CriticalActionReport::Succeeded {
-                    value: generation.clone(),
-                    effect: DefiniteEffectDisposition::Performed,
-                },
-                Err(error) => CriticalActionReport::Failed {
-                    effect: if error.is_fatal() {
-                        EffectDisposition::Indeterminate
+            let outcome = match self.ledger.append_transaction(success, work) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let Some(rejection) = error.rolled_back_work() else {
+                        let error = crate::policy_host::catalog_ledger_error(&error);
+                        self.fatal.mark(error.clone())?;
+                        return Err(error);
+                    };
+                    let original = if rejection.fatal {
+                        RuntimeHostError::fatal(
+                            rejection.code,
+                            rejection.operation,
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
                     } else {
-                        EffectDisposition::NotPerformed
-                    },
-                    error,
-                },
-            },
-            |_, _| {
-                self.events
-                    .draft(
-                        EventSeverity::Info,
-                        EventSource::Runtime,
-                        OriginModule::Policy,
-                        EventActor::Runtime,
-                        success_links,
-                        match target {
-                            CatalogTransitionTarget::Activated => {
-                                CatalogPayloadDraft::activated(success_data, AuditInput::new())
-                            }
-                            CatalogTransitionTarget::RolledBack => {
-                                CatalogPayloadDraft::rolled_back(success_data, AuditInput::new())
-                            }
-                        },
+                        RuntimeHostError::request(
+                            rejection.code,
+                            rejection.operation,
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                    }
+                    .with_native_detail(rejection.detail.clone());
+                    let failed = self
+                        .events
+                        .draft(
+                            EventSeverity::Error,
+                            EventSource::Runtime,
+                            OriginModule::Policy,
+                            EventActor::Runtime,
+                            links,
+                            CatalogPayloadDraft::transition_failed(
+                                action,
+                                data,
+                                EffectDisposition::NotPerformed,
+                                AuditInput::new(),
+                            ),
+                        )
+                        .and_then(|draft| self.events.sanitize(draft));
+                    let failed = match failed {
+                        Ok(draft) => draft,
+                        Err(error) => {
+                            let error = RuntimeHostError::fatal(
+                                "catalog_failure_fact_undurable",
+                                "build_catalog_failure",
+                                RuntimeErrorCode::LedgerFailure,
+                            )
+                            .with_native_detail(format!(
+                                "original={original:?}; failure={error:?}"
+                            ));
+                            self.fatal.mark(error.clone())?;
+                            return Err(error);
+                        }
+                    };
+                    actingcommand_ledger::critical::validate_catalog_outcome(
+                        target, &intent, &failed, false,
                     )
-                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
-            },
-            |_, effect| {
-                self.events
-                    .draft(
-                        EventSeverity::Error,
-                        EventSource::Runtime,
-                        OriginModule::Policy,
-                        EventActor::Runtime,
-                        failure_links,
-                        CatalogPayloadDraft::transition_failed(
-                            action,
-                            failure_data,
-                            effect,
-                            AuditInput::new(),
-                        ),
-                    )
-                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
-            },
-        );
-        match result {
-            Ok(receipt) => Ok(receipt.into_value()),
-            Err(CriticalExecutionError::Action { error, .. }) => {
-                if error.is_fatal() {
-                    self.fatal.mark(error.clone())?;
+                    .map_err(|error| {
+                        RuntimeHostError::fatal(
+                            "catalog_failure_fact_undurable",
+                            "validate_catalog_failure",
+                            RuntimeErrorCode::LedgerFailure,
+                        )
+                        .with_native_detail(format!("original={original:?}; failure={error:?}"))
+                    })?;
+                    let failed = self.ledger.append(failed).map_err(|error| {
+                        crate::policy_host::catalog_ledger_error(&error).with_native_detail(
+                            format!(
+                                "original={original:?}; failure={error}; detail={:?}",
+                                error.detail()
+                            ),
+                        )
+                    });
+                    drop(policy);
+                    match failed {
+                        Ok(event) => {
+                            if original.is_fatal() {
+                                self.fatal.mark(original.clone())?;
+                            }
+                            if let Err(error) = self
+                                .synchronize_fact_store()
+                                .and_then(|()| self.observe_pipeline_event(&event))
+                            {
+                                return Err(error.into_fatal().with_native_detail(format!(
+                                    "original={original:?}; failed outcome was committed"
+                                )));
+                            }
+                            return Err(original);
+                        }
+                        Err(error) => {
+                            self.fatal.mark(error.clone())?;
+                            return Err(error);
+                        }
+                    }
                 }
-                Err(error)
-            }
-            Err(error) => {
-                let error = critical_execution_error(&error);
+            };
+            policy.publish_active(catalog);
+            drop(policy);
+            let post = self
+                .synchronize_fact_store()
+                .and_then(|()| self.observe_pipeline_event(&outcome));
+            if let Err(error) = post {
+                let error = error.into_fatal();
                 self.fatal.mark(error.clone())?;
-                Err(error)
+                return Err(error);
             }
+            Ok(generation)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
         }
+        result
     }
 
     fn evaluate_policy_cycle(&self, trigger: PolicyTrigger) -> RuntimeHostResult<PolicyCycle> {

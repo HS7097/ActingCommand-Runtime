@@ -234,3 +234,32 @@ owner's typed module probe, then proposes exact retirements and CI changes in th
 assigned stage. Duplicate ordinary evidence can retire only after its replacement
 is established. Invariants, fail-closed cases, original failures and historical
 evidence remain protected. This plan authorizes no deletion or CI gate removal.
+
+
+## Catalog SQL transactions
+
+The existing GlobalLedger writer accepts one sanitized catalog outcome or State migration
+fact together with bounded, typed Runtime State work. The SQLite owner lends its exact
+Immediate transaction to that work; a different database owner or unsupported backend
+is rejected. State work cannot publish caches, call Host/GlobalLedger, or commit itself.
+The independently durable catalog intent remains unchanged. Event rows, links, meta/tag
+and the reserved `policy.catalog.active` document/history (plus its migration row when
+applicable) commit once before Ledger indexes/statistics, ack/live and policy caches move.
+
+A State/CAS error is returned as business rejection only after confirmed rollback. The
+caller records the original failure fact while preserving Request/Fatal identity. Failed
+rollback, uncertain COMMIT and incomplete post-commit publication stop the affected writer
+or Host; they never claim NotPerformed or resend the successful operation. Commit readback
+uses the same event position with ordered-u64-v1 encoding, exact event/link/artifact/meta
+rows and State document/history/migration comparisons. Connection acquisition is nonblocking;
+scans use the existing query row ceiling, 2 MiB and a checked two-second deadline, preserving
+the database owner's native SQLite busy timeout. Unavailable, expired or conflicting evidence
+remains Unknown. State's positive integer position encoding and integrity tags are unchanged.
+
+Only the catalog owner writes the reserved key. Generic State document write, migration
+and rollback APIs reject it with a Request error. Startup and historical catalog reads use
+one ordered fold of matched intent/outcome and validated migration facts. Current State
+must equal the latest effective source, including catalog identity/version and verified
+material; an older matching hash is insufficient. File publication/removal, Provider,
+device effects and capacity sampling remain outside the SQL transaction. The original
+performance monitor and Business/Drain admission retain their own committed-fact boundary.
