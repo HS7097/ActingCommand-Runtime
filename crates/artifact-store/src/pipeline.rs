@@ -16,6 +16,7 @@ use actingcommand_contract::{
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 
 pub const DEFAULT_CAPTURE_CADENCE_MS: u64 = 300;
 
@@ -214,7 +215,7 @@ pub struct CapturePipelineOutcome {
 
 pub struct CapturePipeline {
     frame_store: FrameStore,
-    artifact_store: ArtifactStore,
+    artifact_store: Arc<ArtifactStore>,
     event_ids: IdentifierIssuer,
     run_context: ArtifactWriteContext,
     contexts: BTreeMap<usize, ArtifactWriteContext>,
@@ -235,13 +236,49 @@ impl CapturePipeline {
         run_context: ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<Self> {
+        Self::open_shared_inner(
+            Arc::new(ArtifactStore::open(artifact_root)?),
+            frame_temp_root,
+            config,
+            run_context,
+            sink,
+            0,
+        )
+    }
+
+    /// Host capture shares its existing material owner and protects its severity backtrace.
+    pub fn open_with_store(
+        artifact_store: Arc<ArtifactStore>,
+        frame_temp_root: impl AsRef<Path>,
+        config: CapturePipelineConfig,
+        run_context: ArtifactWriteContext,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<Self> {
+        Self::open_shared_inner(
+            artifact_store,
+            frame_temp_root,
+            config,
+            run_context,
+            sink,
+            8,
+        )
+    }
+
+    fn open_shared_inner(
+        artifact_store: Arc<ArtifactStore>,
+        frame_temp_root: impl AsRef<Path>,
+        config: CapturePipelineConfig,
+        run_context: ArtifactWriteContext,
+        sink: &mut dyn ArtifactEventSink,
+        protected_history: usize,
+    ) -> ArtifactStoreResult<Self> {
         config.validate()?;
         let mut pipeline = Self {
             frame_store: FrameStore::new(
                 frame_temp_root.as_ref().to_path_buf(),
                 config.frame_store,
             )?,
-            artifact_store: ArtifactStore::open(artifact_root)?,
+            artifact_store,
             event_ids: IdentifierIssuer::new().map_err(|error| {
                 ArtifactStoreError::fatal(
                     "event_issuer_failed",
@@ -259,6 +296,9 @@ impl CapturePipeline {
             redaction_state: config.redaction_state,
             paused: false,
         };
+        pipeline
+            .frame_store
+            .protect_recent_frames(protected_history)?;
         pipeline.append_event(
             sink,
             pipeline.run_context.event_links().clone(),
@@ -331,6 +371,41 @@ impl CapturePipeline {
             frame,
             persisted,
             evidence_completeness: self.evidence_completeness(),
+        })
+    }
+
+    /// Preserve an exact newly referenced/backtrace frame before publishing its pin.
+    pub fn pin_frame(
+        &mut self,
+        frame_index: usize,
+        reason: PinnedFrameReason,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<ArtifactReference> {
+        self.frame_store.pin_frame(frame_index, reason)?;
+        self.pinned.entry(frame_index).or_insert(reason);
+        self.persist_candidates(false, sink)?;
+        self.persisted.get(&frame_index).cloned().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "frame_material_unavailable",
+                "pin_capture_frame",
+                "pinned original frame was not persisted",
+            )
+        })
+    }
+
+    /// Existing capture/receipt consumers require the exact frame synchronously.
+    pub fn persist_frame(
+        &mut self,
+        frame_index: usize,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<ArtifactReference> {
+        self.persist_candidates(true, sink)?;
+        self.persisted.get(&frame_index).cloned().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "frame_material_unavailable",
+                "persist_capture_frame",
+                "referenced original frame was not retained",
+            )
         })
     }
 

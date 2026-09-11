@@ -11,6 +11,8 @@ use actingcommand_contract::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+mod artifact;
+pub use artifact::{ArtifactAvailability, LedgerArtifactReference};
 mod metadata;
 pub(crate) use metadata::{LedgerEventMetadata, LedgerEventRead};
 
@@ -41,7 +43,7 @@ pub struct PersistedEvent {
     links: EventLinks,
     payload_schema: String,
     payload: EventPayload,
-    artifacts: Vec<ArtifactReference>,
+    artifacts: Vec<LedgerArtifactReference>,
 }
 
 impl PersistedEvent {
@@ -70,7 +72,11 @@ impl PersistedEvent {
             links: draft.links().clone(),
             payload_schema: draft.payload_schema().to_string(),
             payload: draft.payload().clone(),
-            artifacts: draft.artifacts().to_vec(),
+            artifacts: draft
+                .artifacts()
+                .iter()
+                .map(LedgerArtifactReference::from_issued)
+                .collect(),
         };
         event.validate()?;
         Ok(event)
@@ -120,7 +126,7 @@ impl PersistedEvent {
         &self.payload
     }
 
-    pub fn artifacts(&self) -> &[ArtifactReference] {
+    pub fn artifacts(&self) -> &[LedgerArtifactReference] {
         &self.artifacts
     }
 
@@ -180,7 +186,7 @@ struct StoredArtifactRecord {
 }
 
 impl StoredArtifactRecord {
-    fn from_reference(reference: &ArtifactReference) -> Self {
+    fn from_reference(reference: &LedgerArtifactReference) -> Self {
         Self {
             artifact_id: *reference.artifact_id(),
             kind: reference.kind(),
@@ -268,14 +274,16 @@ impl StoredEventRecord {
                     code: "artifact_store_verification_mismatch",
                 });
             }
-            artifacts.push(verified.into_reference());
+            artifacts.push(LedgerArtifactReference::recorded(
+                verified.reference().project(true),
+            )?);
         }
         self.into_event_with_artifacts(artifacts)
     }
 
     fn into_event_with_artifacts(
         self,
-        artifacts: Vec<ArtifactReference>,
+        artifacts: Vec<LedgerArtifactReference>,
     ) -> Result<PersistedEvent, FactValidationError> {
         let event = PersistedEvent {
             schema_version: self.schema_version,

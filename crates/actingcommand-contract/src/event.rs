@@ -112,6 +112,7 @@ mod codes;
 mod envelope;
 mod ids;
 mod payload;
+mod retention;
 mod views;
 
 pub use artifact::*;
@@ -119,6 +120,7 @@ pub use codes::*;
 pub use envelope::*;
 pub use ids::*;
 pub use payload::*;
+pub use retention::*;
 pub use views::*;
 
 use serde::{Deserialize, Serialize};

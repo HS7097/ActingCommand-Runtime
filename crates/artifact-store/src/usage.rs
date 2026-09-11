@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+use crate::{ArtifactStoreError, ArtifactStoreResult};
+use actingcommand_contract::ProjectedArtifactReference;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::path::{Path, PathBuf};
+
+/// OS coordination only; retention policy and availability remain Ledger facts.
+pub struct ArtifactUseGuard {
+    _lock: Option<File>,
+}
+
+pub struct ArtifactDeleteGuard {
+    root: PathBuf,
+    reference: ProjectedArtifactReference,
+    _lock: File,
+    material: Option<File>,
+}
+
+impl ArtifactDeleteGuard {
+    pub fn reference(&self) -> &ProjectedArtifactReference {
+        &self.reference
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn material_present(&self) -> bool {
+        self.material.is_some()
+    }
+}
+
+pub(crate) fn publication_guard(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<ArtifactUseGuard> {
+    let lock = open_lock(root, reference, true)?;
+    let Some(lock) = lock else {
+        return Err(failure(
+            "artifact_use_lock_missing",
+            "publication lock was not created",
+        ));
+    };
+    lock.try_lock_shared()
+        .map_err(|error| failure("artifact_use_lock_failed", error))?;
+    Ok(ArtifactUseGuard { _lock: Some(lock) })
+}
+
+pub(crate) fn reader_guard(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+    material: &File,
+) -> ArtifactStoreResult<ArtifactUseGuard> {
+    let lock = open_lock(root, reference, false)?;
+    if let Some(lock) = &lock {
+        lock.try_lock_shared()
+            .map_err(|error| failure("artifact_use_lock_failed", error))?;
+    }
+    // Existing offline roots need no new lock file. The material lock also fences
+    // a deleter that first creates the fixed lock while this reader is open.
+    material
+        .try_lock_shared()
+        .map_err(|error| failure("artifact_use_lock_failed", error))?;
+    Ok(ArtifactUseGuard { _lock: lock })
+}
+
+/// A busy object is deferred; no deletion or Ledger callback occurs here.
+pub fn try_artifact_delete_guard(
+    root: impl AsRef<Path>,
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<Option<ArtifactDeleteGuard>> {
+    let root = root
+        .as_ref()
+        .canonicalize()
+        .map_err(|error| failure("artifact_root_failed", error))?;
+    let lock = open_lock(&root, reference, true)?
+        .ok_or_else(|| failure("artifact_use_lock_missing", "delete lock was not created"))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Error(error)) => return Err(failure("artifact_use_lock_failed", error)),
+    }
+    let key = reference
+        .object_key()
+        .ok_or_else(|| failure("artifact_object_key_missing", "object key required"))?;
+    let path = crate::store::safe_object_path(&root, key)?;
+    let material = match OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => {
+            match file.try_lock() {
+                Ok(()) => {}
+                Err(TryLockError::WouldBlock) => return Ok(None),
+                Err(TryLockError::Error(error)) => {
+                    return Err(failure("artifact_use_lock_failed", error));
+                }
+            }
+            Some(file)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(failure("artifact_read_failed", error)),
+    };
+    Ok(Some(ArtifactDeleteGuard {
+        root,
+        reference: reference.clone(),
+        _lock: lock,
+        material,
+    }))
+}
+
+fn open_lock(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+    create: bool,
+) -> ArtifactStoreResult<Option<File>> {
+    reference
+        .validate()
+        .map_err(|error| failure("artifact_reference_invalid", error))?;
+    let key = reference
+        .object_key()
+        .ok_or_else(|| failure("artifact_object_key_missing", "object key required"))?;
+    let relative = Path::new(key);
+    let name = relative
+        .file_name()
+        .ok_or_else(|| failure("artifact_path_invalid", "object filename required"))?;
+    let directory = root.join("artifact-use-locks");
+    if create {
+        fs::create_dir_all(&directory)
+            .map_err(|error| failure("artifact_use_lock_failed", error))?;
+    }
+    let directory_meta = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(failure("artifact_use_lock_failed", error)),
+    };
+    if !directory_meta.is_dir() || is_link(&directory_meta) {
+        return Err(failure(
+            "artifact_path_invalid",
+            "artifact lock directory must not be a link",
+        ));
+    }
+    let path = directory.join(name).with_extension("lock");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if !metadata.is_file() || is_link(&metadata) => {
+            return Err(failure(
+                "artifact_path_invalid",
+                "artifact lock must be a regular file",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(failure("artifact_use_lock_failed", error)),
+    }
+    match OpenOptions::new()
+        .read(true)
+        .write(create)
+        .create(create)
+        .truncate(false)
+        .open(path)
+    {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(failure("artifact_use_lock_failed", error)),
+    }
+}
+
+fn failure(code: &'static str, detail: impl ToString) -> ArtifactStoreError {
+    ArtifactStoreError::fatal(code, "artifact_material_use", detail.to_string())
+}
+
+fn is_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
