@@ -98,6 +98,7 @@ impl ForensicEventFilter {
             "origin_module": self.origin_module,
             "diagnostic_code": self.diagnostic_code,
             "minimum_severity": self.severity,
+            "maximum_severity": self.severity,
             "correlation_id": self.correlation_id,
         }))
         .map_err(|_| {
@@ -697,6 +698,19 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     }
 }
 
+/// Reads an already opened evidence snapshot with the Runtime page contract.
+/// Opening/validating the source remains the ledger owner's responsibility.
+pub fn query_view_page(
+    snapshot: &actingcommand_ledger::GlobalLedgerMetadata,
+    query: &EventQuery,
+    profile: actingcommand_contract::ProjectionProfile,
+    page: &actingcommand_contract::RuntimeEventQueryPageRequest,
+) -> ForensicResult<actingcommand_contract::RuntimeEventQueryPage> {
+    snapshot
+        .project_view_page(query, profile, page)
+        .map_err(map_ledger_error)
+}
+
 pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> {
     if request.zip_path.as_os_str().is_empty() {
         return Err(ForensicError::new(
@@ -1085,15 +1099,7 @@ fn events_report(
             break;
         };
         after = last.sequence();
-        // The offline --severity contract is exact equality; the shared lower bound
-        // narrows candidates without admitting higher severities into this page.
-        events.extend(page.into_iter().filter(|event| {
-            request
-                .filter
-                .severity
-                .as_deref()
-                .is_none_or(|severity| event.severity().as_str() == severity)
-        }));
+        events.extend(page);
     }
     let has_more = events.len() > request.limit;
     events.truncate(request.limit);

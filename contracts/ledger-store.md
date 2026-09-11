@@ -99,6 +99,34 @@ claim an atomic multi-event transaction.
 
 ## Recovery, artifacts and forensic consumers
 
+`GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig)` returns an immutable
+`GlobalLedgerMetadata` for an explicit Runtime state root. It selects the formal
+SQLite or Segment reader through existing metadata and retains the supplied read
+budget. SQLite validates canonical records, sequence and IDs, integrity tags,
+relation indexes, head metadata and the complete migration marker/prefix. Segment
+uses its original bounded snapshot scan and reports the verified prefix and any
+corrupt tail. Neither path opens referenced artifact content.
+
+Only the Ledger can construct its private `LedgerEventMetadata`. It retains the
+typed envelope/payload and structurally valid `ProjectedArtifactReference` values
+with their original object keys. It has no conversion to `PersistedEvent` or
+`VerifiedArtifactReference`. The ordinary recovery and export APIs still require
+the ArtifactStore verifier and exact verified-reference equality.
+
+`GlobalLedgerMetadata::project_view_page(&EventQuery, ProjectionProfile,
+&RuntimeEventQueryPageRequest)` and the online
+`GlobalLedger::project_view_page(EventQuery, ProjectionProfile,
+RuntimeEventQueryPageRequest)` share the existing neutral projector and return
+`GlobalLedgerResult<RuntimeEventQueryPage>`. Online requests use one read-only
+writer command forwarding to `LedgerStore::project_view_page`; append, settlement
+and notification order are unchanged. The projector receives the verified full
+snapshot boundary and completeness, preserves complete related-run context, then
+applies the output profile. Pages report `material_read: not_requested`; source
+incompleteness is separate from count/byte pagination. The snapshot also exposes
+`latest_sequence`, `read_complete`, `writer_metadata`, `backend` and `corrupt_tail`
+without granting material access. CLI metadata pagination uses this entry rather
+than a material-verifying evidence open.
+
 Segment recovery validates strict typed records, schemas, sequence continuity,
 unique EventIds and payload/link/reference consistency before rebuilding indexes.
 A dangling final segment tail is quarantined and repaired through the persisted
