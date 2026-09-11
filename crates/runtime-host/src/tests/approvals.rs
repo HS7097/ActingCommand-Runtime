@@ -84,10 +84,14 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     );
     assert_eq!(events.len(), 2);
     let latest = events.last().expect("latest approval fact");
-    let entry = host
-        .shared_ref("inspect_approval_projection")
-        .expect("Host state")
-        .state
+    drop(client);
+    host.close().expect("close host");
+    let database =
+        actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), true)
+            .expect("existing approval database");
+    let state = actingcommand_runtime_state::RuntimeStateStore::from_database(Arc::new(database))
+        .expect("verified State projection");
+    let entry = state
         .read_projection_entry(
             actingcommand_runtime_state::APPROVAL_PROJECTION_NAMESPACE,
             &format!("{:x}", Sha256::digest(b"approval:fixture-a")),
@@ -98,8 +102,6 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     let projected: ApprovalDecisionRecord =
         serde_json::from_slice(entry.payload()).expect("typed approval projection");
     assert_eq!(projected.disposition(), ApprovalDisposition::Revoked);
-    drop(client);
-    host.close().expect("close host");
 }
 
 #[test]
