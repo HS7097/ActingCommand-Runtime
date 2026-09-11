@@ -581,7 +581,7 @@ impl RuntimeStateStore {
         Ok(())
     }
 
-    fn require_legacy_release_writer(&self) -> RuntimeStateResult<()> {
+    pub(super) fn require_legacy_release_writer(&self) -> RuntimeStateResult<()> {
         let mut connection = self.connection("authorize_release_write")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
@@ -589,7 +589,7 @@ impl RuntimeStateStore {
         self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))
     }
 
-    fn require_legacy_release_connection(
+    pub(super) fn require_legacy_release_connection(
         &self,
         scope: &RuntimeTransaction<'_, '_>,
     ) -> RuntimeStateResult<()> {
@@ -604,7 +604,7 @@ impl RuntimeStateStore {
         Ok(())
     }
 
-    fn verify_release_read_sources(
+    pub(super) fn verify_release_read_sources(
         &self,
         scope: &RuntimeTransaction<'_, '_>,
     ) -> RuntimeStateResult<()> {
