@@ -1264,12 +1264,12 @@ fn writer_loop<S: LedgerStore>(
                     }
                     Err(error) => Err(error),
                 };
-                if let Err(error) = &result {
-                    if error.terminal() {
-                        notify_terminal_failure(&mut subscribers, error.clone());
-                        let _ = response.send(Err(error.clone()));
-                        return Err(error.clone());
-                    }
+                if let Err(error) = &result
+                    && error.terminal()
+                {
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error.clone());
                 }
                 let _ = response.send(result);
             }

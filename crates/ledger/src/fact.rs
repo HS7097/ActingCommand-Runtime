@@ -278,22 +278,6 @@ impl StoredEventRecord {
         self.into_event_with_artifacts(Vec::new())
     }
 
-    pub(crate) fn into_event_with_artifact_verifier<F>(
-        self,
-        verifier: &mut F,
-    ) -> Result<PersistedEvent, FactValidationError>
-    where
-        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + ?Sized,
-    {
-        self.into_event_with_artifact_availability(&mut |projected| {
-            verifier(projected)
-                .map(ArtifactAvailability::Available)
-                .ok_or(FactValidationError {
-                    code: "artifact_store_verification_failed",
-                })
-        })
-    }
-
     pub(crate) fn into_event_with_artifact_availability<F>(
         self,
         availability: &mut F,
@@ -302,6 +286,9 @@ impl StoredEventRecord {
         F: FnMut(&ProjectedArtifactReference) -> Result<ArtifactAvailability, FactValidationError>
             + ?Sized,
     {
+        if self.artifacts.is_empty() {
+            return self.into_event();
+        }
         let mut artifacts = Vec::with_capacity(self.artifacts.len());
         for stored in &self.artifacts {
             let reference = stored.projected();
