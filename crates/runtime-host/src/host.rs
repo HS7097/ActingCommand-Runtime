@@ -14406,26 +14406,43 @@ impl RuntimeContainedTask<'_> {
             self.links(),
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
-        let pipeline = self
-            .capture_evidence
-            .pipeline
-            .as_mut()
-            .expect("paused pipeline exists");
-        pipeline
-            .poll_pressure(&context, &mut sink)
-            .map_err(online_observation::observation_artifact_failure)?;
-        if pipeline.is_paused() && self.finalizing.is_none() {
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "capture_pressure_paused",
-                    "admit_contained_task_capture",
-                    RuntimeErrorCode::CaptureFailed,
-                ),
-                RuntimeReceiptState::Denied,
-                None,
-            ));
+        loop {
+            self.ensure_active()?;
+            self.host.ledger.check_writer_health().map_err(|error| {
+                RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        error.code(),
+                        error.operation(),
+                        RuntimeErrorCode::LedgerFailure,
+                    )
+                    .with_native_detail(error.to_string()),
+                )
+            })?;
+            let pipeline = self
+                .capture_evidence
+                .pipeline
+                .as_mut()
+                .expect("paused pipeline exists");
+            pipeline
+                .poll_pressure(&context, &mut sink)
+                .map_err(online_observation::observation_artifact_failure)?;
+            if !pipeline.is_paused() || self.finalizing.is_some() {
+                return Ok(());
+            }
+            // The original run deadline/cancellation bounds the pause before any capture effect.
+            if self.control.deadline() == 0 || self.host.fatal.is_shutdown_requested() {
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "capture_pressure_pause_stopped",
+                        "admit_contained_task_capture",
+                        RuntimeErrorCode::CaptureFailed,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
         }
-        Ok(())
     }
 
     fn record_capture_recognition(

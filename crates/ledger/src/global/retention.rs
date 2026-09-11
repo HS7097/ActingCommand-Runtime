@@ -266,11 +266,11 @@ impl RetentionIndex {
         }
         let intent = ArtifactEvictionIntentRecord {
             identity: identity.clone(),
-            verified: verified.clone(),
-            success: success.clone(),
-            close: close.clone(),
-            capture_summary: object.summary.clone(),
-            settlement: closure.settlement.clone(),
+            verified: *verified,
+            success: *success,
+            close: *close,
+            capture_summary: object.summary,
+            settlement: closure.settlement,
             through_sequence: self.through_sequence,
         };
         self.validate_intent(object, &intent, events, indexes)?;
@@ -1047,7 +1047,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             return Ok((ArtifactEvictionAdmission::Deferred, Vec::new()));
         };
         let identity = identity.clone();
-        let verified = verified.clone();
+        let verified = *verified;
         let releases = self
             .retention
             .close_for(&identity)
@@ -1060,8 +1060,8 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                     .map(
                         |(pin, _)| actingcommand_contract::ArtifactPinReleaseRecord {
                             identity: identity.clone(),
-                            pin: pin.clone(),
-                            release: close.clone(),
+                            pin: *pin,
+                            release: *close,
                         },
                     )
                     .collect::<Vec<_>>()
@@ -1118,7 +1118,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         let fact = ArtifactRetentionFact::EvictionOutcome(
             actingcommand_contract::ArtifactEvictionOutcomeRecord {
                 identity: permit.intent.identity,
-                intent: permit.source.clone(),
+                intent: permit.source,
                 disposition,
                 io,
             },
