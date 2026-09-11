@@ -3,13 +3,13 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
-    AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind,
-    ArtifactProducer, ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal,
-    ClientActionRecord, ContainedTaskCancellationReason, ContainedTaskCancellationStatus,
-    ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventId, EventPayload,
-    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
-    InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
+    ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
+    ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
+    ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
+    CorrelationId, EffectDisposition, EventActor, EventId, EventPayload, EventQuery, EventSource,
+    EventType, FactRecord, FactScope, FrameId, IdentifierIssuer, InputAction, InputPayload,
+    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
     OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
     OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
@@ -1346,7 +1346,11 @@ impl RuntimeClient {
         }
     }
 
-    pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<()> {
+    pub fn input(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientInputStart,
@@ -1357,7 +1361,7 @@ impl RuntimeClient {
             None,
             Some(token),
         );
-        let result = match self.execute_with_timeout(
+        let result = match self.execute_receipt(
             "runtime_input",
             RuntimeOperation::Input {
                 token: token.clone(),
@@ -1365,7 +1369,11 @@ impl RuntimeClient {
             },
             None,
         ) {
-            Ok(RuntimeResult::InputCommitted { .. }) => Ok(()),
+            Ok(receipt)
+                if matches!(receipt.result(), Some(RuntimeResult::InputCommitted { .. })) =>
+            {
+                Ok(receipt)
+            }
             Ok(_) => Err(self.unexpected_result("runtime_input")),
             Err(error) => Err(error),
         };
@@ -2128,16 +2136,24 @@ impl RuntimeClient {
                 maximum_frame_bytes,
                 receipt_deadline,
                 Some(&request),
-            );
+            )
+            .map_err(|error| error.with_receipt_header_context(&request, &self.shared.info));
             if connection
                 .stream
                 .set_read_timeout(Some(connection.io_timeout))
                 .is_err()
             {
-                return Err(connection.latch(RuntimeClientError::fatal(
+                let failure = RuntimeClientError::fatal(
                     "runtime_read_timeout_restore_failed",
                     operation_name,
-                )));
+                );
+                let failure = match &exchange_result {
+                    Err(error) if error.receipt_header_io().is_some() => {
+                        failure.with_related(error.clone())
+                    }
+                    _ => failure,
+                };
+                return Err(connection.latch(failure));
             }
             let receipt = match exchange_result {
                 Ok(receipt) => receipt,
@@ -3839,7 +3855,11 @@ impl RuntimeDebugSession {
         }
     }
 
-    pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<ActionId> {
+    pub fn input(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.client.execute_receipt_with_correlation(
             "debug_runtime_input",
             RuntimeOperation::Input {
@@ -3850,7 +3870,7 @@ impl RuntimeDebugSession {
             None,
         )?;
         match receipt.result() {
-            Some(RuntimeResult::InputCommitted { action_id }) => Ok(*action_id),
+            Some(RuntimeResult::InputCommitted { .. }) => Ok(receipt),
             _ => Err(self.client.unexpected_result("debug_runtime_input")),
         }
     }

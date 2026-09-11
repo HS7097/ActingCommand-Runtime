@@ -2731,7 +2731,8 @@ fn actinglab_cli_result_glue_stays_out_of_main() {
     for definition in [
         "fn human_summary(command: &str, data: &Value) -> String",
         "Value::String(text) => text.clone(),",
-        r#"_ => format!("{command} ok"),"#,
+        r#"_ => with_input_outcome(format!("{command} ok"), data),"#,
+        "fn with_input_outcome(summary: String, data: &Value) -> String",
         "struct CliResult",
         "impl CliResult",
         "fn ok(command: String, data: Value, print_json: bool, human: String) -> Self",

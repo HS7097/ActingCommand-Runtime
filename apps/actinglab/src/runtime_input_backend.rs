@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::InputAction;
+use actingcommand_contract::{InputAction, RuntimeReceipt};
 use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult, InputBackend};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeInputProxy};
 
@@ -18,8 +18,12 @@ impl RuntimeInputBackend {
             .map_err(device_error)
     }
 
-    fn execute(&mut self, action: InputAction) -> DeviceResult<()> {
+    pub(super) fn input_receipt(&mut self, action: InputAction) -> DeviceResult<RuntimeReceipt> {
         self.proxy.input(action).map_err(device_error)
+    }
+
+    fn execute(&mut self, action: InputAction) -> DeviceResult<()> {
+        self.input_receipt(action).map(|_| ())
     }
 }
 
