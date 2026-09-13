@@ -603,6 +603,10 @@ fn selected_backend_from_probe(
     successful: &[(TouchBackendName, u128)],
 ) -> Option<TouchBackendName> {
     match requested {
+        TouchBackendChoice::NemuIpc => successful
+            .iter()
+            .find(|(backend, _)| *backend == TouchBackendName::NemuIpc)
+            .map(|(backend, _)| *backend),
         TouchBackendChoice::Auto => [
             TouchBackendName::MaaTouch,
             TouchBackendName::Minitouch,
