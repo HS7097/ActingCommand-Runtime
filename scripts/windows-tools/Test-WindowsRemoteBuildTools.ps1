@@ -218,7 +218,10 @@ function New-ArtifactFixture {
     $payloads = if ($ArtifactKind -ceq 'Runtime') {
         @(
             @{ name = 'actingcommand-actingd.exe'; content = 'synthetic actingd payload' },
-            @{ name = 'actingctl.exe'; content = 'synthetic actingctl payload' }
+            @{ name = 'actingctl.exe'; content = 'synthetic actingctl payload' },
+            @{ name = 'actingd.config.example.json'; content = '{"schema_version":"actingcommand.actingd.config.v1","state_root":"","bind_host":"127.0.0.1","bind_port":0,"secret_fingerprint_salt":"","instances":[]}' },
+            @{ name = 'INSTALL.md'; content = 'synthetic installation instructions' },
+            @{ name = 'RELEASE-NOTES.md'; content = 'synthetic unreleased candidate notes' }
         )
     } else {
         @(
@@ -252,6 +255,9 @@ function New-ArtifactFixture {
         workflow_run_attempt = 1
         source_artifact_name = $ArtifactName
         files = $records
+    }
+    if ($ArtifactKind -ceq 'Runtime') {
+        $manifest.runtime_payload_layout = 'distribution-v1'
     }
     Write-Utf8NoBom -Path (Join-Path $directory 'BUILD-MANIFEST.json') -Text (($manifest | ConvertTo-Json -Depth 8) + "`n")
     if ($CorruptPayload) {
@@ -373,7 +379,7 @@ try {
     )) {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
-    $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe''\s*\)'
+    $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
     $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe'',\s*''ac_fastdeploy_ppocr\.dll''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
@@ -388,7 +394,7 @@ try {
     foreach ($field in @(
         'repository', 'commit_sha', 'tree_sha', 'cargo_lock_sha256', 'rust_toolchain',
         'target', 'configuration', 'workflow_run_id', 'workflow_run_attempt',
-        'source_artifact_name', 'files', 'path', 'size_bytes', 'sha256'
+        'source_artifact_name', 'runtime_payload_layout', 'files', 'path', 'size_bytes', 'sha256'
     )) {
         Assert-True -Condition $workflowText.Contains("$field =") -Message "workflow manifest is missing field '$field'"
     }
@@ -437,7 +443,12 @@ try {
     $positiveJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Runtime -TaskRoot $testRootFull -OutputPath $positiveOutput -GhExecutable $fakeGh
     $positive = $positiveJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($positive.status -ceq 'PASS') -Message 'positive artifact verification did not report PASS'
-    Assert-True -Condition (Test-Path -LiteralPath (Join-Path $positiveOutput 'actingctl.exe') -PathType Leaf) -Message 'positive artifact payload was not published'
+    foreach ($name in @('actingcommand-actingd.exe', 'actingctl.exe', 'actingd.config.example.json', 'INSTALL.md', 'RELEASE-NOTES.md')) {
+        Assert-True -Condition (
+            @($positive.verified_files).Count -eq 5 -and
+            (Test-Path -LiteralPath (Join-Path $positiveOutput $name) -PathType Leaf)
+        ) -Message "positive Runtime distribution payload was not published: $name"
+    }
     Complete-Case -Name $script:CurrentCase
 
     $script:CurrentCase = 'artifact-tools-provider-positive-exact-selection'
