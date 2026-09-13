@@ -53,7 +53,7 @@ fn converts_region_and_click_shapes() {
         json!({"kind":"long_press","x":12,"y":34,"duration_ms":700})
     );
     // #286 NAVIGATION-DECLARATION-ONLY-v1: generated clicks share the declaration
-    // grammar in both navigation edges and action metadata (AK PR46 first red).
+    // grammar in both navigation edges and action metadata.
     for click in [
         json!({"kind":"point","x":12,"y":34}),
         json!({"kind":"rect","x":1,"y":2,"width":3,"height":4}),

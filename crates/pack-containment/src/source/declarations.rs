@@ -220,7 +220,8 @@ impl Declaration<'_> {
                 "destructive_actions",
             ],
         )?;
-        self.array(self.required(object, "", "navigation")?, "/navigation")?;
+        // Source metadata may contain only control points; generated edges are
+        // validated when declared.
         for (field, value) in object {
             let pointer = child("", field);
             match field.as_str() {

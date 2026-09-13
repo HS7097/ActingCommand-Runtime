@@ -2501,7 +2501,7 @@ mod tests {
         );
         entries.insert(
             "resources/navigation/neutral.test.navigation.json".to_string(),
-            br#"{"navigation":[]}"#.to_vec(),
+            br#"{}"#.to_vec(),
         );
         let zip = zip_from_map(entries);
         let expected = Sha256Hash::digest(&zip);
