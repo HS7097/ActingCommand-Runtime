@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 996" width="1400" height="996">
+<title>架构总览：域分层与 crate 归属</title>
+<defs><marker id="ah-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#275fa5"/></marker><marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#28734d"/></marker><marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c45b12"/></marker><marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8045ac"/></marker><marker id="ah-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b57712"/></marker><marker id="ah-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6b6b60"/></marker></defs>
+<rect x="0" y="0" width="1400" height="996" fill="#ffffff"/>
+<text x="700.0" y="40.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="22.0" fill="#161616" text-anchor="middle" font-weight="bold">架构总览：域分层与 crate 归属</text>
+<text x="700.0" y="64.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="11.0" fill="#4a4a4a" text-anchor="middle" font-weight="normal">HS7097/ActingCommand-Runtime ·工作区31个成员（6应用/ 21 crate / 2 provider / 1工具/ 1基准）·实线=已声明的依赖或数据流；虚线=外部或开发期关系</text>
+<rect x="24.0" y="100.0" width="252.0" height="30.0" rx="6" ry="6" fill="#f5f0ff" stroke="#7040a0" stroke-width="1.20"/>
+<text x="150.0" y="120.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.5" fill="#251440" text-anchor="middle" font-weight="bold">客户端与工具</text>
+<rect x="292.0" y="100.0" width="222.0" height="30.0" rx="6" ry="6" fill="#fdf6ec" stroke="#b57712" stroke-width="1.20"/>
+<text x="403.0" y="120.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.5" fill="#5a3a06" text-anchor="middle" font-weight="bold">契约</text>
+<rect x="530.0" y="100.0" width="396.0" height="30.0" rx="6" ry="6" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="728.0" y="120.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.5" fill="#123921" text-anchor="middle" font-weight="bold">常驻主机 actingd</text>
+<rect x="942.0" y="100.0" width="246.0" height="30.0" rx="6" ry="6" fill="#eef4ff" stroke="#315b9c" stroke-width="1.20"/>
+<text x="1065.0" y="120.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.5" fill="#16355c" text-anchor="middle" font-weight="bold">证据与状态</text>
+<rect x="1204.0" y="100.0" width="172.0" height="30.0" rx="6" ry="6" fill="#f4f4f1" stroke="#6b6b60" stroke-width="1.20"/>
+<text x="1290.0" y="120.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.5" fill="#2e2e26" text-anchor="middle" font-weight="bold">守卫</text>
+<rect x="530.0" y="146.0" width="396.0" height="754.0" rx="12" ry="12" fill="#f7fbf8" stroke="#28734d" stroke-width="1.70"/>
+<text x="542.0" y="166.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="11.5" fill="#123921" text-anchor="start" font-weight="bold">bin actingcommand-actingd</text>
+<rect x="32.0" y="146.0" width="236.0" height="98.0" rx="9" ry="9" fill="#f5f0ff" stroke="#7040a0" stroke-width="1.20"/>
+<text x="42.0" y="169.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#251440" text-anchor="start" font-weight="bold">actingctl</text>
+<text x="42.0" y="188.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">apps/actingctl，bin actingctl。生产CLI，运</text>
+<text x="42.0" y="204.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">行期只依赖contract与runtime-client；每条子</text>
+<text x="42.0" y="219.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">命令都要--state-root。</text>
+<rect x="32.0" y="256.0" width="236.0" height="98.0" rx="9" ry="9" fill="#f5f0ff" stroke="#7040a0" stroke-width="1.20"/>
+<text x="42.0" y="279.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#251440" text-anchor="start" font-weight="bold">actinglab</text>
+<text x="42.0" y="298.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">apps/actinglab，bin actinglab。47个顶层分派</text>
+<text x="42.0" y="314.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">臂/ 131条命令，由ratchet机检；应用中出边最</text>
+<text x="42.0" y="329.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">宽（11条）。</text>
+<rect x="32.0" y="366.0" width="236.0" height="98.0" rx="9" ry="9" fill="#f5f0ff" stroke="#7040a0" stroke-width="1.20"/>
+<text x="42.0" y="389.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#251440" text-anchor="start" font-weight="bold">device-test · vision-provider-check</text>
+<text x="42.0" y="408.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">后端探测与离线试运行；核验视觉provider的</text>
+<text x="42.0" y="424.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">产物清单、产物锁与导出审计。</text>
+<rect x="32.0" y="476.0" width="236.0" height="98.0" rx="9" ry="9" fill="#f5f0ff" stroke="#7040a0" stroke-width="1.20" stroke-dasharray="5 4"/>
+<text x="42.0" y="499.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#251440" text-anchor="start" font-weight="bold">ActingCommand-UI（外部仓）</text>
+<text x="42.0" y="518.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">外部只读控制台，正在搭建。必须经runtime</text>
+<text x="42.0" y="534.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">API访问，不持有Runtime生命周期。</text>
+<rect x="32.0" y="586.0" width="236.0" height="160.0" rx="9" ry="9" fill="#f5f0ff" stroke="#7040a0" stroke-width="1.20" stroke-dasharray="5 4"/>
+<text x="42.0" y="609.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#251440" text-anchor="start" font-weight="bold">编写侧（可移除子图）</text>
+<text x="42.0" y="628.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">crates/lab：可选编写与调试适配器，唯一消</text>
+<text x="42.0" y="644.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">费者是actinglab。crates/resource-tooling：</text>
+<text x="42.0" y="659.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">确定性资源编译与包校验，仅lab / actinglab可</text>
+<text x="42.0" y="674.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">达，由守卫强制。</text>
+<rect x="300.0" y="146.0" width="206.0" height="158.0" rx="9" ry="9" fill="#fdf6ec" stroke="#b57712" stroke-width="1.20"/>
+<text x="310.0" y="169.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#5a3a06" text-anchor="start" font-weight="bold">actingcommand-runtime-client</text>
+<text x="310.0" y="188.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">类型化本地IPC客户端。从</text>
+<text x="310.0" y="204.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">&lt;state_root&gt;/runtime-info.json发现端点</text>
+<text x="310.0" y="219.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">，仅接受回环地址，连接后以Health复</text>
+<text x="310.0" y="234.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">核owner epoch。客户端从不构造设备后</text>
+<text x="310.0" y="249.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">端，掉线也不会停掉Runtime。</text>
+<rect x="300.0" y="318.0" width="206.0" height="143.0" rx="9" ry="9" fill="#fdf6ec" stroke="#b57712" stroke-width="1.20"/>
+<text x="310.0" y="341.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#5a3a06" text-anchor="start" font-weight="bold">类型化IPC</text>
+<text x="310.0" y="360.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">4字节大端长度前缀+ JSON，两端默认</text>
+<text x="310.0" y="376.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">上限1 MiB。请求schema</text>
+<text x="310.0" y="391.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">actingcommand.runtime.request.v3，回</text>
+<text x="310.0" y="406.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">执actingcommand.runtime.receipt.v1。</text>
+<rect x="300.0" y="475.0" width="206.0" height="158.0" rx="9" ry="9" fill="#fdf6ec" stroke="#b57712" stroke-width="1.20"/>
+<text x="310.0" y="498.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#5a3a06" text-anchor="start" font-weight="bold">actingcommand-contract</text>
+<text x="310.0" y="517.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">工作区汇点：17条入边、0条出边。47个</text>
+<text x="310.0" y="533.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">RuntimeOperation、46个RuntimeResult</text>
+<text x="310.0" y="548.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">、7种回执状态（Admitted / Observed /</text>
+<text x="310.0" y="563.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">Queued / Denied / Completed / Failed /</text>
+<text x="310.0" y="578.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">Cancelled）。只定义协议、设备与引擎</text>
+<text x="310.0" y="594.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">的边界词汇，不含游戏逻辑。</text>
+<rect x="542.0" y="178.0" width="372.0" height="128.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="552.0" y="201.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">actingcommand-runtime-host</text>
+<text x="552.0" y="220.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">常驻Runtime所有权、本地IPC、租约门控DeviceProxy与生命周期控制。准</text>
+<text x="552.0" y="236.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">入漏斗process_request → process_validated；按连接的治理鉴权；容量准</text>
+<text x="552.0" y="251.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">入由账本中一条已提交样本投影而来。13条出边，全工作区最宽。</text>
+<rect x="542.0" y="318.0" width="180.0" height="143.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="552.0" y="341.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">actingcommand-scheduler</text>
+<text x="552.0" y="360.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">按实例的写准入、租约存续与围栏</text>
+<text x="552.0" y="376.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">权威。默认租约TTL 120 000 ms，</text>
+<text x="552.0" y="391.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">每实例队列深度64。正常依赖中的</text>
+<text x="552.0" y="406.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">唯一消费者是runtime-host。</text>
+<rect x="734.0" y="318.0" width="180.0" height="143.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="744.0" y="341.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">actingcommand-policy</text>
+<text x="744.0" y="360.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">纯调度策略契约，由编目编译器与</text>
+<text x="744.0" y="376.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">求值器共用；在固定输入快照上确</text>
+<text x="744.0" y="391.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">定性求值。</text>
+<rect x="542.0" y="473.0" width="372.0" height="113.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="552.0" y="496.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">actingcommand-execution-kernel</text>
+<text x="552.0" y="515.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">守护进程持有的执行会话与纯粹的任务/探针计划。客户端拿不到后端对象；</text>
+<text x="552.0" y="531.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">仅在调度器准入与围栏之后被调用；采集、输入与轨迹经回调交还主机记录</text>
+<text x="552.0" y="546.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">。</text>
+<rect x="542.0" y="598.0" width="180.0" height="174.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="552.0" y="621.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">actingcommand-device</text>
+<text x="552.0" y="640.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">采集后端adb_screencap、</text>
+<text x="552.0" y="656.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">droidcast_raw、nemu_ipc；触控</text>
+<text x="552.0" y="671.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">后端maatouch、minitouch、</text>
+<text x="552.0" y="686.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">adb_shell_input。显式后端链使单</text>
+<text x="552.0" y="701.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">后端失败可见且有界。</text>
+<rect x="734.0" y="598.0" width="180.0" height="174.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20"/>
+<text x="744.0" y="621.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">识别栈</text>
+<text x="744.0" y="640.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">严格分层、无环：</text>
+<text x="744.0" y="656.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">pack-containment → page-detector</text>
+<text x="744.0" y="671.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">→ recognition-pack → recognition</text>
+<text x="744.0" y="686.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">。crates/vision-ffi是OCR / NN的</text>
+<text x="744.0" y="701.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">安全边界，模拟结果不得冒充生产</text>
+<text x="744.0" y="717.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">结果。</text>
+<rect x="542.0" y="784.0" width="372.0" height="98.0" rx="9" ry="9" fill="#eef8f2" stroke="#28734d" stroke-width="1.20" stroke-dasharray="5 4"/>
+<text x="552.0" y="807.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#123921" text-anchor="start" font-weight="bold">视觉provider（cdylib）</text>
+<text x="552.0" y="826.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">providers/ppocr-onnx-json与providers/onnxruntime-json：只依赖</text>
+<text x="552.0" y="842.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">vision-ffi与onnx-provider-support，按model_ref + model_sha256绑定。</text>
+<rect x="950.0" y="146.0" width="230.0" height="128.0" rx="9" ry="9" fill="#eef4ff" stroke="#315b9c" stroke-width="1.20"/>
+<text x="960.0" y="169.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#16355c" text-anchor="start" font-weight="bold">actingcommand-ledger</text>
+<text x="960.0" y="188.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">全局事件账本的可恢复单写者存储。净化事件</text>
+<text x="960.0" y="204.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">actingcommand.event.v2；序号只由账本分配</text>
+<text x="960.0" y="219.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">，自1起并跨重开延续。</text>
+<rect x="950.0" y="288.0" width="230.0" height="143.0" rx="9" ry="9" fill="#eef4ff" stroke="#315b9c" stroke-width="1.20"/>
+<text x="960.0" y="311.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#16355c" text-anchor="start" font-weight="bold">actingcommand-artifact-store</text>
+<text x="960.0" y="330.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">制品字节、哈希、保留元数据、帧缓冲与证据</text>
+<text x="960.0" y="346.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">归档。对象键由sha256摘要派生：</text>
+<text x="960.0" y="361.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">artifacts/{shard}/{id}.{ext}。从不持有账</text>
+<text x="960.0" y="376.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">本写者、调度器、Runtime生命周期或设备后</text>
+<text x="960.0" y="391.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">端。</text>
+<rect x="950.0" y="445.0" width="230.0" height="143.0" rx="9" ry="9" fill="#eef4ff" stroke="#315b9c" stroke-width="1.20"/>
+<text x="960.0" y="468.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#16355c" text-anchor="start" font-weight="bold">runtime-database · runtime-state</text>
+<text x="960.0" y="487.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">runtime-database拥有runtime-state.sqlite与</text>
+<text x="960.0" y="503.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">runtime-state.key的连接、文件与完整性密钥</text>
+<text x="960.0" y="518.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">生命周期；runtime-state是权威Runtime状态</text>
+<text x="960.0" y="533.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">与不可变发布代。二者共用一条物理连接。</text>
+<rect x="950.0" y="602.0" width="230.0" height="158.0" rx="9" ry="9" fill="#eef4ff" stroke="#315b9c" stroke-width="1.20"/>
+<text x="960.0" y="625.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#16355c" text-anchor="start" font-weight="bold">ledger-forensics · actingledger</text>
+<text x="960.0" y="644.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">crates/ledger-forensics：对GlobalLedger</text>
+<text x="960.0" y="660.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">与已验证证据归档的只读取证。</text>
+<text x="960.0" y="675.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">apps/ledger-forensics产出bin actingledger</text>
+<text x="960.0" y="690.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">，即离线读取面：open、events、chain、tail</text>
+<text x="960.0" y="705.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">、repairs、export、signatures、replay。</text>
+<rect x="1210.0" y="146.0" width="160.0" height="158.0" rx="9" ry="9" fill="#f4f4f1" stroke="#6b6b60" stroke-width="1.20"/>
+<text x="1220.0" y="169.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#2e2e26" text-anchor="start" font-weight="bold">架构守卫</text>
+<text x="1220.0" y="188.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">tools/actinglab-architecture</text>
+<text x="1220.0" y="204.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">：源码派生的守卫，79个</text>
+<text x="1220.0" y="219.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">#[test]，共6062行。开发期专</text>
+<text x="1220.0" y="234.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">用，不链入actinglab二进制，</text>
+<text x="1220.0" y="249.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">工作区依赖为零。</text>
+<rect x="1210.0" y="318.0" width="160.0" height="143.0" rx="9" ry="9" fill="#f4f4f1" stroke="#6b6b60" stroke-width="1.20"/>
+<text x="1220.0" y="341.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#2e2e26" text-anchor="start" font-weight="bold">ratchet/</text>
+<text x="1220.0" y="360.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">actinglab_commands.json（47</text>
+<text x="1220.0" y="376.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">臂/ 131命令）、</text>
+<text x="1220.0" y="391.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">main_rs_lines.txt（418）、</text>
+<text x="1220.0" y="406.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">ledger_forensics_main_rs_li</text>
+<text x="1220.0" y="421.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">nes.txt（8），由守卫套件直</text>
+<text x="1220.0" y="437.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">接读取比对。</text>
+<rect x="1210.0" y="475.0" width="160.0" height="174.0" rx="9" ry="9" fill="#f4f4f1" stroke="#6b6b60" stroke-width="1.20"/>
+<text x="1220.0" y="498.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="13.0" fill="#2e2e26" text-anchor="start" font-weight="bold">CI闸门</text>
+<text x="1220.0" y="517.9" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">.github/workflows：ci.yml（</text>
+<text x="1220.0" y="533.1" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">Windows：cargo fmt、clippy</text>
+<text x="1220.0" y="548.4" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">-D warnings、test）；</text>
+<text x="1220.0" y="563.6" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">commit-identity-guard.yml（作</text>
+<text x="1220.0" y="578.8" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">者与提交者身份白名单）；</text>
+<text x="1220.0" y="594.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">windows-remote-build.yml（精</text>
+<text x="1220.0" y="609.3" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">确SHA构建）。</text>
+<polyline points="268.0,195.0 280.0,195.0 280.0,193.4 300.0,193.4" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="268.0,305.0 280.0,305.0 280.0,228.2 300.0,228.2" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="268.0,415.0 280.0,415.0 280.0,262.9 300.0,262.9" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="268.0,525.0 286.0,525.0 286.0,421.0 300.0,421.0" fill="none" stroke="#8045ac" stroke-width="1.60" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-purple)"/>
+<rect x="159.0" y="583.2" width="74.0" height="14.8" rx="3" ry="3" fill="#ffffff" stroke="none" stroke-width="0.00"/>
+<text x="196.0" y="592.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="9.8" fill="#8045ac" text-anchor="middle" font-weight="bold">经 runtime API</text>
+<polyline points="403.0,304.0 403.0,318.0" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="403.0,461.0 403.0,475.0" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="506.0,375.2 518.0,375.2 518.0,208.0 542.0,208.0" fill="none" stroke="#275fa5" stroke-width="1.80" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="600.0,306.0 600.0,318.0" fill="none" stroke="#28734d" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-green)"/>
+<polyline points="856.0,306.0 856.0,318.0" fill="none" stroke="#28734d" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-green)"/>
+<polyline points="728.0,306.0 728.0,473.0" fill="none" stroke="#28734d" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-green)"/>
+<polyline points="620.0,586.0 620.0,598.0" fill="none" stroke="#28734d" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-green)"/>
+<polyline points="836.0,586.0 836.0,598.0" fill="none" stroke="#28734d" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-green)"/>
+<polyline points="836.0,784.0 836.0,772.0" fill="none" stroke="#28734d" stroke-width="1.60" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-green)"/>
+<rect x="812.4" y="793.2" width="47.2" height="14.8" rx="3" ry="3" fill="#ffffff" stroke="none" stroke-width="0.00"/>
+<text x="836.0" y="802.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="9.8" fill="#28734d" text-anchor="middle" font-weight="bold">动态加载</text>
+<polyline points="914.0,202.0 932.0,202.0 932.0,180.0 950.0,180.0" fill="none" stroke="#c45b12" stroke-width="2.40" stroke-linejoin="round" marker-end="url(#ah-orange)"/>
+<polyline points="914.0,232.0 926.0,232.0 926.0,328.0 950.0,328.0" fill="none" stroke="#c45b12" stroke-width="1.80" stroke-linejoin="round" marker-end="url(#ah-orange)"/>
+<polyline points="914.0,262.0 938.0,262.0 938.0,485.0 950.0,485.0" fill="none" stroke="#c45b12" stroke-width="1.80" stroke-linejoin="round" marker-end="url(#ah-orange)"/>
+<polyline points="1180.0,228.0 1186.0,228.0 1186.0,516.5 1180.0,516.5" fill="none" stroke="#275fa5" stroke-width="1.60" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<polyline points="1180.0,642.0 1196.0,642.0 1196.0,248.0 1180.0,248.0" fill="none" stroke="#8045ac" stroke-width="1.60" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-purple)"/>
+<polyline points="1210.0,389.5 1198.0,389.5 1198.0,922.0 930.0,922.0" fill="none" stroke="#6b6b60" stroke-width="1.60" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-gray)"/>
+<rect x="1021.6" y="905.2" width="84.8" height="14.8" rx="3" ry="3" fill="#ffffff" stroke="none" stroke-width="0.00"/>
+<text x="1064.0" y="914.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="9.8" fill="#6b6b60" text-anchor="middle" font-weight="bold">在 CI 中机检源码</text>
+<rect x="32.0" y="760.0" width="474.0" height="128.0" rx="8" ry="8" fill="#fcfcfb" stroke="#b9b9b0" stroke-width="1.00"/>
+<text x="46.0" y="782.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="12.0" fill="#2e2e26" text-anchor="start" font-weight="bold">图例</text>
+<polyline points="48.0,800.0 86.0,800.0" fill="none" stroke="#275fa5" stroke-width="1.80" stroke-linejoin="round" marker-end="url(#ah-blue)"/>
+<text x="96.0" y="804.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">蓝色实线：客户端请求路径与库依赖</text>
+<polyline points="48.0,818.0 86.0,818.0" fill="none" stroke="#28734d" stroke-width="1.80" stroke-linejoin="round" marker-end="url(#ah-green)"/>
+<text x="96.0" y="822.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">绿色实线：主机内部的权威与执行调用</text>
+<polyline points="48.0,836.0 86.0,836.0" fill="none" stroke="#c45b12" stroke-width="1.80" stroke-linejoin="round" marker-end="url(#ah-orange)"/>
+<text x="96.0" y="840.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">橙色实线：事实、制品与状态写入（写者只有 runtime-host）</text>
+<polyline points="48.0,854.0 86.0,854.0" fill="none" stroke="#8045ac" stroke-width="1.80" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-purple)"/>
+<text x="96.0" y="858.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">紫色虚线：只读取证，或外部仓经 runtime API 读取</text>
+<polyline points="48.0,872.0 86.0,872.0" fill="none" stroke="#6b6b60" stroke-width="1.80" stroke-linejoin="round" stroke-dasharray="6 4" marker-end="url(#ah-gray)"/>
+<text x="96.0" y="876.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#2a2a2a" text-anchor="start" font-weight="normal">灰色虚线：CI 中对源码的机械检查</text>
+<text x="24.0" y="950.0" font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="10.5" fill="#4a4a4a" text-anchor="start" font-weight="normal">边一律指向被依赖方。为保持可读，仅开发期依赖（runtime-host ⇄ runtime-client、ledger ⇄ artifact-store）与88条正常边中其余部分未画出；benchmarks/rust与tools/actinglab-architecture无工作区依赖边。</text>
+</svg>
