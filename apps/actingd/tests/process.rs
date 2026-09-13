@@ -2424,7 +2424,10 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                             actingcommand_contract::EventPayload::Runtime(
                                 actingcommand_contract::RuntimePayload::LifecycleObserved(value),
                             ) => Some(value.owner_epoch()),
-                            payload => payload.lifecycle_failure().map(|value| value.owner_epoch()),
+                            actingcommand_contract::EventPayload::Runtime(
+                                actingcommand_contract::RuntimePayload::Failed(value),
+                            ) => value.lifecycle_failure().map(|value| value.owner_epoch()),
+                            _ => None,
                         };
                         let request_match = policy_identity_header_io
                             .as_ref()
