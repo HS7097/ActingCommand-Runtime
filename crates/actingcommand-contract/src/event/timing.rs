@@ -2,7 +2,7 @@
 
 use super::{
     CorrelationId, FrameId, RecognitionId, RequestId, RunId, SanitizationError, TaskId,
-    TaskTimingFailure,
+    TaskTimingFailure, TaskTimingScope, TaskTimingStage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -327,6 +327,10 @@ impl TaskRecordSubphases {
 }
 
 impl TaskTimingSpanSummary {
+    fn is_unobserved(&self) -> bool {
+        self == &Self::default()
+    }
+
     fn is_valid(&self) -> bool {
         if self.last.as_ref().is_some_and(|sample| {
             sample.record_index == Some(0)
@@ -381,6 +385,10 @@ impl TaskTimingSpanSummary {
 pub struct TaskTimingPhaseObservations {
     pub recognition_evaluate: TaskTimingSpanSummary,
     pub diagnostic_record_write: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub capture_recognition: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub recognition_completed_record: TaskTimingSpanSummary,
 }
 
 /// A bounded observation of one run, carried by its existing terminal or failure fact.
@@ -402,12 +410,21 @@ pub struct TaskTimingObservations {
     pub task_failure: Option<TaskTimingFailureObservation>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTimingCheckPosition {
+    PostconditionBeforeCapture,
+    PostconditionAfterCapture,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskTimingFailureObservation {
     pub phase: TaskTimingPhase,
     pub origin: Option<TaskTimingBudgetOrigin>,
     pub timing: TaskTimingFailure,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_position: Option<TaskTimingCheckPosition>,
 }
 
 impl TaskTimingObservations {
@@ -421,12 +438,35 @@ impl TaskTimingObservations {
                     .subphases
                     .as_ref()
                     .is_some_and(|value| !value.is_valid())
+                || [
+                    &phase.capture_recognition,
+                    &phase.recognition_completed_record,
+                ]
+                .into_iter()
+                .any(|summary| {
+                    !summary.is_valid()
+                        || summary.subphases.is_some()
+                        || summary
+                            .last
+                            .as_ref()
+                            .is_some_and(|sample| sample.record_index.is_some())
+                })
             {
                 return Err(SanitizationError::new(
                     "invalid_task_timing_observations",
                     "task_timing",
                 ));
             }
+        }
+        if self.task_failure.as_ref().is_some_and(|failure| {
+            failure.check_position.is_some()
+                && (failure.timing.scope != TaskTimingScope::Task
+                    || failure.timing.stage != TaskTimingStage::Postcondition)
+        }) {
+            return Err(SanitizationError::new(
+                "invalid_task_timing_observations",
+                "task_timing",
+            ));
         }
         Ok(())
     }

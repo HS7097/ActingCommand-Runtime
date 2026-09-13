@@ -2,7 +2,7 @@
 
 use actingcommand_contract::{
     CorrelationId, FrameId, ObservedMicroseconds, RecognitionId, RequestId, RunId, TaskId,
-    TaskRecordSubphases, TaskTimingBudgetObservation, TaskTimingFailure,
+    TaskRecordSubphases, TaskTimingBudgetObservation, TaskTimingCheckPosition, TaskTimingFailure,
     TaskTimingFailureObservation, TaskTimingObservationState, TaskTimingObservations,
     TaskTimingPhase, TaskTimingPhaseObservations, TaskTimingResult, TaskTimingSample,
     TaskTimingSpanSummary, TimingObservationClock, TimingObservationIssue,
@@ -59,12 +59,17 @@ impl TaskTimingObserver {
         self.phase = TaskTimingPhase::Finalization;
     }
 
-    pub(super) fn task_failure(&mut self, timing: Option<&TaskTimingFailure>) {
+    pub(super) fn task_failure(
+        &mut self,
+        timing: Option<&TaskTimingFailure>,
+        check_position: Option<TaskTimingCheckPosition>,
+    ) {
         if let Some(timing) = timing {
             self.value.task_failure = Some(TaskTimingFailureObservation {
                 phase: self.phase,
                 origin: self.context.map(ContainedTaskTimingContext::origin),
                 timing: timing.clone(),
+                check_position,
             });
         }
     }
@@ -108,6 +113,14 @@ impl TaskTimingObserver {
 
     pub(super) fn snapshot(&self) -> Box<TaskTimingObservations> {
         self.value.clone()
+    }
+
+    pub(super) fn capture_recognition(&mut self, sample: TaskTimingSample) {
+        observe(&mut self.current().capture_recognition, sample);
+    }
+
+    pub(super) fn recognition_completed_record(&mut self, sample: TaskTimingSample) {
+        observe(&mut self.current().recognition_completed_record, sample);
     }
 
     fn current(&mut self) -> &mut TaskTimingPhaseObservations {

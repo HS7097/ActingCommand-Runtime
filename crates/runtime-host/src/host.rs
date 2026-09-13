@@ -9570,7 +9570,9 @@ impl HostShared {
             execution
         };
         if let Err(ContainedTaskRunError::Task(error)) = &execution {
-            runtime.task_timing.task_failure(error.timing());
+            runtime
+                .task_timing
+                .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
@@ -10090,7 +10092,9 @@ impl HostShared {
             recovery.run_entry_recovery(&mut recovery_runtime)
         };
         if let Err(ContainedTaskRunError::Task(error)) = &recovery_execution {
-            runtime.task_timing.task_failure(error.timing());
+            runtime
+                .task_timing
+                .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.task_timing.replace_context(previous_timing);
         let nonfatal_operation = matches!(
@@ -14446,47 +14450,69 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         results: &actingcommand_page_detector::PageBatchResult,
     ) -> Result<(), RequestFailure> {
-        let Some(index) = self.capture_evidence.last_frame_index else {
-            return Ok(());
-        };
-        let state = match results {
-            Ok(outcomes) => {
-                if let Some(error) = outcomes
-                    .iter()
-                    .find_map(|outcome| outcome.result.as_ref().err())
-                {
-                    RecognitionState::Failed {
-                        reason: error.to_string().chars().take(256).collect(),
-                    }
-                } else {
-                    let mut matches = outcomes
+        let frame_id = self.last_frame_id.map(|id| *id.transport());
+        let recognition_id = self.current_recognition_id.map(|id| *id.transport());
+        let started = Instant::now();
+        let budget_before = self.task_timing.budget_at(started);
+        let result = (|| {
+            let Some(index) = self.capture_evidence.last_frame_index else {
+                return Ok(());
+            };
+            let state = match results {
+                Ok(outcomes) => {
+                    if let Some(error) = outcomes
                         .iter()
-                        .filter_map(|outcome| outcome.result.as_ref().ok())
-                        .filter(|evaluation| evaluation.matched);
-                    let first = matches.next();
-                    if matches.next().is_some() {
-                        // No unique page relation is available to the frame cache.
-                        return Ok(());
+                        .find_map(|outcome| outcome.result.as_ref().err())
+                    {
+                        RecognitionState::Failed {
+                            reason: error.to_string().chars().take(256).collect(),
+                        }
+                    } else {
+                        let mut matches = outcomes
+                            .iter()
+                            .filter_map(|outcome| outcome.result.as_ref().ok())
+                            .filter(|evaluation| evaluation.matched);
+                        let first = matches.next();
+                        if matches.next().is_some() {
+                            // No unique page relation is available to the frame cache.
+                            return Ok(());
+                        }
+                        RecognitionState::from_matched_page(
+                            first.map(|evaluation| evaluation.page_id.clone()),
+                        )
                     }
-                    RecognitionState::from_matched_page(
-                        first.map(|evaluation| evaluation.page_id.clone()),
-                    )
                 }
+                Err(error) => RecognitionState::Failed {
+                    reason: error.to_string().chars().take(256).collect(),
+                },
+            };
+            let mut sink = RuntimeArtifactEventSink {
+                ledger: &self.host.ledger,
+                events: &self.host.events,
+            };
+            if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
+                pipeline
+                    .record_recognition(index, state, &mut sink)
+                    .map_err(online_observation::observation_artifact_failure)?;
             }
-            Err(error) => RecognitionState::Failed {
-                reason: error.to_string().chars().take(256).collect(),
-            },
-        };
-        let mut sink = RuntimeArtifactEventSink {
-            ledger: &self.host.ledger,
-            events: &self.host.events,
-        };
-        if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
-            pipeline
-                .record_recognition(index, state, &mut sink)
-                .map_err(online_observation::observation_artifact_failure)?;
-        }
-        Ok(())
+            Ok(())
+        })();
+        let elapsed_us =
+            actingcommand_execution_kernel::observe_instant_span(started, Instant::now());
+        self.task_timing
+            .capture_recognition(actingcommand_contract::TaskTimingSample {
+                elapsed_us,
+                budget_before,
+                result: if result.is_ok() {
+                    actingcommand_contract::TaskTimingResult::Ok
+                } else {
+                    actingcommand_contract::TaskTimingResult::Err
+                },
+                record_index: None,
+                frame_id,
+                recognition_id,
+            });
+        result
     }
 
     const fn capture_origin(&self) -> (EventSource, OriginModule) {
@@ -15732,58 +15758,81 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 width,
                 height,
             } => {
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let recognition_id = self.current_recognition_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_recognition_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let links = self
-                    .links()
-                    .with_frame_id(frame_id)
-                    .with_recognition_id(recognition_id);
-                self.host.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::completed(
-                        EventAction::RecognitionObserve,
-                        EffectDisposition::NotPerformed,
-                        width,
-                        height,
-                        if page_label.is_some() {
-                            RecognitionVerdict::PageMatched
+                let observed_frame_id = self.last_frame_id.map(|id| *id.transport());
+                let observed_recognition_id = self.current_recognition_id.map(|id| *id.transport());
+                let started = Instant::now();
+                let budget_before = self.task_timing.budget_at(started);
+                let result = (|| {
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let recognition_id = self.current_recognition_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_recognition_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let links = self
+                        .links()
+                        .with_frame_id(frame_id)
+                        .with_recognition_id(recognition_id);
+                    self.host.append_event(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links.clone(),
+                        RecognitionPayloadDraft::completed(
+                            EventAction::RecognitionObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            if page_label.is_some() {
+                                RecognitionVerdict::PageMatched
+                            } else {
+                                RecognitionVerdict::PageUnmatched
+                            },
+                            AuditInput::new(),
+                        ),
+                    )?;
+                    self.append_task(
+                        EventSeverity::Info,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::RecognitionCompleted {
+                                candidate_pages,
+                                matched_page: page_label,
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    )?;
+                    self.current_recognition_id = None;
+                    Ok(())
+                })();
+                let elapsed_us =
+                    actingcommand_execution_kernel::observe_instant_span(started, Instant::now());
+                self.task_timing.recognition_completed_record(
+                    actingcommand_contract::TaskTimingSample {
+                        elapsed_us,
+                        budget_before,
+                        result: if result.is_ok() {
+                            actingcommand_contract::TaskTimingResult::Ok
                         } else {
-                            RecognitionVerdict::PageUnmatched
+                            actingcommand_contract::TaskTimingResult::Err
                         },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::RecognitionCompleted {
-                            candidate_pages,
-                            matched_page: page_label,
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.current_recognition_id = None;
-                Ok(())
+                        record_index: None,
+                        frame_id: observed_frame_id,
+                        recognition_id: observed_recognition_id,
+                    },
+                );
+                result
             }
             ContainedTaskTrace::StepStarted {
                 step_index,

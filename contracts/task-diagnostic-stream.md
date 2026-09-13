@@ -1,7 +1,8 @@
 # Task diagnostic stream
 
 The existing task terminal may carry `task_timing`, a bounded observation of
-`recognition_evaluate` and `diagnostic_record_write`. Each has separate preflight,
+`recognition_evaluate`, `diagnostic_record_write`, `capture_recognition` and
+`recognition_completed_record`. Each has separate preflight,
 execution and finalization counts, error counts, accumulated/maximum microseconds
 and a last sample with its actual frame/recognition or record index. The clock is
 the current process's `std::time::Instant`. These spans do not share the origin of
@@ -27,6 +28,25 @@ lifecycle record can carry the snapshot when diagnostics are aborted; the
 original deduplication and LedgerFailure prohibition are unchanged. Missing
 terminal/failure evidence, interrupted execution and older records do not supply
 timing observations. No extra event or artifact write is introduced.
+
+`capture_recognition` measures the original Host recognition-state handling and
+CapturePipeline recognition call through its returned Result, including early
+returns and errors. `recognition_completed_record` measures only the original
+RecognitionCompleted arm, including its ordered recognition and task Ledger
+commits; the preceding active check and trace offset are outside that span.
+Both freeze the original frame/recognition identities before the call, record
+the original Result with record_index absent, and update only the fixed in-memory
+Observer summaries. Identity clearing still follows both successful commits.
+Unentered summaries are omitted and decode as Unobserved; observed zero and
+Incomplete remain explicit. The existing snapshot and terminal carry the last
+completed calls without an extra event or query.
+
+The optional task_failure.check_position is postcondition_before_capture or
+postcondition_after_capture only for Task/Postcondition timing failures. It
+identifies the original await_postcondition deadline check that returned the
+error. A missing position is unobserved. The original scope, stage, elapsed/limit
+values, checks and sleeps are unchanged; entry recovery forwards the same error
+position while retaining its original observation phase and budget origin.
 
 The optional `diagnostic_record_write.subphases` contains exactly `encode`,
 `framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the

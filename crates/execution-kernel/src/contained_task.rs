@@ -16,8 +16,9 @@ use actingcommand_contract::{
     SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
     SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
     SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingFailure,
-    TaskTimingScope, TaskTimingStage, validate_task_phases,
+    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence,
+    TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
+    validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -83,6 +84,7 @@ pub struct ContainedTaskError {
     code: &'static str,
     detail: Option<String>,
     timing: Option<TaskTimingFailure>,
+    timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
@@ -92,6 +94,7 @@ impl ContainedTaskError {
             code,
             detail: None,
             timing: None,
+            timing_check_position: None,
             declaration_issue: None,
         }
     }
@@ -101,6 +104,7 @@ impl ContainedTaskError {
             code,
             detail: Some(detail.into()),
             timing: None,
+            timing_check_position: None,
             declaration_issue: None,
         }
     }
@@ -129,6 +133,15 @@ impl ContainedTaskError {
 
     pub fn timing(&self) -> Option<&TaskTimingFailure> {
         self.timing.as_ref()
+    }
+
+    fn with_timing_check_position(mut self, position: TaskTimingCheckPosition) -> Self {
+        self.timing_check_position = Some(position);
+        self
+    }
+
+    pub fn timing_check_position(&self) -> Option<TaskTimingCheckPosition> {
+        self.timing_check_position
     }
 
     pub const fn code(&self) -> &'static str {
@@ -2855,12 +2868,14 @@ impl PreparedContainedTask {
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
             let observation = self.capture_page(runtime, ocr_collector, None, timing)?;
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
             if let Some(observation) = observation {
