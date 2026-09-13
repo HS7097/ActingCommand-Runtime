@@ -2016,8 +2016,8 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         "the regression must cross the actual Runtime event-page boundary: {summary}"
     );
     if summary.get("status").and_then(Value::as_str) != Some("simulated_completed") {
-        let mut context = [0_u8; 16 * 1024];
-        let mut remaining = &mut context[..16 * 1024 - 128];
+        let mut context = [0_u8; 64 * 1024];
+        let mut remaining = &mut context[..64 * 1024 - 128];
         let formatted = (|| -> std::io::Result<()> {
             writeln!(
                 remaining,
@@ -2115,11 +2115,11 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             }
             Ok(())
         })();
-        let used = 16 * 1024 - 128 - remaining.len();
+        let used = 64 * 1024 - 128 - remaining.len();
         let valid = std::str::from_utf8(&context[..used])
             .map_or_else(|error| error.valid_up_to(), |_| used);
         let footer: &[u8] = if formatted.is_err() || valid != used {
-            b"\n[truncated: 16-KiB context limit or formatting failure; remaining fields omitted]\n"
+            b"\n[truncated: 64-KiB context limit or formatting failure; remaining fields omitted]\n"
         } else {
             b"\n[end summary failure context]\n"
         };
