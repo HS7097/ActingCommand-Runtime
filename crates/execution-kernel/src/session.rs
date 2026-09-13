@@ -391,7 +391,7 @@ impl ExecutionSession {
         }
     }
 
-    /// Host calls this only after the original capture fact commits to GlobalLedger.
+    /// Host calls this only after the original capture fact has committed.
     pub(crate) fn commit_input_frame(
         &self,
         reference: InputFrameReference,
