@@ -13,6 +13,10 @@ pub enum TaskTimingBoundary {
     CaptureCompletedRecord,
     RecognitionStartedRecord,
     Input,
+    InputToEffectCompleted,
+    EffectCompletedRecord,
+    EffectCompletedToPostInputWait,
+    EffectCompletedAppend,
     PostInputWait,
     RetryWait,
     PageRecognitionWait,
@@ -129,6 +133,14 @@ pub struct TaskTimingBoundaryObservations {
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub input: TaskTimingSpanSummary,
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub input_to_effect_completed: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub effect_completed_record: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub effect_completed_to_post_input_wait: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub effect_completed_append: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub post_input_wait: TaskTimingSpanSummary,
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub retry_wait: TaskTimingSpanSummary,
@@ -150,6 +162,11 @@ pub struct TaskTimingBoundaryObservations {
         skip_serializing_if = "TaskTimingAppendObservations::is_unobserved"
     )]
     pub recognition_task_stages: TaskTimingAppendObservations,
+    #[serde(
+        default,
+        skip_serializing_if = "TaskTimingAppendObservations::is_unobserved"
+    )]
+    pub effect_completed_stages: TaskTimingAppendObservations,
 }
 
 impl TaskTimingBoundaryObservations {
@@ -163,6 +180,12 @@ impl TaskTimingBoundaryObservations {
             TaskTimingBoundary::CaptureCompletedRecord => &mut self.capture_completed_record,
             TaskTimingBoundary::RecognitionStartedRecord => &mut self.recognition_started_record,
             TaskTimingBoundary::Input => &mut self.input,
+            TaskTimingBoundary::InputToEffectCompleted => &mut self.input_to_effect_completed,
+            TaskTimingBoundary::EffectCompletedRecord => &mut self.effect_completed_record,
+            TaskTimingBoundary::EffectCompletedToPostInputWait => {
+                &mut self.effect_completed_to_post_input_wait
+            }
+            TaskTimingBoundary::EffectCompletedAppend => &mut self.effect_completed_append,
             TaskTimingBoundary::PostInputWait => &mut self.post_input_wait,
             TaskTimingBoundary::RetryWait => &mut self.retry_wait,
             TaskTimingBoundary::PageRecognitionWait => &mut self.page_recognition_wait,
@@ -182,6 +205,10 @@ impl TaskTimingBoundaryObservations {
             &self.capture_completed_record,
             &self.recognition_started_record,
             &self.input,
+            &self.input_to_effect_completed,
+            &self.effect_completed_record,
+            &self.effect_completed_to_post_input_wait,
+            &self.effect_completed_append,
             &self.post_input_wait,
             &self.retry_wait,
             &self.page_recognition_wait,
@@ -193,6 +220,7 @@ impl TaskTimingBoundaryObservations {
         .all(valid_boundary_span)
             && self.recognition_payload_stages.is_valid()
             && self.recognition_task_stages.is_valid()
+            && self.effect_completed_stages.is_valid()
     }
 }
 
@@ -246,6 +274,7 @@ impl TaskTimingObservedExpiry {
                     self.boundary,
                     TaskTimingBoundary::RecognitionPayloadAppend
                         | TaskTimingBoundary::RecognitionTaskAppend
+                        | TaskTimingBoundary::EffectCompletedAppend
                 ))
     }
 }

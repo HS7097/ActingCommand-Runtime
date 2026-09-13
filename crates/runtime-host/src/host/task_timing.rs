@@ -11,10 +11,13 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext};
 use std::time::Instant;
 
+#[derive(Clone)]
 pub(super) struct TaskTimingObserver {
     value: Box<TaskTimingObservations>,
     phase: TaskTimingPhase,
     context: Option<ContainedTaskTimingContext>,
+    input_completion: Option<BoundaryStart>,
+    effect_completion: Option<BoundaryStart>,
 }
 
 impl TaskTimingObserver {
@@ -41,15 +44,19 @@ impl TaskTimingObserver {
             }),
             phase: TaskTimingPhase::Preflight,
             context: None,
+            input_completion: None,
+            effect_completion: None,
         }
     }
 
     pub(super) fn begin_execution(&mut self, context: ContainedTaskTimingContext) {
+        self.incomplete_effect_bridges();
         self.context = Some(context);
         self.phase = TaskTimingPhase::Execution;
     }
 
     pub(super) fn replace_context(&mut self, context: Option<ContainedTaskTimingContext>) {
+        self.incomplete_effect_bridges();
         self.context = context;
     }
 
@@ -58,6 +65,7 @@ impl TaskTimingObserver {
     }
 
     pub(super) fn begin_finalization(&mut self) {
+        self.incomplete_effect_bridges();
         self.phase = TaskTimingPhase::Finalization;
     }
 
@@ -114,7 +122,9 @@ impl TaskTimingObserver {
     }
 
     pub(super) fn snapshot(&self) -> Box<TaskTimingObservations> {
-        self.value.clone()
+        let mut snapshot = self.clone();
+        snapshot.incomplete_effect_bridges();
+        snapshot.value
     }
 
     pub(super) fn capture_recognition(&mut self, sample: TaskTimingSample) {
@@ -183,15 +193,16 @@ pub(super) struct BoundaryStart {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum RecognitionAppend {
-    Payload,
-    Task,
+pub(super) enum TaskAppend {
+    RecognitionPayload,
+    RecognitionTask,
+    EffectCompleted,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AppendStart {
     start: BoundaryStart,
-    kind: RecognitionAppend,
+    kind: TaskAppend,
 }
 
 impl TaskTimingObserver {
@@ -219,18 +230,84 @@ impl TaskTimingObserver {
                 }),
             },
         );
+        match timing.boundary {
+            TaskTimingBoundary::EffectCompletedRecord => {
+                if let Some(start) = self.input_completion.take() {
+                    self.complete_effect_bridge(start, timing, timing.ended, timing.succeeded);
+                }
+                self.incomplete_effect_bridges();
+                if timing.succeeded {
+                    self.effect_completion = Some(BoundaryStart {
+                        boundary: TaskTimingBoundary::EffectCompletedToPostInputWait,
+                        phase: self.phase,
+                        context: Some(timing.context),
+                        identity: timing.identity,
+                        started: timing.ended,
+                    });
+                }
+            }
+            TaskTimingBoundary::PostInputWait => {
+                if let Some(start) = self.effect_completion.take() {
+                    self.complete_effect_bridge(start, timing, timing.started, true);
+                }
+            }
+            _ => {}
+        }
     }
 
-    pub(super) fn begin_append(
-        &self,
-        kind: RecognitionAppend,
-        identity: BoundaryIdentity,
-    ) -> AppendStart {
+    fn complete_effect_bridge(
+        &mut self,
+        start: BoundaryStart,
+        timing: actingcommand_execution_kernel::ContainedTaskBoundaryTiming,
+        ended: Instant,
+        succeeded: bool,
+    ) {
+        let same_call = start.phase == self.phase
+            && start.context == Some(timing.context)
+            && start.identity.step_index.is_some()
+            && start.identity.action_id.is_some()
+            && start.identity == timing.identity;
+        self.boundary_span(
+            start,
+            None,
+            AppendCallSpan {
+                present: true,
+                started: Some(start.started),
+                ended: same_call.then_some(ended),
+                result: same_call.then_some(if succeeded {
+                    TaskTimingResult::Ok
+                } else {
+                    TaskTimingResult::Err
+                }),
+            },
+        );
+    }
+
+    fn incomplete_effect_bridges(&mut self) {
+        for start in [self.input_completion.take(), self.effect_completion.take()]
+            .into_iter()
+            .flatten()
+        {
+            self.boundary_span(
+                start,
+                None,
+                AppendCallSpan {
+                    present: true,
+                    started: Some(start.started),
+                    ended: None,
+                    result: None,
+                },
+            );
+        }
+    }
+
+    pub(super) fn begin_append(&self, kind: TaskAppend, identity: BoundaryIdentity) -> AppendStart {
         AppendStart {
             start: self.begin_boundary(
                 match kind {
-                    RecognitionAppend::Payload => TaskTimingBoundary::RecognitionPayloadAppend,
-                    RecognitionAppend::Task => TaskTimingBoundary::RecognitionTaskAppend,
+                    TaskAppend::RecognitionPayload => TaskTimingBoundary::RecognitionPayloadAppend,
+                    TaskAppend::RecognitionTask => TaskTimingBoundary::RecognitionTaskAppend,
+                    TaskAppend::EffectCompleted => TaskTimingBoundary::EffectCompletedAppend,
                 },
                 identity,
             ),
@@ -253,6 +330,9 @@ impl TaskTimingObserver {
 
     pub(super) fn finish_boundary(&mut self, start: BoundaryStart, succeeded: bool) {
         let ended = Instant::now();
+        if start.boundary == TaskTimingBoundary::Input {
+            self.incomplete_effect_bridges();
+        }
         self.boundary_span(
             start,
             None,
@@ -267,6 +347,13 @@ impl TaskTimingObserver {
                 }),
             },
         );
+        if start.boundary == TaskTimingBoundary::Input && succeeded {
+            self.input_completion = Some(BoundaryStart {
+                boundary: TaskTimingBoundary::InputToEffectCompleted,
+                started: ended,
+                ..start
+            });
+        }
     }
 
     pub(super) fn finish_append(
@@ -373,7 +460,7 @@ impl TaskTimingObserver {
     fn boundary_span(
         &mut self,
         start: BoundaryStart,
-        append_stage: Option<(TaskTimingAppendStage, RecognitionAppend)>,
+        append_stage: Option<(TaskTimingAppendStage, TaskAppend)>,
         span: AppendCallSpan,
     ) {
         if !span.present {
@@ -417,8 +504,11 @@ impl TaskTimingObserver {
         let summary = match append_stage {
             None => boundaries.span_mut(start.boundary),
             Some((stage, kind)) => match kind {
-                RecognitionAppend::Payload => boundaries.recognition_payload_stages.span_mut(stage),
-                RecognitionAppend::Task => boundaries.recognition_task_stages.span_mut(stage),
+                TaskAppend::RecognitionPayload => {
+                    boundaries.recognition_payload_stages.span_mut(stage)
+                }
+                TaskAppend::RecognitionTask => boundaries.recognition_task_stages.span_mut(stage),
+                TaskAppend::EffectCompleted => boundaries.effect_completed_stages.span_mut(stage),
             },
         };
         observe(summary, sample.clone());

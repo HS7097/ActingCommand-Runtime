@@ -16049,7 +16049,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     );
                     let append_started = self
                         .task_timing
-                        .begin_append(task_timing::RecognitionAppend::Payload, identity);
+                        .begin_append(task_timing::TaskAppend::RecognitionPayload, identity);
                     let (appended, observation) = self.host.append_event_observed(
                         EventSeverity::Info,
                         EventSource::Runtime,
@@ -16074,7 +16074,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     appended?;
                     let append_started = self
                         .task_timing
-                        .begin_append(task_timing::RecognitionAppend::Task, identity);
+                        .begin_append(task_timing::TaskAppend::RecognitionTask, identity);
                     let (appended, observation) = self.host.append_event_observed(
                         EventSeverity::Info,
                         EventSource::Runtime,
@@ -16200,8 +16200,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 let action_id =
                     contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
-                self.append_task(
+                let identity = task_timing::BoundaryIdentity {
+                    step_index: Some(step_index),
+                    action_id: Some(*action_id.transport()),
+                    ..self.timing_identity(TaskTimingBoundary::EffectCompletedAppend)
+                };
+                let append_started = self
+                    .task_timing
+                    .begin_append(task_timing::TaskAppend::EffectCompleted, identity);
+                let (appended, observation) = self.host.append_event_observed(
                     EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
                     self.links().with_action_id(action_id),
                     TaskPayloadDraft::semantic(
                         TaskSemanticFact::EffectCompleted {
@@ -16210,7 +16221,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )?;
+                );
+                let appended = appended.map(|_| ());
+                self.task_timing
+                    .finish_append(append_started, appended.is_ok(), observation);
+                appended?;
                 self.capture_evidence.effect_completed()
             }
             ContainedTaskTrace::StepFinished {

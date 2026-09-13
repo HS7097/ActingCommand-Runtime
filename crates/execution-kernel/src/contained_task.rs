@@ -2180,12 +2180,24 @@ impl PreparedContainedTask {
                         runtime
                             .input(action)
                             .map_err(ContainedTaskRunError::operation::<R>)?;
-                        runtime
-                            .record(ContainedTaskTrace::EffectCompleted {
-                                step_index,
-                                operation_label: operation_id.clone(),
-                            })
-                            .map_err(ContainedTaskRunError::Boundary)?;
+                        let boundary =
+                            actingcommand_contract::TaskTimingBoundary::EffectCompletedRecord;
+                        let identity = runtime.task_boundary_identity(boundary);
+                        let effect_started = Instant::now();
+                        let effected = runtime.record(ContainedTaskTrace::EffectCompleted {
+                            step_index,
+                            operation_label: operation_id.clone(),
+                        });
+                        let effect_ended = Instant::now();
+                        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                            boundary,
+                            identity,
+                            context: observation_timing,
+                            started: effect_started,
+                            ended: effect_ended,
+                            succeeded: effected.is_ok(),
+                        });
+                        effected.map_err(ContainedTaskRunError::Boundary)?;
                         machine
                             .operation_effect_completed(&operation_id)
                             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
