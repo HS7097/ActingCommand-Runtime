@@ -8545,8 +8545,11 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         let frame = match self
             .execution
-            .capture_retained_with_registration_guard(instance_alias, registration)
-        {
+            .capture_frame_retained_with_registration_guard(
+                instance_alias,
+                links.frame_id().copied(),
+                registration,
+            ) {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
@@ -8738,14 +8741,28 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
+        let verified = terminal(&sink.verified.ok_or_else(|| {
+            online_observation::observation_integrity_failure("observation_verified_event_missing")
+        })?);
+        self.execution
+            .commit_input_frame(
+                instance_alias,
+                actingcommand_contract::InputFrameReference {
+                    frame_id: *frame_id,
+                    width: observation.width(),
+                    height: observation.height(),
+                },
+            )
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "commit_capture_input_frame",
+                    &error,
+                ))
+            })?;
         Ok(CompletedReadonlyObservation {
             observation,
             terminal: event,
-            verified: terminal(&sink.verified.ok_or_else(|| {
-                online_observation::observation_integrity_failure(
-                    "observation_verified_event_missing",
-                )
-            })?),
+            verified,
             links,
             artifact_links,
         })
