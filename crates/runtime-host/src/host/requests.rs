@@ -47,9 +47,37 @@ impl HostShared {
         };
         match self.process_validated(request, &validated, connection_id) {
             Ok(success) => success.into_receipt(request),
-            Err(failure) => {
+            Err(mut failure) => {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
+                }
+                if let Some(rejection) = failure.error.resource_declaration().cloned() {
+                    let rejected = if let Some(event) =
+                        failure.error.lifecycle.resource_declaration_event
+                    {
+                        event
+                    } else {
+                        let links = validated.event_links(None, None, None);
+                        let event = self.append_event_raw(
+                            EventSeverity::Warning,
+                            EventSource::Runtime,
+                            OriginModule::Runtime,
+                            EventActor::Runtime,
+                            links.clone(),
+                            RuntimePayloadDraft::resource_declaration_rejected(rejection.clone()),
+                        )?;
+                        self.record_required_failure(&failure.error, &event, links)?;
+                        terminal(&event)
+                    };
+                    failure.terminal.get_or_insert(rejected);
+                    return runtime_error_receipt(
+                        request,
+                        failure.state,
+                        failure.terminal,
+                        failure.error.projection().clone(),
+                    )?
+                    .with_resource_declaration(rejection, rejected)
+                    .map_err(|_| receipt_error());
                 }
                 runtime_error_receipt(
                     request,

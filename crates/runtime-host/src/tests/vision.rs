@@ -66,7 +66,33 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
         ContainedTaskRequest::new(missing_package.display().to_string(), expected.clone())
             .expect("missing-provider task request"),
     ));
-    let missing_receipt = missing_client.send(&missing_request);
+    let missing_receipt = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        missing_client.send(&missing_request)
+    })) {
+        Ok(receipt) => receipt,
+        Err(original) => {
+            let mut output = [0_u8; 60 * 1024];
+            let mut remaining = &mut output[..];
+            let formatted = write!(
+                remaining,
+                "vision case=missing-provider; operation=RunContainedTask; request_id_json={:?}; correlation_id_json={:?}\nHost fatal sampled after send failure (not task terminal evidence): {:#?}\n",
+                serde_json::to_string(&missing_request.request_id()),
+                serde_json::to_string(&missing_request.correlation_id()),
+                missing_host.fatal_error(),
+            );
+            let used = 60 * 1024 - remaining.len();
+            let text = match std::str::from_utf8(&output[..used]) {
+                Ok(text) => text,
+                Err(error) => std::str::from_utf8(&output[..error.valid_up_to()])
+                    .expect("valid diagnostic prefix"),
+            };
+            eprint!("{text}");
+            if formatted.is_err() {
+                eprintln!("\nFailure output incomplete: 60-KiB diagnostic limit reached.");
+            }
+            std::panic::resume_unwind(original);
+        }
+    };
     assert_eq!(missing_receipt.state(), RuntimeReceiptState::Failed);
     assert_eq!(
         missing_receipt
@@ -111,7 +137,33 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
         ContainedTaskRequest::new(injected_package.display().to_string(), expected)
             .expect("injected-provider task request"),
     ));
-    let injected_receipt = injected_client.send(&injected_request);
+    let injected_receipt = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        injected_client.send(&injected_request)
+    })) {
+        Ok(receipt) => receipt,
+        Err(original) => {
+            let mut output = [0_u8; 60 * 1024];
+            let mut remaining = &mut output[..];
+            let formatted = write!(
+                remaining,
+                "vision case=injected-provider; operation=RunContainedTask; request_id_json={:?}; correlation_id_json={:?}\nHost fatal sampled after send failure (not task terminal evidence): {:#?}\n",
+                serde_json::to_string(&injected_request.request_id()),
+                serde_json::to_string(&injected_request.correlation_id()),
+                injected_host.fatal_error(),
+            );
+            let used = 60 * 1024 - remaining.len();
+            let text = match std::str::from_utf8(&output[..used]) {
+                Ok(text) => text,
+                Err(error) => std::str::from_utf8(&output[..error.valid_up_to()])
+                    .expect("valid diagnostic prefix"),
+            };
+            eprint!("{text}");
+            if formatted.is_err() {
+                eprintln!("\nFailure output incomplete: 60-KiB diagnostic limit reached.");
+            }
+            std::panic::resume_unwind(original);
+        }
+    };
     assert_eq!(injected_receipt.state(), RuntimeReceiptState::Completed);
     assert!(matches!(
         injected_receipt.result(),

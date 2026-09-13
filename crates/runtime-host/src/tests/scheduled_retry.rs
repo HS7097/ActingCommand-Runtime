@@ -25,15 +25,20 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
     let admission = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .admit_scheduled_policy_dispatch(
+            &intent,
+            &reasons,
+            &policy_context(&host, &intent),
+            &request,
+        )
         .expect("policy admission");
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected one policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("sixth operation attempt must stop the scheduled run");

@@ -4,7 +4,7 @@ use crate::{
     resolve_instance_id, runtime_capture_backend, runtime_input_backend, runtime_state_root,
     stream_input_relay_action,
 };
-use actingcommand_contract::{EventActor, EventSource};
+use actingcommand_contract::{EventActor, EventSource, InputAction, RuntimeReceipt};
 use actingcommand_device::{
     CaptureBackendChoice, Frame, InputBackend, combine_operation_and_close,
 };
@@ -468,18 +468,28 @@ impl DirectTouchCommand {
         }
     }
 
-    fn run(&self, backend: &mut dyn InputBackend) -> actingcommand_device::DeviceResult<()> {
-        match *self {
-            Self::Tap { x, y } => backend.tap(x, y),
+    fn run(
+        &self,
+        backend: &mut runtime_input_backend::RuntimeInputBackend,
+    ) -> actingcommand_device::DeviceResult<RuntimeReceipt> {
+        let action = match *self {
+            Self::Tap { x, y } => InputAction::Tap { x, y },
             Self::Swipe {
                 x1,
                 y1,
                 x2,
                 y2,
                 duration_ms,
-            } => backend.swipe(x1, y1, x2, y2, duration_ms),
-            Self::LongTap { x, y, duration_ms } => backend.long_tap(x, y, duration_ms),
-        }
+            } => InputAction::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            },
+            Self::LongTap { x, y, duration_ms } => InputAction::LongTap { x, y, duration_ms },
+        };
+        backend.input_receipt(action)
     }
 
     fn to_json(&self) -> Value {
@@ -534,10 +544,15 @@ pub(crate) fn run_direct_touch(
     command: &str,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_session_routing(&flags)?;
-    let command = DirectTouchCommand::parse(command, &flags)?;
-    let config = read_user_config()?;
+    let (command, config) = (|| -> CliOutcome<_> {
+        let flags = FlagArgs::parse(args)?;
+        reject_legacy_session_routing(&flags)?;
+        Ok((
+            DirectTouchCommand::parse(command, &flags)?,
+            read_user_config()?,
+        ))
+    })()
+    .map_err(input_not_submitted)?;
     send_direct_touch_command(
         global,
         &config,
@@ -554,11 +569,11 @@ fn send_direct_touch_command(
     control_mode: &str,
     safety_gate: &str,
 ) -> CliOutcome<Value> {
-    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, config)?;
+    let (mut backend, instance_alias) =
+        open_cli_runtime_input_proxy(global, config).map_err(input_not_submitted)?;
     let operation = command.run(&mut backend);
     let close = backend.close();
-    combine_operation_and_close(operation, close)
-        .map_err(|err| CliError::device(err.to_string()))?;
+    let input_outcome = finish_direct_input(operation, close)?;
     Ok(json!({
         "status": "sent",
         "backend": "runtime_proxy",
@@ -574,7 +589,8 @@ fn send_direct_touch_command(
         "device_state": "runtime_owned",
         "screen_size": Value::Null,
         "handshake": Value::Null,
-        "action": command.to_json()
+        "action": command.to_json(),
+        "input_outcome": input_outcome
     }))
 }
 
@@ -583,15 +599,18 @@ pub(crate) fn run_direct_input(
     command: &str,
     args: &[String],
 ) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_session_routing(&flags)?;
-    let command = DirectInputCommand::parse(command, &flags)?;
-    let config = read_user_config()?;
-    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, &config)?;
+    let (command, mut backend, instance_alias) = (|| -> CliOutcome<_> {
+        let flags = FlagArgs::parse(args)?;
+        reject_legacy_session_routing(&flags)?;
+        let command = DirectInputCommand::parse(command, &flags)?;
+        let config = read_user_config()?;
+        let (backend, instance_alias) = open_cli_runtime_input_proxy(global, &config)?;
+        Ok((command, backend, instance_alias))
+    })()
+    .map_err(input_not_submitted)?;
     let operation = command.run(&mut backend);
     let close = backend.close();
-    combine_operation_and_close(operation, close)
-        .map_err(|err| CliError::device(err.to_string()))?;
+    let input_outcome = finish_direct_input(operation, close)?;
     Ok(json!({
         "status": "sent",
         "backend": "runtime_proxy",
@@ -607,8 +626,63 @@ pub(crate) fn run_direct_input(
         "device_state": "runtime_owned",
         "screen_size": Value::Null,
         "handshake": Value::Null,
-        "action": command.to_json()
+        "action": command.to_json(),
+        "input_outcome": input_outcome
     }))
+}
+
+// The command owns its input receipt before closing the proxy.
+fn finish_direct_input(
+    operation: actingcommand_device::DeviceResult<RuntimeReceipt>,
+    close: actingcommand_device::DeviceResult<()>,
+) -> CliOutcome<Value> {
+    let mut outcome = json!({
+        "input_stage": if operation.is_ok() { "committed" } else { "receipt_unavailable" },
+        "input_receipt": Value::Null,
+        "close_stage": if close.is_ok() { "succeeded" } else { "failed" },
+    });
+    if let Err(error) = &operation {
+        outcome["input_error"] = json!(error.to_string());
+    }
+    if let Err(error) = &close {
+        outcome["close_error"] = json!(error.to_string());
+    }
+    let serialization_error = match &operation {
+        Ok(receipt) => match serde_json::to_value(receipt) {
+            Ok(value) => {
+                outcome["input_receipt"] = value;
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        },
+        Err(_) => None,
+    };
+    let combined = combine_operation_and_close(operation.map(|_| ()), close)
+        .map_err(|error| CliError::device(error.to_string()));
+    if let Some(error) = serialization_error {
+        outcome["input_receipt_serialization_error"] = json!(&error);
+        let failure = match combined {
+            Err(primary) => primary,
+            Ok(()) => CliError::device(format!("input receipt serialization failed: {error}")),
+        };
+        return Err(failure.with_details(json!({"input_outcome": outcome})));
+    }
+    match combined {
+        Ok(()) => Ok(outcome),
+        Err(error) => Err(error.with_details(json!({"input_outcome": outcome}))),
+    }
+}
+
+fn input_not_submitted(mut error: CliError) -> CliError {
+    let outcome = json!({"input_stage": "not_submitted", "input_receipt": Value::Null});
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        Some(original) => serde_json::Map::from_iter([("original_details".to_owned(), original)]),
+        None => serde_json::Map::new(),
+    };
+    details.insert("input_outcome".to_owned(), outcome);
+    error.details = Some(Value::Object(details));
+    error
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -641,11 +715,15 @@ impl DirectInputCommand {
         }
     }
 
-    fn run(&self, backend: &mut dyn InputBackend) -> actingcommand_device::DeviceResult<()> {
-        match self {
-            Self::Key(key) => backend.key(key),
-            Self::Text(text) => backend.text(text),
-        }
+    fn run(
+        &self,
+        backend: &mut runtime_input_backend::RuntimeInputBackend,
+    ) -> actingcommand_device::DeviceResult<RuntimeReceipt> {
+        let action = match self {
+            Self::Key(key) => InputAction::Key { key: key.clone() },
+            Self::Text(text) => InputAction::Text { text: text.clone() },
+        };
+        backend.input_receipt(action)
     }
 
     fn to_json(&self) -> Value {
@@ -738,10 +816,13 @@ impl StreamInputRelayAction {
         }
     }
 
-    fn run(&self, backend: &mut dyn InputBackend) -> actingcommand_device::DeviceResult<()> {
+    fn run(
+        &self,
+        backend: &mut runtime_input_backend::RuntimeInputBackend,
+    ) -> actingcommand_device::DeviceResult<()> {
         match self {
-            Self::Touch(command) => command.run(backend),
-            Self::Input(command) => command.run(backend),
+            Self::Touch(command) => command.run(backend).map(|_| ()),
+            Self::Input(command) => command.run(backend).map(|_| ()),
         }
     }
 

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#[path = "resource_declarations.rs"]
+pub(crate) mod resource_declarations;
+
 use super::runtime_endpoint::{
     runtime_endpoint_policy, runtime_endpoint_policy_json, runtime_tcp_available,
 };
@@ -31,24 +34,7 @@ pub(super) fn run_resource(
     let resource_root = resolve_resource_root(&repo);
     match sub {
         "restore" => crate::resource_restore::run_resource_restore(args),
-        "validate" => {
-            let mut validation = validate_resource_repo(&resource_root.root)?;
-            if let Some(object) = validation.as_object_mut() {
-                object.insert(
-                    "input".to_string(),
-                    Value::String(resource_root.input.display().to_string()),
-                );
-                object.insert(
-                    "resource_root".to_string(),
-                    Value::String(resource_root.root.display().to_string()),
-                );
-                object.insert(
-                    "resource_layout".to_string(),
-                    Value::String(resource_root.layout.to_string()),
-                );
-            }
-            Ok(validation)
-        }
+        "validate" => resource_declarations::run_resource_validation(&repo, &flags),
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
         "import-alas" | "drift-alas" => {
@@ -390,34 +376,6 @@ pub(super) fn validate_operation_dir(dir: &Path) -> CliOutcome<Value> {
     }))
 }
 
-fn validate_resource_repo(repo: &Path) -> CliOutcome<Value> {
-    if !repo.is_dir() {
-        return Err(CliError::usage(format!(
-            "resource repo does not exist: {}",
-            repo.display()
-        )));
-    }
-    let recognition_dir = repo.join("recognition");
-    let packs = find_files(repo, |path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".pack.json"))
-    })?;
-    let pages = find_files(repo, |path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".pages.json"))
-    })?;
-    Ok(json!({
-        "repo": repo.display().to_string(),
-        "recognition_dir_exists": recognition_dir.is_dir(),
-        "pack_count": packs.len(),
-        "pages_count": pages.len(),
-        "packs": packs.iter().map(|path| path_string(path)).collect::<Vec<_>>(),
-        "pages": pages.iter().map(|path| path_string(path)).collect::<Vec<_>>()
-    }))
-}
-
 pub(super) fn validate_json_file(path: &Path) -> CliOutcome<Value> {
     let text = fs::read_to_string(path)
         .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
@@ -516,7 +474,7 @@ pub(super) fn match_metric_name(metric: MatchMetric) -> &'static str {
     }
 }
 
-fn contains_string_value(value: &Value, needle: &str) -> bool {
+pub(super) fn contains_string_value(value: &Value, needle: &str) -> bool {
     match value {
         Value::String(text) => text.contains(needle),
         Value::Array(items) => items.iter().any(|item| contains_string_value(item, needle)),

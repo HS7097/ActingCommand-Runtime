@@ -66,6 +66,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",
+ "actingcommand-policy",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "actingcommand-resource-tooling",
@@ -250,6 +251,7 @@ dependencies = [
 name = "actingcommand-page-detector"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "serde",

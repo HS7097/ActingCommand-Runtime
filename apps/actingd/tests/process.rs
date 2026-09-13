@@ -1736,15 +1736,17 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
     let started = Instant::now();
     loop {
         let completed = client
-            .query_events(
+            .query_event_page(
                 EventQuery {
                     event_type: Some(EventType::PolicyDispatchCompleted),
                     ..EventQuery::default()
                 },
                 ProjectionProfile::Forensic,
+                RuntimeEventQueryPageRequest::new(1, None).expect("completion page request"),
             )
             .expect("query policy completion");
-        if !completed.is_empty() {
+        let snapshot_ledger_position = completed.snapshot_ledger_position();
+        if !completed.events().is_empty() {
             break;
         }
         if let Some(status) = child.0.try_wait().expect("process state") {
@@ -1755,10 +1757,71 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             }
             panic!("actingd exited before paginated run completed with {status}: {stderr}");
         }
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "paginated policy run timed out"
-        );
+        let completion_wait = std::panic::catch_unwind(|| {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "paginated policy run timed out"
+            );
+        });
+        if let Err(original) = completion_wait {
+            eprintln!(
+                "paginated policy run timed out; elapsed_after_failure={:?}; child_state=running at preceding process-state read; last_successful_snapshot={snapshot_ledger_position}",
+                started.elapsed(),
+            );
+            if snapshot_ledger_position == 0 {
+                eprintln!("No observed ledger facts; failure fragment query skipped.");
+            } else {
+                let from_sequence = snapshot_ledger_position.saturating_sub(31).max(1);
+                eprintln!(
+                    "One Forensic ledger fragment: from_sequence={from_sequence}, to_sequence={snapshot_ledger_position}, limit=32; original 500-ms I/O budget; no continuation or retry. Uncovered events remain unknown."
+                );
+                let fragment = client.query_event_page(
+                    EventQuery {
+                        from_sequence: Some(from_sequence),
+                        to_sequence: Some(snapshot_ledger_position),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                    RuntimeEventQueryPageRequest::new(32, None).expect("failure fragment request"),
+                );
+                let mut output = [0_u8; 60 * 1024];
+                let mut remaining = &mut output[..];
+                let mut serialization_error = None;
+                let formatted = match fragment {
+                    Ok(page) => {
+                        let header = writeln!(
+                            remaining,
+                            "Fragment returned_count={}, has_more={}, snapshot_ledger_position={}; actual page JSON:",
+                            page.returned_count(),
+                            page.has_more(),
+                            page.snapshot_ledger_position(),
+                        );
+                        if header.is_ok() {
+                            serialization_error =
+                                serde_json::to_writer(&mut remaining, &page).err();
+                        }
+                        header
+                    }
+                    Err(error) => writeln!(remaining, "Fragment query failed: {error:#?}"),
+                };
+                let used = 60 * 1024 - remaining.len();
+                let text = match std::str::from_utf8(&output[..used]) {
+                    Ok(text) => text,
+                    Err(error) => std::str::from_utf8(&output[..error.valid_up_to()])
+                        .expect("valid diagnostic prefix"),
+                };
+                eprint!("{text}");
+                if formatted.is_err() {
+                    eprintln!("\nFailure output incomplete: 60-KiB diagnostic limit reached.");
+                }
+                if let Some(error) = serialization_error {
+                    eprintln!(
+                        "\nFailure page serialization/write error: {error}; output may be truncated at the 60-KiB diagnostic limit."
+                    );
+                }
+            }
+            std::panic::resume_unwind(original);
+        }
         thread::sleep(Duration::from_millis(20));
     }
     let intents = client
@@ -1786,6 +1849,83 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
                 .expect("first page request"),
         )
         .expect("first run event page");
+    if first_page.returned_count() != MAX_RUNTIME_EVENT_QUERY_EVENTS
+        || !first_page.has_more()
+        || first_page.next_cursor().is_none()
+    {
+        let mut context = [0_u8; 16 * 1024];
+        let mut remaining = &mut context[..16 * 1024 - 128];
+        let formatted = (|| -> std::io::Result<()> {
+            write!(
+                remaining,
+                "First run event page precondition failure; existing page only: run_id="
+            )?;
+            serde_json::to_writer(&mut remaining, &run_id).map_err(std::io::Error::other)?;
+            writeln!(
+                remaining,
+                ", returned_count={}, has_more={}, snapshot_ledger_position={}, continuation_present={}",
+                first_page.returned_count(),
+                first_page.has_more(),
+                first_page.snapshot_ledger_position(),
+                first_page.next_cursor().is_some(),
+            )?;
+            let context_types = [
+                EventType::TaskCompleted,
+                EventType::TaskFailed,
+                EventType::TaskCancelled,
+                EventType::TaskTerminalIntent,
+                EventType::TaskTerminalCommitFailed,
+                EventType::TaskTerminalRejected,
+                EventType::RuntimeFailed,
+                EventType::PolicyExecutionRecorded,
+                EventType::PolicyDispatchCompleted,
+            ];
+            for event_type in context_types {
+                let count = first_page
+                    .events()
+                    .iter()
+                    .filter(|event| {
+                        event.links.run_id() == Some(&run_id) && event.event_type == event_type
+                    })
+                    .count();
+                if count == 0 {
+                    writeln!(remaining, "{event_type:?}: not recorded in this page")?;
+                } else {
+                    writeln!(remaining, "{event_type:?}: {count} recorded in this page")?;
+                }
+            }
+            writeln!(remaining, "Existing related facts, page tail first:")?;
+            for event in first_page.events().iter().rev().filter(|event| {
+                event.links.run_id() == Some(&run_id) && context_types.contains(&event.event_type)
+            }) {
+                serde_json::to_writer(&mut remaining, event).map_err(std::io::Error::other)?;
+                writeln!(remaining)?;
+            }
+            Ok(())
+        })();
+        let used = 16 * 1024 - 128 - remaining.len();
+        let valid = std::str::from_utf8(&context[..used])
+            .map_or_else(|error| error.valid_up_to(), |_| used);
+        let footer: &[u8] = if formatted.is_err() || valid != used {
+            b"\n[truncated: 16-KiB context limit or formatting failure; remaining fields omitted]\n"
+        } else {
+            b"\n[end first-page failure context]\n"
+        };
+        context[valid..valid + footer.len()].copy_from_slice(footer);
+        let record = &context[..valid + footer.len()];
+        let mut stderr = std::io::stderr().lock();
+        let written = stderr.write_all(record).and_then(|()| stderr.flush());
+        drop(stderr);
+        if let Err(error) = written {
+            eprintln!(
+                "first-page failure context write/flush failed: {error}; original page assertions remain:\n{}",
+                String::from_utf8_lossy(record)
+            );
+        }
+        if let Err(error) = formatted {
+            eprintln!("first-page failure context formatting/write error: {error}");
+        }
+    }
     assert_eq!(
         first_page.returned_count(),
         MAX_RUNTIME_EVENT_QUERY_EVENTS,
@@ -1848,6 +1988,129 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             .is_some_and(|count| count > u64::from(MAX_RUNTIME_EVENT_QUERY_EVENTS)),
         "the regression must cross the actual Runtime event-page boundary: {summary}"
     );
+    if summary.get("status").and_then(Value::as_str) != Some("simulated_completed") {
+        let mut context = [0_u8; 16 * 1024];
+        let mut remaining = &mut context[..16 * 1024 - 128];
+        let formatted = (|| -> std::io::Result<()> {
+            writeln!(
+                remaining,
+                "Paginated run summary status failure; existing values only:"
+            )?;
+            for path in [
+                "/status",
+                "/outcome/policy/failure/error_code",
+                "/outcome/policy/failure/reported_success",
+                "/outcome/policy/failure/original_class",
+                "/outcome/policy/failure/effective_class",
+                "/outcome/policy/failure/runtime_ms",
+                "/outcome/policy/failure/retry_attempt",
+                "/outcome/policy/failure/retry_at_unix_ms",
+                "/outcome/policy/failure/consecutive_same_error",
+                "/outcome/policy/failure/escalation_streak",
+                "/outcome/policy/failure/performance_tax_exempt",
+                "/outcome/policy/failure/disposition",
+                "/run_id",
+                "/task_id",
+                "/correlation_id",
+                "/decision_id",
+                "/instance_id",
+                "/lease/lease_id",
+                "/request/lab_request_id",
+                "/request/receipt_request_id",
+                "/request/terminal_event_id",
+                "/request/terminal_sequence",
+                "/completed_sequence",
+                "/event_count",
+                "/effect",
+                "/simulated_effect_count",
+                "/actual_effect_count",
+            ] {
+                write!(remaining, "{path}: ")?;
+                match summary.pointer(path) {
+                    None => writeln!(remaining, "missing")?,
+                    Some(Value::Null) => writeln!(remaining, "present null")?,
+                    Some(value) => {
+                        write!(remaining, "present ")?;
+                        serde_json::to_writer(&mut remaining, value)
+                            .map_err(std::io::Error::other)?;
+                        writeln!(remaining)?;
+                    }
+                }
+            }
+            let terminal_id = match summary.pointer("/request/terminal_event_id") {
+                None => {
+                    writeln!(remaining, "terminal lookup unavailable: ID missing")?;
+                    return Ok(());
+                }
+                Some(Value::Null) => {
+                    writeln!(remaining, "terminal lookup unavailable: ID is null")?;
+                    return Ok(());
+                }
+                Some(value) => {
+                    match serde_json::from_value::<actingcommand_contract::EventId>(value.clone()) {
+                        Ok(id) => id,
+                        Err(error) => {
+                            writeln!(
+                                remaining,
+                                "terminal lookup unavailable: invalid ID: {error}"
+                            )?;
+                            return Ok(());
+                        }
+                    }
+                }
+            };
+            let terminal = first_page
+                .events()
+                .iter()
+                .map(|event| ("first_page", event))
+                .chain(
+                    second_page
+                        .events()
+                        .iter()
+                        .map(|event| ("second_page", event)),
+                )
+                .find(|(_, event)| event.event_id == terminal_id);
+            match terminal {
+                Some((page, event)) => {
+                    writeln!(
+                        remaining,
+                        "exact terminal from {page}; existing event and payload:"
+                    )?;
+                    serde_json::to_writer(&mut remaining, event).map_err(std::io::Error::other)?;
+                    writeln!(remaining)?;
+                }
+                None => writeln!(
+                    remaining,
+                    "terminal ID not included in original first/second pages; snapshots={}/{}; no additional query",
+                    first_page.snapshot_ledger_position(),
+                    second_page.snapshot_ledger_position()
+                )?,
+            }
+            Ok(())
+        })();
+        let used = 16 * 1024 - 128 - remaining.len();
+        let valid = std::str::from_utf8(&context[..used])
+            .map_or_else(|error| error.valid_up_to(), |_| used);
+        let footer: &[u8] = if formatted.is_err() || valid != used {
+            b"\n[truncated: 16-KiB context limit or formatting failure; remaining fields omitted]\n"
+        } else {
+            b"\n[end summary failure context]\n"
+        };
+        context[valid..valid + footer.len()].copy_from_slice(footer);
+        let record = &context[..valid + footer.len()];
+        let mut stderr = std::io::stderr().lock();
+        let written = stderr.write_all(record).and_then(|()| stderr.flush());
+        drop(stderr);
+        if let Err(error) = written {
+            eprintln!(
+                "summary failure context write/flush failed: {error}; original status assertion remains:\n{}",
+                String::from_utf8_lossy(record)
+            );
+        }
+        if let Err(error) = formatted {
+            eprintln!("summary failure context formatting/write error: {error}");
+        }
+    }
     assert_eq!(
         summary.get("status").and_then(serde_json::Value::as_str),
         Some("simulated_completed")

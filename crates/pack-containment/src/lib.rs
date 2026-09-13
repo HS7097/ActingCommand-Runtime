@@ -487,6 +487,8 @@ impl LoadedBundle {
             metadata.operation = operation;
         }
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
+        source::validate_loaded_declarations(&metadata)
+            .map_err(|error| declaration_error(&metadata.operation_path, error))?;
         let projection_metadata = if let (Some(pack), Some(pages), Some(navigation)) = (
             &metadata.recognition_pack_path,
             &metadata.pages_path,
@@ -941,6 +943,9 @@ impl AssetResolver for MemoryAssetResolver {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainmentError {
+    ResourceDeclaration {
+        issue: actingcommand_contract::ResourceDeclarationIssue,
+    },
     SourceTree {
         code: &'static str,
     },
@@ -1017,6 +1022,11 @@ pub enum ContainmentError {
 impl fmt::Display for ContainmentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceDeclaration { issue } => write!(
+                f,
+                "resource declaration {} field {} is not consumable: {:?}",
+                issue.declaration_file, issue.field_path, issue.reason,
+            ),
             Self::SourceTree { code } => write!(f, "fatal containment error: {code}"),
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
@@ -1128,6 +1138,46 @@ impl fmt::Display for ContainmentError {
 
 impl Error for ContainmentError {}
 
+fn located_declaration_error(
+    path: &str,
+    issue: &actingcommand_contract::ResourceDeclarationIssue,
+) -> ContainmentError {
+    let mut issue = issue.clone();
+    issue.declaration_file = path.to_owned();
+    ContainmentError::ResourceDeclaration { issue }
+}
+
+fn recognition_declaration_error(
+    path: &str,
+    error: actingcommand_recognition_pack::RecognitionPackError,
+) -> ContainmentError {
+    match error.declaration_issue() {
+        Some(issue) => located_declaration_error(path, issue),
+        None => ContainmentError::PackParse {
+            path: path.to_owned(),
+            message: error.to_string(),
+        },
+    }
+}
+
+fn declaration_error(path: &str, error: actingcommand_contract::LabError) -> ContainmentError {
+    if error.code == "resource_declaration_invalid" {
+        return match serde_json::from_value::<actingcommand_contract::ResourceDeclarationIssue>(
+            error.details.clone().unwrap_or(Value::Null),
+        ) {
+            Ok(issue) => ContainmentError::ResourceDeclaration { issue },
+            Err(cause) => ContainmentError::PackParse {
+                path: path.to_owned(),
+                message: format!("resource_declaration_diagnostic_invalid: {cause}; {error}"),
+            },
+        };
+    }
+    ContainmentError::PackParse {
+        path: path.to_owned(),
+        message: error.to_string(),
+    }
+}
+
 fn load_recognition_pipeline(
     entries: &Arc<BTreeMap<String, Vec<u8>>>,
     metadata: &PackageMetadata,
@@ -1150,13 +1200,8 @@ fn load_recognition_pipeline(
         if error_pages.is_some() {
             return Err(packaged_error_page_set_missing(&metadata.operation_path));
         }
-        let pack =
-            load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
-                ContainmentError::PackParse {
-                    path: pack_path.clone(),
-                    message: err.to_string(),
-                }
-            })?;
+        let pack = load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}'))
+            .map_err(|err| recognition_declaration_error(pack_path, err))?;
         let evaluator =
             build_recognition_evaluator(pack, resolver, vision_provider).map_err(|err| {
                 ContainmentError::RecognitionPack {
@@ -1193,13 +1238,8 @@ fn build_recognition_pipeline(
     asset_resolver: Arc<dyn AssetResolver>,
     vision_provider: Option<Arc<dyn VisionProvider>>,
 ) -> ContainmentResult<(RecognitionEvaluator, PageDetector, PageSet)> {
-    let pack =
-        load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
-            ContainmentError::PackParse {
-                path: pack_path.to_string(),
-                message: err.to_string(),
-            }
-        })?;
+    let pack = load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}'))
+        .map_err(|err| recognition_declaration_error(pack_path, err))?;
     let evaluator =
         build_recognition_evaluator(pack, asset_resolver, vision_provider).map_err(|err| {
             ContainmentError::RecognitionPack {
@@ -1210,9 +1250,12 @@ fn build_recognition_pipeline(
         })?;
     let page_set =
         load_page_set_from_json_str(pages_json.trim_start_matches('\u{feff}')).map_err(|err| {
-            ContainmentError::PackParse {
-                path: pages_path.to_string(),
-                message: err.to_string(),
+            match err.declaration_issue() {
+                Some(issue) => located_declaration_error(pages_path, issue),
+                None => ContainmentError::PackParse {
+                    path: pages_path.to_string(),
+                    message: err.to_string(),
+                },
             }
         })?;
     let detector =
@@ -1569,10 +1612,8 @@ fn collect_recognition_pack_diagnostics(
             path: path.clone(),
             message: err.to_string(),
         })?;
-        let pack = load_pack_from_json_str(text).map_err(|err| ContainmentError::PackParse {
-            path: path.clone(),
-            message: err.to_string(),
-        })?;
+        let pack = load_pack_from_json_str(text)
+            .map_err(|err| recognition_declaration_error(path, err))?;
         diagnostics.push(RecognitionPackDiagnostics {
             path: path.clone(),
             unsupported_targets: unsupported_recognition_targets(&pack),
@@ -1678,7 +1719,8 @@ pub fn validate_projection_resources<'a>(
     let Some(bytes) = declaration_bytes else {
         return Ok(Some(VerifiedProjectionMetadata::unannotated(catalog)));
     };
-    let declaration = ProjectionMetadata::parse(bytes).map_err(|e| fail(e.to_string()))?;
+    let declaration = ProjectionMetadata::parse_at(&projection_path, bytes)
+        .map_err(|e| declaration_error(&projection_path, e))?;
     let verified = declaration
         .validate(catalog)
         .map_err(|e| fail(e.to_string()))?;

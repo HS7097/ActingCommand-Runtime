@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{RuntimeClient, RuntimeClientError, RuntimeClientResult, RuntimeDebugSession};
-use actingcommand_contract::{InputAction, LeaseToken};
+use actingcommand_contract::{InputAction, LeaseToken, RuntimeReceipt};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -43,10 +43,14 @@ impl RuntimeInputAuthority {
         }
     }
 
-    fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<()> {
+    fn input(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         match self {
             Self::Client(client) => client.input(token, action),
-            Self::Debug(session) => session.input(token, action).map(|_| ()),
+            Self::Debug(session) => session.input(token, action),
         }
     }
 
@@ -205,7 +209,7 @@ impl RuntimeInputProxy {
         })
     }
 
-    pub fn input(&mut self, action: InputAction) -> RuntimeClientResult<()> {
+    pub fn input(&mut self, action: InputAction) -> RuntimeClientResult<RuntimeReceipt> {
         if self.closed {
             return Err(RuntimeClientError::fatal(
                 "runtime_input_proxy_closed",

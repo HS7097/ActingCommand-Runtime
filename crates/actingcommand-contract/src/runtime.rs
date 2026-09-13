@@ -3405,6 +3405,10 @@ pub struct RuntimeReceipt {
     result: Option<RuntimeResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<RuntimeErrorProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_declaration_event: Option<TerminalEvent>,
 }
 
 impl RuntimeReceipt {
@@ -3430,6 +3434,8 @@ impl RuntimeReceipt {
             terminal: Some(terminal),
             result: Some(RuntimeResult::ContainedLabOperation { operation }),
             error,
+            resource_declaration: None,
+            resource_declaration_event: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -3449,6 +3455,8 @@ impl RuntimeReceipt {
             terminal,
             result: Some(result),
             error: None,
+            resource_declaration: None,
+            resource_declaration_event: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -3468,9 +3476,30 @@ impl RuntimeReceipt {
             terminal,
             result: None,
             error: Some(error),
+            resource_declaration: None,
+            resource_declaration_event: None,
         };
         receipt.validate()?;
         Ok(receipt)
+    }
+
+    pub fn with_resource_declaration(
+        mut self,
+        rejection: crate::ResourceDeclarationRejection,
+        event: TerminalEvent,
+    ) -> RuntimeContractResult<Self> {
+        self.resource_declaration = Some(Box::new(rejection));
+        self.resource_declaration_event = Some(event);
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn resource_declaration(&self) -> Option<&crate::ResourceDeclarationRejection> {
+        self.resource_declaration.as_deref()
+    }
+
+    pub const fn resource_declaration_event(&self) -> Option<TerminalEvent> {
+        self.resource_declaration_event
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
@@ -3509,6 +3538,34 @@ impl RuntimeReceipt {
         }
         if self.terminal.is_some_and(|terminal| terminal.sequence == 0) {
             return Err(RuntimeContractError::new("invalid_terminal_event"));
+        }
+        if let Some(rejection) = &self.resource_declaration {
+            if !matches!(
+                self.state,
+                RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
+            ) || self.terminal.is_none()
+                || self.resource_declaration_event.is_none_or(|event| {
+                    event.sequence == 0
+                        || self
+                            .terminal
+                            .is_none_or(|terminal| terminal.sequence < event.sequence)
+                })
+                || self
+                    .error
+                    .as_ref()
+                    .is_none_or(|error| error.code != RuntimeErrorCode::PackageInvalid)
+                || self.result.is_some()
+            {
+                return Err(RuntimeContractError::new(
+                    "invalid_resource_declaration_receipt",
+                ));
+            }
+            rejection.validate().map_err(RuntimeContractError::new)?;
+        }
+        if self.resource_declaration.is_none() && self.resource_declaration_event.is_some() {
+            return Err(RuntimeContractError::new(
+                "invalid_resource_declaration_receipt",
+            ));
         }
         if let Some(RuntimeResult::LeaseGranted { token } | RuntimeResult::LeaseRenewed { token }) =
             &self.result
