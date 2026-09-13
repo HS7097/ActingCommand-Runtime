@@ -1348,7 +1348,7 @@ impl RetentionIndex {
                         "artifact_store_verification_failed",
                     ))
             })
-            .map_err(|error| invalid(error.code()))?;
+            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
         self.annotate_event(&mut event);
         Ok(event)
     }
