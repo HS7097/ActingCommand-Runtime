@@ -2282,7 +2282,7 @@ mod tests {
             OriginModule, PerformancePayloadDraft,
         };
         use actingcommand_ledger::{
-            GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerReadOnlyConfig,
+            GlobalLedgerError, GlobalLedgerEvidenceConfig, LedgerMaintenance,
             Sha256SecretFingerprinter,
         };
         use std::sync::Arc;
@@ -2293,11 +2293,20 @@ mod tests {
             >(temp.path(), b"neutral-summary", |_| Ok(()), |_| Ok(()))
             .expect("database"),
         );
-        let ledger = GlobalLedger::open_sqlite_candidate(
-            GlobalLedgerConfig::new(temp.path(), "neutral-summary-writer"),
-            Arc::clone(&database),
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = LedgerMaintenance::acquire(
+            temp.path(),
+            true,
+            limits,
+            limits.deadline().expect("deadline"),
         )
-        .expect("ledger");
+        .expect("maintenance owner");
+        maintenance
+            .initialize_empty(&database)
+            .expect("ready ledger");
+        let ledger = maintenance
+            .open_writer(database, "neutral-summary-writer".into(), |_| None)
+            .expect("ledger");
         let ids = IdentifierIssuer::new().expect("ids");
         let persist = |data: PerformanceSummaryEventData| {
             ledger
@@ -2372,12 +2381,9 @@ mod tests {
                 .contains("ledger_commits")
         );
         ledger.close().expect("close writer");
-        let snapshot = GlobalLedger::open_sqlite_candidate_read_only(
-            GlobalLedgerReadOnlyConfig::new(temp.path()),
-            database,
-            |_| None,
-        )
-        .expect("read persisted source");
+        let snapshot =
+            GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(temp.path()), |_| None)
+                .expect("read persisted source");
         assert_eq!(
             snapshot.events(),
             &[first_event, second_event, legacy_event]
