@@ -2561,8 +2561,23 @@ fn help_lists_capture_backend_short_alias() {
 }
 
 #[test]
-fn help_lists_resource_convert_maa_tasks_option() {
+fn help_lists_resource_declaration_and_conversion_options() {
     let help = help_data();
+    assert_eq!(
+        help.pointer("/command_options/resource validate/1")
+            .and_then(Value::as_str),
+        Some("--changed-path <repository-relative path> (repeatable)")
+    );
+    assert_eq!(
+        help.pointer("/command_options/resource validate/2")
+            .and_then(Value::as_str),
+        Some("--changed-paths-file <repository-relative NUL-delimited Git name-status list>")
+    );
+    assert_eq!(
+        help.pointer("/command_options/operation validate/0")
+            .and_then(Value::as_str),
+        Some("--repo <repository root>")
+    );
     let options = help
         .pointer("/command_options/resource convert")
         .and_then(Value::as_array)
@@ -3835,6 +3850,46 @@ fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
         env::remove_var(SESSION_STATE_ENV);
     }
     let temp = synthetic_game_resource_root();
+    let declarations = run_cli(
+        [
+            "--json",
+            "resource",
+            "validate",
+            "--repo",
+            temp.path().to_str().unwrap(),
+            "--changed-path",
+            "synthetic.pack.json",
+            "--changed-path",
+            "synthetic.pages.json",
+            "--changed-path",
+            "synthetic.navigation.json",
+        ],
+        true,
+    );
+    assert_eq!(
+        declarations.exit_code(),
+        0,
+        "{}",
+        declarations.envelope_json()
+    );
+    let declaration_report = declarations.envelope.data.as_ref().unwrap();
+    assert_eq!(
+        declaration_report["schema_version"],
+        "actinglab.resource-declarations.v1"
+    );
+    assert_eq!(declaration_report["scope"], "declarations_only");
+    assert_eq!(declaration_report["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        declaration_report["read_files"].as_array().unwrap().len(),
+        3
+    );
+    assert!(
+        declaration_report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["status"] == "valid")
+    );
     let scene = temp.path().join("synthetic-home.png");
     fs::write(&scene, encode_png(1, 1, [10, 20, 30])).unwrap();
     let pack = temp.path().join("synthetic.pack.json");
