@@ -257,6 +257,7 @@ impl HostShared {
             ledger: &self.ledger,
             events: &self.events,
             verified: None,
+            frame_retention: None,
         };
         let artifact = self
             .artifacts
@@ -374,6 +375,10 @@ pub(super) struct ObservationArtifactSink<'a> {
     pub(super) ledger: &'a GlobalLedger,
     pub(super) events: &'a RuntimeEvents,
     pub(super) verified: Option<PersistedEvent>,
+    pub(super) frame_retention: Option<(
+        actingcommand_contract::OwnerEpoch,
+        actingcommand_contract::ArtifactPinReason,
+    )>,
 }
 impl ArtifactEventSink for ObservationArtifactSink<'_> {
     fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
@@ -391,14 +396,23 @@ impl ArtifactEventSink for ObservationArtifactSink<'_> {
                 error.to_string(),
             )
         })?;
-        if event.event_type() == EventType::ArtifactVerified
-            && self.verified.replace(event).is_some()
-        {
-            return Err(ArtifactStoreError::fatal(
-                "observation_duplicate_verified_event",
-                "append_observation_artifact_event",
-                "one diagnostic artifact per request",
-            ));
+        if event.event_type() == EventType::ArtifactVerified {
+            if let Some((owner, reason)) = self.frame_retention {
+                frame_retention::pin_published_frames(
+                    self.ledger,
+                    self.events,
+                    owner,
+                    &event,
+                    reason,
+                )?;
+            }
+            if self.verified.replace(event).is_some() {
+                return Err(ArtifactStoreError::fatal(
+                    "observation_duplicate_verified_event",
+                    "append_observation_artifact_event",
+                    "one diagnostic artifact per request",
+                ));
+            }
         }
         Ok(())
     }

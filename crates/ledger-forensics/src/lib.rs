@@ -27,10 +27,12 @@ use std::path::{Path, PathBuf};
 
 mod signatures;
 mod task_records;
+mod views;
 pub use signatures::{
     ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,
 };
 pub use task_records::{TaskDiagnosticGap, TaskDiagnosticPage, TaskRecordsRequest};
+pub use views::{ForensicViewOptions, ForensicViewRequest, run_views};
 
 pub const MAX_FORENSIC_EVENTS: usize = 1_024;
 pub const MAX_FORENSIC_REPAIRS: usize = 1_024;
@@ -98,6 +100,7 @@ impl ForensicEventFilter {
             "origin_module": self.origin_module,
             "diagnostic_code": self.diagnostic_code,
             "minimum_severity": self.severity,
+            "maximum_severity": self.severity,
             "correlation_id": self.correlation_id,
         }))
         .map_err(|_| {
@@ -228,6 +231,7 @@ impl ForensicRequest {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
+    Views(Box<actingcommand_contract::RuntimeEventQueryPage>),
     Signatures(Box<SignatureReplayReport>),
     Open(Box<OpenReport>),
     Events(EventsReport),
@@ -285,6 +289,7 @@ pub struct OpenReport {
     pub storage_snapshot: Option<Box<GlobalLedgerStorageSnapshot>>,
     pub latest_sequence: u64,
     pub event_count: usize,
+    pub artifact_material_complete: bool,
     pub listed_through_segment: Option<u64>,
     pub writer: WriterObservationReport,
     pub repair_count: Option<usize>,
@@ -298,6 +303,7 @@ pub struct EventsReport {
     pub through_sequence: u64,
     pub limit: usize,
     pub events: Vec<PersistedEvent>,
+    pub artifact_evictions: Vec<actingcommand_contract::ArtifactEvictionProof>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_after_sequence: Option<u64>,
 }
@@ -497,6 +503,7 @@ pub struct ChainReport {
     pub through_sequence: u64,
     pub limit: usize,
     pub events: Vec<PersistedEvent>,
+    pub artifact_evictions: Vec<actingcommand_contract::ArtifactEvictionProof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -674,6 +681,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
                     request_id,
                     through_sequence,
                     limit: MAX_FORENSIC_EVENTS,
+                    artifact_evictions: eviction_proofs(&events),
                     events,
                 },
             )))
@@ -695,6 +703,19 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
             &artifact_root,
         )?)),
     }
+}
+
+/// Reads an already opened evidence snapshot with the Runtime page contract.
+/// Opening/validating the source remains the ledger owner's responsibility.
+pub fn query_view_page(
+    snapshot: &actingcommand_ledger::GlobalLedgerMetadata,
+    query: &EventQuery,
+    profile: actingcommand_contract::ProjectionProfile,
+    page: &actingcommand_contract::RuntimeEventQueryPageRequest,
+) -> ForensicResult<actingcommand_contract::RuntimeEventQueryPage> {
+    snapshot
+        .project_view_page(query, profile, page)
+        .map_err(map_ledger_error)
 }
 
 pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> {
@@ -1034,6 +1055,20 @@ fn task_frame_evidence(
     } else {
         Vec::new()
     };
+    if png.state == "linked"
+        && let Some(artifact) = png_candidates[0]
+            .artifacts()
+            .iter()
+            .find(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+    {
+        png.state = match artifact.availability() {
+            actingcommand_ledger::ArtifactAvailability::Available(_) => "linked",
+            actingcommand_ledger::ArtifactAvailability::Unrecorded => "material_unverified",
+            actingcommand_ledger::ArtifactAvailability::Evicted(_) => "evicted",
+            actingcommand_ledger::ArtifactAvailability::PendingEviction(_) => "pending_eviction",
+            actingcommand_ledger::ArtifactAvailability::FailedEviction(_) => "eviction_failed",
+        };
+    }
     let mut capture_summary = task_evidence_relation(
         input,
         events.iter().filter(|event| {
@@ -1085,15 +1120,7 @@ fn events_report(
             break;
         };
         after = last.sequence();
-        // The offline --severity contract is exact equality; the shared lower bound
-        // narrows candidates without admitting higher severities into this page.
-        events.extend(page.into_iter().filter(|event| {
-            request
-                .filter
-                .severity
-                .as_deref()
-                .is_none_or(|severity| event.severity().as_str() == severity)
-        }));
+        events.extend(page);
     }
     let has_more = events.len() > request.limit;
     events.truncate(request.limit);
@@ -1108,6 +1135,7 @@ fn events_report(
         after_sequence: request.after_sequence,
         through_sequence,
         limit: request.limit,
+        artifact_evictions: eviction_proofs(&events),
         events,
         next_after_sequence,
     })
@@ -1422,6 +1450,18 @@ fn project_stability(
     Ok(Some(comparison))
 }
 
+fn eviction_proofs(
+    events: &[PersistedEvent],
+) -> Vec<actingcommand_contract::ArtifactEvictionProof> {
+    events
+        .iter()
+        .flat_map(PersistedEvent::artifact_evictions)
+        .map(|proof| (proof.identity.artifact.artifact_id, proof.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>()
+        .into_values()
+        .collect()
+}
+
 fn open_report(snapshot: &GlobalLedgerEvidence) -> OpenReport {
     OpenReport {
         storage_backend: snapshot.backend(),
@@ -1431,6 +1471,16 @@ fn open_report(snapshot: &GlobalLedgerEvidence) -> OpenReport {
             .map(|source| Box::new(source.storage_snapshot().clone())),
         latest_sequence: snapshot.latest_sequence(),
         event_count: snapshot.events().len(),
+        artifact_material_complete: snapshot
+            .events()
+            .iter()
+            .flat_map(PersistedEvent::artifacts)
+            .all(|artifact| {
+                matches!(
+                    artifact.availability(),
+                    actingcommand_ledger::ArtifactAvailability::Available(_)
+                )
+            }),
         listed_through_segment: snapshot
             .segment()
             .and_then(|source| source.listed_through_segment()),
@@ -1508,6 +1558,12 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
     writeln!(report, "read_complete: {}", open.read_complete).expect("write String");
     writeln!(report, "latest_sequence: {}", open.latest_sequence).expect("write String");
     writeln!(report, "event_count: {}", open.event_count).expect("write String");
+    writeln!(
+        report,
+        "artifact_material_complete: {}",
+        open.artifact_material_complete
+    )
+    .expect("write String");
     writeln!(
         report,
         "storage_snapshot: {}",
@@ -1600,6 +1656,12 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
         let line = serde_json::to_string(&event).map_err(serialization_error)?;
         writeln!(report, "- {line}").expect("write String");
     }
+    writeln!(
+        report,
+        "artifact_evictions: {}",
+        serde_json::to_string(&eviction_proofs(&events)).map_err(serialization_error)?
+    )
+    .expect("write String");
     writeln!(report, "effective_configuration:").expect("write String");
     for event in &events {
         if event.event_type() != EventType::ArtifactVerified {
