@@ -516,6 +516,8 @@ fn policy_final_admission_records_the_actual_control_rejection() {
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
     clock.advance(60_000);
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
+    sample_capacity().expect("capacity sample at final admission time");
     let failure = host
         .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
         .expect_err("selection cannot bypass final locked window admission");

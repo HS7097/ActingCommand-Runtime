@@ -37,6 +37,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod timing;
+pub use timing::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext, observe_instant_span};
+
 const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
 const DEFAULT_CAPTURE_INTERVAL_MS: u64 = 50;
 const DEFAULT_TASK_TIMEOUT_MS: u64 = 60_000;
@@ -80,6 +83,7 @@ pub struct ContainedTaskError {
     code: &'static str,
     detail: Option<String>,
     timing: Option<TaskTimingFailure>,
+    declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
 impl ContainedTaskError {
@@ -88,6 +92,7 @@ impl ContainedTaskError {
             code,
             detail: None,
             timing: None,
+            declaration_issue: None,
         }
     }
 
@@ -96,6 +101,7 @@ impl ContainedTaskError {
             code,
             detail: Some(detail.into()),
             timing: None,
+            declaration_issue: None,
         }
     }
 
@@ -131,6 +137,10 @@ impl ContainedTaskError {
 
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
+    }
+
+    pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
+        self.declaration_issue.as_deref()
     }
 }
 
@@ -1493,6 +1503,9 @@ pub trait ContainedTaskRuntime {
     /// This is a same-run snapshot, not a count of inputs or successful confirmations.
     fn update_run_progress(&mut self, _executed_steps: u32) {}
 
+    /// Supplies the kernel's existing budget only for observation; it changes no execution limit.
+    fn observe_task_timing(&mut self, _context: ContainedTaskTimingContext) {}
+
     /// Classification comes from the error owner. Unknown errors forbid further reporting.
     fn classify_error(_error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         ContainedTaskRuntimeErrorClass::Unknown
@@ -1515,6 +1528,7 @@ pub trait ContainedTaskRuntime {
         &mut self,
         _phase: &'static str,
         _results: &PageBatchResult,
+        _timing: Option<ContainedTaskEvaluationTiming>,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -1658,13 +1672,13 @@ impl PreparedContainedTask {
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();
+        actingcommand_pack_containment::source::validate_contained_declarations(&bundle)
+            .map_err(contained_task_declaration_error)?;
         let control = bundle
             .control()
             .cloned()
             .ok_or_else(|| ContainedTaskError::new("contained_task_control_missing"))?;
-        let control: TaskControl = serde_json::from_value(control)
-            .map_err(|_| ContainedTaskError::new("contained_task_control_invalid"))?;
-        control.validate()?;
+        let control = parse_task_control_declaration(control)?;
         let program: TaskProgram = serde_json::from_value(bundle.operation().clone())
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
         let evaluator = bundle
@@ -1806,7 +1820,7 @@ impl PreparedContainedTask {
             result,
         }]);
         runtime
-            .record_page_evaluations("home_preflight", &results)
+            .record_page_evaluations("home_preflight", &results, None)
             .map_err(ContainedTaskRunError::Boundary)?;
         let matched = results
             .into_iter()
@@ -1932,18 +1946,36 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
+        let observation_timing = ContainedTaskTimingContext::new(
+            started,
+            task_deadline,
+            match entry {
+                ContainedTaskEntry::Ordinary => {
+                    actingcommand_contract::TaskTimingBudgetOrigin::Task
+                }
+                ContainedTaskEntry::BoundRecovery => {
+                    actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery
+                }
+            },
+        );
+        runtime.observe_task_timing(observation_timing);
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
-            self.capture_page(runtime, ocr_collector, Some(required_page))?
-                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
+            self.capture_page(
+                runtime,
+                ocr_collector,
+                Some(required_page),
+                observation_timing,
+            )?
+            .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
         } else {
             self.capture_until_page(
                 runtime,
                 ocr_collector,
                 step_timeout,
                 capture_interval,
-                task_deadline,
+                observation_timing,
             )?
         };
         if Instant::now() >= task_deadline {
@@ -2014,7 +2046,7 @@ impl PreparedContainedTask {
                         ocr_collector,
                         step_timeout,
                         capture_interval,
-                        task_deadline,
+                        observation_timing,
                     )?;
                     machine
                         .observe_page(Some(observation.page_label.clone()))
@@ -2140,7 +2172,7 @@ impl PreparedContainedTask {
                                 ocr_collector,
                                 step_timeout,
                                 capture_interval,
-                                task_deadline,
+                                observation_timing,
                             )?;
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
@@ -2171,7 +2203,7 @@ impl PreparedContainedTask {
                             operation,
                             confirmation_timeout,
                             confirmation_interval,
-                            task_deadline,
+                            observation_timing,
                         )?;
                         let (failed_observation, hit_error_page, timing_failure) = match resolution
                         {
@@ -2252,7 +2284,7 @@ impl PreparedContainedTask {
                                     operation,
                                     confirmation_timeout,
                                     confirmation_interval,
-                                    task_deadline,
+                                    observation_timing,
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = reached;
@@ -2633,8 +2665,9 @@ impl PreparedContainedTask {
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         timeout: Duration,
         interval: Duration,
-        task_deadline: Instant,
+        timing: ContainedTaskTimingContext,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
+        let task_deadline = timing.deadline();
         let started = Instant::now();
         loop {
             if Instant::now() >= task_deadline {
@@ -2642,7 +2675,7 @@ impl PreparedContainedTask {
                     .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
                     .into());
             }
-            let observation = self.capture_page(runtime, ocr_collector, None)?;
+            let observation = self.capture_page(runtime, ocr_collector, None, timing)?;
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
@@ -2675,6 +2708,7 @@ impl PreparedContainedTask {
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         required_entry_page: Option<&str>,
+        timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let frame = runtime
             .capture()
@@ -2706,9 +2740,20 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        let evaluation_started = Instant::now();
+        let budget_before = timing.budget_at(evaluation_started);
         let results = self.detector.evaluate_all_outcomes_in_context(&context);
+        let evaluation_timing = ContainedTaskEvaluationTiming {
+            elapsed_us: observe_instant_span(evaluation_started, Instant::now()),
+            budget_before,
+            result: if results.is_ok() {
+                actingcommand_contract::TaskTimingResult::Ok
+            } else {
+                actingcommand_contract::TaskTimingResult::Err
+            },
+        };
         runtime
-            .record_page_evaluations("page", &results)
+            .record_page_evaluations("page", &results, Some(evaluation_timing))
             .map_err(ContainedTaskRunError::Boundary)?;
         let matched_pages = results
             .map_err(|error| {
@@ -2801,8 +2846,9 @@ impl PreparedContainedTask {
         operation: &TaskOperation,
         timeout: Duration,
         interval: Duration,
-        task_deadline: Instant,
+        timing: ContainedTaskTimingContext,
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
+        let task_deadline = timing.deadline();
         let started = Instant::now();
         let mut last_observation = None;
         loop {
@@ -2811,7 +2857,7 @@ impl PreparedContainedTask {
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
                     .into());
             }
-            let observation = self.capture_page(runtime, ocr_collector, None)?;
+            let observation = self.capture_page(runtime, ocr_collector, None, timing)?;
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
@@ -3073,6 +3119,20 @@ impl StabilityTracker {
             }
         }
     }
+}
+
+/// Validate the control wire declaration without preparing a task or opening assets.
+pub fn validate_control_declaration(value: serde_json::Value) -> Result<(), ContainedTaskError> {
+    parse_task_control_declaration(value).map(|_| ())
+}
+
+fn parse_task_control_declaration(
+    value: serde_json::Value,
+) -> Result<TaskControl, ContainedTaskError> {
+    let control: TaskControl = serde_json::from_value(value)
+        .map_err(|_| ContainedTaskError::new("contained_task_control_invalid"))?;
+    control.validate()?;
+    Ok(control)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4968,7 +5028,32 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
     }
 }
 
+fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> ContainedTaskError {
+    let mut failure =
+        ContainedTaskError::with_detail("resource_declaration_invalid", error.to_string());
+    if let Some(details) = error.details {
+        match serde_json::from_value(details) {
+            Ok(issue) => failure.declaration_issue = Some(Box::new(issue)),
+            Err(error) => {
+                return ContainedTaskError::with_detail(
+                    "resource_declaration_diagnostic_invalid",
+                    error.to_string(),
+                );
+            }
+        }
+    }
+    failure
+}
+
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {
+    if let ExecutionBundleError::Containment(ContainmentError::ResourceDeclaration { issue }) =
+        &error
+    {
+        let mut rejected =
+            ContainedTaskError::with_detail("resource_declaration_invalid", error.to_string());
+        rejected.declaration_issue = Some(Box::new(issue.clone()));
+        return rejected;
+    }
     let code = match &error {
         ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
@@ -6021,6 +6106,7 @@ mod post_admission_ocr_tests {
                 );
                 assert_eq!(runtime.inner.inputs, 1);
                 let mut collector = PostAdmissionOcrCollector::new(None);
+                let deadline = Instant::now() + Duration::from_secs(1);
                 assert!(
                     matches!(
                         task.await_postcondition(
@@ -6029,7 +6115,11 @@ mod post_admission_ocr_tests {
                             &task.program.operations[0],
                             Duration::ZERO,
                             Duration::from_millis(5),
-                            Instant::now() + Duration::from_secs(1),
+                            ContainedTaskTimingContext::new(
+                                deadline - Duration::from_secs(1),
+                                deadline,
+                                actingcommand_contract::TaskTimingBudgetOrigin::Task,
+                            ),
                         )
                         .unwrap(),
                         PostconditionResolution::Reached(_)

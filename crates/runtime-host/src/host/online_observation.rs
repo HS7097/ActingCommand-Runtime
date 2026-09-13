@@ -356,7 +356,17 @@ pub(super) fn observation_integrity_failure(code: &'static str) -> RequestFailur
     ))
 }
 pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> RequestFailure {
-    RequestFailure::poison_without_terminal(RuntimeHostError::artifact(error))
+    let error = RuntimeHostError::artifact(error);
+    if error.is_fatal() {
+        return RequestFailure::poison_without_terminal(error);
+    }
+    let evidence = TaskFailureEvidence {
+        code: error.code(),
+        severity: EventSeverity::Warning,
+    };
+    let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
+    failure.task_failure = Some(evidence);
+    failure
 }
 
 /// This request retains the sequence returned by its own native append.

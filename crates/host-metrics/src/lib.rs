@@ -5,6 +5,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::collections::BTreeMap;
+use std::path::Path;
+
+mod capacity;
+pub use capacity::{CapacitySample, CapacityTarget, CapacityUnavailable, sample_capacity};
+
+/// Resolve the current binding without taking another free-space sample.
+pub fn capacity_volume(path: &Path) -> Result<String, CapacityUnavailable> {
+    capacity::volume(path)
+}
 
 #[cfg(windows)]
 mod windows;
@@ -79,6 +88,10 @@ pub struct ProcessLoadThresholds {
 }
 
 pub trait HostSampler: Send {
+    fn sample_capacity(&mut self, targets: &[CapacityTarget]) -> Vec<CapacitySample> {
+        sample_capacity(targets)
+    }
+
     fn sample(
         &mut self,
         observed_at_unix_ms: u64,

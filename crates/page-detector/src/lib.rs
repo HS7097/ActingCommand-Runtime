@@ -24,6 +24,8 @@ pub struct PageDetectorError {
     message: String,
     pub completed_targets: Vec<PageTargetEvaluation>,
     pub failed_target: Option<Box<PageTargetFailure>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -42,6 +44,7 @@ impl PageDetectorError {
             message: message.into(),
             completed_targets: Vec::new(),
             failed_target: None,
+            declaration_issue: None,
         }
     }
 
@@ -51,6 +54,10 @@ impl PageDetectorError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
+        self.declaration_issue.as_deref()
     }
 
     fn after(mut self, earlier: impl IntoIterator<Item = PageTargetEvaluation>) -> Self {
@@ -193,7 +200,60 @@ pub enum PageTargetRole {
 }
 
 pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
-    serde_json::from_str(json)
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|err| PageDetectorError::fatal(format!("failed to parse page set JSON: {err}")))?;
+    let schema = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str);
+    let check =
+        |value: &serde_json::Value, pointer: &str, fields: &[&str]| -> PageDetectorResult<()> {
+            if let Some(object) = value.as_object()
+                && let Some(field) = object
+                    .keys()
+                    .find(|field| !fields.contains(&field.as_str()))
+            {
+                let (reason, description) = if pointer.is_empty()
+                    && ["converter_schema_version", "generated", "generated_by"]
+                        .contains(&field.as_str())
+                {
+                    (
+                        actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+                        "unconsumed",
+                    )
+                } else {
+                    (
+                        actingcommand_contract::ResourceDeclarationReason::UnknownField,
+                        "unknown",
+                    )
+                };
+                let mut error = PageDetectorError::fatal(format!(
+                    "{pointer} contains {description} field '{field}'"
+                ));
+                error.declaration_issue =
+                    Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                        declaration_file: "recognition.pages.json".to_string(),
+                        field_path: format!(
+                            "{pointer}/{}",
+                            field.replace('~', "~0").replace('/', "~1")
+                        ),
+                        schema_version: schema.map(str::to_owned),
+                        reason,
+                    }));
+                return Err(error);
+            }
+            Ok(())
+        };
+    check(&value, "", &["schema_version", "pages"])?;
+    if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
+        for (index, page) in pages.iter().enumerate() {
+            check(
+                page,
+                &format!("/pages/{index}"),
+                &["id", "required", "any_of", "optional", "forbidden"],
+            )?;
+        }
+    }
+    serde_json::from_value(value)
         .map_err(|err| PageDetectorError::fatal(format!("failed to parse page set JSON: {err}")))
 }
 

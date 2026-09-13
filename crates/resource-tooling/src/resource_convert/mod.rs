@@ -183,8 +183,25 @@ fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
             )));
         }
     };
+    validate_maa_semantic_declarations(
+        &mapping_path,
+        &mapping_bytes,
+        &facts_path,
+        &facts_bytes,
+        game,
+    )
+}
+
+/// Validate the same MAA declaration pair without reading assets or converting resources.
+pub fn validate_maa_semantic_declarations(
+    mapping_path: &Path,
+    mapping_bytes: &[u8],
+    facts_path: &Path,
+    facts_bytes: &[u8],
+    game: &str,
+) -> CliOutcome<usize> {
     let mapping: MaaSemanticMappingDocument =
-        serde_json::from_slice(&mapping_bytes).map_err(|error| {
+        serde_json::from_slice(mapping_bytes).map_err(|error| {
             CliError::package_invalid(format!(
                 "failed to parse {}: {error}",
                 mapping_path.display()
@@ -224,14 +241,14 @@ fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
         )));
     }
 
-    let actual_sha256 = format!("{:x}", Sha256::digest(&facts_bytes));
+    let actual_sha256 = format!("{:x}", Sha256::digest(facts_bytes));
     if actual_sha256 != mapping.facts_container.sha256 {
         return Err(CliError::package_invalid(format!(
             "{}: A1 facts container SHA-256 mismatch",
             facts_path.display()
         )));
     }
-    let facts: MaaTaskFactsEnvelope = serde_json::from_slice(&facts_bytes).map_err(|error| {
+    let facts: MaaTaskFactsEnvelope = serde_json::from_slice(facts_bytes).map_err(|error| {
         CliError::package_invalid(format!("failed to parse {}: {error}", facts_path.display()))
     })?;
     if facts.data.schema_version != MAA_TASK_FACTS_SCHEMA {
@@ -433,8 +450,10 @@ impl OperationConverter {
         let root = root.to_path_buf();
         let ops_dir = root.join("operations");
         let resources = read_json_value(&ops_dir.join("resources.json"))?;
+        source::validate_resource_declarations(&ops_dir.join("resources.json"), &resources)?;
         let resource_ids = resource_ids(&resources)?;
         let bundles = load_bundles(&ops_dir)?;
+        source::declaration_file_requests(&bundles)?;
         let first = bundles.first().ok_or_else(|| {
             CliError::package_invalid(format!(
                 "no Operation Bundles found under {}",
@@ -483,7 +502,9 @@ impl OperationConverter {
             .join("navigation")
             .join(format!("{game}.{server}.navigation.json"));
         let existing_navigation = if existing_navigation_path.exists() {
-            Some(read_json_value(&existing_navigation_path)?)
+            let value = read_json_value(&existing_navigation_path)?;
+            source::validate_navigation_declarations(&existing_navigation_path, &value)?;
+            Some(value)
         } else {
             None
         };

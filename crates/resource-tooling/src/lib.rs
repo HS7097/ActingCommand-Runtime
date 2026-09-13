@@ -35,5 +35,6 @@ pub use package_validate::validate_package;
 pub use resource_convert::{
     Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
     canonical_locale, canonical_server, resolve_resource_root, resource_convert,
+    validate_maa_semantic_declarations,
 };
 pub use resource_restore::*;

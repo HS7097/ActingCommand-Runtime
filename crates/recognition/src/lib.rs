@@ -28,6 +28,30 @@ pub enum RecognitionErrorSeverity {
 pub struct RecognitionError {
     severity: RecognitionErrorSeverity,
     message: String,
+    timing: Option<TemplateMatchTiming>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateMatchTimingStage {
+    Exact,
+    Coarse,
+    Refinement,
+    ImageprocReturned,
+    JointTemplateColor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateMatchTimingIssue {
+    DurationOverflow,
+}
+
+/// The original deadline owner's observation; None means conversion was unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateMatchTiming {
+    pub stage: TemplateMatchTimingStage,
+    pub elapsed_us: Option<u64>,
+    pub limit_us: Option<u64>,
+    pub incomplete: Option<TemplateMatchTimingIssue>,
 }
 
 impl RecognitionError {
@@ -35,6 +59,7 @@ impl RecognitionError {
         Self {
             severity: RecognitionErrorSeverity::Fatal,
             message: message.into(),
+            timing: None,
         }
     }
 
@@ -44,6 +69,10 @@ impl RecognitionError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn timing(&self) -> Option<&TemplateMatchTiming> {
+        self.timing.as_ref()
     }
 }
 
@@ -200,7 +229,10 @@ impl Scene {
                         &template,
                         MatchTemplateMethod::CrossCorrelationNormalized,
                     );
-                    deadline.check("ccorr_normed template match")?;
+                    deadline.check(
+                        "ccorr_normed template match",
+                        TemplateMatchTimingStage::ImageprocReturned,
+                    )?;
                     let extremes = find_extremes(&response);
                     template_match_from_candidate(
                         MatchCandidate {
@@ -259,7 +291,10 @@ impl Scene {
         // shortlist cannot exclude a lower scoring candidate whose color is valid.
         for y in window.min_y..=window.max_y {
             for x in window.min_x..=window.max_x {
-                deadline.check("joint template/color match")?;
+                deadline.check(
+                    "joint template/color match",
+                    TemplateMatchTimingStage::JointTemplateColor,
+                )?;
                 let raw_score = score_window(&search, &stats, &integrals, metric, x, y);
                 let candidate = template_match_from_candidate(
                     MatchCandidate { x, y, raw_score },
@@ -278,7 +313,10 @@ impl Scene {
                 }
             }
         }
-        deadline.check("joint template/color match")?;
+        deadline.check(
+            "joint template/color match",
+            TemplateMatchTimingStage::JointTemplateColor,
+        )?;
         Ok(TemplateMatchSelection {
             best_template: best
                 .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?,
@@ -360,10 +398,18 @@ fn exact_metric_match(
     window: SearchWindow,
     deadline: &TemplateMatchDeadline,
 ) -> RecognitionResult<TemplateMatch> {
-    let candidate = exact_metric_candidates(search, template, metric, window, 1, deadline)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
+    let candidate = exact_metric_candidates(
+        search,
+        template,
+        metric,
+        window,
+        1,
+        deadline,
+        TemplateMatchTimingStage::Exact,
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
     template_match_from_candidate(candidate, template, offset_x, offset_y)
 }
 
@@ -422,6 +468,7 @@ fn full_frame_pyramid_match_with_deadline(
         SearchWindow::full(&coarse_search, &coarse_template),
         refinement_candidate_limit(template, factor),
         deadline,
+        TemplateMatchTimingStage::Coarse,
     )?;
     let full_window = SearchWindow::full(search, template);
     let radius = factor * FULL_FRAME_REFINE_RADIUS_MULTIPLIER;
@@ -430,7 +477,15 @@ fn full_frame_pyramid_match_with_deadline(
         let approx_x = candidate.x.saturating_mul(factor);
         let approx_y = candidate.y.saturating_mul(factor);
         let window = full_window.around(approx_x, approx_y, radius);
-        let best = exact_metric_candidates(search, template, metric, window, 1, deadline)?;
+        let best = exact_metric_candidates(
+            search,
+            template,
+            metric,
+            window,
+            1,
+            deadline,
+            TemplateMatchTimingStage::Refinement,
+        )?;
         refined.extend(best);
     }
 
@@ -489,6 +544,7 @@ fn exact_metric_candidates(
     window: SearchWindow,
     limit: usize,
     deadline: &TemplateMatchDeadline,
+    stage: TemplateMatchTimingStage,
 ) -> RecognitionResult<Vec<MatchCandidate>> {
     let limit = limit.max(1);
     let template_stats = TemplateStats::new(template, metric)?;
@@ -496,7 +552,7 @@ fn exact_metric_candidates(
     let mut candidates = Vec::new();
 
     for y in window.min_y..=window.max_y {
-        deadline.check("template match")?;
+        deadline.check("template match", stage)?;
         for x in window.min_x..=window.max_x {
             let raw_score = score_window(search, &template_stats, &integrals, metric, x, y);
             push_candidate(&mut candidates, MatchCandidate { x, y, raw_score }, limit);
@@ -773,12 +829,23 @@ impl TemplateMatchDeadline {
         }
     }
 
-    fn check(&self, label: &str) -> RecognitionResult<()> {
-        if self.started.elapsed() > self.timeout {
-            return Err(RecognitionError::fatal(format!(
+    fn check(&self, label: &str, stage: TemplateMatchTimingStage) -> RecognitionResult<()> {
+        let elapsed = self.started.elapsed();
+        if elapsed > self.timeout {
+            let mut error = RecognitionError::fatal(format!(
                 "{label} exceeded {} ms deadline",
                 self.timeout.as_millis()
-            )));
+            ));
+            let elapsed_us = u64::try_from(elapsed.as_micros()).ok();
+            let limit_us = u64::try_from(self.timeout.as_micros()).ok();
+            error.timing = Some(TemplateMatchTiming {
+                stage,
+                elapsed_us,
+                limit_us,
+                incomplete: (elapsed_us.is_none() || limit_us.is_none())
+                    .then_some(TemplateMatchTimingIssue::DurationOverflow),
+            });
+            return Err(error);
         }
         Ok(())
     }
@@ -1074,6 +1141,7 @@ mod tests {
             coarse_window,
             coarse_count,
             &deadline,
+            TemplateMatchTimingStage::Coarse,
         )
         .expect("coarse candidates");
         let full_window = SearchWindow::full(&search, &template);
@@ -1129,6 +1197,11 @@ mod tests {
 
         assert_eq!(err.severity(), RecognitionErrorSeverity::Fatal);
         assert!(err.message().contains("deadline"));
+        let timing = err.timing().expect("original deadline check observation");
+        assert_eq!(timing.stage, TemplateMatchTimingStage::Coarse);
+        assert_eq!(timing.limit_us, Some(0));
+        assert!(timing.elapsed_us.is_some_and(|elapsed| elapsed > 0));
+        assert_eq!(timing.incomplete, None);
     }
 
     #[test]

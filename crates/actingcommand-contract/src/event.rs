@@ -112,12 +112,14 @@ mod codes;
 mod envelope;
 mod ids;
 mod payload;
+mod timing;
 
 pub use artifact::*;
 pub use codes::*;
 pub use envelope::*;
 pub use ids::*;
 pub use payload::*;
+pub use timing::*;
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;

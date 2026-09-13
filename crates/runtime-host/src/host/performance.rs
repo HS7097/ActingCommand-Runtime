@@ -2,13 +2,31 @@
 
 use super::*;
 
+pub(super) enum CapacityUse {
+    Business,
+    Drain,
+}
+
 impl HostShared {
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
-            let mut tick = performance.tick(observed_at_unix_ms)?;
+            performance.sample_and_record_capacity(&self.ledger, &self.events)?;
+            let mut tick = if performance.counters_enabled() {
+                performance.tick(observed_at_unix_ms)?
+            } else {
+                PerformanceTick {
+                    events: Vec::new(),
+                    stop_sampling: true,
+                }
+            };
+            tick.stop_sampling &= !performance.capacity_enabled();
             performance.attach_ledger_sample(&mut tick, &self.ledger)?;
-            let observation = performance.control_observation(observed_at_unix_ms)?;
+            let observation = if performance.counters_enabled() {
+                performance.control_observation(observed_at_unix_ms)?
+            } else {
+                None
+            };
             (tick, observation)
         };
         let PerformanceTick {
@@ -20,6 +38,64 @@ impl HostShared {
             self.reconcile_performance_control(observation)?;
         }
         Ok(stop_sampling)
+    }
+
+    /// Called after replay resolution and immediately before authorizing new business.
+    pub(super) fn admit_capacity(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_contract::CapacityDecision> {
+        lock(&self.performance, "admit_capacity")?.admit_capacity()
+    }
+
+    pub(super) fn require_business_capacity(
+        &self,
+        links: EventLinksDraft,
+    ) -> Result<(), RequestFailure> {
+        if let Err(error) = self.admit_capacity() {
+            if error.is_fatal() {
+                return Err(RequestFailure::poison_without_terminal(error));
+            }
+            let event = self
+                .append_event_raw(
+                    EventSeverity::Warning,
+                    EventSource::Scheduler,
+                    OriginModule::Scheduler,
+                    EventActor::Scheduler,
+                    links.clone(),
+                    SchedulerPayloadDraft::denied(
+                        EventAction::ScheduleAdmit,
+                        DiagnosticCode::RuntimeDiagnostic,
+                        AuditInput::new(),
+                    ),
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+            self.record_required_failure(&error, &event, links)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            return Err(RequestFailure::request(
+                error,
+                RuntimeReceiptState::Denied,
+                Some(terminal(&event)),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Select a successor only on fresh capacity; refusing it does not refuse the old owner's drain.
+    pub(super) fn capacity_allows_transfer(&self, token: &LeaseToken) -> RuntimeHostResult<bool> {
+        let Err(error) = self.admit_capacity() else {
+            return Ok(true);
+        };
+        if error.is_fatal() {
+            return Err(error);
+        }
+        self.append_lifecycle_failure(
+            RuntimeLifecycleFailureStage::OperationCleanup,
+            RuntimeLifecycleFailure::Host(&error),
+            self.events
+                .synthetic_links(token, self.events.action_id()?)?,
+            None,
+        )?;
+        Ok(false)
     }
 
     pub(super) fn reconcile_performance_control(
@@ -103,7 +179,7 @@ impl HostShared {
             )?;
             let mut performance = lock(&self.performance, "record_performance_event_reference")?;
             if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
-                || performance.sample_interval().is_some()
+                || performance.counters_enabled()
             {
                 performance.record_event_reference(event, *persisted.event_id())?;
             }
