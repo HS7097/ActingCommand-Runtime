@@ -3066,8 +3066,10 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::CapturePolicyChanged,
             EventType::ArtifactCreated,
             EventType::ArtifactVerified,
+            EventType::ArtifactPinRecorded,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
         ]
