@@ -2290,7 +2290,12 @@ mod tests {
         let database = Arc::new(
             actingcommand_runtime_database::RuntimeDatabase::open_with_initializer::<
                 GlobalLedgerError,
-            >(temp.path(), b"neutral-summary", |_| Ok(()), |_| Ok(()))
+            >(
+                temp.path(),
+                b"sqlite-ledger-contract-seed",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
             .expect("database"),
         );
         let limits = actingcommand_runtime_database::MaintenanceLimits::default();
