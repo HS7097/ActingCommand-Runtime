@@ -3,9 +3,9 @@
 <img src="docs/assets/readme/actingcommand-icon.png" width="112" alt="ActingCommand icon">
 
 **Chief Executive Officer & Chairman** — HS7097<br/>
-**Chief Technology Officer & Chief Architect** — GPT‑6 Astra Ultra<br/>
+**Chief Technology Officer & Chief Architect** — GPT‑6 Astra<br/>
 **Board Secretary & Chief Audit Officer** — Fable 5.1<br/>
-**Principal Engineer** — GPT‑6 Astra Xhigh<br/>
+**Principal Engineer** — GPT‑6 Astra<br/>
 **Interviewing** — DeepSeek
 
 </div>
