@@ -17,6 +17,19 @@ use std::time::{Duration, Instant};
 
 use crate::{RuntimeHostError, RuntimeHostResult, events::RuntimeEvents};
 
+pub(super) fn capture_frame_store_config() -> actingcommand_artifact_store::FrameStoreConfig {
+    actingcommand_artifact_store::FrameStoreConfig::default().with_memory_source(
+        actingcommand_artifact_store::MemorySampleSource::live(|| {
+            let sample = actingcommand_host_metrics::sample_physical_memory()
+                .map_err(|code| ArtifactStoreError::fatal(code, "sample_capture_memory", code))?;
+            Ok(actingcommand_artifact_store::MemorySample {
+                total_bytes: sample.total_bytes,
+                available_bytes: sample.available_bytes,
+            })
+        }),
+    )
+}
+
 pub(super) fn capture_pin_reason(
     request: &actingcommand_contract::ValidatedRuntimeRequest<'_>,
 ) -> ArtifactPinReason {

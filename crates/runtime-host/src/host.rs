@@ -8654,6 +8654,7 @@ impl HostShared {
             frame_retention::spill_root(self.artifacts.root(), frame_id)
                 .map_err(online_observation::observation_artifact_failure)?,
             CapturePipelineConfig {
+                frame_store: frame_retention::capture_frame_store_config(),
                 retention_class: if request.actor() == EventActor::Lab
                     && request.source() == EventSource::Lab
                 {
@@ -15341,6 +15342,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 self.run_id.transport(),
                             )?,
                             CapturePipelineConfig {
+                                frame_store: frame_retention::capture_frame_store_config(),
                                 retention_class: RetentionClass::DebugFull,
                                 redaction_state: ArtifactRedactionState::NotRequired,
                                 ..CapturePipelineConfig::default()

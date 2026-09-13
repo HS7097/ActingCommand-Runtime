@@ -885,7 +885,20 @@ impl ArtifactStore {
         &self,
         projected: &ProjectedArtifactReference,
     ) -> ArtifactStoreResult<VerifiedArtifactReference> {
-        open_projected_stream(&self.root, projected)?.finish()
+        open_projected_stream(&self.root, projected)?
+            .finish()
+            .map_err(|error| {
+                if error.code() == "artifact_hash_mismatch" {
+                    ArtifactStoreError::fatal(
+                        "artifact_verify_failed",
+                        "verify_recovery_artifact",
+                        error.detail(),
+                    )
+                    .with_secondary(&error)
+                } else {
+                    error
+                }
+            })
     }
 
     fn write_and_verify(
@@ -1434,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_artifact_has_no_side_effect_until_committed() {
+    fn prepared_artifact_has_no_material_or_event_until_committed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
         let mut sink = RecordingSink::default();
@@ -1444,7 +1457,7 @@ mod tests {
         let reference = prepared.reference().clone();
 
         assert!(sink.event_types.is_empty());
-        assert!(all_files(temp.path()).is_empty());
+        assert!(material_files(temp.path()).is_empty());
 
         let stored = store
             .commit_prepared(prepared, b"prepared artifact bytes", &mut sink)
@@ -1470,7 +1483,7 @@ mod tests {
             .expect_err("mismatched prepared bytes");
         assert_eq!(error.code(), "artifact_hash_mismatch");
         assert!(sink.event_types.is_empty());
-        assert!(all_files(temp.path()).is_empty());
+        assert!(material_files(temp.path()).is_empty());
     }
 
     #[test]
@@ -1526,13 +1539,13 @@ mod tests {
             expected_bytes
         );
         assert!(stream_sink.event_types.is_empty());
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
 
         let streamed = store
             .seal_stream(stream, &mut stream_sink)
             .expect("sealed stream");
         assert!(!staging.exists());
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
         assert!(streamed.path().starts_with(store.root()));
         assert_eq!(streamed.reference().kind(), ArtifactKind::DiagnosticJson);
         assert_eq!(streamed.reference().byte_count(), expected_bytes);
@@ -1638,6 +1651,7 @@ mod tests {
             open_projected_stream(temp.path(), &stream_reference).expect("open before corruption");
         reader.read_chunk(&mut buffer).expect("provisional prefix");
         assert!(reader.verified.is_none());
+        drop(reader);
         let mut corrupt = OpenOptions::new()
             .write(true)
             .open(streamed.path())
@@ -1645,6 +1659,10 @@ mod tests {
         corrupt.seek(std::io::SeekFrom::End(-1)).expect("seek tail");
         corrupt.write_all(b"x").expect("corrupt same-length tail");
         drop(corrupt);
+        let mut reader =
+            open_projected_stream(temp.path(), &stream_reference).expect("open corrupt material");
+        reader.read_chunk(&mut buffer).expect("provisional prefix");
+        assert!(reader.verified.is_none());
         assert_eq!(
             reader
                 .finish()
@@ -1743,9 +1761,9 @@ mod tests {
             .expect_err("event failure");
 
         assert_eq!(error.code(), "injected_event_failure");
-        assert_eq!(all_files(temp.path()).len(), 1);
+        assert_eq!(material_files(temp.path()).len(), 1);
         assert_eq!(
-            fs::read(&all_files(temp.path())[0]).expect("published bytes"),
+            fs::read(&material_files(temp.path())[0]).expect("published bytes"),
             b"must not become success"
         );
         assert!(
@@ -1771,7 +1789,7 @@ mod tests {
         assert_eq!(error.code(), "injected_event_failure");
         assert!(error.is_fatal());
         assert!(sink.event_types.is_empty());
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
     }
 
     #[test]
@@ -1788,7 +1806,7 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert_eq!(sink.event_types, [EventType::ArtifactCreated]);
-        assert_eq!(all_files(temp.path()).len(), 1);
+        assert_eq!(material_files(temp.path()).len(), 1);
         assert_eq!(
             store
                 .read_verified(&sink.references[0])
@@ -1822,7 +1840,7 @@ mod tests {
         assert!(error.is_fatal());
         assert_eq!(stream_sink.event_types, [EventType::ArtifactCreated]);
         assert_eq!(stream_sink.references.len(), 1);
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
         assert_eq!(
             store
                 .read_verified(&stream_sink.references[0])
@@ -2044,7 +2062,7 @@ mod tests {
         )
     }
 
-    fn all_files(root: &Path) -> Vec<PathBuf> {
+    fn material_files(root: &Path) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if !root.exists() {
             return files;
@@ -2054,7 +2072,10 @@ mod tests {
             for entry in fs::read_dir(directory).expect("read directory") {
                 let path = entry.expect("entry").path();
                 if path.is_dir() {
-                    pending.push(path);
+                    // Fixed OS locks coordinate use; material and staging files stay counted.
+                    if path != root.join("artifact-use-locks") {
+                        pending.push(path);
+                    }
                 } else {
                     files.push(path);
                 }

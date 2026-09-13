@@ -1407,7 +1407,8 @@ mod tests {
             TaskOutcome::Success,
             complete_summary(vec![(1, frame)], None),
         );
-        let source_files = all_files(&artifact_root).len();
+        let material_root = artifact_root.join("artifacts");
+        let source_files = all_files(&material_root).len();
         sink.fail_next = Some(EventType::ArtifactExportCompleted);
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
 
@@ -1417,7 +1418,7 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert!(!output.exists());
-        assert_eq!(all_files(&artifact_root).len(), source_files + 1);
+        assert_eq!(all_files(&material_root).len(), source_files + 1);
         assert!(sink.event_types.contains(&EventType::ArtifactExportFailed));
         assert!(
             !sink

@@ -1312,9 +1312,21 @@ impl FrameStore {
 
     fn write_segment(
         &mut self,
-        indexes: Vec<usize>,
+        mut indexes: Vec<usize>,
     ) -> Result<SegmentWriteReport, SegmentWriteError> {
         let mut frame_failures = Vec::new();
+        // Classify original frame failures before a shared segment I/O failure can mask them.
+        // Each check holds at most one encoded frame.
+        indexes.retain(|index| match self.entries[*index].original_png() {
+            Ok(_) => true,
+            Err(error) => {
+                frame_failures.push(SegmentFrameFailure {
+                    index: *index,
+                    message: format!("spill_degraded: failed to encode frame or verify original material: {error}"),
+                });
+                false
+            }
+        });
         if indexes.is_empty() {
             return Ok(SegmentWriteReport { frame_failures });
         }
@@ -1357,7 +1369,7 @@ impl FrameStore {
                         frame_failures.push(SegmentFrameFailure {
                             index,
                             message: format!(
-                                "spill_degraded: failed to encode or verify frame: {error}"
+                                "spill_degraded: failed to encode frame or verify original material: {error}"
                             ),
                         });
                         continue;
@@ -2613,7 +2625,7 @@ mod tests {
 
     fn assert_resident_accounting(store: &FrameStore) {
         let mut estimate = ResidentEstimate::default();
-        for entry in store.entries.iter().filter(|entry| entry.retained) {
+        for entry in &store.entries {
             estimate.payload = estimate
                 .payload
                 .saturating_add(entry.resident_estimate.payload);

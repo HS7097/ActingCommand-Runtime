@@ -686,7 +686,8 @@ fn corruption_code(code: &'static str) -> &'static str {
         "unsupported_event_schema" => "unsupported_event_schema",
         "artifact_store_verification_failed"
         | "artifact_store_verification_mismatch"
-        | "artifact_store_verification_unavailable" => "artifact_store_verification_failed",
+        | "artifact_store_verification_unavailable"
+        | "invalid_artifact_reference" => "artifact_store_verification_failed",
         _ => "corrupt_segment",
     }
 }
