@@ -3,9 +3,9 @@
 <img src="docs/assets/readme/actingcommand-icon.png" width="112" alt="ActingCommand 图标">
 
 **首席执行官 兼 董事长** — HS7097<br/>
-**首席技术官 兼 首席架构师** — GPT‑6 Astra Ultra<br/>
+**首席技术官 兼 首席架构师** — GPT‑6 Astra<br/>
 **董事会秘书 兼 首席审计官** — Fable 5.1<br/>
-**首席技术工程师** — GPT‑6 Astra Xhigh<br/>
+**首席技术工程师** — GPT‑6 Astra<br/>
 **正在面试** — DeepSeek
 
 </div>
