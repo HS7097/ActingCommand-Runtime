@@ -2,7 +2,8 @@
 
 use super::{
     CommitStatistics, GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult,
-    LedgerAppendObservation, Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
+    LedgerAppendObservation, LedgerProjectViewObservation, Sha256SecretFingerprinter,
+    is_identifier, projection::EventIndexes,
 };
 use crate::PersistedEvent;
 use crate::fact::{LedgerEventRead, StoredEventRecord};
@@ -157,6 +158,7 @@ pub(super) trait DurableStorage: Send + 'static {
         _query: &actingcommand_contract::EventQuery,
         _profile: actingcommand_contract::ProjectionProfile,
         _request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        _observation: &mut Option<LedgerProjectViewObservation>,
     ) -> Option<GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>> {
         None
     }
@@ -1310,9 +1312,23 @@ impl<B: DurableStorage> EventStore<B> {
         profile: actingcommand_contract::ProjectionProfile,
         request: &actingcommand_contract::RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
-        if let Some(page) = self.backend.project_view_page(query, profile, request) {
+        self.project_view_page_observed(query, profile, request, &mut None)
+    }
+
+    pub(super) fn project_view_page_observed(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        if let Some(page) = self
+            .backend
+            .project_view_page(query, profile, request, observation)
+        {
             return page;
         }
+        *observation = None;
         self.indexes.project_view_page(
             &self.events,
             query,

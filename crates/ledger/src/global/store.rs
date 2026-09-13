@@ -3,7 +3,9 @@
 //! Private durable-store boundary. See contracts/ledger-store.md for the S0 contract.
 
 use super::storage::{DurableStorage, EventStore};
-use super::{CommitStatistics, GlobalLedgerResult, LedgerAppendObservation};
+use super::{
+    CommitStatistics, GlobalLedgerResult, LedgerAppendObservation, LedgerProjectViewObservation,
+};
 use crate::PersistedEvent;
 use actingcommand_contract::{
     EventQuery, PolicyExecutionEventData, ProjectionProfile, RuntimeEventQueryPage,
@@ -66,6 +68,7 @@ pub(super) trait LedgerStore: Send + 'static {
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage>;
     fn replay_page(
         &self,
@@ -151,8 +154,13 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        Self::project_view_page(self, query, profile, request)
+        if observation.is_some() {
+            Self::project_view_page_observed(self, query, profile, request, observation)
+        } else {
+            Self::project_view_page(self, query, profile, request)
+        }
     }
 
     fn replay_page(

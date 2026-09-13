@@ -157,6 +157,61 @@ pub struct LedgerWriterWorkObservation {
     /// Ok means this tail returned normally, not that every subscriber accepted an event.
     pub after_reply: LedgerAppendSpan,
     pub reply_result: Option<LedgerAppendStageResult>,
+    /// Same-command SQLite view details; absent for other commands/backends.
+    pub project_view: Option<LedgerProjectViewObservation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerProjectViewCount {
+    #[default]
+    Unobserved,
+    Observed(u64),
+    Incomplete,
+}
+
+impl LedgerProjectViewCount {
+    fn from_len(value: usize) -> Self {
+        u64::try_from(value).map_or(Self::Incomplete, Self::Observed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerProjectViewReadBudget {
+    pub max_bytes: u64,
+    pub max_events: LedgerProjectViewCount,
+    pub deadline: Instant,
+}
+
+/// Fixed process-local stages and sizes of one original SQLite ProjectViewPage call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerProjectViewObservation {
+    pub admission: LedgerAppendSpan,
+    pub connection: LedgerAppendSpan,
+    /// Guard-acquired work through explicit transaction close, before mutex-guard Drop.
+    pub with_connection: LedgerAppendSpan,
+    pub begin_transaction: LedgerAppendSpan,
+    pub read_snapshot: LedgerAppendSpan,
+    pub verify_snapshot: LedgerAppendSpan,
+    pub prepare_events: LedgerAppendSpan,
+    pub select_sequences: LedgerAppendSpan,
+    pub project_page: LedgerAppendSpan,
+    pub commit: LedgerAppendSpan,
+    pub rollback: LedgerAppendSpan,
+    pub read_budget: Option<LedgerProjectViewReadBudget>,
+    pub requested_limit: LedgerProjectViewCount,
+    pub selection_limit: LedgerProjectViewCount,
+    pub max_page_events: LedgerProjectViewCount,
+    pub max_response_bytes: LedgerProjectViewCount,
+    pub max_recovery_context_events: LedgerProjectViewCount,
+    pub raw_bytes: LedgerProjectViewCount,
+    pub raw_event_rows: LedgerProjectViewCount,
+    pub raw_link_rows: LedgerProjectViewCount,
+    pub raw_artifact_rows: LedgerProjectViewCount,
+    pub verified_records: LedgerProjectViewCount,
+    pub prepared_events: LedgerProjectViewCount,
+    pub selected_sequences: LedgerProjectViewCount,
+    pub returned_events: LedgerProjectViewCount,
+    pub returned_recovery_groups: LedgerProjectViewCount,
 }
 
 impl LedgerWriterWorkObservation {
@@ -1701,7 +1756,9 @@ fn writer_loop<S: LedgerStore>(
                 request,
                 response,
             } => {
-                let result = store.project_view_page(&query, profile, &request);
+                let mut observation = Some(LedgerProjectViewObservation::default());
+                let result = store.project_view_page(&query, profile, &request, &mut observation);
+                command_observation.project_view = observation;
                 command_succeeded = result.is_ok();
                 if result.as_ref().is_err_and(GlobalLedgerError::terminal) {
                     let error = result.expect_err("terminal view query must be an error");

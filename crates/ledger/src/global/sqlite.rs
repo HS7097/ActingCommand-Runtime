@@ -9,6 +9,7 @@ use super::storage::{
 };
 use super::{
     GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerReadOnlyConfig, GlobalLedgerResult,
+    LedgerProjectViewCount, LedgerProjectViewObservation, LedgerProjectViewReadBudget,
     MAX_QUERY_PAGE_EVENTS,
 };
 use crate::{
@@ -827,6 +828,7 @@ impl DurableStorage for SqliteStorage {
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
     ) -> Option<GlobalLedgerResult<RuntimeEventQueryPage>> {
         Some(
             SqliteViewSnapshot {
@@ -836,7 +838,7 @@ impl DurableStorage for SqliteStorage {
                 budget: None,
                 source: LedgerReadSource::Runtime,
             }
-            .project_view_page(query, profile, request),
+            .project_view_page_observed(query, profile, request, observation),
         )
     }
 
@@ -914,90 +916,247 @@ impl SqliteViewSnapshot {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        let (snapshot, after) =
-            super::projection::page_bounds(query, profile, request, self.through_sequence)?;
-        check_read_budget(self.budget, 0, 0)?;
-        let mut connection = self.database.connection("query_ledger_view")?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|error| sql_error(error, "begin_ledger_view_snapshot"))?;
-        let result = (|| {
-            let raw = read_snapshot_connection(&transaction, self.budget)?;
-            let bytes = raw.bytes;
-            let prefix_hash = raw
-                .events
-                .iter()
-                .find(|row| row.first() == Some(&SqlValue::Integer(encode(self.through_sequence))))
-                .and_then(|row| row.get(11))
-                .cloned();
-            let (records, _) = verify_snapshot_records(&self.database, raw)?;
-            if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
-                || records.last().map_or(0, StoredEventRecord::sequence) < self.through_sequence
-            {
-                return Err(failure(
-                    "ledger_snapshot_boundary_mismatch",
-                    "query_ledger_view",
-                ));
-            }
-            let mut events = Vec::new();
-            for record in records
-                .into_iter()
-                .take_while(|record| record.sequence() <= self.through_sequence)
-            {
-                check_read_budget(self.budget, bytes, events.len() + 1)?;
-                events.push(
-                    record
-                        .into_metadata()
-                        .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
-                );
-            }
-            super::retention::annotate_metadata_checked(&mut events, |count| {
-                check_read_budget(self.budget, bytes, count)
-            })?;
-            let sequences = views::select_sequences(
-                &transaction,
-                &events,
-                query,
-                after,
-                snapshot,
-                usize::from(request.limit()) + 1,
-                self.budget,
-            )?;
-            let indexes = EventIndexes::from_events(&events);
-            let page = indexes.project_view_page(
-                &events,
-                query,
-                profile,
-                request,
-                LedgerReadScope {
-                    source: self.source,
-                    material_read: LedgerMaterialReadState::NotRequested,
-                    scanned_through_position: self.through_sequence,
-                    read_complete: true,
-                    limits: Vec::new(),
-                },
-                super::projection::PageSelection {
-                    through_sequence: self.through_sequence,
-                    sequences: Some(&sequences),
-                    retention: None,
-                },
-            )?;
-            check_read_budget(self.budget, bytes, events.len())?;
-            Ok(page)
-        })();
-        match result {
-            Ok(page) => {
-                transaction
-                    .commit()
-                    .map_err(|error| sql_error(error, "close_ledger_view_snapshot"))?;
-                Ok(page)
-            }
-            Err(error) => Err(error.with_close_result(
-                transaction
-                    .rollback()
-                    .map_err(|error| sql_error(error, "rollback_ledger_view_snapshot")),
-            )),
+        self.project_view_page_observed(query, profile, request, &mut None)
+    }
+
+    pub(super) fn project_view_page_observed(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        if let Some(value) = observation {
+            *value = LedgerProjectViewObservation {
+                read_budget: self.budget.map(|(max_bytes, max_events, deadline)| {
+                    LedgerProjectViewReadBudget {
+                        max_bytes,
+                        max_events: LedgerProjectViewCount::from_len(max_events),
+                        deadline,
+                    }
+                }),
+                requested_limit: LedgerProjectViewCount::Observed(u64::from(request.limit())),
+                max_page_events: LedgerProjectViewCount::Observed(u64::from(
+                    actingcommand_contract::MAX_RUNTIME_EVENT_QUERY_EVENTS,
+                )),
+                max_response_bytes: LedgerProjectViewCount::from_len(
+                    actingcommand_contract::MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES,
+                ),
+                max_recovery_context_events: LedgerProjectViewCount::from_len(
+                    MAX_QUERY_PAGE_EVENTS,
+                ),
+                ..LedgerProjectViewObservation::default()
+            };
+            value.admission.begin(Instant::now());
         }
+        let admission = (|| {
+            let bounds =
+                super::projection::page_bounds(query, profile, request, self.through_sequence)?;
+            check_read_budget(self.budget, 0, 0)?;
+            Ok::<_, GlobalLedgerError>(bounds)
+        })();
+        if let Some(value) = observation {
+            value.admission.finish(Instant::now(), admission.is_ok());
+        }
+        let (snapshot, after) = admission?;
+        if let Some(value) = observation {
+            value.connection.begin(Instant::now());
+        }
+        let acquired = self.database.connection("query_ledger_view");
+        if let Some(value) = observation {
+            value.connection.finish(Instant::now(), acquired.is_ok());
+        }
+        let mut connection = acquired?;
+        if let Some(value) = observation {
+            value.with_connection.begin(Instant::now());
+        }
+        let completed = (|| {
+            if let Some(value) = observation {
+                value.begin_transaction.begin(Instant::now());
+            }
+            let begun = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| sql_error(error, "begin_ledger_view_snapshot"));
+            if let Some(value) = observation {
+                value
+                    .begin_transaction
+                    .finish(Instant::now(), begun.is_ok());
+            }
+            let transaction = begun?;
+            let result = (|| {
+                if let Some(value) = observation {
+                    value.read_snapshot.begin(Instant::now());
+                }
+                let read = read_snapshot_connection(&transaction, self.budget);
+                if let Some(value) = observation {
+                    value.read_snapshot.finish(Instant::now(), read.is_ok());
+                }
+                let raw = read?;
+                let bytes = raw.bytes;
+                if let Some(value) = observation {
+                    value.raw_bytes = LedgerProjectViewCount::Observed(raw.bytes);
+                    value.raw_event_rows = LedgerProjectViewCount::from_len(raw.events.len());
+                    value.raw_link_rows = LedgerProjectViewCount::from_len(raw.links.len());
+                    value.raw_artifact_rows = LedgerProjectViewCount::from_len(raw.artifacts.len());
+                    value.verify_snapshot.begin(Instant::now());
+                }
+                let prefix_hash = raw
+                    .events
+                    .iter()
+                    .find(|row| {
+                        row.first() == Some(&SqlValue::Integer(encode(self.through_sequence)))
+                    })
+                    .and_then(|row| row.get(11))
+                    .cloned();
+                let verified = verify_snapshot_records(&self.database, raw);
+                if let Some(value) = observation
+                    && verified.is_err()
+                {
+                    value.verify_snapshot.finish(Instant::now(), false);
+                }
+                let (records, _) = verified?;
+                if let Some(value) = observation {
+                    value.verified_records = LedgerProjectViewCount::from_len(records.len());
+                }
+                if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
+                    || records.last().map_or(0, StoredEventRecord::sequence) < self.through_sequence
+                {
+                    if let Some(value) = observation {
+                        value.verify_snapshot.finish(Instant::now(), false);
+                    }
+                    return Err(failure(
+                        "ledger_snapshot_boundary_mismatch",
+                        "query_ledger_view",
+                    ));
+                }
+                if let Some(value) = observation {
+                    value.verify_snapshot.finish(Instant::now(), true);
+                    value.prepare_events.begin(Instant::now());
+                }
+                let mut events = Vec::new();
+                if let Some(value) = observation {
+                    value.prepared_events = LedgerProjectViewCount::from_len(events.len());
+                }
+                for record in records
+                    .into_iter()
+                    .take_while(|record| record.sequence() <= self.through_sequence)
+                {
+                    check_read_budget(self.budget, bytes, events.len() + 1)?;
+                    events.push(
+                        record
+                            .into_metadata()
+                            .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
+                    );
+                    if let Some(value) = observation {
+                        value.prepared_events = LedgerProjectViewCount::from_len(events.len());
+                    }
+                }
+                super::retention::annotate_metadata_checked(&mut events, |count| {
+                    check_read_budget(self.budget, bytes, count)
+                })?;
+                if let Some(value) = observation {
+                    value.prepare_events.finish(Instant::now(), true);
+                }
+                let selection_limit = usize::from(request.limit()) + 1;
+                if let Some(value) = observation {
+                    value.selection_limit = LedgerProjectViewCount::from_len(selection_limit);
+                    value.select_sequences.begin(Instant::now());
+                }
+                let selected = views::select_sequences(
+                    &transaction,
+                    &events,
+                    query,
+                    after,
+                    snapshot,
+                    selection_limit,
+                    self.budget,
+                );
+                if let Some(value) = observation {
+                    value
+                        .select_sequences
+                        .finish(Instant::now(), selected.is_ok());
+                }
+                let sequences = selected?;
+                if let Some(value) = observation {
+                    value.selected_sequences = LedgerProjectViewCount::from_len(sequences.len());
+                    value.project_page.begin(Instant::now());
+                }
+                let indexes = EventIndexes::from_events(&events);
+                let page = indexes.project_view_page(
+                    &events,
+                    query,
+                    profile,
+                    request,
+                    LedgerReadScope {
+                        source: self.source,
+                        material_read: LedgerMaterialReadState::NotRequested,
+                        scanned_through_position: self.through_sequence,
+                        read_complete: true,
+                        limits: Vec::new(),
+                    },
+                    super::projection::PageSelection {
+                        through_sequence: self.through_sequence,
+                        sequences: Some(&sequences),
+                        retention: None,
+                    },
+                )?;
+                check_read_budget(self.budget, bytes, events.len())?;
+                if let Some(value) = observation {
+                    value.project_page.finish(Instant::now(), true);
+                }
+                Ok(page)
+            })();
+            if let Some(value) = observation
+                && result.is_err()
+            {
+                // These original multi-statement regions return errors through the
+                // existing operation closure, after its local values have been released.
+                for stage in [&mut value.prepare_events, &mut value.project_page] {
+                    if stage.started_at.is_some() && stage.finished_at.is_none() {
+                        stage.finish(Instant::now(), false);
+                    }
+                }
+            }
+            match result {
+                Ok(page) => {
+                    if let Some(value) = observation {
+                        value.commit.begin(Instant::now());
+                    }
+                    let closed = transaction
+                        .commit()
+                        .map_err(|error| sql_error(error, "close_ledger_view_snapshot"));
+                    if let Some(value) = observation {
+                        value.commit.finish(Instant::now(), closed.is_ok());
+                    }
+                    closed?;
+                    Ok(page)
+                }
+                Err(error) => {
+                    if let Some(value) = observation {
+                        value.rollback.begin(Instant::now());
+                    }
+                    let closed = transaction
+                        .rollback()
+                        .map_err(|error| sql_error(error, "rollback_ledger_view_snapshot"));
+                    if let Some(value) = observation {
+                        value.rollback.finish(Instant::now(), closed.is_ok());
+                    }
+                    Err(error.with_close_result(closed))
+                }
+            }
+        })();
+        if let Some(value) = observation {
+            value
+                .with_connection
+                .finish(Instant::now(), completed.is_ok());
+            if let Ok(page) = &completed {
+                value.returned_events =
+                    LedgerProjectViewCount::Observed(u64::from(page.returned_count()));
+                value.returned_recovery_groups =
+                    LedgerProjectViewCount::from_len(page.run_recovery().len());
+            }
+        }
+        completed
     }
 }
 
