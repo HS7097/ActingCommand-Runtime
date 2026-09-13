@@ -94,6 +94,7 @@ use actingcommand_execution_kernel::{
     PreparedInputAction, RecognitionVisionProvider, StabilityComparisonResult,
     StabilityTerminalReason, StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
+use actingcommand_execution_kernel::{InputFrameContext, ObservedFrame};
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
     CriticalOperation, DefiniteEffectDisposition, EventAppender, LeaseTransitionTarget,
@@ -150,6 +151,7 @@ mod frame_retention;
 mod governance;
 mod lab_operation;
 mod monitor_control;
+mod nemu_input;
 mod online_observation;
 mod performance;
 mod planning;
@@ -912,7 +914,7 @@ impl RuntimeHost {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
             lifecycle_admission: RwLock::new(false),
-            scheduler: Mutex::new(scheduler),
+            scheduler: Arc::new(Mutex::new(scheduler)),
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
@@ -3218,7 +3220,7 @@ struct HostShared {
     shutdown_target: actingcommand_contract::RuntimeShutdownTarget,
     // Concurrent work holds the read side; idle shutdown never waits for a busy writer slot.
     lifecycle_admission: RwLock<bool>,
-    scheduler: Mutex<SeedScheduler>,
+    scheduler: Arc<Mutex<SeedScheduler>>,
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
@@ -3308,11 +3310,13 @@ struct RuntimeRunLinks {
     run_id: IssuedRunId,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct RuntimeInputContext {
     run_links: Option<RuntimeRunLinks>,
     source_step_action_id: Option<ActionId>,
     before_frame_id: Option<actingcommand_contract::FrameId>,
+    input_frame: Option<actingcommand_contract::InputFrameReference>,
+    input_control: Option<Arc<ContainedRunControl>>,
 }
 
 #[derive(Clone, Copy)]
@@ -11150,6 +11154,8 @@ impl HostShared {
             run_links,
             source_step_action_id,
             before_frame_id,
+            input_frame,
+            input_control,
         } = context;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
@@ -11180,6 +11186,59 @@ impl HostShared {
                 ),
             )?);
         }
+        let input_check = self
+            .nemu_input_check(
+                &resolved.instance_alias,
+                token,
+                connection_id,
+                input_control,
+                false,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        if input_check.is_some()
+            && !matches!(
+                action,
+                InputAction::Tap { .. } | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+            )
+        {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "nemu_input_capability_unsupported",
+                    "execute_input",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        if input_check.is_some() && input_frame.is_none() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "nemu_input_frame_required",
+                    "execute_input",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        if let Some(reference) = input_frame {
+            self.execution
+                .resolve_input_frame(&resolved.instance_alias, reference)
+                .map_err(|error| {
+                    RequestFailure::request(
+                        RuntimeHostError::request(
+                            "input_frame_unavailable",
+                            "resolve_input_frame",
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                        .with_native_detail(error.to_string()),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    )
+                })?;
+        }
+        let before_frame_id = input_frame.map(|frame| frame.frame_id).or(before_frame_id);
         let prepared_action = self
             .execution
             .prepare_input(action.clone())
@@ -11276,13 +11335,13 @@ impl HostShared {
                         };
                     }
                 };
-                match self
-                    .execution
-                    .input_prepared_retained_with_registration_guard(
-                        &instance_alias,
-                        action_for_worker,
-                        registration,
-                    ) {
+                match self.execution.input_prepared_in_frame(
+                    &instance_alias,
+                    action_for_worker,
+                    input_frame,
+                    input_check,
+                    registration,
+                ) {
                     Ok(outcome) => {
                         if let Some(recovery) = outcome.recovery
                             && let Err(error) = self.append_event_raw(
@@ -11535,11 +11594,13 @@ impl HostShared {
                         };
                     }
                 };
-                match self.execution.control_application_with_registration_guard(
-                    &instance_alias,
-                    action,
-                    registration,
-                ) {
+                match self
+                    .execution
+                    .control_application_retained_with_registration_guard(
+                        &instance_alias,
+                        action,
+                        registration,
+                    ) {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
                         effect: DefiniteEffectDisposition::Performed,
@@ -11796,10 +11857,12 @@ impl HostShared {
                 ))
             })?;
 
-        match self
-            .execution
-            .close_instance(token.instance_id(), DeviceCloseAuthority::FencedDeviceWrite)
-        {
+        match self.execution.close_instance_with_input_check(
+            token.instance_id(),
+            DeviceCloseAuthority::FencedDeviceWrite,
+            self.nemu_close_check(token, connection_id)
+                .map_err(RequestFailure::poison_without_terminal)?,
+        ) {
             Ok(outcome) => {
                 self.append_stdio_close_observations(
                     outcome.vendor_stdio(),
@@ -14199,8 +14262,15 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         RuntimeContainedTask::classify_error(error)
     }
 
-    fn capture(&mut self) -> Result<Frame, Self::Error> {
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
         self.inner.capture()
+    }
+
+    fn committed_input_frame(
+        &mut self,
+        reference: actingcommand_contract::InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        self.inner.committed_input_frame(reference)
     }
 
     fn action_seed(
@@ -14211,8 +14281,12 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.action_seed(step_index, operation_label)
     }
 
-    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-        self.inner.input(action)
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
+        self.inner.input(action, frame)
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -15362,7 +15436,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         }
     }
 
-    fn capture(&mut self) -> Result<Frame, Self::Error> {
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
         self.ensure_active()?;
         self.poll_capture_pressure()?;
         let instance_guard = self.host.instance_guard(self.token.instance_id())?;
@@ -15395,8 +15469,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         match self
             .host
             .execution
-            .capture_retained_with_registration_guard(self.instance_alias, registration)
-        {
+            .capture_frame_retained_with_registration_guard(
+                self.instance_alias,
+                Some(*frame_id.transport()),
+                registration,
+            ) {
             Ok(frame) => {
                 self.ensure_active()?;
                 let frame_index = self.capture_evidence.captured()?;
@@ -15512,7 +15589,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     )?;
                     self.configuration_capture_recorded = true;
                 }
-                Ok(frame)
+                Ok(ObservedFrame {
+                    input_reference: Some(actingcommand_contract::InputFrameReference {
+                        frame_id: *frame_id.transport(),
+                        width: frame.width,
+                        height: frame.height,
+                    }),
+                    frame,
+                })
             }
             Err(error) => {
                 let error = self
@@ -15592,7 +15676,27 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(Some(action_seed))
     }
 
-    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+    fn committed_input_frame(
+        &mut self,
+        reference: actingcommand_contract::InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        self.host
+            .execution
+            .resolve_input_frame(self.instance_alias, reference)
+            .map(Some)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "resolve_committed_input_frame",
+                    &error,
+                ))
+            })
+    }
+
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
         self.ensure_active()?;
         let (success, selection) = self.host.input(
             self.request,
@@ -15603,7 +15707,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             RuntimeInputContext {
                 run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
                 source_step_action_id: self.input_step_action_id.take(),
-                before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
+                before_frame_id: None,
+                input_frame: frame.map(|frame| frame.reference()),
+                input_control: Some(Arc::clone(&self.control)),
             },
         )?;
         self.ensure_active()?;
@@ -15749,7 +15855,24 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                self.host
+                    .execution
+                    .commit_input_frame(
+                        self.instance_alias,
+                        actingcommand_contract::InputFrameReference {
+                            frame_id: *frame_id.transport(),
+                            width,
+                            height,
+                        },
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                            "commit_capture_input_frame",
+                            &error,
+                        ))
+                    })
             }
             ContainedTaskTrace::RecognitionStarted {
                 candidate_pages,

@@ -8,8 +8,8 @@ use actingcommand_contract::{
     ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
     CorrelationId, EffectDisposition, EventActor, EventId, EventPayload, EventQuery, EventSource,
-    EventType, FactRecord, FactScope, FrameId, IdentifierIssuer, InputAction, InputPayload,
-    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    EventType, FactRecord, FactScope, FrameId, IdentifierIssuer, InputAction, InputFrameReference,
+    InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
     OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
     OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
@@ -1351,6 +1351,15 @@ impl RuntimeClient {
         token: &LeaseToken,
         action: InputAction,
     ) -> RuntimeClientResult<RuntimeReceipt> {
+        self.input_with_frame(token, action, None)
+    }
+
+    pub fn input_with_frame(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientInputStart,
@@ -1364,6 +1373,7 @@ impl RuntimeClient {
         let result = match self.execute_receipt(
             "runtime_input",
             RuntimeOperation::Input {
+                frame,
                 token: token.clone(),
                 action,
             },
@@ -3863,9 +3873,19 @@ impl RuntimeDebugSession {
         token: &LeaseToken,
         action: InputAction,
     ) -> RuntimeClientResult<RuntimeReceipt> {
+        self.input_with_frame(token, action, None)
+    }
+
+    pub fn input_with_frame(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.client.execute_receipt_with_correlation(
             "debug_runtime_input",
             RuntimeOperation::Input {
+                frame,
                 token: token.clone(),
                 action,
             },

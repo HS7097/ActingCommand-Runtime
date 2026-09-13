@@ -3,10 +3,10 @@
 //! Runtime-owned admission and execution for contained semantic task packages.
 
 use crate::{
-    ExecutionBundleError, ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective,
-    RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
-    RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
-    select_run_operation,
+    ExecutionBundleError, ExternalExpectedSha256, ExternallyVerifiedBundle, InputFrameContext,
+    ObservedFrame, RunDirective, RunFailureObservation, RunFailureStage, RunOperationCandidate,
+    RunOperationFailureDecision, RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal,
+    decide_run_operation_failure, select_run_operation,
 };
 use actingcommand_contract::{
     EffectiveOperationTiming, EffectiveTaskTiming, EffectiveTimingSource, EffectiveTimingValue,
@@ -1511,7 +1511,14 @@ pub trait ContainedTaskRuntime {
         ContainedTaskRuntimeErrorClass::Unknown
     }
 
-    fn capture(&mut self) -> Result<Frame, Self::Error>;
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error>;
+
+    fn committed_input_frame(
+        &mut self,
+        _reference: actingcommand_contract::InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        Ok(None)
+    }
 
     fn action_seed(
         &mut self,
@@ -1521,7 +1528,11 @@ pub trait ContainedTaskRuntime {
         Ok(None)
     }
 
-    fn input(&mut self, action: InputAction) -> Result<(), Self::Error>;
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error>;
 
     /// Transports the already computed results; implementations must not evaluate them again.
     fn record_page_evaluations(
@@ -2155,7 +2166,7 @@ impl PreparedContainedTask {
                                 .into());
                         }
                         runtime
-                            .input(action)
+                            .input(action, observation.input_context.clone())
                             .map_err(ContainedTaskRunError::operation::<R>)?;
                         runtime
                             .record(ContainedTaskTrace::EffectCompleted {
@@ -2729,6 +2740,12 @@ impl PreparedContainedTask {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         let scene = scene_from_frame(&frame)?;
+        let input_context = match frame.input_reference {
+            Some(reference) => runtime
+                .committed_input_frame(reference)
+                .map_err(ContainedTaskRunError::Boundary)?,
+            None => None,
+        };
         let context = self.evaluator.scene_context(&scene);
         let candidate_pages = self
             .detector
@@ -2838,6 +2855,7 @@ impl PreparedContainedTask {
             page_label,
             scene,
             stability_sample,
+            input_context,
         }))
     }
 
@@ -2917,6 +2935,7 @@ struct PageObservation {
     page_label: String,
     scene: Scene,
     stability_sample: Option<StabilityFrameSample>,
+    input_context: Option<InputFrameContext>,
 }
 
 enum PostconditionResolution {
@@ -5711,7 +5730,7 @@ mod post_admission_ocr_tests {
             fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
                 error.0
             }
-            fn capture(&mut self) -> Result<Frame, Self::Error> {
+            fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
                 if self.inner.captures > 0
                     && let Some(error @ (_, Callback::Capture)) = self.failure
                 {
@@ -5729,11 +5748,15 @@ mod post_admission_ocr_tests {
                 }
                 Ok(None)
             }
-            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+            fn input(
+                &mut self,
+                action: InputAction,
+                _frame: Option<InputFrameContext>,
+            ) -> Result<(), Self::Error> {
                 if let Some(error @ (_, Callback::Input)) = self.failure {
                     return Err(error);
                 }
-                self.inner.input(action).expect("scripted input");
+                self.inner.input(action, _frame).expect("scripted input");
                 Ok(())
             }
             fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -7376,14 +7399,18 @@ mod post_admission_ocr_tests {
         impl ContainedTaskRuntime for StabilityOcrRuntime {
             type Error = &'static str;
 
-            fn capture(&mut self) -> Result<Frame, Self::Error> {
+            fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
                 Ok(match self.frames.pop_front() {
-                    Some(frame) => frame,
-                    None => self.last_frame.clone(),
+                    Some(frame) => frame.into(),
+                    None => self.last_frame.clone().into(),
                 })
             }
 
-            fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+            fn input(
+                &mut self,
+                _action: InputAction,
+                _frame: Option<InputFrameContext>,
+            ) -> Result<(), Self::Error> {
                 self.inputs += 1;
                 Ok(())
             }
@@ -8263,15 +8290,19 @@ mod retry_wiring_tests {
             self.progress.push(executed_steps);
         }
 
-        fn capture(&mut self) -> Result<Frame, Self::Error> {
+        fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
             self.captures += 1;
             Ok(match self.frames.pop_front() {
-                Some(frame) => frame,
-                None => self.last_frame.clone(),
+                Some(frame) => frame.into(),
+                None => self.last_frame.clone().into(),
             })
         }
 
-        fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+        fn input(
+            &mut self,
+            _action: InputAction,
+            _frame: Option<InputFrameContext>,
+        ) -> Result<(), Self::Error> {
             self.inputs += 1;
             Ok(())
         }
@@ -8516,13 +8547,17 @@ mod retry_wiring_tests {
     impl ContainedTaskRuntime for TimingRuntime {
         type Error = &'static str;
 
-        fn capture(&mut self) -> Result<Frame, Self::Error> {
+        fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
             self.captures_at.push(Instant::now());
             self.inner.capture()
         }
 
-        fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-            self.inner.input(action)
+        fn input(
+            &mut self,
+            action: InputAction,
+            _frame: Option<InputFrameContext>,
+        ) -> Result<(), Self::Error> {
+            self.inner.input(action, _frame)
         }
 
         fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -8777,11 +8812,15 @@ mod retry_wiring_tests {
         impl ContainedTaskRuntime for FailingInputRuntime {
             type Error = &'static str;
 
-            fn capture(&mut self) -> Result<Frame, Self::Error> {
+            fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
                 self.inner.capture()
             }
 
-            fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+            fn input(
+                &mut self,
+                _action: InputAction,
+                _frame: Option<InputFrameContext>,
+            ) -> Result<(), Self::Error> {
                 self.input_attempts += 1;
                 Err("injected input failure")
             }
@@ -9442,7 +9481,7 @@ mod retry_wiring_tests {
         impl ContainedTaskRuntime for FailingRuntime {
             type Error = &'static str;
 
-            fn capture(&mut self) -> Result<Frame, Self::Error> {
+            fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
                 self.inner.capture()
             }
 
@@ -9454,8 +9493,12 @@ mod retry_wiring_tests {
                 Ok(Some(77))
             }
 
-            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-                self.inner.input(action)
+            fn input(
+                &mut self,
+                action: InputAction,
+                _frame: Option<InputFrameContext>,
+            ) -> Result<(), Self::Error> {
+                self.inner.input(action, _frame)
             }
 
             fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -10158,12 +10201,16 @@ mod retry_wiring_tests {
         impl ContainedTaskRuntime for FailingComparisonRuntime {
             type Error = &'static str;
 
-            fn capture(&mut self) -> Result<Frame, Self::Error> {
+            fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
                 self.inner.capture()
             }
 
-            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-                self.inner.input(action)
+            fn input(
+                &mut self,
+                action: InputAction,
+                _frame: Option<InputFrameContext>,
+            ) -> Result<(), Self::Error> {
+                self.inner.input(action, _frame)
             }
 
             fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {

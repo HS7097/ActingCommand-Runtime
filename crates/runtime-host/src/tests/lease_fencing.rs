@@ -20,6 +20,7 @@ fn different_instances_acquire_and_execute_independently() {
             start.wait();
             let (_, token) = client.acquire(alias);
             let input = client.request(RuntimeOperation::Input {
+                frame: None,
                 token: token.clone(),
                 action: InputAction::Reset,
             });
@@ -261,6 +262,7 @@ fn every_fencing_field_is_checked_before_backend_use() {
 
     let mut intruder = TestClient::connect(&host);
     let cross_connection = intruder.request(RuntimeOperation::Input {
+        frame: None,
         token: token.clone(),
         action: InputAction::Tap { x: 10, y: 20 },
     });

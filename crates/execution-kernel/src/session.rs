@@ -4,10 +4,13 @@ use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
     ResolvedExecutionInstance,
 };
-use actingcommand_contract::{ApplicationLifecycleAction, InputAction, ResourceQuiescence};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, FrameId, InputAction, InputFrameReference, ResourceQuiescence,
+};
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, Frame, InputBackend,
+    InputExecutionContext, InputOperationCheck, NemuFrameGeometry, NemuSessionBackends,
     PreparedSegmentedSwipePlan, SegmentedSwipeAction, prepare_segmented_swipe,
     segmented_swipe_capability_error,
 };
@@ -17,6 +20,89 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 const SESSION_CHANNEL_CAPACITY: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputFrameContext {
+    reference: InputFrameReference,
+    geometry: Option<Arc<NemuFrameGeometry>>,
+}
+
+impl InputFrameContext {
+    pub const fn reference(&self) -> InputFrameReference {
+        self.reference
+    }
+
+    fn captured(frame_id: FrameId, frame: &Frame) -> Self {
+        Self {
+            reference: InputFrameReference {
+                frame_id,
+                width: frame.width,
+                height: frame.height,
+            },
+            geometry: frame
+                .selection
+                .as_ref()
+                .and_then(|selection| selection.nemu_frame.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservedFrame {
+    pub frame: Frame,
+    /// Capture request data; the committed context is obtained after CaptureCompleted.
+    pub input_reference: Option<InputFrameReference>,
+}
+
+impl From<Frame> for ObservedFrame {
+    fn from(frame: Frame) -> Self {
+        Self {
+            frame,
+            input_reference: None,
+        }
+    }
+}
+
+impl std::ops::Deref for ObservedFrame {
+    type Target = Frame;
+    fn deref(&self) -> &Frame {
+        &self.frame
+    }
+}
+
+enum SessionBackends {
+    Pending,
+    Independent {
+        input: Option<Box<dyn InputBackend>>,
+        capture: Option<Box<dyn CaptureBackend>>,
+    },
+    Nemu(NemuSessionBackends),
+}
+
+impl SessionBackends {
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, Self::Pending)
+    }
+
+    fn prepare(
+        &mut self,
+        provider: &dyn ExecutionBackendProvider,
+        alias: &str,
+    ) -> ExecutionKernelResult<()> {
+        if matches!(self, Self::Pending) {
+            *self = match provider.open_nemu_session(alias).map_err(|error| {
+                ExecutionKernelError::device("paired_backend_open_failed", &error)
+            })? {
+                Some(pair) => Self::Nemu(pair),
+                None => Self::Independent {
+                    input: None,
+                    capture: None,
+                },
+            };
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionInputOutcome {
@@ -77,10 +163,21 @@ impl TryFrom<InputAction> for PreparedInputAction {
 enum SessionCommand {
     Input {
         action: PreparedInputAction,
+        frame: Option<InputFrameReference>,
+        check: Option<Arc<dyn InputOperationCheck>>,
         response: SyncSender<ExecutionKernelResult<ExecutionInputOutcome>>,
     },
     Capture {
+        frame_id: Option<FrameId>,
         response: SyncSender<ExecutionKernelResult<Frame>>,
+    },
+    CommitFrame {
+        reference: InputFrameReference,
+        response: SyncSender<ExecutionKernelResult<InputFrameContext>>,
+    },
+    ResolveFrame {
+        reference: InputFrameReference,
+        response: SyncSender<ExecutionKernelResult<InputFrameContext>>,
     },
     ApplicationLifecycle {
         action: ApplicationLifecycleAction,
@@ -88,6 +185,7 @@ enum SessionCommand {
     },
     Close {
         authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
         response: SyncSender<ExecutionKernelResult<ExecutionResourceCloseOutcome>>,
     },
 }
@@ -159,15 +257,13 @@ impl ExecutionSession {
         let join = thread::Builder::new()
             .name("actingcommand-execution-session".to_string())
             .spawn(move || {
-                let mut input = None;
-                let mut capture = None;
+                let mut backends = SessionBackends::Pending;
                 match catch_unwind(AssertUnwindSafe(|| {
-                    run_session(provider, instance_alias, receiver, &mut input, &mut capture)
+                    run_session(provider, instance_alias, receiver, &mut backends)
                 })) {
                     Ok(result) => result,
                     Err(_) => Err(close_after_failure(
-                        capture.take(),
-                        input.take(),
+                        backends.take(),
                         ExecutionKernelError::fatal("execution_session_panicked"),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
@@ -215,6 +311,15 @@ impl ExecutionSession {
         &self,
         action: PreparedInputAction,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
+        self.input_prepared_in_frame(action, None, None)
+    }
+
+    pub(crate) fn input_prepared_in_frame(
+        &self,
+        action: PreparedInputAction,
+        frame: Option<InputFrameReference>,
+        check: Option<Arc<dyn InputOperationCheck>>,
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
@@ -222,7 +327,12 @@ impl ExecutionSession {
             .sender
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
-            .send(SessionCommand::Input { action, response })
+            .send(SessionCommand::Input {
+                action,
+                frame,
+                check,
+                response,
+            })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
@@ -251,6 +361,13 @@ impl ExecutionSession {
     }
 
     pub(crate) fn capture_retained(&self) -> ExecutionKernelResult<Frame> {
+        self.capture_frame_retained(None)
+    }
+
+    pub(crate) fn capture_frame_retained(
+        &self,
+        frame_id: Option<FrameId>,
+    ) -> ExecutionKernelResult<Frame> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
@@ -258,9 +375,57 @@ impl ExecutionSession {
             .sender
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
-            .send(SessionCommand::Capture { response })
+            .send(SessionCommand::Capture { frame_id, response })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
+            return finish_after_result(&mut state, Err(error));
+        }
+        match receiver.recv() {
+            Ok(result) => result,
+            Err(_) => finish_after_result(
+                &mut state,
+                Err(ExecutionKernelError::fatal(
+                    "execution_session_response_lost",
+                )),
+            ),
+        }
+    }
+
+    /// Host calls this only after the original capture fact commits to GlobalLedger.
+    pub(crate) fn commit_input_frame(
+        &self,
+        reference: InputFrameReference,
+    ) -> ExecutionKernelResult<InputFrameContext> {
+        self.frame_request(|response| SessionCommand::CommitFrame {
+            reference,
+            response,
+        })
+    }
+
+    pub(crate) fn resolve_input_frame(
+        &self,
+        reference: InputFrameReference,
+    ) -> ExecutionKernelResult<InputFrameContext> {
+        self.frame_request(|response| SessionCommand::ResolveFrame {
+            reference,
+            response,
+        })
+    }
+
+    fn frame_request(
+        &self,
+        command: impl FnOnce(SyncSender<ExecutionKernelResult<InputFrameContext>>) -> SessionCommand,
+    ) -> ExecutionKernelResult<InputFrameContext> {
+        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        ensure_open(&state)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sent = state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .send(command(response))
+            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+        if let Err(error) = sent {
             return finish_after_result(&mut state, Err(error));
         }
         match receiver.recv() {
@@ -278,6 +443,23 @@ impl ExecutionSession {
         &self,
         action: ApplicationLifecycleAction,
     ) -> ExecutionKernelResult<()> {
+        match self.control_application_retained(action) {
+            Ok(()) => Ok(()),
+            Err(primary) => {
+                let error = match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
+                    Ok(_) => primary,
+                    Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
+                };
+                let mut state = self.lock_state("execution_session_state_poisoned")?;
+                finish_after_result(&mut state, Err(error))
+            }
+        }
+    }
+
+    pub(crate) fn control_application_retained(
+        &self,
+        action: ApplicationLifecycleAction,
+    ) -> ExecutionKernelResult<()> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
@@ -290,12 +472,15 @@ impl ExecutionSession {
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
         }
-        let result = receiver.recv().unwrap_or_else(|_| {
-            Err(ExecutionKernelError::fatal(
-                "execution_session_response_lost",
-            ))
-        });
-        finish_after_result(&mut state, result)
+        match receiver.recv() {
+            Ok(result) => result,
+            Err(_) => finish_after_result(
+                &mut state,
+                Err(ExecutionKernelError::fatal(
+                    "execution_session_response_lost",
+                )),
+            ),
+        }
     }
 
     pub fn close(&self) -> ExecutionKernelResult<()> {
@@ -306,6 +491,14 @@ impl ExecutionSession {
     pub(crate) fn close_with_authority(
         &self,
         authority: DeviceCloseAuthority,
+    ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+        self.close_with_input_check(authority, None)
+    }
+
+    pub(crate) fn close_with_input_check(
+        &self,
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
     ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         if let Some(result) = &state.close_result {
@@ -322,6 +515,7 @@ impl ExecutionSession {
         let send_result = sender
             .send(SessionCommand::Close {
                 authority,
+                input_check,
                 response,
             })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
@@ -413,20 +607,33 @@ fn run_session(
     provider: Arc<dyn ExecutionBackendProvider>,
     instance_alias: String,
     receiver: Receiver<SessionCommand>,
-    input: &mut Option<Box<dyn InputBackend>>,
-    capture: &mut Option<Box<dyn CaptureBackend>>,
+    backends: &mut SessionBackends,
 ) -> ExecutionKernelResult<()> {
+    let mut pending_frame: Option<InputFrameContext> = None;
+    let mut committed_frame: Option<InputFrameContext> = None;
     while let Ok(command) = receiver.recv() {
         match command {
-            SessionCommand::Input { action, response } => {
-                let result = execute_input(provider.as_ref(), &instance_alias, input, action);
+            SessionCommand::Input {
+                action,
+                frame,
+                check,
+                response,
+            } => {
+                let result = execute_input(
+                    provider.as_ref(),
+                    &instance_alias,
+                    backends,
+                    action,
+                    frame,
+                    committed_frame.as_ref(),
+                    check,
+                );
                 let context = match result {
                     Ok(context) => context,
                     Err(error) => {
                         if response.send(Err(error.clone())).is_err() {
                             return Err(close_after_failure(
-                                capture.take(),
-                                input.take(),
+                                backends.take(),
                                 ExecutionKernelError::merge(
                                     error,
                                     ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -437,8 +644,7 @@ fn run_session(
                         }
                         return close_retained_after_failure(
                             &receiver,
-                            capture,
-                            input,
+                            backends,
                             error,
                             ResourceCloseOrder::InputFirst,
                         );
@@ -446,21 +652,24 @@ fn run_session(
                 };
                 if response.send(Ok(context)).is_err() {
                     return Err(close_after_failure(
-                        capture.take(),
-                        input.take(),
+                        backends.take(),
                         ExecutionKernelError::fatal("execution_session_response_lost"),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     ));
                 }
             }
-            SessionCommand::Capture { response } => {
-                let result = execute_capture(provider.as_ref(), &instance_alias, capture);
+            SessionCommand::Capture { frame_id, response } => {
+                pending_frame = None;
+                committed_frame = None;
+                let result = execute_capture(provider.as_ref(), &instance_alias, backends);
+                if let (Some(frame_id), Ok(frame)) = (frame_id, &result) {
+                    pending_frame = Some(InputFrameContext::captured(frame_id, frame));
+                }
                 match result {
                     Ok(frame) => response.send(Ok(frame)).map_err(|_| {
                         close_after_failure(
-                            capture.take(),
-                            input.take(),
+                            backends.take(),
                             ExecutionKernelError::fatal("execution_session_response_lost"),
                             ResourceCloseOrder::CaptureFirst,
                             DeviceCloseAuthority::LocalOnly,
@@ -469,8 +678,7 @@ fn run_session(
                     Err(error) => {
                         if response.send(Err(error.clone())).is_err() {
                             return Err(close_after_failure(
-                                capture.take(),
-                                input.take(),
+                                backends.take(),
                                 ExecutionKernelError::merge(
                                     error,
                                     ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -481,28 +689,92 @@ fn run_session(
                         }
                         return close_retained_after_failure(
                             &receiver,
-                            capture,
-                            input,
+                            backends,
                             error,
                             ResourceCloseOrder::CaptureFirst,
                         );
                     }
                 }
             }
+            SessionCommand::CommitFrame {
+                reference,
+                response,
+            } => {
+                let result = if let Some(frame) = pending_frame
+                    .take()
+                    .filter(|frame| frame.reference == reference)
+                {
+                    committed_frame = Some(frame.clone());
+                    Ok(frame)
+                } else {
+                    committed_frame = None;
+                    Err(ExecutionKernelError::fatal("input_frame_capture_mismatch"))
+                };
+                if response.send(result).is_err() {
+                    return Err(close_after_failure(
+                        backends.take(),
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ResourceCloseOrder::CaptureFirst,
+                        DeviceCloseAuthority::LocalOnly,
+                    ));
+                }
+            }
+            SessionCommand::ResolveFrame {
+                reference,
+                response,
+            } => {
+                let result = committed_frame
+                    .as_ref()
+                    .filter(|frame| frame.reference == reference)
+                    .cloned()
+                    .ok_or_else(|| ExecutionKernelError::fatal("input_frame_not_committed"));
+                if response.send(result).is_err() {
+                    return Err(close_after_failure(
+                        backends.take(),
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ResourceCloseOrder::CaptureFirst,
+                        DeviceCloseAuthority::LocalOnly,
+                    ));
+                }
+            }
             SessionCommand::ApplicationLifecycle { action, response } => {
-                if let Err(error) = close_resources(
-                    capture.take(),
-                    input.take(),
-                    DeviceCloseAuthority::LocalOnly,
-                    ResourceCloseOrder::CaptureFirst,
-                ) {
+                pending_frame = None;
+                committed_frame = None;
+                let invalidation = match backends {
+                    SessionBackends::Nemu(pair) => {
+                        pair.owner.invalidate_display().map_err(|error| {
+                            ExecutionKernelError::device(
+                                "application_frame_invalidation_failed",
+                                &error,
+                            )
+                        })
+                    }
+                    _ => close_resources(
+                        backends.take(),
+                        DeviceCloseAuthority::LocalOnly,
+                        ResourceCloseOrder::CaptureFirst,
+                        None,
+                    )
+                    .map(|_| ()),
+                };
+                if let Err(error) = invalidation {
                     if response.send(Err(error.clone())).is_err() {
-                        return Err(ExecutionKernelError::merge(
-                            error,
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                        return Err(close_after_failure(
+                            backends.take(),
+                            ExecutionKernelError::merge(
+                                error,
+                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ),
+                            ResourceCloseOrder::CaptureFirst,
+                            DeviceCloseAuthority::LocalOnly,
                         ));
                     }
-                    return Err(error);
+                    return close_retained_after_failure(
+                        &receiver,
+                        backends,
+                        error,
+                        ResourceCloseOrder::CaptureFirst,
+                    );
                 }
                 let result = provider
                     .control_application(&instance_alias, action)
@@ -511,26 +783,42 @@ fn run_session(
                     });
                 if let Err(error) = result {
                     if response.send(Err(error.clone())).is_err() {
-                        return Err(ExecutionKernelError::merge(
-                            error,
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                        return Err(close_after_failure(
+                            backends.take(),
+                            ExecutionKernelError::merge(
+                                error,
+                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ),
+                            ResourceCloseOrder::CaptureFirst,
+                            DeviceCloseAuthority::LocalOnly,
                         ));
                     }
-                    return Err(error);
+                    return close_retained_after_failure(
+                        &receiver,
+                        backends,
+                        error,
+                        ResourceCloseOrder::CaptureFirst,
+                    );
                 }
-                response
-                    .send(Ok(()))
-                    .map_err(|_| ExecutionKernelError::fatal("execution_session_response_lost"))?;
+                if response.send(Ok(())).is_err() {
+                    return Err(close_after_failure(
+                        backends.take(),
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ResourceCloseOrder::CaptureFirst,
+                        DeviceCloseAuthority::LocalOnly,
+                    ));
+                }
             }
             SessionCommand::Close {
                 authority,
+                input_check,
                 response,
             } => {
                 let result = close_resources(
-                    capture.take(),
-                    input.take(),
+                    backends.take(),
                     authority,
                     ResourceCloseOrder::CaptureFirst,
+                    input_check,
                 );
                 if response.send(result.clone()).is_err() {
                     return match result {
@@ -549,29 +837,51 @@ fn run_session(
         }
     }
     close_resources(
-        capture.take(),
-        input.take(),
+        backends.take(),
         DeviceCloseAuthority::LocalOnly,
         ResourceCloseOrder::CaptureFirst,
+        None,
     )
     .map(|_| ())
 }
 
 fn close_retained_after_failure(
     receiver: &Receiver<SessionCommand>,
-    capture: &mut Option<Box<dyn CaptureBackend>>,
-    input: &mut Option<Box<dyn InputBackend>>,
+    backends: &mut SessionBackends,
     primary: ExecutionKernelError,
     order: ResourceCloseOrder,
 ) -> ExecutionKernelResult<()> {
     // Keep the actual backends here until the Host chooses close admission.
     loop {
         match receiver.recv() {
+            Ok(
+                SessionCommand::CommitFrame { response, .. }
+                | SessionCommand::ResolveFrame { response, .. },
+            ) => {
+                if response
+                    .send(Err(ExecutionKernelError::device(
+                        "execution_session_close_pending",
+                        &DeviceError::transient(
+                            "input frame is unavailable while its owner closes the session",
+                        ),
+                    )))
+                    .is_ok()
+                {
+                    continue;
+                }
+                return Err(close_after_failure(
+                    backends.take(),
+                    primary,
+                    order,
+                    DeviceCloseAuthority::LocalOnly,
+                ));
+            }
             Ok(SessionCommand::Close {
                 authority,
+                input_check,
                 response,
             }) => {
-                let result = close_resources(capture.take(), input.take(), authority, order);
+                let result = close_resources(backends.take(), authority, order, input_check);
                 if response.send(result.clone()).is_err() {
                     return Err(match result {
                         Ok(outcome) => {
@@ -583,7 +893,7 @@ fn close_retained_after_failure(
                 }
                 return result.map(|_| ());
             }
-            Ok(SessionCommand::Capture { response }) => {
+            Ok(SessionCommand::Capture { response, .. }) => {
                 // A concurrent observer can already be waiting behind the failed input.
                 // Refuse that observation without consuming the input owner's close handoff.
                 if response
@@ -598,8 +908,7 @@ fn close_retained_after_failure(
                     continue;
                 }
                 return Err(close_after_failure(
-                    capture.take(),
-                    input.take(),
+                    backends.take(),
                     ExecutionKernelError::merge(
                         primary,
                         ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -610,8 +919,7 @@ fn close_retained_after_failure(
             }
             _ => {
                 return Err(close_after_failure(
-                    capture.take(),
-                    input.take(),
+                    backends.take(),
                     primary,
                     order,
                     DeviceCloseAuthority::LocalOnly,
@@ -624,20 +932,52 @@ fn close_retained_after_failure(
 fn execute_input(
     provider: &dyn ExecutionBackendProvider,
     instance_alias: &str,
-    backend: &mut Option<Box<dyn InputBackend>>,
+    backends: &mut SessionBackends,
     action: PreparedInputAction,
+    frame: Option<InputFrameReference>,
+    committed_frame: Option<&InputFrameContext>,
+    check: Option<Arc<dyn InputOperationCheck>>,
 ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-    if backend.is_none() {
-        *backend =
-            Some(provider.open_input(instance_alias).map_err(|error| {
-                ExecutionKernelError::device("input_backend_open_failed", &error)
-            })?);
-    }
-    let backend = backend
-        .as_mut()
-        .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?;
+    backends.prepare(provider, instance_alias)?;
+    let context = match backends {
+        SessionBackends::Nemu(_) => {
+            let reference =
+                frame.ok_or_else(|| ExecutionKernelError::fatal("nemu_input_frame_required"))?;
+            let committed = committed_frame
+                .filter(|value| value.reference == reference)
+                .ok_or_else(|| ExecutionKernelError::fatal("input_frame_not_committed"))?;
+            if committed.geometry.is_none() {
+                return Err(ExecutionKernelError::fatal(
+                    "nemu_input_frame_source_missing",
+                ));
+            }
+            Some(InputExecutionContext {
+                geometry: committed.geometry.clone(),
+                check: check
+                    .ok_or_else(|| ExecutionKernelError::fatal("nemu_input_fencing_required"))?,
+            })
+        }
+        _ => None,
+    };
+    let backend = match backends {
+        SessionBackends::Independent { input, .. } => {
+            if input.is_none() {
+                *input = Some(provider.open_input(instance_alias).map_err(|error| {
+                    ExecutionKernelError::device("input_backend_open_failed", &error)
+                })?);
+            }
+            input
+                .as_mut()
+                .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?
+                .as_mut()
+        }
+        SessionBackends::Nemu(pair) => pair.input.as_mut(),
+        SessionBackends::Pending => {
+            return Err(ExecutionKernelError::fatal("input_backend_missing"));
+        }
+    };
     let recovery = backend.take_adb_recovery();
-    execute_action(backend.as_mut(), &action).map_err(|error| {
+    execute_action(backend, &action, context.as_ref()).map_err(|error| {
         let error = match &recovery {
             Some(report) => error.with_adb_recovery(report.clone()),
             None => error,
@@ -653,16 +993,27 @@ fn execute_input(
 fn execute_capture(
     provider: &dyn ExecutionBackendProvider,
     instance_alias: &str,
-    backend: &mut Option<Box<dyn CaptureBackend>>,
+    backends: &mut SessionBackends,
 ) -> ExecutionKernelResult<Frame> {
-    if backend.is_none() {
-        *backend = Some(provider.open_capture(instance_alias).map_err(|error| {
-            ExecutionKernelError::device("capture_backend_open_failed", &error)
-        })?);
-    }
+    backends.prepare(provider, instance_alias)?;
+    let backend = match backends {
+        SessionBackends::Independent { capture, .. } => {
+            if capture.is_none() {
+                *capture = Some(provider.open_capture(instance_alias).map_err(|error| {
+                    ExecutionKernelError::device("capture_backend_open_failed", &error)
+                })?);
+            }
+            capture
+                .as_mut()
+                .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
+                .as_mut()
+        }
+        SessionBackends::Nemu(pair) => pair.capture.as_mut(),
+        SessionBackends::Pending => {
+            return Err(ExecutionKernelError::fatal("capture_backend_missing"));
+        }
+    };
     backend
-        .as_mut()
-        .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
         .capture()
         .map_err(|error| ExecutionKernelError::device("capture_backend_operation_failed", &error))
 }
@@ -670,9 +1021,13 @@ fn execute_capture(
 fn execute_action(
     backend: &mut dyn InputBackend,
     action: &PreparedInputAction,
+    context: Option<&InputExecutionContext>,
 ) -> DeviceResult<()> {
     match action {
-        PreparedInputAction::Direct(InputAction::Tap { x, y }) => backend.tap(*x, *y),
+        PreparedInputAction::Direct(InputAction::Tap { x, y }) => match context {
+            Some(context) => backend.tap_in_frame(*x, *y, context),
+            None => backend.tap(*x, *y),
+        },
         PreparedInputAction::Direct(InputAction::LongTap { x, y, duration_ms }) => {
             backend.long_tap(*x, *y, *duration_ms)
         }
@@ -687,7 +1042,10 @@ fn execute_action(
             if !backend.supports_segmented_swipe() {
                 return Err(segmented_swipe_capability_error());
             }
-            backend.segmented_swipe_prepared(plan)
+            match context {
+                Some(context) => backend.segmented_swipe_prepared_in_frame(plan, context),
+                None => backend.segmented_swipe_prepared(plan),
+            }
         }
         PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(key),
         PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(text),
@@ -705,24 +1063,42 @@ enum ResourceCloseOrder {
 }
 
 fn close_after_failure(
-    capture: Option<Box<dyn CaptureBackend>>,
-    input: Option<Box<dyn InputBackend>>,
+    backends: SessionBackends,
     primary: ExecutionKernelError,
     order: ResourceCloseOrder,
     authority: DeviceCloseAuthority,
 ) -> ExecutionKernelError {
-    match close_resources(capture, input, authority, order) {
+    match close_resources(backends, authority, order, None) {
         Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
         Err(secondary) => ExecutionKernelError::merge_cleanup(primary, secondary),
     }
 }
 
 fn close_resources(
-    capture: Option<Box<dyn CaptureBackend>>,
-    input: Option<Box<dyn InputBackend>>,
+    backends: SessionBackends,
     authority: DeviceCloseAuthority,
     order: ResourceCloseOrder,
+    input_check: Option<Arc<dyn InputOperationCheck>>,
 ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+    let (capture, input) = match backends {
+        SessionBackends::Pending => return Ok(ExecutionResourceCloseOutcome::confirmed(0)),
+        SessionBackends::Independent { capture, input } => (capture, input),
+        SessionBackends::Nemu(pair) => {
+            let NemuSessionBackends {
+                owner,
+                input,
+                capture,
+            } = pair;
+            drop(input);
+            drop(capture);
+            return owner
+                .close_once(authority, input_check)
+                .map(ExecutionResourceCloseOutcome::from_device)
+                .map_err(|error| {
+                    ExecutionKernelError::device("nemu_session_close_failed", &error)
+                });
+        }
+    };
     let (first, second) = match order {
         ResourceCloseOrder::CaptureFirst => (
             close_capture(capture, authority),

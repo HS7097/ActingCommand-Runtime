@@ -14,6 +14,7 @@ const MAX_ADB_INPUT_GESTURE_MS: u64 = 60_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TouchBackendName {
+    NemuIpc,
     MaaTouch,
     Minitouch,
     AdbShellInput,
@@ -22,6 +23,7 @@ pub enum TouchBackendName {
 impl TouchBackendName {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::NemuIpc => "nemu_ipc",
             Self::MaaTouch => "maatouch",
             Self::Minitouch => "minitouch",
             Self::AdbShellInput => "adb_shell_input",
@@ -34,6 +36,7 @@ pub enum TouchBackendChoice {
     #[default]
     Auto,
     AutoFastest,
+    NemuIpc,
     MaaTouch,
     Minitouch,
     AdbShellInput,
@@ -42,6 +45,7 @@ pub enum TouchBackendChoice {
 impl TouchBackendChoice {
     pub fn parse(value: &str) -> DeviceResult<Self> {
         match value {
+            "nemu_ipc" => Ok(Self::NemuIpc),
             "auto" => Ok(Self::Auto),
             "auto-fastest" | "auto_fastest" => Ok(Self::AutoFastest),
             "maatouch" | "maa_touch" => Ok(Self::MaaTouch),
@@ -50,13 +54,14 @@ impl TouchBackendChoice {
                 Ok(Self::AdbShellInput)
             }
             other => Err(DeviceError::fatal(format!(
-                "unknown touch backend '{other}', expected auto, auto-fastest, maatouch, minitouch, or adb_shell_input"
+                "unknown touch backend '{other}', expected auto, auto-fastest, nemu_ipc, maatouch, minitouch, or adb_shell_input"
             ))),
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::NemuIpc => "nemu_ipc",
             Self::Auto => "auto",
             Self::AutoFastest => "auto-fastest",
             Self::MaaTouch => "maatouch",
@@ -487,6 +492,9 @@ pub fn create_touch_backend(config: TouchBackendConfig) -> DeviceResult<Selected
     let requested = config.requested;
     let factories = default_touch_factories(config);
     match requested {
+        TouchBackendChoice::NemuIpc => Err(DeviceError::fatal(
+            "Nemu input requires its paired ExecutionSession",
+        )),
         TouchBackendChoice::Auto => select_fixed_priority(requested, factories),
         TouchBackendChoice::AutoFastest => select_fastest(requested, factories),
         TouchBackendChoice::MaaTouch => select_fixed_priority(
@@ -1260,6 +1268,9 @@ fn touch_bounds_for_backend(
     device: &DeviceInfo,
 ) -> DeviceResult<TouchBounds> {
     match backend {
+        TouchBackendName::NemuIpc => Err(DeviceError::fatal(
+            "Nemu input bounds require its committed frame geometry",
+        )),
         TouchBackendName::Minitouch => touch_bounds_from_screen_size(&device.screen_size),
         TouchBackendName::MaaTouch | TouchBackendName::AdbShellInput => {
             touch_bounds_from_device(handshake, device)

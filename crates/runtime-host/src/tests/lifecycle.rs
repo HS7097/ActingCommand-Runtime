@@ -37,6 +37,7 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
     for alias in ["node.a", "node.b", "node.c"] {
         let (_, token) = client.acquire(alias);
         let request = client.request(RuntimeOperation::Input {
+            frame: None,
             token,
             action: InputAction::Reset,
         });

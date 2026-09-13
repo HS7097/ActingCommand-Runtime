@@ -682,12 +682,14 @@ fn runtime_request_debug_redacts_alias_key_and_text() {
         ids.mint_holder_id().expect("holder"),
     ));
     let text = request(RuntimeOperation::Input {
+        frame: None,
         token: token(),
         action: InputAction::Text {
             text: secret_text.to_string(),
         },
     });
     let key = request(RuntimeOperation::Input {
+        frame: None,
         token: token(),
         action: InputAction::Key {
             key: secret_key.to_string(),
