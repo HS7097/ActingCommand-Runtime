@@ -183,8 +183,25 @@ fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
             )));
         }
     };
+    validate_maa_semantic_declarations(
+        &mapping_path,
+        &mapping_bytes,
+        &facts_path,
+        &facts_bytes,
+        game,
+    )
+}
+
+/// Validate the same MAA declaration pair without reading assets or converting resources.
+pub fn validate_maa_semantic_declarations(
+    mapping_path: &Path,
+    mapping_bytes: &[u8],
+    facts_path: &Path,
+    facts_bytes: &[u8],
+    game: &str,
+) -> CliOutcome<usize> {
     let mapping: MaaSemanticMappingDocument =
-        serde_json::from_slice(&mapping_bytes).map_err(|error| {
+        serde_json::from_slice(mapping_bytes).map_err(|error| {
             CliError::package_invalid(format!(
                 "failed to parse {}: {error}",
                 mapping_path.display()
@@ -224,14 +241,14 @@ fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
         )));
     }
 
-    let actual_sha256 = format!("{:x}", Sha256::digest(&facts_bytes));
+    let actual_sha256 = format!("{:x}", Sha256::digest(facts_bytes));
     if actual_sha256 != mapping.facts_container.sha256 {
         return Err(CliError::package_invalid(format!(
             "{}: A1 facts container SHA-256 mismatch",
             facts_path.display()
         )));
     }
-    let facts: MaaTaskFactsEnvelope = serde_json::from_slice(&facts_bytes).map_err(|error| {
+    let facts: MaaTaskFactsEnvelope = serde_json::from_slice(facts_bytes).map_err(|error| {
         CliError::package_invalid(format!("failed to parse {}: {error}", facts_path.display()))
     })?;
     if facts.data.schema_version != MAA_TASK_FACTS_SCHEMA {
