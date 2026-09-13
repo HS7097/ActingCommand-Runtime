@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+pub(super) fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> RuntimeHost {
+    RuntimeHost::start(
+        config(root),
+        Arc::new(FakeProvider::one(alias, instance_id(), state)),
+    )
+    .expect("runtime host")
+}
+
 #[derive(Default)]
 pub(super) struct FakeState {
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,

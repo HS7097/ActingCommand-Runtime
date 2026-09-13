@@ -23,7 +23,6 @@ sha2 = "0.10"
 [dev-dependencies]
 actingcommand-artifact-store = { path = "../artifact-store", default-features = false, features = ["capture"] }
 actingcommand-device = { workspace = true }
-actingcommand-execution-kernel = { workspace = true }
 actingcommand-ledger-forensics = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
@@ -31,6 +30,5 @@ actingcommand-runtime-database = { workspace = true }
 actingcommand-runtime-host = { workspace = true }
 actingcommand-runtime-state = { workspace = true }
 actingcommand-scheduler = { workspace = true }
-actingledger = { path = "../../apps/ledger-forensics" }
 rusqlite = { workspace = true }
 tempfile = "3"

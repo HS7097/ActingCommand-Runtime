@@ -22,14 +22,6 @@ pub(super) fn config(root: &TempDir) -> RuntimeHostConfig {
         })
 }
 
-pub(super) fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> RuntimeHost {
-    RuntimeHost::start(
-        config(root),
-        Arc::new(FakeProvider::one(alias, instance_id(), state)),
-    )
-    .expect("runtime host")
-}
-
 fn procedure_manifest() -> ProcedureManifest {
     procedure_manifest_with_primary(
         b"fixture procedure observe package v1",

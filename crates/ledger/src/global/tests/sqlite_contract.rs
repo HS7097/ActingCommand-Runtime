@@ -4,38 +4,21 @@
 use super::*;
 use actingcommand_runtime_database::RuntimeDatabase;
 
-// The original shared helpers also serve Host's other specifications.
-#[allow(dead_code)]
+// Shared Host startup configuration.
 mod host {
-    use actingcommand_contract::{
-        ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId, MonitorDiagnosis,
-        MonitorObservation,
-    };
-    use actingcommand_device::{
-        CaptureBackend, CaptureBackendName, DeviceError, DeviceErrorCategory,
-        DeviceErrorSensitivity, DeviceResult, Frame, InputBackend, PixelFormat,
-        PreparedSegmentedSwipePlan,
-    };
-    use actingcommand_execution_kernel::ExecutionBackendProvenance;
+    use actingcommand_contract::{IdentifierIssuer, InstanceId};
     use actingcommand_policy::{
         EvaluationFacts, EvaluationResources, FactValue, HostResourceSnapshot, InstanceSnapshot,
         ObservedOutcome, PoolValueSnapshot,
     };
-    use actingcommand_recognition_pack::VisionProvider;
     use actingcommand_runtime_host::{
-        ExecutionBackendProvider, PolicyInputSnapshot, ProcedureBinding, ProcedureManifest,
-        ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
+        PolicyInputSnapshot, ProcedureBinding, ProcedureManifest, RuntimeHostConfig,
     };
     use actingcommand_scheduler::SchedulerConfig;
     use sha2::{Digest, Sha256};
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-    use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
 
-    include!("../../../../runtime-host/src/tests/support/backend.rs");
     include!("../../../../runtime-host/src/tests/support/startup.rs");
 }
 
@@ -495,9 +478,16 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     reopened.close().expect("read owner close");
 
     {
-        use actingcommand_runtime_host::RuntimeHost;
+        use actingcommand_device::{
+            AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
+            TouchBackendChoice, TouchBackendConfig,
+        };
+        use actingcommand_runtime_host::{
+            ExecutionBackendProvider, ExecutionBackendRegistration, ExecutionBackendRegistry,
+            RuntimeHost,
+        };
         use actingcommand_runtime_state::RuntimeStateStore;
-        use host::{FakeProvider, FakeState, config, host_with_state, instance_id};
+        use host::{config, instance_id};
 
         // S3 extends the existing owner/startup specification through the formal offline entry.
         let source_root = TempDir::new().expect("legacy runtime root");
@@ -527,16 +517,26 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
                 },
             )
         };
-        let refused = RuntimeHost::start(
-            config(&source_root),
-            Arc::new(FakeProvider::one(
+        let provider: Arc<dyn ExecutionBackendProvider> = Arc::new(
+            ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
                 "node.a",
                 instance_id(),
-                Arc::new(FakeState::default()),
-            )),
-        )
-        .err()
-        .expect("legacy startup requires migration");
+                "neutral.application",
+                TouchBackendConfig::new(
+                    AdbConfig::default(),
+                    DeviceTarget::default(),
+                    MaaTouchConfig::default(),
+                )
+                .with_requested(TouchBackendChoice::AdbShellInput),
+                CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+                    .with_requested(CaptureBackendChoice::Adb),
+            )
+            .expect("explicit instance configuration")])
+            .expect("single-instance registry"),
+        );
+        let refused = RuntimeHost::start(config(&source_root), provider)
+            .err()
+            .expect("legacy startup requires migration");
         assert_eq!(refused.code(), "ledger_migration_required");
         let frozen = maintenance(
             actingcommand_runtime_host::LedgerMaintenanceOperation::Backup,
@@ -585,7 +585,24 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
             serde_json::to_value(&restored.ledger).expect("restored status"),
             serde_json::to_value(LedgerStorageStatus::Missing).expect("missing status")
         );
-        let migrated = host_with_state(&source_root, "node.a", Arc::new(FakeState::default()));
+        let provider: Arc<dyn ExecutionBackendProvider> = Arc::new(
+            ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+                "node.a",
+                instance_id(),
+                "neutral.application",
+                TouchBackendConfig::new(
+                    AdbConfig::default(),
+                    DeviceTarget::default(),
+                    MaaTouchConfig::default(),
+                )
+                .with_requested(TouchBackendChoice::AdbShellInput),
+                CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+                    .with_requested(CaptureBackendChoice::Adb),
+            )
+            .expect("explicit instance configuration")])
+            .expect("single-instance registry"),
+        );
+        let migrated = RuntimeHost::start(config(&source_root), provider).expect("runtime host");
         migrated
             .close()
             .expect("normal SQLite startup after cutover");

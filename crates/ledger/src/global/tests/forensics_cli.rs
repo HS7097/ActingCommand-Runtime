@@ -15,9 +15,8 @@ use actingcommand_contract::{
     TaskOutcome, TaskPayloadDraft,
 };
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -268,380 +267,362 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
 }
 
 #[test]
-fn actingledger_read_commands_are_thin_and_fail_loud() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let state_root = temp.path();
-    let ledger_root = state_root.join("ledger");
-    let identifiers = IdentifierIssuer::new().expect("identifiers");
-    let request_id = identifiers.mint_request_id().expect("request id");
-    let request_text = serde_json::to_value(request_id.transport())
-        .expect("request id JSON")
-        .as_str()
-        .expect("request id string")
-        .to_owned();
-    let writer = GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "cli-fixture"))
-        .expect("open ledger");
-    let event_id = identifiers.mint_event_id().expect("event id");
-    let event = EventDraft::new(
-        event_id,
-        1_752_147_200_000,
-        EventSeverity::Info,
-        EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::User),
-        EventLinksDraft::default().with_request_id(request_id),
-        CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
-    )
-    .sanitize(&Sha256SecretFingerprinter::new(b"actingledger-test-salt").expect("fingerprinter"))
-    .expect("sanitize");
-    writer.append(event).expect("append event");
-    writer.close().expect("close writer");
+fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
+    {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state_root = temp.path();
+        let ledger_root = state_root.join("ledger");
+        let identifiers = IdentifierIssuer::new().expect("identifiers");
+        let request_id = identifiers.mint_request_id().expect("request id");
+        let request_text = serde_json::to_value(request_id.transport())
+            .expect("request id JSON")
+            .as_str()
+            .expect("request id string")
+            .to_owned();
+        let writer = GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "cli-fixture"))
+            .expect("open ledger");
+        let event_id = identifiers.mint_event_id().expect("event id");
+        let event = EventDraft::new(
+            event_id,
+            1_752_147_200_000,
+            EventSeverity::Info,
+            EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::User),
+            EventLinksDraft::default().with_request_id(request_id),
+            CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new()).into(),
+        )
+        .sanitize(
+            &Sha256SecretFingerprinter::new(b"actingledger-test-salt").expect("fingerprinter"),
+        )
+        .expect("sanitize");
+        writer.append(event).expect("append event");
+        writer.close().expect("close writer");
 
-    let binary =
-        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
-    let commands = [
-        vec!["open".to_owned()],
-        vec!["events".to_owned()],
-        vec!["chain".to_owned(), "--req".to_owned(), request_text],
-        vec!["tail".to_owned()],
-        vec!["repairs".to_owned()],
-        vec!["export".to_owned()],
-    ];
-    for (index, command) in commands.iter().enumerate() {
-        let first = invoke(binary, state_root, command);
-        let second = invoke(binary, state_root, command);
-        assert!(first.status.success(), "valid command failed: {first:?}");
-        assert_eq!(first.stdout, second.stdout);
-        assert!(first.stderr.is_empty());
-        if index < 5 {
-            let value: serde_json::Value =
-                serde_json::from_slice(&first.stdout).expect("machine JSON");
-            assert_eq!(value["command"], command[0]);
-        } else {
-            assert!(
-                std::str::from_utf8(&first.stdout)
-                    .expect("UTF-8 export")
-                    .starts_with("ActingCommand ledger forensic export\n")
-            );
-        }
-    }
-
-    let snapshot = || {
-        let mut paths = vec![state_root.to_path_buf()];
-        let mut files = BTreeMap::new();
-        while let Some(path) = paths.pop() {
-            for entry in fs::read_dir(path).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    paths.push(path);
-                } else {
-                    files.insert(path.clone(), fs::read(path).unwrap());
-                }
+        let binary =
+            &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
+        let commands = [
+            vec!["open".to_owned()],
+            vec!["events".to_owned()],
+            vec!["chain".to_owned(), "--req".to_owned(), request_text],
+            vec!["tail".to_owned()],
+            vec!["repairs".to_owned()],
+            vec!["export".to_owned()],
+        ];
+        for (index, command) in commands.iter().enumerate() {
+            let first = invoke(binary, state_root, command);
+            let second = invoke(binary, state_root, command);
+            assert!(first.status.success(), "valid command failed: {first:?}");
+            assert_eq!(first.stdout, second.stdout);
+            assert!(first.stderr.is_empty());
+            if index < 5 {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&first.stdout).expect("machine JSON");
+                assert_eq!(value["command"], command[0]);
+            } else {
+                assert!(
+                    std::str::from_utf8(&first.stdout)
+                        .expect("UTF-8 export")
+                        .starts_with("ActingCommand ledger forensic export\n")
+                );
             }
         }
-        files
-    };
-    let before = snapshot();
-    let task_evidence = invoke(
-        binary,
-        state_root,
-        &[
+
+        let snapshot = || {
+            let mut paths = vec![state_root.to_path_buf()];
+            let mut files = BTreeMap::new();
+            while let Some(path) = paths.pop() {
+                for entry in fs::read_dir(path).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        paths.push(path);
+                    } else {
+                        files.insert(path.clone(), fs::read(path).unwrap());
+                    }
+                }
+            }
+            files
+        };
+        let before = snapshot();
+        let task_evidence = invoke(
+            binary,
+            state_root,
+            &[
+                "export".into(),
+                "--task-evidence".into(),
+                "--after".into(),
+                "0".into(),
+                "--through".into(),
+                "1".into(),
+                "--limit".into(),
+                "1".into(),
+            ],
+        );
+        assert!(task_evidence.status.success(), "{task_evidence:?}");
+        assert!(task_evidence.stderr.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&task_evidence.stdout).unwrap();
+        assert_eq!(report["command"], "task_evidence");
+        assert_eq!(report["data"]["page"]["events"][0]["sequence"], 1);
+        assert_eq!(report["data"]["inputs"], serde_json::json!([]));
+        assert_eq!(report["data"]["window_complete"], true);
+        assert_eq!(snapshot(), before);
+        for suffix in [
+            vec!["--json"],
+            vec!["--run", "run"],
+            vec!["--req", "request"],
+            vec!["--after", "2", "--through", "1"],
+            vec!["--limit", "0"],
+            vec!["--limit", "1025"],
+            vec!["--limit", "1", "--limit", "2"],
+            vec!["--record-limit", "0"],
+            vec!["--record-limit", "65"],
+            vec!["--record-cursor", "{}"],
+            vec!["--include-private", "--include-private"],
+        ] {
+            let mut command = vec!["export".to_string(), "--task-evidence".to_string()];
+            command.extend(suffix.into_iter().map(str::to_string));
+            let output = invoke(binary, state_root, &command);
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!output.stderr.is_empty());
+        }
+        assert_eq!(snapshot(), before);
+        let writer =
+            GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "legacy-input-source"))
+                .unwrap();
+        use actingcommand_artifact_store::ArtifactStore;
+        use actingcommand_contract::{
+            ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, OcrRegionEvidence, OcrRegionRect,
+            TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticOcrData,
+            TaskDiagnosticPayload, TaskDiagnosticRecord,
+        };
+        struct Sink<'a>(&'a GlobalLedger);
+        impl ArtifactEventSink for Sink<'_> {
+            fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+                self.0
+                    .append(
+                        draft
+                            .sanitize(
+                                &Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap(),
+                            )
+                            .unwrap(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        ArtifactStoreError::fatal(
+                            error.code(),
+                            "append_cli_fixture",
+                            "artifact event append failed",
+                        )
+                    })
+            }
+        }
+        let store = ArtifactStore::open(state_root).unwrap();
+        let correlation = identifiers.mint_correlation_id().unwrap();
+        let task = identifiers.mint_task_id().unwrap();
+        let run_id = identifiers.mint_run_id().unwrap();
+        let instance = identifiers.mint_instance_id().unwrap();
+        let lease = identifiers.mint_lease_id().unwrap();
+        let mut stream = store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                ArtifactWriteContext::new(
+                    ArtifactLinksDraft::default()
+                        .with_correlation_id(correlation)
+                        .with_run_id(run_id),
+                    EventLinksDraft::default()
+                        .with_request_id(request_id)
+                        .with_correlation_id(correlation)
+                        .with_task_id(task)
+                        .with_run_id(run_id)
+                        .with_instance_id(instance)
+                        .with_lease_id(lease),
+                    1_752_147_200_001,
+                ),
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::ArtifactStore,
+                    RetentionClass::DebugFull,
+                    ArtifactRedactionState::Pending,
+                ),
+            )
+            .unwrap();
+        let header = serde_json::to_vec(&TaskDiagnosticHeader {
+            schema_version: TASK_DIAGNOSTIC_SCHEMA.into(),
+            request_id: *request_id.transport(),
+            correlation_id: *correlation.transport(),
+            task_id: *task.transport(),
+            run_id: *run_id.transport(),
+            instance_id: *instance.transport(),
+            lease_id: *lease.transport(),
+        })
+        .unwrap();
+        stream.append(&header[..header.len() - 1]).unwrap();
+        stream.append(b",\"records\":[\n").unwrap();
+        for index in 1..=3 {
+            if index > 1 {
+                stream.append(b",").unwrap();
+            }
+            serde_json::to_writer(
+                &mut stream,
+                &TaskDiagnosticRecord {
+                    index,
+                    frame_id: None,
+                    step_action_id: None,
+                    physical_action_id: None,
+                    parent_index: None,
+                    payload: TaskDiagnosticPayload::Ocr(Box::new(
+                        TaskDiagnosticOcrData::Evaluated {
+                            region: OcrRegionEvidence {
+                                frame_width: 2,
+                                frame_height: 2,
+                                anchor_target_id: None,
+                                anchor_match: None,
+                                offset: None,
+                                width: 2,
+                                height: 2,
+                                roi: Some(OcrRegionRect {
+                                    x: 0,
+                                    y: 0,
+                                    width: 2,
+                                    height: 2,
+                                }),
+                                unresolved: None,
+                            },
+                            raw_text: format!("neutral private {index}"),
+                            derived_text: format!("neutral private {index}"),
+                            confidence: None,
+                            matched_expected: None,
+                            match_mode: "exact".to_owned(),
+                            block_count: 0,
+                        },
+                    )),
+                },
+            )
+            .unwrap();
+            stream.append(b"\n").unwrap();
+        }
+        stream.append(b"]}\n").unwrap();
+        let artifact = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
+        let through = writer.latest_sequence().unwrap().to_string();
+        writer.close().unwrap();
+        let command = vec![
             "export".into(),
             "--task-evidence".into(),
-            "--after".into(),
-            "0".into(),
             "--through".into(),
+            through,
+            "--record-limit".into(),
             "1".into(),
-            "--limit".into(),
-            "1".into(),
-        ],
-    );
-    assert!(task_evidence.status.success(), "{task_evidence:?}");
-    assert!(task_evidence.stderr.is_empty());
-    let report: serde_json::Value = serde_json::from_slice(&task_evidence.stdout).unwrap();
-    assert_eq!(report["command"], "task_evidence");
-    assert_eq!(report["data"]["page"]["events"][0]["sequence"], 1);
-    assert_eq!(report["data"]["inputs"], serde_json::json!([]));
-    assert_eq!(report["data"]["window_complete"], true);
-    assert_eq!(snapshot(), before);
-    for suffix in [
-        vec!["--json"],
-        vec!["--run", "run"],
-        vec!["--req", "request"],
-        vec!["--after", "2", "--through", "1"],
-        vec!["--limit", "0"],
-        vec!["--limit", "1025"],
-        vec!["--limit", "1", "--limit", "2"],
-        vec!["--record-limit", "0"],
-        vec!["--record-limit", "65"],
-        vec!["--record-cursor", "{}"],
-        vec!["--include-private", "--include-private"],
-    ] {
-        let mut command = vec!["export".to_string(), "--task-evidence".to_string()];
-        command.extend(suffix.into_iter().map(str::to_string));
-        let output = invoke(binary, state_root, &command);
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        assert!(!output.stderr.is_empty());
-    }
-    assert_eq!(snapshot(), before);
-    let writer =
-        GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "legacy-input-source")).unwrap();
-    use actingcommand_artifact_store::ArtifactStore;
-    use actingcommand_contract::{
-        ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, OcrRegionEvidence, OcrRegionRect,
-        TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticOcrData, TaskDiagnosticPayload,
-        TaskDiagnosticRecord,
-    };
-    struct Sink<'a>(&'a GlobalLedger);
-    impl ArtifactEventSink for Sink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            self.0
-                .append(
-                    draft
-                        .sanitize(
-                            &Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap(),
-                        )
-                        .unwrap(),
-                )
-                .map(|_| ())
-                .map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        error.code(),
-                        "append_cli_fixture",
-                        "artifact event append failed",
+        ];
+        let fixture_before = snapshot();
+        let withheld = invoke(binary, state_root, &command);
+        assert!(withheld.status.success(), "{withheld:?}");
+        assert!(!String::from_utf8_lossy(&withheld.stdout).contains("neutral private"));
+        let withheld: serde_json::Value = serde_json::from_slice(&withheld.stdout).unwrap();
+        assert_eq!(
+            withheld["data"]["diagnostics"][0]["state"],
+            "privacy_withheld"
+        );
+        let mut cursor = None;
+        let mut indices = Vec::new();
+        loop {
+            let mut command = command.clone();
+            command.push("--include-private".into());
+            if let Some(value) = cursor.take() {
+                command.extend(["--record-cursor".into(), value]);
+            }
+            let output = invoke(binary, state_root, &command);
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty());
+            let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let page = &value["data"]["diagnostics"][0];
+            assert_eq!(page["state"], "verified");
+            assert_eq!(page["records"].as_array().unwrap().len(), 1);
+            assert_eq!(page["artifact"]["sha256"], artifact.reference().sha256());
+            indices.push(page["records"][0]["index"].as_u64().unwrap());
+            if page["next_cursor"].is_null() {
+                break;
+            }
+            cursor = Some(serde_json::to_string(&page["next_cursor"]).unwrap());
+        }
+        assert_eq!(indices, vec![1, 2, 3]);
+        assert_eq!(snapshot(), fixture_before);
+        let writer = GlobalLedger::open_with_artifact_verifier(
+            GlobalLedgerConfig::new(&ledger_root, "legacy-input-source"),
+            |reference| store.verify_recovery_reference(reference).ok(),
+        )
+        .unwrap();
+        writer
+            .append(
+                EventDraft::new(
+                    identifiers.mint_event_id().unwrap(),
+                    1_752_147_200_001,
+                    EventSeverity::Info,
+                    EventOrigin::new(
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                    ),
+                    EventLinksDraft::default()
+                        .with_request_id(request_id)
+                        .with_action_id(identifiers.mint_action_id().unwrap()),
+                    actingcommand_contract::InputPayloadDraft::intent(
+                        EventAction::InputTap,
+                        AuditInput::new(),
                     )
-                })
-        }
-    }
-    let store = ArtifactStore::open(state_root).unwrap();
-    let correlation = identifiers.mint_correlation_id().unwrap();
-    let task = identifiers.mint_task_id().unwrap();
-    let run_id = identifiers.mint_run_id().unwrap();
-    let instance = identifiers.mint_instance_id().unwrap();
-    let lease = identifiers.mint_lease_id().unwrap();
-    let mut stream = store
-        .begin_stream(
-            ArtifactKind::DiagnosticJson,
-            ArtifactWriteContext::new(
-                ArtifactLinksDraft::default()
-                    .with_correlation_id(correlation)
-                    .with_run_id(run_id),
-                EventLinksDraft::default()
-                    .with_request_id(request_id)
-                    .with_correlation_id(correlation)
-                    .with_task_id(task)
-                    .with_run_id(run_id)
-                    .with_instance_id(instance)
-                    .with_lease_id(lease),
-                1_752_147_200_001,
-            ),
-            ArtifactIssuePolicy::new(
-                ArtifactProducer::ArtifactStore,
-                RetentionClass::DebugFull,
-                ArtifactRedactionState::Pending,
-            ),
-        )
-        .unwrap();
-    let header = serde_json::to_vec(&TaskDiagnosticHeader {
-        schema_version: TASK_DIAGNOSTIC_SCHEMA.into(),
-        request_id: *request_id.transport(),
-        correlation_id: *correlation.transport(),
-        task_id: *task.transport(),
-        run_id: *run_id.transport(),
-        instance_id: *instance.transport(),
-        lease_id: *lease.transport(),
-    })
-    .unwrap();
-    stream.append(&header[..header.len() - 1]).unwrap();
-    stream.append(b",\"records\":[\n").unwrap();
-    for index in 1..=3 {
-        if index > 1 {
-            stream.append(b",").unwrap();
-        }
-        serde_json::to_writer(
-            &mut stream,
-            &TaskDiagnosticRecord {
-                index,
-                frame_id: None,
-                step_action_id: None,
-                physical_action_id: None,
-                parent_index: None,
-                payload: TaskDiagnosticPayload::Ocr(Box::new(TaskDiagnosticOcrData::Evaluated {
-                    region: OcrRegionEvidence {
-                        frame_width: 2,
-                        frame_height: 2,
-                        anchor_target_id: None,
-                        anchor_match: None,
-                        offset: None,
-                        width: 2,
-                        height: 2,
-                        roi: Some(OcrRegionRect {
-                            x: 0,
-                            y: 0,
-                            width: 2,
-                            height: 2,
-                        }),
-                        unresolved: None,
-                    },
-                    raw_text: format!("neutral private {index}"),
-                    derived_text: format!("neutral private {index}"),
-                    confidence: None,
-                    matched_expected: None,
-                    match_mode: "exact".to_owned(),
-                    block_count: 0,
-                })),
-            },
-        )
-        .unwrap();
-        stream.append(b"\n").unwrap();
-    }
-    stream.append(b"]}\n").unwrap();
-    let artifact = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
-    let through = writer.latest_sequence().unwrap().to_string();
-    writer.close().unwrap();
-    let command = vec![
-        "export".into(),
-        "--task-evidence".into(),
-        "--through".into(),
-        through,
-        "--record-limit".into(),
-        "1".into(),
-    ];
-    let fixture_before = snapshot();
-    let withheld = invoke(binary, state_root, &command);
-    assert!(withheld.status.success(), "{withheld:?}");
-    assert!(!String::from_utf8_lossy(&withheld.stdout).contains("neutral private"));
-    let withheld: serde_json::Value = serde_json::from_slice(&withheld.stdout).unwrap();
-    assert_eq!(
-        withheld["data"]["diagnostics"][0]["state"],
-        "privacy_withheld"
-    );
-    let mut cursor = None;
-    let mut indices = Vec::new();
-    loop {
-        let mut command = command.clone();
-        command.push("--include-private".into());
-        if let Some(value) = cursor.take() {
-            command.extend(["--record-cursor".into(), value]);
-        }
-        let output = invoke(binary, state_root, &command);
-        assert!(output.status.success(), "{output:?}");
-        assert!(output.stderr.is_empty());
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let page = &value["data"]["diagnostics"][0];
-        assert_eq!(page["state"], "verified");
-        assert_eq!(page["records"].as_array().unwrap().len(), 1);
-        assert_eq!(page["artifact"]["sha256"], artifact.reference().sha256());
-        indices.push(page["records"][0]["index"].as_u64().unwrap());
-        if page["next_cursor"].is_null() {
-            break;
-        }
-        cursor = Some(serde_json::to_string(&page["next_cursor"]).unwrap());
-    }
-    assert_eq!(indices, vec![1, 2, 3]);
-    assert_eq!(snapshot(), fixture_before);
-    let writer = GlobalLedger::open_with_artifact_verifier(
-        GlobalLedgerConfig::new(&ledger_root, "legacy-input-source"),
-        |reference| store.verify_recovery_reference(reference).ok(),
-    )
-    .unwrap();
-    writer
-        .append(
-            EventDraft::new(
-                identifiers.mint_event_id().unwrap(),
-                1_752_147_200_001,
-                EventSeverity::Info,
-                EventOrigin::new(
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                ),
-                EventLinksDraft::default()
-                    .with_request_id(request_id)
-                    .with_action_id(identifiers.mint_action_id().unwrap()),
-                actingcommand_contract::InputPayloadDraft::intent(
-                    EventAction::InputTap,
-                    AuditInput::new(),
+                    .into(),
                 )
-                .into(),
+                .sanitize(&Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap())
+                .unwrap(),
             )
-            .sanitize(&Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap())
-            .unwrap(),
-        )
-        .unwrap();
-    writer.close().unwrap();
-    let legacy_before = snapshot();
-    let output = invoke(
-        binary,
-        state_root,
-        &["export".into(), "--task-evidence".into()],
-    );
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("task_evidence_export_incomplete"));
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        report["data"]["inputs"][0]["source_step"]["state"],
-        "not_recorded"
-    );
-    assert_eq!(report["data"]["window_complete"], false);
-    assert_eq!(snapshot(), legacy_before);
-
-    for invalid in [
-        Vec::<&str>::new(),
-        vec!["--state-root"],
-        vec![
-            "--state-root",
-            state_root.to_str().expect("state root"),
-            "unknown",
-        ],
-        vec![
-            "--state-root",
-            state_root.to_str().expect("state root"),
-            "chain",
-        ],
-        vec![
-            "--state-root",
-            state_root.to_str().expect("state root"),
-            "events",
-            "--module",
-            "runtime_host",
-        ],
-    ] {
-        let output = Command::new(binary)
-            .args(invalid)
-            .output()
-            .expect("run invalid command");
+            .unwrap();
+        writer.close().unwrap();
+        let legacy_before = snapshot();
+        let output = invoke(
+            binary,
+            state_root,
+            &["export".into(), "--task-evidence".into()],
+        );
         assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        assert!(!output.stderr.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("task_evidence_export_incomplete")
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["data"]["inputs"][0]["source_step"]["state"],
+            "not_recorded"
+        );
+        assert_eq!(report["data"]["window_complete"], false);
+        assert_eq!(snapshot(), legacy_before);
+
+        for invalid in [
+            Vec::<&str>::new(),
+            vec!["--state-root"],
+            vec![
+                "--state-root",
+                state_root.to_str().expect("state root"),
+                "unknown",
+            ],
+            vec![
+                "--state-root",
+                state_root.to_str().expect("state root"),
+                "chain",
+            ],
+            vec![
+                "--state-root",
+                state_root.to_str().expect("state root"),
+                "events",
+                "--module",
+                "runtime_host",
+            ],
+        ] {
+            let output = Command::new(binary)
+                .args(invalid)
+                .output()
+                .expect("run invalid command");
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!output.stderr.is_empty());
+        }
     }
 
-    let args = [
-        OsString::from("--state-root"),
-        state_root.as_os_str().to_owned(),
-        OsString::from("open"),
-    ];
-    let error = actingledger::run(args, &mut FailingWriter).expect_err("output failure");
-    assert_eq!(error.code(), "output_failed");
-
-    let main_source = include_str!("../../../../../apps/ledger-forensics/src/main.rs");
-    assert_eq!(main_source.matches("actingledger::run_env()").count(), 1);
-    for forbidden in ["GlobalLedger", "EventQuery", "serde_json"] {
-        assert!(!main_source.contains(forbidden));
-    }
-    let cli_source = include_str!("../../../../../apps/ledger-forensics/src/lib.rs");
-    assert_eq!(
-        cli_source
-            .matches("actingcommand_ledger_forensics::run(request)")
-            .count(),
-        1
-    );
-    for forbidden in ["GlobalLedger", "EventQuery", "PersistedEvent"] {
-        assert!(!cli_source.contains(forbidden));
-    }
-}
-
-#[test]
-fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
     let temp = tempfile::tempdir().expect("tempdir");
     let state_root = temp.path();
     let ledger_root = state_root.join("ledger");
@@ -1233,25 +1214,6 @@ fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
         archive_bytes
     );
     assert!(!temp.path().join("sealed-evidence").exists());
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStringExt;
-
-        let invalid_utf8 = OsString::from_wide(&[0xd800]);
-        let error = actingledger::run(
-            [
-                OsString::from("replay"),
-                OsString::from("--zip"),
-                invalid_utf8,
-                OsString::from("--expected-sha256"),
-                OsString::from(receipt.zip_sha256()),
-            ],
-            &mut Vec::new(),
-        )
-        .expect_err("non-UTF-8 replay path");
-        assert_eq!(error.code(), "invalid_arguments");
-    }
 }
 
 #[test]
@@ -1659,16 +1621,4 @@ fn invoke(binary: &str, state_root: &std::path::Path, command: &[String]) -> std
         .args(command)
         .output()
         .expect("run actingledger")
-}
-
-struct FailingWriter;
-
-impl Write for FailingWriter {
-    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
-        Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed output"))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
