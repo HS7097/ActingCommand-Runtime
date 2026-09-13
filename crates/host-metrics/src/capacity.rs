@@ -64,9 +64,12 @@ fn native_error(operation: &'static str) -> CapacityUnavailable {
 
 #[cfg(windows)]
 pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
-    use std::os::windows::ffi::OsStrExt;
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetVolumeNameForVolumeMountPointW, GetVolumePathNameW,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, GetFinalPathNameByHandleW, VOLUME_NAME_GUID,
     };
 
     // Resolve the nearest existing ancestor for a future shard/temp file. A dangling
@@ -91,50 +94,73 @@ pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
             }
         }
     }
-    let resolved = existing
-        .canonicalize()
+    // Query attributes with the same sharing and directory/reparse behavior as
+    // Windows canonicalize. The File owns this call's temporary handle.
+    let file = OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(existing)
         .map_err(|error| CapacityUnavailable {
             operation: "canonicalize_capacity_target",
             raw_os_error: error.raw_os_error(),
             detail: error.to_string(),
         })?;
-    let path = resolved
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let mut mount = vec![0u16; 32_768];
-    // SAFETY: both buffers are valid; input is terminated and the output size is exact.
-    if unsafe { GetVolumePathNameW(path.as_ptr(), mount.as_mut_ptr(), mount.len() as u32) } == 0 {
-        return Err(native_error("resolve_capacity_volume"));
-    }
-    let mut identity = [0u16; 64];
-    // SAFETY: GetVolumePathNameW supplied a terminated mount path; output is sized in WCHARs.
-    if unsafe {
-        GetVolumeNameForVolumeMountPointW(
-            mount.as_ptr(),
-            identity.as_mut_ptr(),
-            identity.len() as u32,
+    // Cover the extended-path limit and a GUID-root prefix, including the NUL.
+    // A required size beyond this bound fails without another path query.
+    let mut resolved = vec![0u16; 32_768 + 49];
+    // SAFETY: File keeps the handle live; the output buffer is sized in WCHARs.
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            resolved.as_mut_ptr(),
+            resolved.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_GUID,
         )
-    } == 0
-    {
+    } as usize;
+    if length == 0 {
         return Err(native_error("identify_capacity_volume"));
     }
-    let end = identity
-        .iter()
-        .position(|value| *value == 0)
+    if length >= resolved.len() {
+        return Err(CapacityUnavailable {
+            operation: "identify_capacity_volume",
+            raw_os_error: None,
+            detail: "final volume path exceeds capacity resolution bound".into(),
+        });
+    }
+    // Only the 49-WCHAR GUID root is an identity. The private path suffix may
+    // contain non-Unicode Windows names and is neither decoded nor retained.
+    let root = resolved[..length]
+        .get(..49)
         .ok_or_else(|| CapacityUnavailable {
             operation: "identify_capacity_volume",
             raw_os_error: None,
-            detail: "unterminated volume identity".into(),
+            detail: "missing final volume GUID root".into(),
         })?;
-    String::from_utf16(&identity[..end])
-        .map(|value| value.to_ascii_lowercase())
-        .map_err(|error| CapacityUnavailable {
+    let mut identity = String::from_utf16(root).map_err(|error| CapacityUnavailable {
+        operation: "identify_capacity_volume",
+        raw_os_error: None,
+        detail: error.to_string(),
+    })?;
+    identity.make_ascii_lowercase();
+    let valid = identity
+        .strip_prefix(r"\\?\volume{")
+        .and_then(|guid| guid.strip_suffix(r"}\"))
+        .is_some_and(|guid| {
+            guid.len() == 36
+                && guid.bytes().enumerate().all(|(index, byte)| match index {
+                    8 | 13 | 18 | 23 => byte == b'-',
+                    _ => byte.is_ascii_hexdigit(),
+                })
+        });
+    if !valid {
+        return Err(CapacityUnavailable {
             operation: "identify_capacity_volume",
             raw_os_error: None,
-            detail: error.to_string(),
-        })
+            detail: "invalid final volume GUID root".into(),
+        });
+    }
+    Ok(identity)
 }
 
 #[cfg(windows)]
