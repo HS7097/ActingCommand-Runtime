@@ -118,6 +118,7 @@ dependencies = [
 name = "actingcommand-device"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "image",
  "libloading 0.8.9",
  "serde",

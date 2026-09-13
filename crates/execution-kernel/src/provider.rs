@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ExecutionKernelError, ExecutionKernelResult};
+pub use actingcommand_contract::ExecutionBackendProvenance;
 use actingcommand_contract::{ApplicationLifecycleAction, InstanceId, MonitorObservation};
 use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
@@ -552,22 +553,13 @@ fn invalid_region() -> VisionProviderError {
     )
 }
 
-/// Runtime-owned provenance for an execution backend instance.
-///
-/// Fixture simulation is an explicit zero-device boundary. It must not be accepted by normal
-/// device-facing Runtime operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionBackendProvenance {
-    PhysicalDevice,
-    FixtureSimulation,
-}
-
 #[derive(Clone)]
 pub struct ResolvedExecutionInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
     configuration: Option<actingcommand_contract::EffectiveDeviceConfiguration>,
+    capabilities: Option<actingcommand_contract::EmulatorCapabilityProfile>,
 }
 
 impl PartialEq for ResolvedExecutionInstance {
@@ -587,6 +579,7 @@ impl ResolvedExecutionInstance {
             audit_endpoint: audit_endpoint.into(),
             provenance: ExecutionBackendProvenance::PhysicalDevice,
             configuration: None,
+            capabilities: None,
         }
     }
 
@@ -596,6 +589,7 @@ impl ResolvedExecutionInstance {
             audit_endpoint: "fixture-simulation".to_owned(),
             provenance: ExecutionBackendProvenance::FixtureSimulation,
             configuration: None,
+            capabilities: None,
         }
     }
 
@@ -621,6 +615,18 @@ impl ResolvedExecutionInstance {
 
     pub fn configuration(&self) -> Option<&actingcommand_contract::EffectiveDeviceConfiguration> {
         self.configuration.as_ref()
+    }
+
+    pub fn with_capabilities(
+        mut self,
+        capabilities: actingcommand_contract::EmulatorCapabilityProfile,
+    ) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
+
+    pub fn capabilities(&self) -> Option<&actingcommand_contract::EmulatorCapabilityProfile> {
+        self.capabilities.as_ref()
     }
 }
 

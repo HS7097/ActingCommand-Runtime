@@ -12804,24 +12804,35 @@ impl HostShared {
                     None,
                 )
             })?;
-        let resolved = self.execution.resolve(instance_alias).map_err(|error| {
-            if error.code() == "execution_instance_unknown" {
-                RequestFailure::request(
-                    RuntimeHostError::request(
-                        "instance_unknown",
+        self.resolve_registered_backend(&registered)?;
+        Ok(registered)
+    }
+
+    fn resolve_registered_backend(
+        &self,
+        registered: &RegisteredInstance,
+    ) -> Result<crate::ResolvedExecutionInstance, RequestFailure> {
+        let resolved = self
+            .execution
+            .resolve(&registered.instance_alias)
+            .map_err(|error| {
+                if error.code() == "execution_instance_unknown" {
+                    RequestFailure::request(
+                        RuntimeHostError::request(
+                            "instance_unknown",
+                            "resolve_runtime_instance",
+                            RuntimeErrorCode::InstanceUnknown,
+                        ),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    )
+                } else {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::execution(
                         "resolve_runtime_instance",
-                        RuntimeErrorCode::InstanceUnknown,
-                    ),
-                    RuntimeReceiptState::Denied,
-                    None,
-                )
-            } else {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "resolve_runtime_instance",
-                    &error,
-                ))
-            }
-        })?;
+                        &error,
+                    ))
+                }
+            })?;
         if resolved.instance_id() != registered.instance_id
             || resolved.audit_endpoint() != registered.audit_endpoint
             || resolved.provenance() != registered.provenance
@@ -12834,7 +12845,7 @@ impl HostShared {
                 ),
             ));
         }
-        Ok(registered)
+        Ok(resolved)
     }
 
     fn require_physical_instance_alias(&self, instance_alias: &str) -> Result<(), RequestFailure> {

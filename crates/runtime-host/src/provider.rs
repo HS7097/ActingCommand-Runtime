@@ -2,7 +2,9 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    ApplicationLifecycleAction, InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
+    ApplicationLifecycleAction, EmulatorCapability, EmulatorCapabilityAvailability,
+    EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
+    EmulatorVersionEvidence, InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
@@ -103,6 +105,7 @@ struct ExecutionBackendEntry {
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
+    capabilities: EmulatorCapabilityProfile,
 }
 
 pub struct ExecutionBackendRegistry {
@@ -134,6 +137,8 @@ impl ExecutionBackendRegistry {
             let audit_endpoint = registration.input.target.resolved_serial();
             let application_adb = registration.input.adb_config.clone();
             let application_target = registration.input.target.clone();
+            let capabilities =
+                Self::capability_profile(&registration.input, &registration.capture)?;
             entries.insert(
                 registration.instance_alias,
                 ExecutionBackendEntry {
@@ -145,6 +150,7 @@ impl ExecutionBackendRegistry {
                     input: registration.input,
                     capture: registration.capture,
                     configuration: registration.configuration,
+                    capabilities,
                 },
             );
         }
@@ -168,6 +174,61 @@ impl ExecutionBackendRegistry {
         self.vision_provider = Some(vision_provider);
         self
     }
+
+    /// Records implementation/configuration only; this path never opens or probes a backend.
+    fn capability_profile(
+        input: &TouchBackendConfig,
+        capture: &CaptureBackendConfig,
+    ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
+        let invalid = |_| {
+            RuntimeHostError::fatal(
+                "execution_capability_profile_invalid",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        };
+        let evidence = EmulatorCapability::ALL.into_iter().map(|capability| {
+            let (supported, source) = match capability {
+                EmulatorCapability::InputTap | EmulatorCapability::InputLongTap
+                | EmulatorCapability::InputSwipe | EmulatorCapability::InputReset =>
+                    (true, input.requested.as_str()),
+                EmulatorCapability::InputSegmentedSwipe => (
+                    matches!(input.requested, TouchBackendChoice::MaaTouch | TouchBackendChoice::Minitouch),
+                    input.requested.as_str(),
+                ),
+                EmulatorCapability::InputKey | EmulatorCapability::InputText => (
+                    input.requested == TouchBackendChoice::MaaTouch, input.requested.as_str(),
+                ),
+                EmulatorCapability::CaptureFrame => (true, capture.requested.as_str()),
+                EmulatorCapability::ApplicationLaunch | EmulatorCapability::ApplicationStop
+                | EmulatorCapability::ApplicationRestart => (true, "adb_application_lifecycle"),
+                EmulatorCapability::InventoryRead | EmulatorCapability::InstanceStatusRead
+                | EmulatorCapability::InstanceStart | EmulatorCapability::InstanceStop
+                | EmulatorCapability::InstanceRestart | EmulatorCapability::InstanceCreate
+                | EmulatorCapability::InstanceClone | EmulatorCapability::InstanceDelete
+                | EmulatorCapability::InstanceConfigure | EmulatorCapability::ApplicationControl
+                | EmulatorCapability::AdbBridge | EmulatorCapability::SnapshotManage =>
+                    (false, "execution_backend_registry"),
+            };
+            let (implementation, availability, refusal) = if supported {
+                (EmulatorCapabilityImplementation::Supported, EmulatorCapabilityAvailability::Unverified,
+                 "Implementation selected; version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.")
+            } else {
+                (EmulatorCapabilityImplementation::Unsupported, EmulatorCapabilityAvailability::Unavailable,
+                 "The registered backend does not implement this capability; it must not be executed through this capability claim.")
+            };
+            EmulatorCapabilityEvidence::new(capability, availability, refusal, source)?
+                .with_implementation(implementation)
+        }).collect::<Result<Vec<_>, _>>().map_err(invalid)?;
+        EmulatorCapabilityProfile::new(
+            "runtime.execution_backend_registry",
+            EmulatorVersionEvidence::Unavailable {
+                reason: "Backend versions have not been probed.".to_owned(),
+            },
+            evidence,
+        )
+        .map_err(invalid)
+    }
 }
 
 impl fmt::Debug for ExecutionBackendRegistry {
@@ -189,7 +250,8 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         let entry = self.entries.get(instance_alias)?;
         Some(
             ResolvedExecutionInstance::new(entry.instance_id, &entry.audit_endpoint)
-                .with_configuration(entry.configuration.clone()),
+                .with_configuration(entry.configuration.clone())
+                .with_capabilities(entry.capabilities.clone()),
         )
     }
 

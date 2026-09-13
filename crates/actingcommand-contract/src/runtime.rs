@@ -1114,6 +1114,10 @@ pub struct RuntimeInstanceStatus {
     takeover_cooldown_active: bool,
     destructive_step_active: bool,
     preempt_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend_provenance: Option<crate::ExecutionBackendProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capabilities: Option<crate::EmulatorCapabilityProfile>,
 }
 
 impl RuntimeInstanceStatus {
@@ -1134,6 +1138,8 @@ impl RuntimeInstanceStatus {
             takeover_cooldown_active,
             destructive_step_active,
             preempt_requested,
+            backend_provenance: None,
+            capabilities: None,
         };
         status.validate()?;
         Ok(status)
@@ -1141,6 +1147,11 @@ impl RuntimeInstanceStatus {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         validate_instance_alias(&self.instance_alias)?;
+        if self.capabilities.is_some() && self.backend_provenance.is_none() {
+            return Err(RuntimeContractError::new(
+                "runtime_capabilities_provenance_missing",
+            ));
+        }
         if (self.destructive_step_active || self.preempt_requested) && !self.lease_active {
             return Err(RuntimeContractError::new("invalid_runtime_instance_status"));
         }
@@ -1176,6 +1187,24 @@ impl RuntimeInstanceStatus {
 
     pub const fn preempt_requested(&self) -> bool {
         self.preempt_requested
+    }
+
+    pub fn with_backend_metadata(
+        mut self,
+        provenance: crate::ExecutionBackendProvenance,
+        capabilities: Option<crate::EmulatorCapabilityProfile>,
+    ) -> Self {
+        self.backend_provenance = Some(provenance);
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub const fn backend_provenance(&self) -> Option<crate::ExecutionBackendProvenance> {
+        self.backend_provenance
+    }
+
+    pub fn capabilities(&self) -> Option<&crate::EmulatorCapabilityProfile> {
+        self.capabilities.as_ref()
     }
 }
 

@@ -284,9 +284,18 @@ impl HostShared {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        // Resolve only metadata before taking the scheduler lock. Identity checks and the
+        // registered instance set are shared with device-facing admission.
+        let instances = instances
+            .into_iter()
+            .map(|instance| {
+                let resolved = self.resolve_registered_backend(&instance)?;
+                Ok((instance, resolved))
+            })
+            .collect::<Result<Vec<_>, RequestFailure>>()?;
         let scheduler = lock(&self.scheduler, "read_runtime_status_scheduler")?;
         let mut projected = Vec::with_capacity(instances.len());
-        for instance in instances {
+        for (instance, resolved) in instances {
             let instance_id = instance.instance_id();
             let active = scheduler.active_lease(instance_id);
             let queued_request_count =
@@ -317,7 +326,8 @@ impl HostShared {
                         "project_runtime_control_plane_status",
                         RuntimeErrorCode::RuntimeFatal,
                     ))
-                })?,
+                })?
+                .with_backend_metadata(resolved.provenance(), resolved.capabilities().cloned()),
             );
         }
         let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected).map_err(|_| {
