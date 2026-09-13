@@ -1732,7 +1732,34 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
     wait_for_runtime_info(&mut child.0, root.path());
-    let client = wait_for_agent_client(&mut child.0, root.path());
+    // Use default I/O for this pagination client's existing readiness loop.
+    let client = {
+        let started = Instant::now();
+        loop {
+            match RuntimeClient::connect(RuntimeClientConfig::new(
+                root.path(),
+                EventActor::Agent,
+                EventSource::Adapter,
+            )) {
+                Ok(client) => break client,
+                Err(error) => {
+                    if let Some(status) = child.0.try_wait().expect("process state") {
+                        let mut stderr = String::new();
+                        if let Some(pipe) = child.0.stderr.as_mut() {
+                            pipe.read_to_string(&mut stderr)
+                                .expect("read actingd stderr");
+                        }
+                        panic!("actingd exited before policy readiness with {status}: {stderr}");
+                    }
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "actingd policy connection timed out after {error}"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+    };
     let started = Instant::now();
     loop {
         let completed = client
@@ -1773,7 +1800,7 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             } else {
                 let from_sequence = snapshot_ledger_position.saturating_sub(31).max(1);
                 eprintln!(
-                    "One Forensic ledger fragment: from_sequence={from_sequence}, to_sequence={snapshot_ledger_position}, limit=32; original 500-ms I/O budget; no continuation or retry. Uncovered events remain unknown."
+                    "One Forensic ledger fragment: from_sequence={from_sequence}, to_sequence={snapshot_ledger_position}, limit=32; default 5-second I/O budget; no continuation or retry. Uncovered events remain unknown."
                 );
                 let fragment = client.query_event_page(
                     EventQuery {
