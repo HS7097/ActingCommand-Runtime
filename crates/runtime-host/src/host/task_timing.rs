@@ -6,7 +6,8 @@ use actingcommand_contract::{
     TaskTimingCallContext, TaskTimingCheckPosition, TaskTimingFailure,
     TaskTimingFailureObservation, TaskTimingObservationState, TaskTimingObservations,
     TaskTimingObservedExpiry, TaskTimingPhase, TaskTimingPhaseObservations,
-    TaskTimingPreviousWorkRelation, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
+    TaskTimingPreviousWorkRelation, TaskTimingProjectViewCount, TaskTimingProjectViewObservation,
+    TaskTimingProjectViewReadBudget, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
     TaskTimingWriterCommand, TaskTimingWriterEndpoint, TaskTimingWriterObservation,
     TaskTimingWriterReceiveOrder, TaskTimingWriterSpan, TimingObservationClock,
     TimingObservationIssue,
@@ -695,6 +696,62 @@ fn writer_observation(
         previous_processing: writer_span(anchor, previous.processing),
         previous_after_reply: writer_span(anchor, previous.after_reply),
         previous_reply_result: writer_result(previous.reply_result),
+        previous_project_view: previous
+            .project_view
+            .map(|view| Box::new(project_view_observation(anchor, view))),
+    }
+}
+
+fn project_view_count(
+    count: actingcommand_ledger::LedgerProjectViewCount,
+) -> TaskTimingProjectViewCount {
+    use actingcommand_ledger::LedgerProjectViewCount as Count;
+    match count {
+        Count::Unobserved => TaskTimingProjectViewCount::Unobserved,
+        Count::Observed(value) => TaskTimingProjectViewCount::Measured { value },
+        Count::Incomplete => TaskTimingProjectViewCount::Unavailable {
+            reason: TimingObservationIssue::CountOverflow,
+        },
+    }
+}
+
+fn project_view_observation(
+    anchor: Option<Instant>,
+    view: actingcommand_ledger::LedgerProjectViewObservation,
+) -> TaskTimingProjectViewObservation {
+    TaskTimingProjectViewObservation {
+        admission: writer_span(anchor, view.admission),
+        connection: writer_span(anchor, view.connection),
+        with_connection: writer_span(anchor, view.with_connection),
+        begin_transaction: writer_span(anchor, view.begin_transaction),
+        read_snapshot: writer_span(anchor, view.read_snapshot),
+        verify_snapshot: writer_span(anchor, view.verify_snapshot),
+        prepare_events: writer_span(anchor, view.prepare_events),
+        select_sequences: writer_span(anchor, view.select_sequences),
+        project_page: writer_span(anchor, view.project_page),
+        commit: writer_span(anchor, view.commit),
+        rollback: writer_span(anchor, view.rollback),
+        read_budget: view
+            .read_budget
+            .map(|budget| TaskTimingProjectViewReadBudget {
+                max_bytes: budget.max_bytes,
+                max_events: project_view_count(budget.max_events),
+                deadline: writer_endpoint(anchor, Some(budget.deadline)),
+            }),
+        requested_limit: project_view_count(view.requested_limit),
+        selection_limit: project_view_count(view.selection_limit),
+        max_page_events: project_view_count(view.max_page_events),
+        max_response_bytes: project_view_count(view.max_response_bytes),
+        max_recovery_context_events: project_view_count(view.max_recovery_context_events),
+        raw_bytes: project_view_count(view.raw_bytes),
+        raw_event_rows: project_view_count(view.raw_event_rows),
+        raw_link_rows: project_view_count(view.raw_link_rows),
+        raw_artifact_rows: project_view_count(view.raw_artifact_rows),
+        verified_records: project_view_count(view.verified_records),
+        prepared_events: project_view_count(view.prepared_events),
+        selected_sequences: project_view_count(view.selected_sequences),
+        returned_events: project_view_count(view.returned_events),
+        returned_recovery_groups: project_view_count(view.returned_recovery_groups),
     }
 }
 

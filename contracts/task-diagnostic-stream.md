@@ -121,6 +121,48 @@ send overlaps queue. A single predecessor cannot establish queue depth, complete
 waiting history, CPU/SQL cost or the cause of an uncovered gap. No query, extra
 command, event, diagnostic channel or timing-history buffer supplies these fields.
 
+The optional `writer.previous_project_view` carries the preceding SQLite
+ProjectViewPage command's own fixed internal observations. Older records and
+other preceding commands/backends omit it. These distinguish original database
+connection acquisition from work performed after acquiring its guard: Deferred
+transaction establishment, snapshot reading, record and fixed-prefix verification,
+sequence selection, page/context/profile projection, and original transaction
+close operations. Each stage uses its own original endpoints and Result; nested
+transaction and inner spans are not added or subtracted to derive another stage.
+An automatic transaction drop has no observed rollback return. Missing and
+incomplete stages retain their own state without replacing the original query
+Result or reusing an earlier command's stages.
+
+The fixed stages are `admission` (original bounds and initial budget check),
+`connection`, `with_connection`, `begin_transaction`, `read_snapshot`,
+`verify_snapshot`, `prepare_events`, `select_sequences`, `project_page`, `commit`
+and `rollback`. `with_connection` ends before the original connection guard drops.
+Verification includes the original prefix lookup and fixed boundary checks;
+preparation includes metadata conversion and retention annotation; page projection
+includes index creation and its original final budget check. Only the original
+explicit transaction calls can complete commit/rollback observations.
+
+The same command's scale observations use already available snapshot byte and
+row counts, original bounds and returned sizes. Unknown or overflowing values
+remain explicit; observation performs no extra query, traversal, serialization
+or hash pass. Stages and scale belong to that preceding writer command, without
+current-append task/frame identity or query/record content. These remain in the
+existing TaskTiming snapshot/terminal or permitted lifecycle carrier, with no
+additional event, diagnostic channel or command history. The original complete
+snapshot, excluded-row integrity checks, physical read transaction, selection,
+projection, replies and all limits retain their original behavior.
+
+Scale fields retain request/selection and original event/byte/recovery-context
+limits; raw bytes and event/link/artifact row counts; verified/prepared/selected
+counts; and returned event/recovery-group counts. Prepared events may describe
+completed work before a failure. Returned counts are observed only after the
+whole SQLite query returns Ok. Raw bytes are snapshot input size, not encoded
+response size; no extra serialization supplies a return-byte count. Checked count
+conversion failure maps to Unavailable/CountOverflow. The optional `read_budget`
+retains the existing byte/event limits and its deadline through the same checked
+relative endpoint mapping. Null means that original optional budget is absent;
+it does not grant a new execution deadline or alter a query Result.
+
 Boundary samples have no record index. `last_call` adds the same call's budget
 after return and its already known logical step/action. Identity is frozen before
 the original clearing; a frame or recognition identity not yet issued is null.
