@@ -4,6 +4,41 @@
 use super::*;
 use actingcommand_runtime_database::RuntimeDatabase;
 
+// The original shared helpers also serve Host's other specifications.
+#[allow(dead_code)]
+mod host {
+    use actingcommand_contract::{
+        ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId, MonitorDiagnosis,
+        MonitorObservation,
+    };
+    use actingcommand_device::{
+        CaptureBackend, CaptureBackendName, DeviceError, DeviceErrorCategory,
+        DeviceErrorSensitivity, DeviceResult, Frame, InputBackend, PixelFormat,
+        PreparedSegmentedSwipePlan,
+    };
+    use actingcommand_execution_kernel::ExecutionBackendProvenance;
+    use actingcommand_policy::{
+        EvaluationFacts, EvaluationResources, FactValue, HostResourceSnapshot, InstanceSnapshot,
+        ObservedOutcome, PoolValueSnapshot,
+    };
+    use actingcommand_recognition_pack::VisionProvider;
+    use actingcommand_runtime_host::{
+        ExecutionBackendProvider, PolicyInputSnapshot, ProcedureBinding, ProcedureManifest,
+        ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
+    };
+    use actingcommand_scheduler::SchedulerConfig;
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    include!("../../../../runtime-host/src/tests/support/backend.rs");
+    include!("../../../../runtime-host/src/tests/support/startup.rs");
+}
+
 pub(in crate::global) fn database(root: &Path) -> Arc<RuntimeDatabase> {
     Arc::new(
         RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
@@ -458,4 +493,111 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
             .is_fatal()
     );
     reopened.close().expect("read owner close");
+
+    {
+        use actingcommand_runtime_host::RuntimeHost;
+        use actingcommand_runtime_state::RuntimeStateStore;
+        use host::{FakeProvider, FakeState, config, host_with_state, instance_id};
+
+        // S3 extends the existing owner/startup specification through the formal offline entry.
+        let source_root = TempDir::new().expect("legacy runtime root");
+        drop(
+            RuntimeStateStore::open(source_root.path(), b"runtime-host-test-salt")
+                .expect("existing State material"),
+        );
+        let segment = GlobalLedger::open(GlobalLedgerConfig::new(
+            source_root.path().join("ledger"),
+            "legacy-source",
+        ))
+        .expect("legacy source");
+        segment.close().expect("source closed");
+        let original_writer = std::fs::read(source_root.path().join("ledger/writer.lock"))
+            .expect("source writer bytes");
+        let external = TempDir::new().expect("maintenance destinations");
+        let backup = external.path().join("backup");
+        let maintenance = |operation, target| {
+            RuntimeHost::maintain_ledger(
+                config(&source_root),
+                actingcommand_runtime_host::LedgerMaintenanceRequest {
+                    operation,
+                    backup: Some(backup.clone()),
+                    target,
+                    artifact_root: None,
+                    limits: Default::default(),
+                },
+            )
+        };
+        let refused = RuntimeHost::start(
+            config(&source_root),
+            Arc::new(FakeProvider::one(
+                "node.a",
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .err()
+        .expect("legacy startup requires migration");
+        assert_eq!(refused.code(), "ledger_migration_required");
+        let frozen = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Backup,
+            None,
+        )
+        .expect("formal frozen backup");
+        assert_eq!(frozen.status, "backed-up");
+        let preview = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::DryRun,
+            None,
+        )
+        .expect("formal dry-run");
+        assert_eq!(preview.status, "dry-run");
+        assert_eq!(
+            serde_json::to_value(&preview.ledger).expect("preview status"),
+            serde_json::to_value(LedgerStorageStatus::Missing).expect("missing status")
+        );
+        assert!(!preview.activated);
+        let delivered = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Import,
+            None,
+        )
+        .expect("formal import");
+        assert_eq!(delivered.status, "imported");
+        assert_eq!(delivered.backup_id, frozen.backup_id);
+        let repeated = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Import,
+            None,
+        )
+        .expect("formal idempotent import");
+        assert_eq!(repeated.status, "already-imported");
+        assert_eq!(repeated.ledger, delivered.ledger);
+        assert_eq!(
+            std::fs::read(source_root.path().join("ledger/writer.lock")).unwrap(),
+            original_writer
+        );
+        let restore_target = external.path().join("restored");
+        let restored = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Restore,
+            Some(restore_target.clone()),
+        )
+        .expect("exact pre-cutover restore before later events");
+        assert_eq!(restored.status, "restored");
+        assert!(!restored.activated);
+        assert_eq!(
+            serde_json::to_value(&restored.ledger).expect("restored status"),
+            serde_json::to_value(LedgerStorageStatus::Missing).expect("missing status")
+        );
+        let migrated = host_with_state(&source_root, "node.a", Arc::new(FakeState::default()));
+        migrated
+            .close()
+            .expect("normal SQLite startup after cutover");
+        let refused = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Restore,
+            Some(external.path().join("discard-forbidden")),
+        )
+        .expect_err("new Runtime facts cannot be lost");
+        assert!(matches!(
+            refused.code.as_str(),
+            "restore_would_discard_new_events" | "restore_state_has_advanced"
+        ));
+        assert!(!external.path().join("discard-forbidden").exists());
+    }
 }

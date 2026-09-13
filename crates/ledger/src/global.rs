@@ -56,10 +56,12 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use storage::SegmentStore;
 use store::LedgerStore;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
 const DEFAULT_SEGMENT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_INGRESS_CAPACITY: usize = 256;
 const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 64;
@@ -213,6 +215,7 @@ impl Error for GlobalLedgerError {}
 pub struct GlobalLedgerConfig {
     root: PathBuf,
     owner_id: String,
+    #[cfg(test)]
     segment_max_bytes: u64,
     ingress_capacity: usize,
     subscription_capacity: usize,
@@ -220,11 +223,13 @@ pub struct GlobalLedgerConfig {
 
 impl fmt::Debug for GlobalLedgerConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GlobalLedgerConfig")
+        let mut debug = formatter.debug_struct("GlobalLedgerConfig");
+        debug
             .field("root", &"<redacted-root>")
-            .field("owner_id", &"<redacted-owner-id>")
-            .field("segment_max_bytes", &self.segment_max_bytes)
+            .field("owner_id", &"<redacted-owner-id>");
+        #[cfg(test)]
+        debug.field("segment_max_bytes", &self.segment_max_bytes);
+        debug
             .field("ingress_capacity", &self.ingress_capacity)
             .field("subscription_capacity", &self.subscription_capacity)
             .finish()
@@ -236,12 +241,14 @@ impl GlobalLedgerConfig {
         Self {
             root: root.as_ref().to_path_buf(),
             owner_id: owner_id.into(),
+            #[cfg(test)]
             segment_max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
             ingress_capacity: DEFAULT_INGRESS_CAPACITY,
             subscription_capacity: DEFAULT_SUBSCRIPTION_CAPACITY,
         }
     }
 
+    #[cfg(test)]
     pub fn with_segment_max_bytes(mut self, bytes: u64) -> Self {
         self.segment_max_bytes = bytes;
         self
@@ -270,6 +277,7 @@ impl GlobalLedgerConfig {
                 "validate_owner_id",
             ));
         }
+        #[cfg(test)]
         if self.segment_max_bytes < 128 {
             return Err(GlobalLedgerError::fatal(
                 "invalid_ledger_config",
@@ -767,6 +775,7 @@ impl GlobalLedger {
         }
     }
 
+    #[cfg(test)]
     pub fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
         Self::open_with_store(config, SegmentStore::open)
     }
@@ -781,6 +790,7 @@ impl GlobalLedger {
         GlobalLedgerReadOnly::open(config, verify_artifact)
     }
 
+    #[cfg(test)]
     pub fn open_with_artifact_verifier<F>(
         config: GlobalLedgerConfig,
         verifier: F,
@@ -793,7 +803,7 @@ impl GlobalLedger {
         })
     }
 
-    /// Explicit candidate assembly; the production constructors retain Segment storage.
+    /// Explicit SQLite candidate assembly; Runtime startup uses LedgerMaintenance.
     pub fn open_sqlite_candidate(
         config: GlobalLedgerConfig,
         database: Arc<actingcommand_runtime_database::RuntimeDatabase>,

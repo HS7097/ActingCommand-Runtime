@@ -35,7 +35,13 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: cargo test --workspace --no-fail-fast
+        run: |
+          cargo build --locked -p actingledger --bin actingledger
+          if ($LASTEXITCODE -ne 0) {
+            throw "actingledger build failed with exit code $LASTEXITCODE"
+          }
+          $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
+          cargo test --workspace --no-fail-fast
       - name: Remove trybuild cache artifacts
         if: always()
         shell: pwsh

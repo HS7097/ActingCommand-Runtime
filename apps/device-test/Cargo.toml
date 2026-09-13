@@ -21,3 +21,4 @@ serde_json = { workspace = true }
 [dev-dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-ledger = { workspace = true }
+actingcommand-runtime-database = { workspace = true }

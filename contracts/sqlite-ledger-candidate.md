@@ -3,8 +3,9 @@
 RuntimeHost selects the formal SQLite medium through [Ledger maintenance and
 cutover](ledger-maintenance.md). Explicit candidate constructors use the same
 semantic core for the bounded storage corpus. `GlobalLedger::open` and
-`open_with_artifact_verifier` serve explicit Segment fixtures; production startup
-uses the formal marker and continuous Ledger lock handoff.
+`open_with_artifact_verifier` exist only in Ledger's own `cfg(test)` scope for
+the original Segment physical specifications. Production startup uses the formal
+marker and continuous Ledger lock handoff.
 
 `open_sqlite_candidate` and `open_sqlite_candidate_with_artifact_verifier` take a
 `GlobalLedgerConfig` and the assembly's `Arc<RuntimeDatabase>`. The configuration
@@ -21,8 +22,9 @@ error order. Ledger depends on this low-level owner, without a State dependency.
 ## Event semantics and durable records
 
 `EventStore` holds the single common sequence, committed event vector, indexes,
-validation, scheduled continuation and commit statistics. `SegmentStorage` and
-`SqliteStorage` implement durable persistence and close. The common writer still
+validation, scheduled continuation and commit statistics. `SqliteStorage`
+implements production persistence and close; `SegmentStorage` remains inside
+Ledger's test compilation. The common writer still
 owns query/projection/subscription and scheduling outcome orchestration.
 
 SQLite restores typed events and rebuilds the existing `EventIndexes`. All
@@ -103,10 +105,14 @@ facts, artifact order and CaptureSummary recovery, schema/row/meta/hash/link
 corruption, unique constraints, transaction rollback with subscriber failure,
 and process exit after COMMIT before append acknowledgement/live publication.
 The last case reuses the existing process barrier and its bounded parent wait.
-Segment repair, quarantine, ownership and process specifications remain active.
+Segment repair, quarantine, ownership and process specifications remain active
+in Ledger unit tests, including the original ArtifactStore and forensic consumer
+bodies. The original CLI process specifications use `CARGO_BIN_EXE_actingledger`
+at runtime. CI builds that existing binary from the same source before supplying
+its absolute path to the workspace tests; a missing path fails immediately.
 
-The candidate proves S2's durable-medium and semantic boundaries through exact-head
-CI and independent review. Migration/cutover and backup/restore belong to S3/S5;
-shared internal transactions, six SQL views and frame retention belong to S4;
-production Segment retirement completes in S5. Real data and devices are outside
-this candidate validation.
+The existing corpus covers the durable-medium and semantic boundaries through
+exact-head CI and independent review. Formal maintenance supplies migration,
+cutover and backup/restore alongside the shared transactions, SQL views and
+frame retention. Segment writing is confined to Ledger's physical test scope.
+Real data and devices are outside this validation.

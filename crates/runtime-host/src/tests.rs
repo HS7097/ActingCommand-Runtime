@@ -46,7 +46,7 @@ use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
     ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, PersistedEvent};
+use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
     ActivityDocument, CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison,
     DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime,
@@ -82,6 +82,7 @@ use zip::{ZipWriter, write::FileOptions};
 
 // Shared fixture fragments retain one private test scope.
 include!("tests/support/backend.rs");
+include!("tests/support/startup.rs");
 include!("tests/support/mapped_runs.rs");
 include!("tests/support/packages.rs");
 include!("tests/support/planning.rs");

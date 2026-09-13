@@ -2282,13 +2282,21 @@ mod tests {
             OriginModule, PerformancePayloadDraft,
         };
         use actingcommand_ledger::{
-            GlobalLedgerConfig, GlobalLedgerReadOnlyConfig, Sha256SecretFingerprinter,
+            GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerReadOnlyConfig,
+            Sha256SecretFingerprinter,
         };
+        use std::sync::Arc;
         let temp = tempfile::tempdir().expect("ledger root");
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            temp.path(),
-            "neutral-summary-writer",
-        ))
+        let database = Arc::new(
+            actingcommand_runtime_database::RuntimeDatabase::open_with_initializer::<
+                GlobalLedgerError,
+            >(temp.path(), b"neutral-summary", |_| Ok(()), |_| Ok(()))
+            .expect("database"),
+        );
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(temp.path(), "neutral-summary-writer"),
+            Arc::clone(&database),
+        )
         .expect("ledger");
         let ids = IdentifierIssuer::new().expect("ids");
         let persist = |data: PerformanceSummaryEventData| {
@@ -2364,9 +2372,12 @@ mod tests {
                 .contains("ledger_commits")
         );
         ledger.close().expect("close writer");
-        let snapshot =
-            GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(temp.path()), |_| None)
-                .expect("read persisted source");
+        let snapshot = GlobalLedger::open_sqlite_candidate_read_only(
+            GlobalLedgerReadOnlyConfig::new(temp.path()),
+            database,
+            |_| None,
+        )
+        .expect("read persisted source");
         assert_eq!(
             snapshot.events(),
             &[first_event, second_event, legacy_event]

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
     CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
@@ -13,7 +14,6 @@ use actingcommand_contract::{
     EvidenceCompleteness, IdentifierIssuer, OriginModule, ProjectionProfile, RetentionClass,
     TaskOutcome, TaskPayloadDraft,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
@@ -35,7 +35,8 @@ fn signatures_cli_requires_two_frozen_roots_and_exposes_incomplete_catalog() {
         .close()
         .unwrap();
     }
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
     let command = vec![
         "signatures".into(),
         "--through".into(),
@@ -173,7 +174,8 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
         .iter()
         .map(|path| fs::read(path).expect("source bytes"))
         .collect();
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
     let open = invoke(binary, root, &["open".to_owned()]);
     assert!(open.status.success(), "{open:?}");
     let open: serde_json::Value = serde_json::from_slice(&open.stdout).expect("open JSON");
@@ -293,7 +295,8 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
     writer.append(event).expect("append event");
     writer.close().expect("close writer");
 
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
     let commands = [
         vec!["open".to_owned()],
         vec!["events".to_owned()],
@@ -620,12 +623,12 @@ fn actingledger_read_commands_are_thin_and_fail_loud() {
     let error = actingledger::run(args, &mut FailingWriter).expect_err("output failure");
     assert_eq!(error.code(), "output_failed");
 
-    let main_source = include_str!("../src/main.rs");
+    let main_source = include_str!("../../../../../apps/ledger-forensics/src/main.rs");
     assert_eq!(main_source.matches("actingledger::run_env()").count(), 1);
     for forbidden in ["GlobalLedger", "EventQuery", "serde_json"] {
         assert!(!main_source.contains(forbidden));
     }
-    let cli_source = include_str!("../src/lib.rs");
+    let cli_source = include_str!("../../../../../apps/ledger-forensics/src/lib.rs");
     assert_eq!(
         cli_source
             .matches("actingcommand_ledger_forensics::run(request)")
@@ -679,7 +682,8 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
     }
     writer.close().expect("close writer");
 
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
     let command = vec![
         "events".to_owned(),
         "--after".to_owned(),
@@ -1073,7 +1077,8 @@ fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
         verify_evidence_archive(&archive, receipt.zip_sha256()).expect("canonical verification");
     let archive_bytes = fs::read(&archive).expect("archive bytes");
     let before = snapshot(temp.path());
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
 
     let invoke_replay = || {
         Command::new(binary)
@@ -1314,7 +1319,8 @@ fn performance_export_is_explicit_bounded_and_preserves_ordinary_export() {
         facts.push(writer.append(draft).expect("append fixture event"));
     }
     writer.close().expect("close fixture writer");
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
     let ordinary = invoke(binary, state_root, &["export".to_owned()]);
     assert!(ordinary.status.success(), "ordinary export: {ordinary:?}");
     assert!(ordinary.stderr.is_empty());
@@ -1534,7 +1540,8 @@ fn stability_cli_pages_errors_and_source_files_are_explicit() {
         files
     };
     let before = snapshot();
-    let binary = env!("CARGO_BIN_EXE_actingledger");
+    let binary =
+        &std::env::var("CARGO_BIN_EXE_actingledger").expect("actingledger executable path");
     let mut after = 0;
     let mut emitted = Vec::new();
     loop {
