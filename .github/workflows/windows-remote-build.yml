@@ -160,7 +160,13 @@ jobs:
           }
           New-Item -ItemType Directory -Path $runtimeDir, $toolsDir | Out-Null
 
-          $runtimeFiles = @('actingcommand-actingd.exe', 'actingctl.exe')
+          $runtimeFiles = @(
+            'actingcommand-actingd.exe',
+            'actingctl.exe',
+            'actingd.config.example.json',
+            'INSTALL.md',
+            'RELEASE-NOTES.md'
+          )
           $toolFiles = @(
             'actinglab.exe',
             'actingledger.exe',
@@ -172,10 +178,11 @@ jobs:
           function Copy-BuildFiles {
             param(
               [Parameter(Mandatory)] [string[]] $Names,
-              [Parameter(Mandatory)] [string] $Destination
+              [Parameter(Mandatory)] [string] $Destination,
+              [string] $SourceDirectory = $buildDir
             )
             foreach ($name in $Names) {
-              $source = Join-Path $buildDir $name
+              $source = Join-Path $SourceDirectory $name
               if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
                 throw "expected build output is missing or is not a file: $source"
               }
@@ -187,7 +194,8 @@ jobs:
             param(
               [Parameter(Mandatory)] [string] $ArtifactName,
               [Parameter(Mandatory)] [string] $Directory,
-              [Parameter(Mandatory)] [string[]] $Names
+              [Parameter(Mandatory)] [string[]] $Names,
+              [switch] $RuntimeDistribution
             )
             $files = foreach ($name in $Names) {
               $path = Join-Path $Directory $name
@@ -223,6 +231,9 @@ jobs:
               source_artifact_name = $ArtifactName
               files = @($files)
             }
+            if ($RuntimeDistribution) {
+              $manifest.runtime_payload_layout = 'distribution-v1'
+            }
             $manifestPath = Join-Path $Directory 'BUILD-MANIFEST.json'
             $json = $manifest | ConvertTo-Json -Depth 6
             [IO.File]::WriteAllText(
@@ -232,7 +243,12 @@ jobs:
             )
           }
 
-          Copy-BuildFiles -Names $runtimeFiles -Destination $runtimeDir
+          Copy-BuildFiles -Names @('actingcommand-actingd.exe', 'actingctl.exe') -Destination $runtimeDir
+          Copy-BuildFiles -Names @(
+            'actingd.config.example.json',
+            'INSTALL.md',
+            'RELEASE-NOTES.md'
+          ) -SourceDirectory (Join-Path $PWD 'distribution/windows') -Destination $runtimeDir
           Copy-BuildFiles -Names @(
             'actinglab.exe',
             'actingledger.exe',
@@ -252,7 +268,8 @@ jobs:
           New-BuildManifest `
             -ArtifactName $runtimeArtifactName `
             -Directory $runtimeDir `
-            -Names $runtimeFiles
+            -Names $runtimeFiles `
+            -RuntimeDistribution
           New-BuildManifest `
             -ArtifactName $toolsArtifactName `
             -Directory $toolsDir `
