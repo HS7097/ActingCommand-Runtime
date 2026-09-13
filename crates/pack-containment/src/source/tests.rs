@@ -52,6 +52,29 @@ fn converts_region_and_click_shapes() {
         click_to_navigation(&json!({"kind":"long_press","x":12,"y":34,"duration_ms":700})).unwrap(),
         json!({"kind":"long_press","x":12,"y":34,"duration_ms":700})
     );
+    // #286 NAVIGATION-DECLARATION-ONLY-v1: generated clicks share the declaration
+    // grammar in both navigation edges and action metadata.
+    for click in [
+        json!({"kind":"point","x":12,"y":34}),
+        json!({"kind":"rect","x":1,"y":2,"width":3,"height":4}),
+        json!({"kind":"drag","from":{"x":1,"y":2,"width":3,"height":4},"to":{"x":5,"y":6,"width":7,"height":8},"duration_ms":900}),
+        json!({"kind":"offset","target_id":"page/home","offset":{"x":1,"y":2,"width":3,"height":4}}),
+        json!({"kind":"long_press","x":12,"y":34,"duration_ms":700}),
+        json!({"kind":"target","target_id":"page/home"}),
+        json!({"kind":"target_center","target_id":"page/home"}),
+    ] {
+        let click = click_to_navigation(&click).expect("generated navigation click");
+        let navigation = json!({
+            "navigation": [{"id":"home_to_next","from_page":"home","to_page":"next","click":click}],
+            "page_operations": [{"id":"action","page":"home","click":click}],
+            "destructive_actions": [{"id":"action","page":"home","click":click}]
+        });
+        validate_navigation_declarations(
+            Path::new("navigation/fixture.navigation.json"),
+            &navigation,
+        )
+        .expect("generated navigation declaration");
+    }
 }
 
 #[test]
