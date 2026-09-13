@@ -31,6 +31,7 @@ pub enum TaskTimingAppendStage {
     FactGate,
     Draft,
     WriterResponse,
+    LedgerSend,
     LedgerQueue,
     LedgerPersistence,
     LedgerDurable,
@@ -59,6 +60,8 @@ pub struct TaskTimingAppendObservations {
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub writer_response: TaskTimingSpanSummary,
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
+    pub ledger_send: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub ledger_queue: TaskTimingSpanSummary,
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub ledger_persistence: TaskTimingSpanSummary,
@@ -72,6 +75,8 @@ pub struct TaskTimingAppendObservations {
     pub fact_sync: TaskTimingSpanSummary,
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub pipeline: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<Box<TaskTimingWriterObservation>>,
 }
 
 impl TaskTimingAppendObservations {
@@ -80,6 +85,7 @@ impl TaskTimingAppendObservations {
             TaskTimingAppendStage::FactGate => &mut self.fact_gate,
             TaskTimingAppendStage::Draft => &mut self.draft,
             TaskTimingAppendStage::WriterResponse => &mut self.writer_response,
+            TaskTimingAppendStage::LedgerSend => &mut self.ledger_send,
             TaskTimingAppendStage::LedgerQueue => &mut self.ledger_queue,
             TaskTimingAppendStage::LedgerPersistence => &mut self.ledger_persistence,
             TaskTimingAppendStage::LedgerDurable => &mut self.ledger_durable,
@@ -99,6 +105,7 @@ impl TaskTimingAppendObservations {
             &self.fact_gate,
             &self.draft,
             &self.writer_response,
+            &self.ledger_send,
             &self.ledger_queue,
             &self.ledger_persistence,
             &self.ledger_durable,
@@ -109,6 +116,7 @@ impl TaskTimingAppendObservations {
         ]
         .into_iter()
         .all(valid_boundary_span)
+            && self.writer.as_ref().is_none_or(|writer| writer.is_valid())
     }
 }
 

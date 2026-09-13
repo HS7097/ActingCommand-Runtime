@@ -5,8 +5,11 @@ use actingcommand_contract::{
     TaskRecordSubphases, TaskTimingAppendStage, TaskTimingBoundary, TaskTimingBudgetObservation,
     TaskTimingCallContext, TaskTimingCheckPosition, TaskTimingFailure,
     TaskTimingFailureObservation, TaskTimingObservationState, TaskTimingObservations,
-    TaskTimingObservedExpiry, TaskTimingPhase, TaskTimingPhaseObservations, TaskTimingResult,
-    TaskTimingSample, TaskTimingSpanSummary, TimingObservationClock, TimingObservationIssue,
+    TaskTimingObservedExpiry, TaskTimingPhase, TaskTimingPhaseObservations,
+    TaskTimingPreviousWorkRelation, TaskTimingResult, TaskTimingSample, TaskTimingSpanSummary,
+    TaskTimingWriterCommand, TaskTimingWriterEndpoint, TaskTimingWriterObservation,
+    TaskTimingWriterReceiveOrder, TaskTimingWriterSpan, TimingObservationClock,
+    TimingObservationIssue,
 };
 use actingcommand_execution_kernel::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext};
 use std::time::Instant;
@@ -375,6 +378,7 @@ impl TaskTimingObserver {
             observation.draft,
         );
         if let Some(ledger) = observation.ledger {
+            self.ledger_span(append, TaskTimingAppendStage::LedgerSend, ledger.send);
             self.ledger_span(append, TaskTimingAppendStage::LedgerQueue, ledger.queue);
             if let Some(durable_started) = ledger.durable_started_at {
                 self.ledger_span(
@@ -396,6 +400,20 @@ impl TaskTimingObserver {
                 TaskTimingAppendStage::LedgerPublication,
                 ledger.publication,
             );
+        }
+        // Replace the last same-append snapshot even when this call has no Ledger reply.
+        // Previous writer work carries no observing-task identity or task-budget sample.
+        let writer = observation.ledger.map(writer_observation).map(Box::new);
+        let phase = match start.phase {
+            TaskTimingPhase::Preflight => &mut self.value.preflight,
+            TaskTimingPhase::Execution => &mut self.value.execution,
+            TaskTimingPhase::Finalization => &mut self.value.finalization,
+        };
+        let boundaries = phase.boundaries.get_or_insert_with(Default::default);
+        match append.kind {
+            TaskAppend::RecognitionPayload => boundaries.recognition_payload_stages.writer = writer,
+            TaskAppend::RecognitionTask => boundaries.recognition_task_stages.writer = writer,
+            TaskAppend::EffectCompleted => boundaries.effect_completed_stages.writer = writer,
         }
         self.boundary_span(
             start,
@@ -552,6 +570,131 @@ impl TaskTimingObserver {
                 context,
             }));
         }
+    }
+}
+
+fn writer_endpoint(anchor: Option<Instant>, endpoint: Option<Instant>) -> TaskTimingWriterEndpoint {
+    use TaskTimingWriterEndpoint as Endpoint;
+    let Some(endpoint) = endpoint else {
+        return Endpoint::Unobserved;
+    };
+    let Some(anchor) = anchor else {
+        return Endpoint::Unavailable {
+            reason: TimingObservationIssue::CallIncomplete,
+        };
+    };
+    match endpoint.cmp(&anchor) {
+        std::cmp::Ordering::Less => Endpoint::BeforeSendStart {
+            distance_us: actingcommand_execution_kernel::observe_instant_span(endpoint, anchor),
+        },
+        std::cmp::Ordering::Equal => Endpoint::AtSendStart,
+        std::cmp::Ordering::Greater => Endpoint::AfterSendStart {
+            distance_us: actingcommand_execution_kernel::observe_instant_span(anchor, endpoint),
+        },
+    }
+}
+
+fn writer_result(
+    result: Option<actingcommand_ledger::LedgerAppendStageResult>,
+) -> TaskTimingResult {
+    match result {
+        Some(actingcommand_ledger::LedgerAppendStageResult::Ok) => TaskTimingResult::Ok,
+        Some(actingcommand_ledger::LedgerAppendStageResult::Err) => TaskTimingResult::Err,
+        None => TaskTimingResult::Unobserved,
+    }
+}
+
+fn writer_span(
+    anchor: Option<Instant>,
+    span: actingcommand_ledger::LedgerAppendSpan,
+) -> TaskTimingWriterSpan {
+    use actingcommand_ledger::LedgerAppendObservationState as State;
+    let elapsed_us = if span.state == State::Unobserved {
+        None
+    } else {
+        Some(span.started_at.zip(span.finished_at).map_or(
+            ObservedMicroseconds::Unavailable {
+                reason: TimingObservationIssue::CallIncomplete,
+            },
+            |(started, finished)| {
+                actingcommand_execution_kernel::observe_instant_span(started, finished)
+            },
+        ))
+    };
+    let status = match (span.state, elapsed_us) {
+        (State::Unobserved, _) => TaskTimingObservationState::Unobserved,
+        (_, Some(ObservedMicroseconds::Unavailable { reason })) => {
+            TaskTimingObservationState::Incomplete { reason }
+        }
+        (State::Observed, Some(ObservedMicroseconds::Measured { .. })) if span.result.is_some() => {
+            TaskTimingObservationState::Observed
+        }
+        _ => TaskTimingObservationState::Incomplete {
+            reason: TimingObservationIssue::CallIncomplete,
+        },
+    };
+    TaskTimingWriterSpan {
+        status,
+        started: writer_endpoint(anchor, span.started_at),
+        finished: writer_endpoint(anchor, span.finished_at),
+        elapsed_us,
+        result: writer_result(span.result),
+    }
+}
+
+fn writer_observation(
+    ledger: actingcommand_ledger::LedgerAppendObservation,
+) -> TaskTimingWriterObservation {
+    use actingcommand_ledger::{
+        LedgerPreviousWorkRelation as Relation, LedgerWriterCommandKind as Command,
+        LedgerWriterReceiveOrder as Order,
+    };
+    let previous = ledger.previous_writer_work;
+    let anchor = ledger.send.started_at;
+    TaskTimingWriterObservation {
+        send_returned: writer_endpoint(anchor, ledger.send.finished_at),
+        writer_received: writer_endpoint(anchor, ledger.queue.finished_at),
+        receive_order: match ledger.writer_receive_order {
+            Order::Unobserved => TaskTimingWriterReceiveOrder::Unobserved,
+            Order::Incomplete => TaskTimingWriterReceiveOrder::Incomplete,
+            Order::BeforeSendReturned => TaskTimingWriterReceiveOrder::BeforeSendReturned,
+            Order::AtSendReturn => TaskTimingWriterReceiveOrder::AtSendReturn,
+            Order::AfterSendReturned => TaskTimingWriterReceiveOrder::AfterSendReturned,
+        },
+        previous_work_relation: match ledger.previous_work_relation {
+            Relation::Unobserved => TaskTimingPreviousWorkRelation::Unobserved,
+            Relation::Incomplete => TaskTimingPreviousWorkRelation::Incomplete,
+            Relation::CompletedBySendStart => TaskTimingPreviousWorkRelation::CompletedBySendStart,
+            Relation::OverlapsSend => TaskTimingPreviousWorkRelation::OverlapsSend,
+            Relation::StartedAtOrAfterSendReturn => {
+                TaskTimingPreviousWorkRelation::StartedAtOrAfterSendReturn
+            }
+        },
+        previous_command: previous.command.map(|command| match command {
+            Command::RetentionCandidates => TaskTimingWriterCommand::RetentionCandidates,
+            Command::AdmitArtifactEviction => TaskTimingWriterCommand::AdmitArtifactEviction,
+            Command::FinishArtifactEviction => TaskTimingWriterCommand::FinishArtifactEviction,
+            Command::AppendTransaction => TaskTimingWriterCommand::AppendTransaction,
+            Command::Append => TaskTimingWriterCommand::Append,
+            Command::ReconcileScheduledPolicySettlement => {
+                TaskTimingWriterCommand::ReconcileScheduledPolicySettlement
+            }
+            Command::Query => TaskTimingWriterCommand::Query,
+            Command::QueryPage => TaskTimingWriterCommand::QueryPage,
+            Command::ProjectViewPage => TaskTimingWriterCommand::ProjectViewPage,
+            Command::ProjectSchedulingOutcomes => {
+                TaskTimingWriterCommand::ProjectSchedulingOutcomes
+            }
+            Command::LatestSequence => TaskTimingWriterCommand::LatestSequence,
+            Command::Subscribe => TaskTimingWriterCommand::Subscribe,
+            Command::ReplayPage => TaskTimingWriterCommand::ReplayPage,
+            Command::Project => TaskTimingWriterCommand::Project,
+            Command::ProjectPage => TaskTimingWriterCommand::ProjectPage,
+            Command::Shutdown => TaskTimingWriterCommand::Shutdown,
+        }),
+        previous_processing: writer_span(anchor, previous.processing),
+        previous_after_reply: writer_span(anchor, previous.after_reply),
+        previous_reply_result: writer_result(previous.reply_result),
     }
 }
 

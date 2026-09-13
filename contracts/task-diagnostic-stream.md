@@ -60,9 +60,25 @@ Host arms. `input` covers the complete original Host input call. `post_input_wai
 `retry_wait`, `page_recognition_wait` and `postcondition_wait` cover only their
 original wait calls, with the original duration expressions and results.
 
+`effect_completed_record` covers the complete original Kernel record call,
+including Host active/trace handling and the EffectCompleted arm. Its original
+Result and Task budgets are retained before error propagation. `input_to_effect_completed`
+starts at the existing input observation's end, before its aggregation, and ends
+at that record return. `effect_completed_to_post_input_wait` starts at the same
+record return and ends at the original post_input_wait start; it includes the
+original operation-state update and observation/entry preparation. The original
+input and wait endpoints are unchanged. Two fixed Observer markers require the
+same task, phase, timing context, step, action and known frame/recognition. They
+are consumed once and cleared on a new input, context or phase. An unmatched or
+unclosed marker is Incomplete in the existing snapshot; it never borrows a later
+action's endpoint. A returned record error completes the first bridge as Err;
+it does not start the second bridge.
+
 `recognition_payload_append` and `recognition_task_append` retain the two ordered
-RecognitionCompleted commits separately. Their fixed `recognition_payload_stages`
-and `recognition_task_stages` contain `fact_gate` (original lock acquisition),
+RecognitionCompleted commits separately. `effect_completed_append` retains the
+single original TaskEffectCompleted commit, before the unchanged capture-evidence
+transition. Their fixed `recognition_payload_stages`, `recognition_task_stages`
+and `effect_completed_stages` contain `fact_gate` (original lock acquisition),
 `draft` (construction and sanitization), `writer_response` (the original Ledger
 call), `device_diagnostics`, `fact_sync` (including required invalidation), and
 `pipeline` (the original performance callback after dropping the Fact gate).
@@ -80,6 +96,30 @@ sender setup, response send/wakeup tails and post-reply delivery are outside the
 inner spans. No cumulative statistics subtraction supplies a missing endpoint.
 Missing same-request reply observations stay absent; partial endpoints/results
 remain Incomplete, with unknown duration/result represented explicitly.
+
+`ledger_send` covers the same original send_command call, after command construction,
+with its own original Result. Queue retains its original endpoints. Each append
+stage family also retains one optional `writer` snapshot from that same reply,
+replaced on every append; a missing reply never reuses the previous append's data.
+It includes the send return and writer receipt relative to this send's start,
+and the writer's immediately preceding completed command kind, processing span,
+reply-send result and after-reply span. Previous processing starts when the original
+writer receive returns and ends after its original match arm, including reply,
+tail work and local drops. After-reply starts after the original send result and
+ends at that same arm end. Its Ok means the original tail returned, while the
+separate reply result describes response.send; neither proves subscriber delivery.
+Previous work has no current-task identifiers, budgets or aggregate attribution.
+
+Endpoint direction and checked microsecond distance are relative to the original
+same-append send start. Sub-microsecond distances may round to zero without losing
+their before/after direction. `receive_order` preserves receipt before, at or
+after send return; there is no fabricated negative or zero wait. The writer's
+`previous_work_relation` states completed by send start, overlapping send, or
+starting at/after send return. Unobserved/Incomplete remain explicit. These direct
+process intervals include thread scheduling. After-reply is nested in processing;
+send overlaps queue. A single predecessor cannot establish queue depth, complete
+waiting history, CPU/SQL cost or the cause of an uncovered gap. No query, extra
+command, event, diagnostic channel or timing-history buffer supplies these fields.
 
 Boundary samples have no record index. `last_call` adds the same call's budget
 after return and its already known logical step/action. Identity is frozen before

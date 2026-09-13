@@ -589,6 +589,57 @@ fn normalize_value(
 ) {
     match value {
         Value::Object(object) => {
+            // Writer endpoints and the immediately preceding command depend on thread
+            // scheduling. Keep missing/incomplete states and original results visible.
+            if matches!(
+                key,
+                Some("send_returned" | "writer_received" | "started" | "finished")
+            ) && let Ok(endpoint) = serde_json::from_value::<
+                actingcommand_contract::TaskTimingWriterEndpoint,
+            >(Value::Object(object.clone()))
+                && matches!(
+                    endpoint,
+                    actingcommand_contract::TaskTimingWriterEndpoint::AtSendStart
+                        | actingcommand_contract::TaskTimingWriterEndpoint::BeforeSendStart {
+                            distance_us: actingcommand_contract::ObservedMicroseconds::Measured { .. }
+                        }
+                        | actingcommand_contract::TaskTimingWriterEndpoint::AfterSendStart {
+                            distance_us: actingcommand_contract::ObservedMicroseconds::Measured { .. }
+                        }
+                )
+            {
+                *value = json!("<PROCESS_INSTANT>");
+                return;
+            }
+            if key == Some("writer") {
+                if matches!(
+                    object.get("receive_order").and_then(Value::as_str),
+                    Some("before_send_returned" | "at_send_return" | "after_send_returned")
+                ) {
+                    object.insert("receive_order".to_owned(), json!("<WRITER_RECEIVE_ORDER>"));
+                }
+                if matches!(
+                    object.get("previous_work_relation").and_then(Value::as_str),
+                    Some(
+                        "completed_by_send_start"
+                            | "overlaps_send"
+                            | "started_at_or_after_send_return"
+                    )
+                ) {
+                    object.insert(
+                        "previous_work_relation".to_owned(),
+                        json!("<PREVIOUS_WORK_RELATION>"),
+                    );
+                }
+                if object.get("previous_command").is_some_and(|command| {
+                    serde_json::from_value::<actingcommand_contract::TaskTimingWriterCommand>(
+                        command.clone(),
+                    )
+                    .is_ok()
+                }) {
+                    object.insert("previous_command".to_owned(), json!("<WRITER_COMMAND>"));
+                }
+            }
             if matches!(key, Some("elapsed_us" | "limit_us"))
                 && object.get("state").and_then(Value::as_str) == Some("measured")
                 && object.get("value").is_some_and(Value::is_u64)

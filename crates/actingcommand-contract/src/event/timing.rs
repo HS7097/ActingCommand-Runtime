@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 mod boundaries;
 pub use boundaries::*;
+mod writer;
+pub use writer::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
