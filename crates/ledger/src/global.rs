@@ -69,6 +69,104 @@ const MAX_QUERY_PAGE_EVENTS: usize = 1024;
 
 pub type GlobalLedgerResult<T> = Result<T, GlobalLedgerError>;
 
+/// Original append result and optional observations from that same writer command.
+pub type LedgerAppendOutcome = (
+    GlobalLedgerResult<PersistedEvent>,
+    Option<LedgerAppendObservation>,
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerAppendStageResult {
+    Ok,
+    Err,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerAppendObservationState {
+    #[default]
+    Unobserved,
+    Observed,
+    Incomplete,
+}
+
+/// Process-local Instant endpoints. Incomplete endpoints must not become zero durations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerAppendSpan {
+    pub state: LedgerAppendObservationState,
+    pub started_at: Option<Instant>,
+    pub finished_at: Option<Instant>,
+    pub result: Option<LedgerAppendStageResult>,
+}
+
+impl LedgerAppendSpan {
+    fn begin(&mut self, started_at: Instant) {
+        self.state = LedgerAppendObservationState::Incomplete;
+        self.started_at = Some(started_at);
+    }
+
+    fn finish(&mut self, finished_at: Instant, succeeded: bool) {
+        self.finished_at = Some(finished_at);
+        self.result = Some(if succeeded {
+            LedgerAppendStageResult::Ok
+        } else {
+            LedgerAppendStageResult::Err
+        });
+        self.state = if self
+            .started_at
+            .and_then(|started| finished_at.checked_duration_since(started))
+            .is_some()
+        {
+            LedgerAppendObservationState::Observed
+        } else {
+            LedgerAppendObservationState::Incomplete
+        };
+    }
+}
+
+/// Fixed-size, non-persistent observations; only the original reply transports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerAppendObservation {
+    /// Immediately before send_command through entry into the writer's Append arm.
+    pub queue: LedgerAppendSpan,
+    /// Writer entry through backend.persist return, including validation and preparation.
+    /// An earlier store error ends this span at the store return instead.
+    pub persistence: LedgerAppendSpan,
+    /// Immediately before backend.persist; None means that call was not observed.
+    /// Its return is persistence.finished_at, including on an original backend error.
+    pub durable_started_at: Option<Instant>,
+    /// Successful backend return through reply construction: retention, indexes,
+    /// events, statistics, and the original response preparation/error notification.
+    pub publication: LedgerAppendSpan,
+}
+
+impl LedgerAppendObservation {
+    fn sent(started_at: Instant) -> Self {
+        let mut value = Self::default();
+        value.queue.begin(started_at);
+        value
+    }
+
+    fn writer_received(&mut self) {
+        let now = Instant::now();
+        self.queue.finish(now, true);
+        self.persistence.begin(now);
+    }
+
+    fn persisted(&mut self, succeeded: bool) {
+        let now = Instant::now();
+        self.persistence.finish(now, succeeded);
+        if succeeded {
+            self.publication.begin(now);
+        }
+    }
+
+    fn reply_ready(&mut self, succeeded: bool) {
+        if self.publication.started_at.is_some() {
+            self.publication.finish(Instant::now(), succeeded);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalLedgerError {
     code: &'static str,
@@ -390,7 +488,8 @@ enum WriterCommand {
     },
     Append {
         draft: Box<SanitizedEventDraft>,
-        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+        queued_at: Option<Instant>,
+        response: SyncSender<LedgerAppendOutcome>,
     },
     ReconcileScheduledPolicySettlement {
         execution: Box<PolicyExecutionEventData>,
@@ -907,20 +1006,43 @@ impl GlobalLedger {
     }
 
     pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
-        let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_event"))?;
-        send_command(
-            sender,
-            WriterCommand::Append {
-                draft: Box::new(draft),
-                response,
-            },
-            "append_event",
-        )?;
-        receive_response(receiver, "append_event")?
+        self.append_request(draft, false).0
+    }
+
+    /// Observes the same append command and returns its original result unchanged.
+    /// Queue rejection or a missing reply leaves inner spans unobserved/incomplete.
+    /// Response transport, caller wakeup and later subscription delivery are outside
+    /// these spans. A backend error retains its original partial-commit semantics.
+    pub fn append_with_observation(&self, draft: SanitizedEventDraft) -> LedgerAppendOutcome {
+        self.append_request(draft, true)
+    }
+
+    fn append_request(&self, draft: SanitizedEventDraft, observe: bool) -> LedgerAppendOutcome {
+        let mut observation = observe.then(LedgerAppendObservation::default);
+        let result = (|| {
+            let (response, receiver) = mpsc::sync_channel(1);
+            let sender = self
+                .sender
+                .as_ref()
+                .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_event"))?;
+            let draft = Box::new(draft);
+            let queued_at = observe.then(Instant::now);
+            observation = queued_at.map(LedgerAppendObservation::sent);
+            send_command(
+                sender,
+                WriterCommand::Append {
+                    draft,
+                    queued_at,
+                    response,
+                },
+                "append_event",
+            )?;
+            receive_response(receiver, "append_event")
+        })();
+        match result {
+            Ok(reply) => reply,
+            Err(error) => (Err(error), observation),
+        }
     }
 
     /// Reconciles one already-admitted scheduled-policy outcome from ledger facts.
@@ -1273,21 +1395,45 @@ fn writer_loop<S: LedgerStore>(
                 }
                 let _ = response.send(result);
             }
-            WriterCommand::Append { draft, response } => {
-                let result = store.append(*draft);
+            WriterCommand::Append {
+                draft,
+                queued_at,
+                response,
+            } => {
+                let mut observation = queued_at.map(LedgerAppendObservation::sent);
+                if let Some(value) = &mut observation {
+                    value.writer_received();
+                }
+                let result = store.append(*draft, &mut observation);
+                if let Some(value) = &mut observation
+                    && value.persistence.finished_at.is_none()
+                {
+                    value.persistence.finish(Instant::now(), result.is_ok());
+                }
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
                 if let Ok(event) = &result {
-                    let _ = response.send(Ok(event.clone()));
+                    let reply = Ok(event.clone());
+                    if let Some(value) = &mut observation {
+                        value.reply_ready(true);
+                    }
+                    let _ = response.send((reply, observation));
                     deliver_live_event(&mut subscribers, event);
                 }
                 if terminal {
                     let error = result.expect_err("terminal append result must be an error");
                     notify_terminal_failure(&mut subscribers, error.clone());
-                    let _ = response.send(Err(error.clone()));
+                    let reply = Err(error.clone());
+                    if let Some(value) = &mut observation {
+                        value.reply_ready(false);
+                    }
+                    let _ = response.send((reply, observation));
                     return Err(error);
                 }
                 if let Err(error) = result {
-                    let _ = response.send(Err(error));
+                    if let Some(value) = &mut observation {
+                        value.reply_ready(false);
+                    }
+                    let _ = response.send((Err(error), observation));
                 }
             }
             WriterCommand::AppendTransaction {
@@ -1609,10 +1755,7 @@ fn send_command(
     }
 }
 
-fn receive_response<T>(
-    receiver: Receiver<GlobalLedgerResult<T>>,
-    operation: &'static str,
-) -> GlobalLedgerResult<GlobalLedgerResult<T>> {
+fn receive_response<T>(receiver: Receiver<T>, operation: &'static str) -> GlobalLedgerResult<T> {
     match receiver.recv_timeout(COMMAND_TIMEOUT) {
         Ok(result) => Ok(result),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::fatal(

@@ -3,7 +3,7 @@
 //! Private durable-store boundary. See contracts/ledger-store.md for the S0 contract.
 
 use super::storage::{DurableStorage, EventStore};
-use super::{CommitStatistics, GlobalLedgerResult};
+use super::{CommitStatistics, GlobalLedgerResult, LedgerAppendObservation};
 use crate::PersistedEvent;
 use actingcommand_contract::{
     EventQuery, PolicyExecutionEventData, ProjectionProfile, RuntimeEventQueryPage,
@@ -34,7 +34,11 @@ pub(super) trait LedgerStore: Send + 'static {
 
     /// Success means durable persistence, index visibility and commit accounting.
     /// An error does not prove that no bytes or facts were committed.
-    fn append(&mut self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent>;
+    fn append(
+        &mut self,
+        draft: SanitizedEventDraft,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent>;
     fn append_transaction(
         &mut self,
         draft: SanitizedEventDraft,
@@ -97,8 +101,16 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         Arc::clone(&self.commit_statistics)
     }
 
-    fn append(&mut self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
-        Self::append(self, draft)
+    fn append(
+        &mut self,
+        draft: SanitizedEventDraft,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        if observation.is_some() {
+            Self::append_observed(self, draft, observation)
+        } else {
+            Self::append(self, draft)
+        }
     }
 
     fn append_transaction(

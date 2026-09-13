@@ -2,7 +2,7 @@
 
 use super::{
     CommitStatistics, GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult,
-    Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
+    LedgerAppendObservation, Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
 };
 use crate::PersistedEvent;
 use crate::fact::{LedgerEventRead, StoredEventRecord};
@@ -346,6 +346,14 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        self.append_observed(draft, &mut None)
+    }
+
+    pub(super) fn append_observed(
+        &mut self,
+        draft: SanitizedEventDraft,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         if self.recovering_retention && draft.event_type() != EventType::LedgerRecovered {
             return Err(GlobalLedgerError::request(
                 "artifact_retention_recovery_pending",
@@ -365,7 +373,7 @@ impl<B: DurableStorage> EventStore<B> {
                 "append_event",
             ));
         }
-        self.append_with_event_id(draft, None)
+        self.append_with_event_id(draft, None, observation)
     }
 
     pub(super) fn append_transaction(
@@ -508,6 +516,7 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
         event_id: Option<EventId>,
+        observation: &mut Option<LedgerAppendObservation>,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let event = match event_id {
             Some(event_id) => {
@@ -516,7 +525,7 @@ impl<B: DurableStorage> EventStore<B> {
             None => PersistedEvent::from_sanitized(self.next_sequence, draft),
         }
         .map_err(|error| GlobalLedgerError::request(error.code(), "validate_sanitized_event"))?;
-        self.persist_event(event)
+        self.persist_event(event, observation)
     }
 
     fn append_with_scheduled_recovery_continuation(
@@ -527,7 +536,7 @@ impl<B: DurableStorage> EventStore<B> {
         let draft = continuation.apply_to(draft).map_err(|error| {
             GlobalLedgerError::request(error.code(), "validate_recovered_scheduled_event")
         })?;
-        self.append_with_event_id(draft, None)
+        self.append_with_event_id(draft, None, &mut None)
     }
 
     fn append_recovered_policy_completion(
@@ -1189,8 +1198,12 @@ impl<B: DurableStorage> EventStore<B> {
         self.append_with_scheduled_recovery_continuation(draft, continuation)
     }
 
-    fn persist_event(&mut self, event: PersistedEvent) -> GlobalLedgerResult<PersistedEvent> {
-        self.persist_retention_checked(event, false)
+    fn persist_event(
+        &mut self,
+        event: PersistedEvent,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        self.persist_retention_checked_observed(event, false, observation)
     }
 
     pub(super) fn validate_retention_admission(
@@ -1216,6 +1229,15 @@ impl<B: DurableStorage> EventStore<B> {
         event: PersistedEvent,
         guarded: bool,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        self.persist_retention_checked_observed(event, guarded, &mut None)
+    }
+
+    fn persist_retention_checked_observed(
+        &mut self,
+        event: PersistedEvent,
+        guarded: bool,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
@@ -1224,7 +1246,14 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         self.validate_retention_admission(&event, guarded)?;
-        let write_sync_ns = self.backend.persist(&event)?;
+        if let Some(value) = observation {
+            value.durable_started_at = Some(Instant::now());
+        }
+        let result = self.backend.persist(&event);
+        if let Some(value) = observation {
+            value.persisted(result.is_ok());
+        }
+        let write_sync_ns = result?;
         self.publish_committed(event, following_sequence, write_sync_ns)
     }
 
@@ -1369,7 +1398,7 @@ impl<B: DurableStorage> EventStore<B> {
         .map_err(|_| {
             GlobalLedgerError::fatal("recovery_event_failed", "sanitize_recovery_event")
         })?;
-        self.append_with_event_id(draft, event_id)
+        self.append_with_event_id(draft, event_id, &mut None)
     }
 }
 
