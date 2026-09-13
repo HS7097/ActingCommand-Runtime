@@ -183,6 +183,23 @@ failure reaches subscribers and terminates the writer through its existing error
 path. SQL candidate rows do not replace the full related-run recovery context or
 its 1024-event bound. An empty match retains the verified global snapshot position.
 
+Within one SQLite verification call, the private result retains the original stored
+records and the metadata already constructed and structurally validated for each
+record. It is returned only after all rows, relations, head and migration-marker
+checks succeed. Query preparation consumes that metadata after the requested
+prefix/hash check, retaining its per-item budget checks and retention annotation.
+The original records are released inside the preparation observation boundary.
+Metadata opening uses the same authenticated result; recovery and schema upgrade
+continue to consume the original records. These representations belong only to
+the current call and confer no artifact availability capability.
+
+The shared SQLite row projector used by append and Release source authentication
+serializes the complete stored record for canonical bytes, hash and integrity tag.
+Its index-column view borrows only the original identity/type/origin/links/schema
+and ordered artifact fields. The same field serializers and SQL column extraction
+preserve string/null handling and ordered-u64 values, while the payload remains in
+the complete canonical serialization.
+
 Segment recovery validates strict typed records, schemas, sequence continuity,
 unique EventIds and payload/link/reference consistency before rebuilding indexes.
 A dangling final segment tail is quarantined and repaired through the persisted
