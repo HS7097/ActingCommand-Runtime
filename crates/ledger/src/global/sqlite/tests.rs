@@ -259,14 +259,22 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
                 !format!("{baseline_error:?} {baseline_error}").contains("token-secret"),
                 "{label}: baseline disclosure"
             );
-            let range_error =
-                crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 0)
-                    .expect_err("changed original interval must fail");
-            assert!(range_error.is_fatal(), "{label}: {range_error}");
-            assert!(
-                !format!("{range_error:?} {range_error}").contains("token-secret"),
-                "{label}: range disclosure"
-            );
+            let range_result =
+                crate::verify_transaction_planning_page(&database, &borrowed, &planning_page, 0);
+            match label {
+                "partial view schema" | "changed view schema" => {
+                    range_result.expect("view declarations do not change the original interval");
+                }
+                _ => {
+                    let range_error =
+                        range_result.expect_err("changed original interval must fail");
+                    assert!(range_error.is_fatal(), "{label}: {range_error}");
+                    assert!(
+                        !format!("{range_error:?} {range_error}").contains("token-secret"),
+                        "{label}: range disclosure"
+                    );
+                }
+            }
             let failures = [&first, &second]
                 .into_iter()
                 .filter_map(|event| verify_transaction_event(&database, &borrowed, event).err())
