@@ -459,7 +459,9 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
         let Item::Impl(item_impl) = item else {
             continue;
         };
-        if impl_self_ident(item_impl).is_none_or(|ident| ident != "GlobalLedger") {
+        if impl_self_ident(item_impl)
+            .is_none_or(|ident| resolve_alias(&ident.to_string(), &aliases) != "GlobalLedger")
+        {
             continue;
         }
         for item in &item_impl.items {
@@ -509,7 +511,21 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             }
             if is_public(&method.vis)
                 && (method.sig.ident.to_string().starts_with("append")
-                    || method_accepts_event_ingress(method))
+                    || method_accepts_event_ingress(method)
+                    || method.sig.inputs.iter().any(|input| {
+                        let FnArg::Typed(argument) = input else {
+                            return false;
+                        };
+                        [
+                            "EventDraft",
+                            "SanitizedEventDraft",
+                            "EventPayloadDraft",
+                            "ArtifactReference",
+                            "PersistedEvent",
+                        ]
+                        .iter()
+                        .any(|name| type_uses_resolved_ident(&argument.ty, name, &aliases))
+                    }))
             {
                 alternate_ingress_methods.push(method.sig.ident.to_string());
             }
