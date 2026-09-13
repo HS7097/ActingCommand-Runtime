@@ -7,6 +7,12 @@ available to the Runtime account once per distinct volume per cycle. An unresolv
 binding or unsupported platform produces Unknown with the original native cause.
 Private directory paths are not capacity-fact fields.
 
+Each binding resolution opens its nearest existing ancestor with a temporary
+attribute-query handle, follows reparse targets, and obtains the normalized final
+GUID volume root. Sampling and admission use this same resolver; each call releases
+its handle. Missing GUID identities, native errors and results exceeding the bounded
+UTF-16 buffer remain unavailable. Only the volume root enters the capacity identity.
+
 `capacity_thresholds` in the actingd configuration contains `hard_bytes` and
 `soft_bytes`. Defaults are 536870912 (512 MiB) and 2147483648 (2 GiB), with
 `0 < hard_bytes < soft_bytes`. These are initial policy values, not a measurement
