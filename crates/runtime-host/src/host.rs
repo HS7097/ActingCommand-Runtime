@@ -84,7 +84,7 @@ use actingcommand_contract::{
     TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload,
     TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
-use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
+use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
