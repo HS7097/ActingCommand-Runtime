@@ -7,9 +7,7 @@ use actingcommand_contract::{
     LabErrorClass, ResourceDeclarationIssue, page_projection::ProjectionMetadata,
     resource_declaration::ProcedureBindingConfigFile,
 };
-use actingcommand_lab::{
-    DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,
-};
+use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
 use actingcommand_pack_containment::source::{
     Bundle, ConversionFiles, SourceFile, SourceRead, declaration_file_requests,
     validate_bundle_declarations, validate_control_declarations, validate_navigation_declarations,
@@ -279,8 +277,6 @@ impl DeclarationReader {
             let value = serde_json::from_slice(&bytes)
                 .map_err(|error| invalid(path, &format!("navigation JSON parse: {error}")))?;
             validate_navigation_declarations(path, &value)?;
-            DriveNavigationGraph::parse_json(text)
-                .map_err(|error| invalid(path, &error.to_string()))?;
             "navigation"
         } else if name.ends_with(".projection.json") {
             ProjectionMetadata::parse(&bytes).map_err(|error| at_file(error, path))?;
