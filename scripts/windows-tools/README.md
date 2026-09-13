@@ -12,9 +12,10 @@ MuMu/Nemu, model, provider, or Runtime binaries.
 
 `Windows exact-SHA build` produces these artifacts:
 
-- `actingcommand-runtime-<40-character-commit-sha>`: `actingcommand-actingd.exe`
-  and `actingctl.exe`;
+- `actingcommand-runtime-<40-character-commit-sha>`: `actingcommand-actingd.exe`,
+  `actingctl.exe`, `actingd.config.example.json`, `INSTALL.md`, and `RELEASE-NOTES.md`;
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
+  `actingledger.exe`,
   `actingcommand-vision-provider-check.exe`, `actingcommand-device-test.exe`, and
   the existing PP-OCR cdylib staged as `ac_fastdeploy_ppocr.dll`.
 
@@ -22,6 +23,20 @@ Each artifact contains a root `BUILD-MANIFEST.json`. The verifier independently
 resolves the commit tree and `Cargo.lock` bytes from GitHub, selects exactly one
 successful workflow run, then checks the complete manifest tuple and every payload
 file before publishing the download directory.
+
+Runtime manifests declare `runtime_payload_layout: "distribution-v1"`, which
+requires exactly the five Runtime payloads listed above. Historical Runtime
+manifests without this field still require exactly the two original executables.
+Explicit unknown, empty or non-string layouts fail; an incomplete distribution
+cannot fall back to the two-file layout. Both layouts retain the flat directory,
+exact case/path, complete declared/physical set, size/hash and source checks.
+Tools keep their separate fixed payload set and do not declare a Runtime layout.
+
+The three static Runtime files come from `distribution/windows` at the same build
+commit. See the [installation instructions](../../distribution/windows/INSTALL.md)
+and [unreleased candidate notes](../../distribution/windows/RELEASE-NOTES.md).
+The template requires private values before startup; artifact verification does
+not establish successful installation, device execution or release publication.
 
 ```powershell
 pwsh -NoProfile -File scripts/windows-tools/Get-ExactBuildArtifact.ps1 `
