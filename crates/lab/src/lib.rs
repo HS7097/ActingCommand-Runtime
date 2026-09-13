@@ -58,6 +58,10 @@ pub use actingcommand_execution_kernel::{
     RecoverySignal, RecoveryStatus, execute_recovery_graph, simulate_contained_task,
 };
 
+pub use actingcommand_execution_kernel::{
+    DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,
+};
+
 pub struct Lab<P: LabPorts> {
     ports: P,
     state: LabState,
