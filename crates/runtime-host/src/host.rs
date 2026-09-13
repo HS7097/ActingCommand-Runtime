@@ -8705,9 +8705,6 @@ impl HostShared {
             .poll_pressure(&write_context, &mut sink)
             .map_err(online_observation::observation_artifact_failure)?;
         pipeline
-            .finish(&mut sink)
-            .map_err(online_observation::observation_artifact_failure)?;
-        pipeline
             .cleanup_spills()
             .map_err(online_observation::observation_artifact_failure)?;
         let observation = ReadonlyObservation::new(
