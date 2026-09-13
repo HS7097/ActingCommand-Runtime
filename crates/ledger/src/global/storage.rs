@@ -1,24 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#[cfg(test)]
+use super::GlobalLedgerConfig;
 use super::{
-    CommitStatistics, GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult,
-    Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
+    CommitStatistics, GlobalLedgerError, GlobalLedgerResult, Sha256SecretFingerprinter,
+    is_identifier, projection::EventIndexes,
 };
 use crate::PersistedEvent;
 #[cfg(test)]
 use crate::fact::LedgerEventRead;
 use crate::fact::StoredEventRecord;
-#[cfg(test)]
-use actingcommand_contract::GLOBAL_EVENT_SCHEMA_VERSION;
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
     EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
     EventType, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload, LedgerPayloadDraft,
     OriginModule, PolicyDispatchEventData, PolicyDispatchPayload, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    PolicyPayloadDraft, ProjectedArtifactReference, RecoveryReason, SanitizedEventDraft,
-    ScheduledPolicyRecoveryContinuation, Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
-    VerifiedArtifactReference,
+    PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation,
+    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
+};
+#[cfg(test)]
+use actingcommand_contract::{
+    GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference, VerifiedArtifactReference,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -30,7 +33,9 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const WRITER_SCHEMA_VERSION: &str = "actingcommand.ledger-writer.v2";
 const REPAIR_SCHEMA_VERSION: &str = "actingcommand.ledger-repair.v1";
