@@ -465,6 +465,25 @@ try {
     Assert-ExactString -Object $manifest -Name 'configuration' -Expected $configuration -Context 'manifest'
     Assert-ExactString -Object $manifest -Name 'source_artifact_name' -Expected $artifactName -Context 'manifest'
 
+    if ($manifest.PSObject.Properties.Name -contains 'runtime_payload_layout') {
+        $layout = $manifest.PSObject.Properties['runtime_payload_layout']
+        if (
+            $ArtifactKind -cne 'Runtime' -or
+            $layout.Name -cne 'runtime_payload_layout' -or
+            $layout.Value -isnot [string] -or
+            $layout.Value -cne 'distribution-v1'
+        ) {
+            throw "Manifest runtime_payload_layout must be exactly 'distribution-v1' for a Runtime artifact."
+        }
+        $expectedFiles = @(
+            'actingcommand-actingd.exe',
+            'actingctl.exe',
+            'actingd.config.example.json',
+            'INSTALL.md',
+            'RELEASE-NOTES.md'
+        )
+    }
+
     $rustToolchain = [string](Assert-Property -Object $manifest -Name 'rust_toolchain' -Context 'manifest')
     if ([string]::IsNullOrWhiteSpace($rustToolchain)) {
         throw 'Manifest rust_toolchain must be a nonempty exact tuple value.'
