@@ -6,6 +6,9 @@ use crate::{CorrelationId, EventId, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod capacity;
+pub use capacity::*;
+
 const MAX_CONTEXT_EVENTS: usize = 128;
 const MAX_CONTEXT_PRESSURES: usize = 16;
 const MAX_CONTEXT_METRICS: usize = 32;
@@ -15,6 +18,7 @@ const MAX_PROCESS_SUMMARIES: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerformanceMetric {
+    DiskCapacity,
     CpuTotal,
     CpuPerCore,
     Ram,
@@ -34,6 +38,7 @@ pub enum PerformanceMetric {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerformancePressureKind {
+    DiskCapacity,
     Cpu,
     Ram,
     DiskIo,
@@ -114,6 +119,10 @@ pub enum PerformanceDeadlineDisposition {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PerformancePressureValue {
+    DiskCapacity {
+        available_bytes: u64,
+        thresholds: CapacityThresholds,
+    },
     Utilization {
         basis_points: u16,
     },
@@ -293,6 +302,10 @@ impl PerformancePressureRecord {
         }
         match (&self.kind, &self.peak) {
             (
+                PerformancePressureKind::DiskCapacity,
+                PerformancePressureValue::DiskCapacity { thresholds, .. },
+            ) => thresholds.validate(),
+            (
                 PerformancePressureKind::Cpu
                 | PerformancePressureKind::Ram
                 | PerformancePressureKind::Gpu,
@@ -367,6 +380,7 @@ pub struct PerformanceSummaryEventData {
     pub owned_processes: Vec<PerformanceProcessSummary>,
     pub third_party_high_load: Vec<PerformanceProcessSummary>,
     pub ledger_commits: Option<PerformanceLedgerSample>,
+    pub capacity: Option<PerformanceCapacitySample>,
 }
 
 /// A window wider than one hour does not describe the periodic sampling cadence.
@@ -468,6 +482,9 @@ pub(crate) fn validate_performance_summary(
     data: &PerformanceSummaryEventData,
 ) -> Result<(), SanitizationError> {
     data.context.validate()?;
+    if let Some(capacity) = &data.capacity {
+        capacity.validate()?;
+    }
     if let Some(PerformanceLedgerSample::Available { window }) = &data.ledger_commits {
         window.validate()?;
     }

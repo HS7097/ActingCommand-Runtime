@@ -1488,7 +1488,7 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(monitor_probe.contains("self.artifacts"));
     assert!(monitor_probe.contains("ArtifactWriteRequest::new"));
     assert!(monitor_probe.contains("ArtifactProducer::CaptureStore"));
-    assert!(monitor_probe.contains(".map_err(RuntimeHostError::artifact)"));
+    assert!(monitor_probe.contains("let error = RuntimeHostError::artifact(error)"));
     assert!(monitor_control.contains("fn record_monitor_recovery_coordination"));
     assert!(monitor_control.contains("fn monitor_recovery_admission"));
     assert!(monitor_control.contains("MonitorPayloadDraft::recovery_admitted"));
@@ -2817,7 +2817,8 @@ fn actinglab_cli_result_glue_stays_out_of_main() {
     for definition in [
         "fn human_summary(command: &str, data: &Value) -> String",
         "Value::String(text) => text.clone(),",
-        r#"_ => format!("{command} ok"),"#,
+        r#"_ => with_input_outcome(format!("{command} ok"), data),"#,
+        "fn with_input_outcome(summary: String, data: &Value) -> String",
         "struct CliResult",
         "impl CliResult",
         "fn ok(command: String, data: Value, print_json: bool, human: String) -> Self",

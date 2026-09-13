@@ -761,7 +761,7 @@
               "payload_schema": "actingcommand.payload.client.v2",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 3,
+              "sequence": 4,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -795,7 +795,7 @@
               "payload_schema": "actingcommand.payload.command.v2",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 4,
+              "sequence": 5,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -830,7 +830,7 @@
               "payload_schema": "actingcommand.payload.command.v2",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 5,
+              "sequence": 6,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -866,7 +866,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 6,
+              "sequence": 7,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -902,7 +902,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 7,
+              "sequence": 8,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -940,7 +940,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 8,
+              "sequence": 9,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -979,7 +979,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 9,
+              "sequence": 10,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1032,7 +1032,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 10,
+              "sequence": 11,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1085,7 +1085,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 11,
+              "sequence": 12,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1130,7 +1130,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 12,
+              "sequence": 13,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1170,7 +1170,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 13,
+              "sequence": 14,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1208,7 +1208,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 14,
+              "sequence": 15,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1263,7 +1263,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 15,
+              "sequence": 16,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1312,61 +1312,6 @@
                       "effect_disposition": "performed"
                     },
                     "kind": "verified"
-                  }
-                }
-              },
-              "payload_schema": "actingcommand.payload.artifact.v1",
-              "schema_version": "actingcommand.event.v2",
-              "sensitivity": "internal",
-              "sequence": 16,
-              "severity": "info",
-              "timestamp_unix_ms": "<TIME>"
-            },
-            {
-              "artifacts": [
-                {
-                  "artifact_id": "<ARTIFACT_ID>",
-                  "byte_count": "<BYTES>",
-                  "correlation_id": "<CORRELATION_ID>",
-                  "created_at_unix_ms": "<TIME>",
-                  "frame_id": "<FRAME_ID>",
-                  "kind": "diagnostic.json",
-                  "media_type": "application/json",
-                  "object_key": "artifacts/<SHARD>/<ARTIFACT_ID>.json",
-                  "producer": "artifact_store",
-                  "redaction_state": "not_required",
-                  "retention_class": "debug_full",
-                  "run_id": "<RUN_ID>",
-                  "sha256": "<SHA256>"
-                }
-              ],
-              "event_id": "<EVENT_ID>",
-              "event_type": "artifact.created",
-              "links": {
-                "correlation_id": "<CORRELATION_ID>",
-                "frame_id": "<FRAME_ID>",
-                "instance_id": "<INSTANCE_ID>",
-                "lease_id": "<LEASE_ID>",
-                "request_id": "<REQUEST_ID>",
-                "run_id": "<RUN_ID>",
-                "task_id": "<TASK_ID>"
-              },
-              "origin": {
-                "actor": "system",
-                "module": "artifact-store",
-                "source": "system"
-              },
-              "payload": {
-                "detail": "full",
-                "payload": {
-                  "family": "artifact",
-                  "payload": {
-                    "data": {
-                      "action": "artifact.store",
-                      "audit": {},
-                      "effect_disposition": "performed"
-                    },
-                    "kind": "created"
                   }
                 }
               },
@@ -1396,6 +1341,61 @@
                 }
               ],
               "event_id": "<EVENT_ID>",
+              "event_type": "artifact.created",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "frame_id": "<FRAME_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
+              },
+              "origin": {
+                "actor": "system",
+                "module": "artifact-store",
+                "source": "system"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "artifact",
+                  "payload": {
+                    "data": {
+                      "action": "artifact.store",
+                      "audit": {},
+                      "effect_disposition": "performed"
+                    },
+                    "kind": "created"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.artifact.v1",
+              "schema_version": "actingcommand.event.v2",
+              "sensitivity": "internal",
+              "sequence": 18,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>"
+            },
+            {
+              "artifacts": [
+                {
+                  "artifact_id": "<ARTIFACT_ID>",
+                  "byte_count": "<BYTES>",
+                  "correlation_id": "<CORRELATION_ID>",
+                  "created_at_unix_ms": "<TIME>",
+                  "frame_id": "<FRAME_ID>",
+                  "kind": "diagnostic.json",
+                  "media_type": "application/json",
+                  "object_key": "artifacts/<SHARD>/<ARTIFACT_ID>.json",
+                  "producer": "artifact_store",
+                  "redaction_state": "not_required",
+                  "retention_class": "debug_full",
+                  "run_id": "<RUN_ID>",
+                  "sha256": "<SHA256>"
+                }
+              ],
+              "event_id": "<EVENT_ID>",
               "event_type": "artifact.verified",
               "links": {
                 "correlation_id": "<CORRELATION_ID>",
@@ -1428,7 +1428,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 18,
+              "sequence": 19,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1469,7 +1469,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 19,
+              "sequence": 20,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1512,7 +1512,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 20,
+              "sequence": 21,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1551,7 +1551,7 @@
               "payload_schema": "actingcommand.payload.recognition.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 21,
+              "sequence": 22,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1598,7 +1598,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 22,
+              "sequence": 23,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1641,7 +1641,7 @@
               "payload_schema": "actingcommand.payload.recognition.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 23,
+              "sequence": 24,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1689,7 +1689,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 24,
+              "sequence": 25,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1730,7 +1730,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 25,
+              "sequence": 26,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1783,7 +1783,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "secret",
-              "sequence": 26,
+              "sequence": 27,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1836,7 +1836,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "secret",
-              "sequence": 27,
+              "sequence": 28,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1881,7 +1881,7 @@
               "payload_schema": "actingcommand.payload.runtime.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 28,
+              "sequence": 29,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1985,7 +1985,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 29,
+              "sequence": 30,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -2018,7 +2018,241 @@
                         "executed_steps": 0,
                         "final_page": "arknights/home",
                         "kind": "terminal_committed",
-                        "outcome": "success"
+                        "outcome": "success",
+                        "task_timing": {
+                          "clock": "process_instant",
+                          "correlation_id": "<CORRELATION_ID>",
+                          "execution": {
+                            "diagnostic_record_write": {
+                              "attempts": 2,
+                              "errors": 0,
+                              "last": {
+                                "budget_before": {
+                                  "expired": false,
+                                  "origin": "task",
+                                  "remaining_us": "<MICROSECONDS>",
+                                  "state": "observed"
+                                },
+                                "elapsed_us": {
+                                  "state": "measured",
+                                  "value": "<MICROSECONDS>"
+                                },
+                                "frame_id": "<FRAME_ID>",
+                                "recognition_id": "<RECOGNITION_ID>",
+                                "record_index": 2,
+                                "result": "ok"
+                              },
+                              "max_us": "<MICROSECONDS>",
+                              "status": { "state": "observed" },
+                              "subphases": {
+                                "capacity_admit": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "encode": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "file_write": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok",
+                                    "returned_bytes": 481
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "successful_returned_bytes": 882,
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "framing": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "material_update": {
+                                  "attempts": 2,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 2,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                }
+                              },
+                              "total_us": "<MICROSECONDS>"
+                            },
+                            "recognition_evaluate": {
+                              "attempts": 1,
+                              "errors": 0,
+                              "last": {
+                                "budget_before": {
+                                  "expired": false,
+                                  "origin": "task",
+                                  "remaining_us": "<MICROSECONDS>",
+                                  "state": "observed"
+                                },
+                                "elapsed_us": {
+                                  "state": "measured",
+                                  "value": "<MICROSECONDS>"
+                                },
+                                "frame_id": "<FRAME_ID>",
+                                "recognition_id": "<RECOGNITION_ID>",
+                                "record_index": null,
+                                "result": "ok"
+                              },
+                              "max_us": "<MICROSECONDS>",
+                              "status": { "state": "observed" },
+                              "total_us": "<MICROSECONDS>"
+                            }
+                          },
+                          "finalization": {
+                            "diagnostic_record_write": {
+                              "attempts": 4,
+                              "errors": 0,
+                              "last": {
+                                "budget_before": {
+                                  "expired": false,
+                                  "origin": "task",
+                                  "remaining_us": "<MICROSECONDS>",
+                                  "state": "observed"
+                                },
+                                "elapsed_us": {
+                                  "state": "measured",
+                                  "value": "<MICROSECONDS>"
+                                },
+                                "frame_id": "<FRAME_ID>",
+                                "recognition_id": null,
+                                "record_index": 6,
+                                "result": "ok"
+                              },
+                              "max_us": "<MICROSECONDS>",
+                              "status": { "state": "observed" },
+                              "subphases": {
+                                "capacity_admit": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "encode": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "file_write": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok",
+                                    "returned_bytes": 252
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "successful_returned_bytes": 2477,
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "framing": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "material_update": {
+                                  "attempts": 4,
+                                  "errors": 0,
+                                  "last": {
+                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "record_index": 6,
+                                    "result": "ok"
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": { "state": "observed" },
+                                  "total_us": "<MICROSECONDS>"
+                                }
+                              },
+                              "total_us": "<MICROSECONDS>"
+                            },
+                            "recognition_evaluate": {
+                              "attempts": 0,
+                              "errors": 0,
+                              "last": null,
+                              "max_us": null,
+                              "status": { "state": "unobserved" },
+                              "total_us": null
+                            }
+                          },
+                          "preflight": {
+                            "diagnostic_record_write": {
+                              "attempts": 0,
+                              "errors": 0,
+                              "last": null,
+                              "max_us": null,
+                              "status": { "state": "unobserved" },
+                              "total_us": null
+                            },
+                            "recognition_evaluate": {
+                              "attempts": 0,
+                              "errors": 0,
+                              "last": null,
+                              "max_us": null,
+                              "status": { "state": "unobserved" },
+                              "total_us": null
+                            }
+                          },
+                          "request_id": "<REQUEST_ID>",
+                          "run_id": "<RUN_ID>",
+                          "task_id": "<TASK_ID>"
+                        }
                       }
                     },
                     "kind": "semantic"
@@ -2028,7 +2262,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 30,
+              "sequence": 31,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -2065,7 +2299,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 31,
+              "sequence": 32,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -2103,7 +2337,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 32,
+              "sequence": 33,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -2142,7 +2376,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 33,
+              "sequence": 34,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             }
@@ -2164,7 +2398,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 30
+              "sequence": 31
             }
           }
         }

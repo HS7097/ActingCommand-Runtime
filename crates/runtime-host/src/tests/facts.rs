@@ -646,6 +646,8 @@ fn fact_snapshot_catches_up_with_critical_ledger_events() {
     }
     // Another native instance does not invalidate or advance this fact's boundary.
     clock.advance(1_000);
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
+    sample_capacity().expect("capacity sample after clock advance");
     let mut peer = TestClient::connect(&host);
     let (_, token) = peer.acquire("fixture-instance-b");
     let input = peer.request(RuntimeOperation::Input {

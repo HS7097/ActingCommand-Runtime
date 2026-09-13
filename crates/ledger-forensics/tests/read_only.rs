@@ -1165,6 +1165,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                 executed_steps: Some(7),
                 failure_code: None,
                 scheduling_disposition: None,
+                task_timing: None,
             },
             AuditInput::new(),
         )

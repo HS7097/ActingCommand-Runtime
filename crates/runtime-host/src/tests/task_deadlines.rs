@@ -43,12 +43,16 @@ fn direct_contained_task_max_deadline_survives_past_default_lease_boundary() {
     let advance_past_default_lease_boundary =
         DEFAULT_LEASE_TTL_MS - DEFAULT_MAX_CLIENT_HEARTBEAT_INTERVAL_MS + 1;
     let checkpoint_clock = Arc::clone(&clock);
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
     let checkpoint = host
         .run_at_contained_task_checkpoint_for_test(
             request.request_id(),
             stable_instance_id,
             None,
-            move |_| checkpoint_clock.advance(advance_past_default_lease_boundary),
+            move |_| {
+                checkpoint_clock.advance(advance_past_default_lease_boundary);
+                sample_capacity().expect("capacity sample at task checkpoint time");
+            },
         )
         .expect("install authoritative deadline checkpoint");
 

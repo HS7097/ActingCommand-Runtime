@@ -5399,12 +5399,28 @@ mod tests {
             let out = temp.path().join(format!("{case}.zip"));
             let error = build_task(build_task_request(repo, out.clone()))
                 .expect_err("invalid declaration must fail the official build path");
-            assert_eq!(error.code, "package_invalid", "{case}: {error:?}");
-            assert!(
-                error.message.contains(expected),
-                "{case}: expected '{expected}' in '{}'",
-                error.message
-            );
+            if case.ends_with("-malformed") {
+                assert_eq!(
+                    error.code, "resource_declaration_invalid",
+                    "{case}: {error:?}"
+                );
+                let details = error.details.expect("typed declaration refusal");
+                let pointer = match field {
+                    "target_page" => "/target_page/1",
+                    "to" => "/operations/0/to/1",
+                    "expect_after.page_id" => "/operations/0/expect_after/page_id/1",
+                    _ => unreachable!("fixed page declaration cases"),
+                };
+                assert_eq!(details["field_path"], pointer, "{case}");
+                assert_eq!(details["reason"], "invalid_type", "{case}");
+            } else {
+                assert_eq!(error.code, "package_invalid", "{case}: {error:?}");
+                assert!(
+                    error.message.contains(expected),
+                    "{case}: expected '{expected}' in '{}'",
+                    error.message
+                );
+            }
             assert!(!out.exists(), "{case}: invalid build published a ZIP");
         }
     }

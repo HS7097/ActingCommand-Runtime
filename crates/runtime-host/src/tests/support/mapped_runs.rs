@@ -275,6 +275,8 @@ fn admit_mapped_run_at(
     unix_ms: u64,
     seed: u64,
 ) -> (Box<PolicyRunContext>, PolicyRecomputeDirective) {
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
+    sample_capacity().expect("capacity sample for mapped admission time");
     let facts = mapped_policy_facts_at(outcome_key, unix_ms, true);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(

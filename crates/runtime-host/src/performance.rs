@@ -24,6 +24,9 @@ use actingcommand_ledger::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
+mod capacity;
+pub(crate) use capacity::{CapacityPreflightConfig, CapacityRoots};
+
 const BASIS_POINTS_MAX: u16 = 10_000;
 const DEFAULT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const DEFAULT_CONTEXT_WINDOW: Duration = Duration::from_secs(30);
@@ -371,6 +374,7 @@ struct TimedEventReference {
 }
 
 pub(crate) struct PerformanceMonitor {
+    capacity: Option<capacity::CapacityMonitor>,
     config: Option<PerformanceMonitorConfig>,
     sampler: Option<Box<dyn HostSampler>>,
     sampler_start_error: Option<&'static str>,
@@ -396,6 +400,7 @@ pub(crate) struct PerformanceMonitor {
 impl PerformanceMonitor {
     pub(crate) fn disabled() -> Self {
         Self {
+            capacity: None,
             config: None,
             sampler: None,
             sampler_start_error: None,
@@ -433,6 +438,7 @@ impl PerformanceMonitor {
             Err(error) => (None, Some(error)),
         };
         Ok(Self {
+            capacity: None,
             config: Some(config),
             sampler,
             sampler_start_error,
@@ -457,7 +463,10 @@ impl PerformanceMonitor {
     }
 
     pub(crate) fn sample_interval(&self) -> Option<Duration> {
-        self.config.as_ref().map(|config| config.sample_interval)
+        self.capacity
+            .as_ref()
+            .map(|capacity| capacity.interval)
+            .or_else(|| self.config.as_ref().map(|config| config.sample_interval))
     }
 
     /// Called before the tick's events are appended; its summary belongs to the next window.
@@ -1165,6 +1174,7 @@ impl PerformanceMonitor {
                         .map(process_summary)
                         .collect(),
                     ledger_commits: None,
+                    capacity: None,
                 },
             )));
             self.last_summary_unix_ms = Some(sample.observed_at_unix_ms);
@@ -1668,6 +1678,10 @@ fn pressure_severity(
         PerformancePressureSeverity::Critical
     } else {
         let high = match value {
+            PerformancePressureValue::DiskCapacity {
+                available_bytes,
+                thresholds,
+            } => *available_bytes < thresholds.hard_bytes,
             PerformancePressureValue::Utilization { basis_points } => *basis_points >= 9_200,
             PerformancePressureValue::DiskIo {
                 queue_depth_milli,
