@@ -445,10 +445,13 @@ pub fn inspect_readonly_capture_capability(
     Ok(violations)
 }
 
-/// Enforces the sole public global-ledger append ingress.
+/// Enforces Sanitized ingress and the exact adapters to one canonical append request.
+/// Observation adapter boundary: https://github.com/HS7097/ActingCommand-Workflow/issues/285#issuecomment-5654739712
 pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
     let mut append_methods = Vec::new();
+    let mut observation_methods = Vec::new();
+    let mut request_methods = Vec::new();
     let mut alternate_ingress_methods = Vec::new();
     for item in &file.items {
         let Item::Impl(item_impl) = item else {
@@ -462,8 +465,14 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
                 continue;
             };
             if method.sig.ident == "append" && is_public(&method.vis) {
-                append_methods.push(method);
+                append_methods.push((item_impl, method));
                 continue;
+            }
+            if method.sig.ident == "append_with_observation" {
+                observation_methods.push((item_impl, method));
+            }
+            if method.sig.ident == "append_request" {
+                request_methods.push((item_impl, method));
             }
             if method.sig.ident == "append_transaction" && is_public(&method.vis) {
                 let typed = method
@@ -512,7 +521,7 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             append_methods.len()
         ));
     } else {
-        let method = append_methods[0];
+        let method = append_methods[0].1;
         let typed = method
             .sig
             .inputs
@@ -531,7 +540,145 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             ));
         }
     }
+    let mut observation_adapter_valid = false;
+    if !observation_methods.is_empty() {
+        let previous_violations = violations.len();
+        if observation_methods.len() != 1 {
+            violations.push(format!(
+                "{path}: expected one GlobalLedger::append_with_observation adapter, found {}",
+                observation_methods.len()
+            ));
+        }
+        if request_methods.len() != 1 {
+            violations.push(format!(
+                "{path}: expected one private GlobalLedger::append_request, found {}",
+                request_methods.len()
+            ));
+        }
+        for (item_impl, method) in observation_methods
+            .iter()
+            .chain(append_methods.iter())
+            .chain(request_methods.iter())
+        {
+            let request = method.sig.ident == "append_request";
+            let observed = method.sig.ident == "append_with_observation";
+            let mut exact = item_impl.trait_.is_none()
+                && item_impl.generics.params.is_empty()
+                && item_impl.generics.where_clause.is_none()
+                && method.sig.constness.is_none()
+                && method.sig.asyncness.is_none()
+                && method.sig.unsafety.is_none()
+                && method.sig.abi.is_none()
+                && method.sig.variadic.is_none()
+                && method.sig.generics.params.is_empty()
+                && method.sig.generics.where_clause.is_none()
+                && if request {
+                    matches!(method.vis, Visibility::Inherited)
+                } else {
+                    matches!(method.vis, Visibility::Public(_))
+                }
+                && method.sig.inputs.len() == if request { 3 } else { 2 }
+                && matches!(method.sig.inputs.first(), Some(FnArg::Receiver(receiver))
+                    if receiver.reference.as_ref().is_some_and(|(_, lifetime)| lifetime.is_none())
+                        && receiver.mutability.is_none()
+                        && receiver.colon_token.is_none()
+                        && receiver.attrs.is_empty());
+            for (input, (name, expected_type)) in method
+                .sig
+                .inputs
+                .iter()
+                .skip(1)
+                .zip([("draft", "SanitizedEventDraft"), ("observe", "bool")])
+            {
+                exact &= matches!(input, FnArg::Typed(argument)
+                    if argument.attrs.is_empty()
+                        && matches!(argument.pat.as_ref(), Pat::Ident(pattern)
+                            if pattern.by_ref.is_none()
+                                && pattern.mutability.is_none()
+                                && pattern.subpat.is_none())
+                        && pattern_ident(&argument.pat).is_some_and(|ident| ident == name)
+                        && matches!(argument.ty.as_ref(), Type::Path(value)
+                            if value.qself.is_none() && value.path.is_ident(expected_type)));
+            }
+            exact &= match &method.sig.output {
+                ReturnType::Type(_, output) if request || observed => {
+                    matches!(output.as_ref(), Type::Path(value)
+                        if value.qself.is_none() && value.path.is_ident("LedgerAppendOutcome"))
+                }
+                ReturnType::Type(_, output) => {
+                    let Type::Path(value) = output.as_ref() else {
+                        violations.push(format!("{path}: GlobalLedger::append result type must remain GlobalLedgerResult<PersistedEvent>"));
+                        continue;
+                    };
+                    value.qself.is_none()
+                        && value.path.leading_colon.is_none()
+                        && value.path.segments.len() == 1
+                        && value.path.segments.first().is_some_and(|segment| {
+                            segment.ident == "GlobalLedgerResult"
+                                && matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments)
+                                    if arguments.colon2_token.is_none()
+                                        && arguments.args.len() == 1
+                                        && matches!(arguments.args.first(), Some(syn::GenericArgument::Type(Type::Path(inner)))
+                                            if inner.qself.is_none() && inner.path.is_ident("PersistedEvent")))
+                        })
+                }
+                ReturnType::Default => false,
+            };
+            if !exact {
+                violations.push(format!(
+                    "{path}: GlobalLedger::{} must retain its exact canonical append signature",
+                    method.sig.ident
+                ));
+            }
+            if request {
+                continue;
+            }
+            let call = match method.block.stmts.as_slice() {
+                [Stmt::Expr(Expr::MethodCall(call), None)] if observed => Some(call),
+                [Stmt::Expr(Expr::Field(field), None)] if !observed => match field.base.as_ref() {
+                    Expr::MethodCall(call)
+                        if field.attrs.is_empty()
+                            && matches!(&field.member, syn::Member::Unnamed(index) if index.index == 0) =>
+                    {
+                        Some(call)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let exact_call = call.is_some_and(|call| {
+                call.attrs.is_empty()
+                    && call.method == "append_request"
+                    && call.turbofish.is_none()
+                    && matches!(call.receiver.as_ref(), Expr::Path(receiver)
+                        if receiver.attrs.is_empty()
+                            && receiver.qself.is_none()
+                            && receiver.path.is_ident("self"))
+                    && call.args.len() == 2
+                    && matches!(call.args.first(), Some(Expr::Path(draft))
+                        if draft.attrs.is_empty()
+                            && draft.qself.is_none()
+                            && draft.path.is_ident("draft"))
+                    && matches!(call.args.last(), Some(Expr::Lit(value))
+                        if value.attrs.is_empty()
+                            && matches!(&value.lit, Lit::Bool(flag) if flag.value == observed))
+            });
+            if !exact_call {
+                violations.push(format!(
+                    "{path}: GlobalLedger::{} must only forward draft to its exact append_request tail expression",
+                    method.sig.ident
+                ));
+            }
+        }
+        observation_adapter_valid = observation_methods.len() == 1
+            && append_methods.len() == 1
+            && request_methods.len() == 1
+            && violations.len() == previous_violations;
+    }
     for method in alternate_ingress_methods {
+        if method == "append_with_observation" && observation_adapter_valid {
+            continue;
+        }
         violations.push(format!(
             "{path}: GlobalLedger exposes alternate public event ingress {method}"
         ));
