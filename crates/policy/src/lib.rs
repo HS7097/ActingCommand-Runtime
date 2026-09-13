@@ -17,5 +17,5 @@ pub use compiler::*;
 pub use evaluator::*;
 pub use forward::*;
 pub use schema::*;
-pub use source::{CatalogDocumentSource, CatalogSources};
+pub use source::{CatalogDocumentSource, CatalogSources, validate_catalog_declaration};
 pub use strategy::*;
