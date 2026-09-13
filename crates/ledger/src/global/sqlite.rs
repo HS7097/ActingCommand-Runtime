@@ -867,22 +867,27 @@ pub(super) fn open_metadata(
     let raw = read_snapshot(&database, budget)?;
     let bytes = raw.bytes;
     let marker = SqliteMarker::parse(&raw.meta)?;
-    let (records, head_hash) = verify_snapshot_records(&database, raw)?;
+    let verified = verify_snapshot_records(&database, raw)?;
     if marker.state != "ready" {
         return Err(failure(
             "ledger_candidate_not_production",
             "open_runtime_evidence",
         ));
     }
-    let through_sequence = records.last().map_or(0, StoredEventRecord::sequence);
-    let mut events = Vec::with_capacity(records.len());
-    for record in records {
+    let through_sequence = verified
+        .records
+        .last()
+        .map_or(0, StoredEventRecord::sequence);
+    let mut events = Vec::with_capacity(verified.records.len());
+    let VerifiedSnapshotRecords {
+        records,
+        metadata,
+        head_hash,
+    } = verified;
+    drop(records);
+    for event in metadata {
         check_read_budget(budget, bytes, events.len() + 1)?;
-        events.push(
-            record
-                .into_metadata()
-                .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
-        );
+        events.push(event);
     }
     super::retention::annotate_metadata_checked(&mut events, |count| {
         check_read_budget(budget, bytes, count)
@@ -1014,7 +1019,9 @@ impl SqliteViewSnapshot {
                 {
                     value.verify_snapshot.finish(Instant::now(), false);
                 }
-                let (records, _) = verified?;
+                let VerifiedSnapshotRecords {
+                    records, metadata, ..
+                } = verified?;
                 if let Some(value) = observation {
                     value.verified_records = LedgerProjectViewCount::from_len(records.len());
                 }
@@ -1033,20 +1040,19 @@ impl SqliteViewSnapshot {
                     value.verify_snapshot.finish(Instant::now(), true);
                     value.prepare_events.begin(Instant::now());
                 }
+                // Release the original records inside the preparation boundary;
+                // the metadata is from this same fully authenticated snapshot.
+                drop(records);
                 let mut events = Vec::new();
                 if let Some(value) = observation {
                     value.prepared_events = LedgerProjectViewCount::from_len(events.len());
                 }
-                for record in records
+                for event in metadata
                     .into_iter()
-                    .take_while(|record| record.sequence() <= self.through_sequence)
+                    .take_while(|event| event.sequence() <= self.through_sequence)
                 {
                     check_read_budget(self.budget, bytes, events.len() + 1)?;
-                    events.push(
-                        record
-                            .into_metadata()
-                            .map_err(|error| failure(error.code(), "validate_persisted_event"))?,
-                    );
+                    events.push(event);
                     if let Some(value) = observation {
                         value.prepared_events = LedgerProjectViewCount::from_len(events.len());
                     }
@@ -1172,7 +1178,11 @@ fn upgrade_views(
     let result = (|| {
         if !views::installed(&transaction)? {
             let raw = read_snapshot_connection(&transaction, None)?;
-            let (records, actual_hash) = verify_snapshot_records(database, raw)?;
+            let VerifiedSnapshotRecords {
+                records,
+                head_hash: actual_hash,
+                ..
+            } = verify_snapshot_records(database, raw)?;
             if records.last().map_or(0, StoredEventRecord::sequence) != head
                 || actual_hash.as_deref() != hash
             {
@@ -1502,18 +1512,30 @@ where
 {
     let budget = raw.budget;
     let bytes = raw.bytes;
-    let (records, hash) = verify_snapshot_records(database, raw)?;
+    let VerifiedSnapshotRecords {
+        records,
+        head_hash: hash,
+        ..
+    } = verify_snapshot_records(database, raw)?;
     let events = super::retention::restore_records(records, verifier, |count| {
         check_read_budget(budget, bytes, count)
     })?;
     Ok((events, hash))
 }
 
+/// Returned only after complete row, relation, head and marker authentication.
+/// A query still checks its requested prefix before consuming the retained metadata.
+struct VerifiedSnapshotRecords {
+    records: Vec<StoredEventRecord>,
+    metadata: Vec<LedgerEventMetadata>,
+    head_hash: Option<String>,
+}
+
 /// Authenticates the complete ledger snapshot without opening referenced material.
 fn verify_snapshot_records(
     database: &RuntimeDatabase,
     raw: RawSnapshot,
-) -> GlobalLedgerResult<(Vec<StoredEventRecord>, Option<String>)> {
+) -> GlobalLedgerResult<VerifiedSnapshotRecords> {
     let marker = SqliteMarker::parse(&raw.meta)?;
     let expected_format = if marker.state == "ready" {
         FORMAL_FORMAT_VERSION
@@ -1527,6 +1549,7 @@ fn verify_snapshot_records(
         ));
     }
     let mut events = Vec::with_capacity(raw.events.len());
+    let mut metadata = Vec::with_capacity(raw.events.len());
     let mut ids = BTreeSet::new();
     let mut next = 1;
     let mut head_hash: Option<String> = None;
@@ -1574,6 +1597,7 @@ fn verify_snapshot_records(
         expected_artifacts.extend(projected.artifacts);
         head_hash = Some(projected.hash);
         events.push(stored);
+        metadata.push(event);
         next = increment_sequence(next)?;
     }
     if raw.links != expected_links || raw.artifacts != expected_artifacts {
@@ -1591,7 +1615,11 @@ fn verify_snapshot_records(
         return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
     }
     marker.verify_records(&events)?;
-    Ok((events, head_hash))
+    Ok(VerifiedSnapshotRecords {
+        records: events,
+        metadata,
+        head_hash,
+    })
 }
 
 struct ProjectedRecord {
@@ -1617,7 +1645,7 @@ fn project_stored_record(
     let bytes = serde_json::to_vec(stored).map_err(|error| {
         GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
     })?;
-    let value = serde_json::to_value(stored).map_err(|error| {
+    let value = serde_json::to_value(stored.index_fields()).map_err(|error| {
         GlobalLedgerError::json(
             "event_serialization_failed",
             "project_sqlite_record",

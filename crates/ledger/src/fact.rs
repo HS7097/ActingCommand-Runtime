@@ -246,6 +246,33 @@ impl StoredArtifactRecord {
 }
 
 impl StoredEventRecord {
+    /// Borrow only the fields consumed by SQLite's index-column projection.
+    /// Canonical serialization continues to use the complete stored record.
+    pub(crate) fn index_fields(&self) -> impl Serialize + '_ {
+        #[derive(Serialize)]
+        struct IndexFields<'a> {
+            event_id: &'a EventId,
+            event_type: EventType,
+            severity: EventSeverity,
+            sensitivity: Sensitivity,
+            origin: &'a EventOrigin,
+            links: &'a EventLinks,
+            payload_schema: &'a str,
+            artifacts: &'a [StoredArtifactRecord],
+        }
+
+        IndexFields {
+            event_id: &self.event_id,
+            event_type: self.event_type,
+            severity: self.severity,
+            sensitivity: self.sensitivity,
+            origin: &self.origin,
+            links: &self.links,
+            payload_schema: &self.payload_schema,
+            artifacts: &self.artifacts,
+        }
+    }
+
     pub(crate) fn from_event(event: &PersistedEvent) -> Self {
         Self {
             schema_version: event.schema_version.clone(),

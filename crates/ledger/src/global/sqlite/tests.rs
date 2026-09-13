@@ -500,16 +500,11 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
             .project(EventQuery::default(), ProjectionProfile::Lab)
             .expect("reference projection")
     );
-    let (records, _) = verify_snapshot_records(
+    let VerifiedSnapshotRecords { metadata, .. } = verify_snapshot_records(
         &database,
         read_snapshot(&database, None).expect("same SQLite snapshot"),
     )
     .expect("metadata verifies canonical rows and indexes");
-    let metadata = records
-        .into_iter()
-        .map(StoredEventRecord::into_metadata)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("typed reference metadata");
     let metadata_indexes = EventIndexes::from_events(&metadata);
     let segment_metadata = super::super::read_only::open_metadata(GlobalLedgerReadOnlyConfig::new(
         segment_root.path(),
