@@ -111,6 +111,15 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    fn navigation_coordinate(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let coordinate = value
+            .as_i64()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        i32::try_from(coordinate)
+            .map(|_| ())
+            .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))
+    }
+
     fn point(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if let Some(point) = value.as_str() {
             let parts: Vec<_> = point.split(',').collect();
@@ -118,18 +127,19 @@ impl Declaration<'_> {
                 return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
             }
         } else if let Some(point) = value.as_array() {
-            if point.len() != 2 || point.iter().any(|value| value.as_i64().is_none()) {
+            if point.len() != 2 {
                 return Err(self.error(pointer, ResourceDeclarationReason::InvalidType));
+            }
+            for (index, value) in point.iter().enumerate() {
+                self.navigation_coordinate(value, &child(pointer, &index.to_string()))?;
             }
         } else {
             let object = self.object(value, pointer, &["x", "y"])?;
             for field in ["x", "y"] {
-                if self.required(object, pointer, field)?.as_i64().is_none() {
-                    return Err(self.error(
-                        &child(pointer, field),
-                        ResourceDeclarationReason::InvalidType,
-                    ));
-                }
+                self.navigation_coordinate(
+                    self.required(object, pointer, field)?,
+                    &child(pointer, field),
+                )?;
             }
         }
         Ok(())
@@ -165,6 +175,17 @@ impl Declaration<'_> {
             }
         };
         let object = self.object(value, pointer, fields)?;
+        let required: &[&str] = match kind {
+            Some("point") if object.contains_key("point") => &["point"],
+            Some("point") => &["x", "y"],
+            Some("rect") | None => &["x", "y", "width", "height"],
+            Some("target" | "target_center") => &["target_id"],
+            Some("drag") => &["from", "to"],
+            _ => &[],
+        };
+        for field in required {
+            self.required(object, pointer, field)?;
+        }
         for (field, value) in object {
             let pointer = child(pointer, field);
             match field.as_str() {
@@ -172,8 +193,8 @@ impl Declaration<'_> {
                 "point" => self.point(value, &pointer)?,
                 "from" | "to" => self.navigation_click(value, &pointer)?,
                 "duration_ms" => self.unsigned(value, &pointer)?,
-                "x" | "y" | "width" | "height" if value.as_i64().is_none() => {
-                    return Err(self.error(&pointer, ResourceDeclarationReason::InvalidType));
+                "x" | "y" | "width" | "height" => {
+                    self.navigation_coordinate(value, &pointer)?;
                 }
                 _ => {}
             }
@@ -199,6 +220,7 @@ impl Declaration<'_> {
                 "destructive_actions",
             ],
         )?;
+        self.array(self.required(object, "", "navigation")?, "/navigation")?;
         for (field, value) in object {
             let pointer = child("", field);
             match field.as_str() {
@@ -241,6 +263,17 @@ impl Declaration<'_> {
                             ]
                         };
                         let entry = self.object(entry, &pointer, fields)?;
+                        if field == "navigation" {
+                            for name in ["id", "from_page", "to_page"] {
+                                self.string(
+                                    self.required(entry, &pointer, name)?,
+                                    &child(&pointer, name),
+                                )?;
+                            }
+                        }
+                        if field == "navigation" || field == "destructive_actions" {
+                            self.required(entry, &pointer, "click")?;
+                        }
                         for (field, value) in entry {
                             let pointer = child(&pointer, field);
                             match field.as_str() {
@@ -1725,12 +1758,17 @@ impl Declaration<'_> {
             self.required(object, pointer, "name")?,
             &child(pointer, "name"),
         )?;
+        if !object.contains_key("click") && !object.contains_key("point") {
+            for field in ["x", "y"] {
+                self.required(object, pointer, field)?;
+            }
+        }
         for (field, value) in object {
             let pointer = child(pointer, field);
             match field.as_str() {
                 "name" | "note" | "purpose" => self.string(value, &pointer)?,
-                "x" | "y" if value.as_i64().is_none() => {
-                    return Err(self.error(&pointer, ResourceDeclarationReason::InvalidType));
+                "x" | "y" => {
+                    self.navigation_coordinate(value, &pointer)?;
                 }
                 "point" => self.point(value, &pointer)?,
                 "click" => self.navigation_click(value, &pointer)?,
