@@ -2288,11 +2288,15 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
 
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
+    let mut policy_identity_header_io = None;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wait_for_runtime_info(&mut child.0, root.path());
         let client = connect_agent(root.path());
         let identity = client
             .project_policy_input_identity(evidence_sequence)
+            .inspect_err(|error| {
+                policy_identity_header_io = error.receipt_header_io().cloned();
+            })
             .expect("project policy input identity through daemon IPC");
         let report = strategic_report(
             &base,
@@ -2355,6 +2359,20 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
             "preserved actingd failure state root: {}",
             root.path().display()
         );
+        eprintln!(
+            "original policy identity header I/O association: {}",
+            policy_identity_header_io
+                .as_ref()
+                .map(|context| json!({
+                    "request_id": context.request_id(),
+                    "correlation_id": context.correlation_id(),
+                    "expected_owner_epoch": context.expected_owner_epoch(),
+                    "expected_runtime_pid": context.expected_runtime_pid(),
+                    "kind": format!("{:?}", context.kind()),
+                    "raw_os_error": context.raw_os_error(),
+                }))
+                .unwrap_or(Value::Null),
+        );
         let snapshot = actingcommand_ledger::GlobalLedger::open_evidence(
             actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
             |reference| match actingcommand_artifact_store::verify_projected_read_only(
@@ -2398,7 +2416,42 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                         "authoritative {event_type:?} snapshot count={}",
                         events.len()
                     );
+                    let mut request_matches = 0;
+                    let mut correlation_matches = 0;
+                    let mut owner_matches = 0;
                     for event in events {
+                        let event_owner = match event.payload() {
+                            actingcommand_contract::EventPayload::Runtime(
+                                actingcommand_contract::RuntimePayload::LifecycleObserved(value),
+                            ) => Some(value.owner_epoch()),
+                            payload => payload.lifecycle_failure().map(|value| value.owner_epoch()),
+                        };
+                        let request_match = policy_identity_header_io
+                            .as_ref()
+                            .and_then(|context| context.request_id())
+                            .map(|id| event.links().request_id() == Some(id));
+                        let correlation_match = policy_identity_header_io
+                            .as_ref()
+                            .and_then(|context| context.correlation_id())
+                            .map(|id| event.links().correlation_id() == Some(id));
+                        let owner_match = policy_identity_header_io
+                            .as_ref()
+                            .and_then(|context| context.expected_owner_epoch())
+                            .zip(event_owner.as_ref())
+                            .map(|(expected, actual)| expected == actual);
+                        request_matches += usize::from(request_match == Some(true));
+                        correlation_matches += usize::from(correlation_match == Some(true));
+                        owner_matches += usize::from(owner_match == Some(true));
+                        eprintln!(
+                            "authoritative failure-snapshot association: {}",
+                            json!({
+                                "sequence": event.sequence(),
+                                "request_match": request_match,
+                                "correlation_match": correlation_match,
+                                "owner_match": owner_match,
+                                "event_owner_epoch": event_owner,
+                            })
+                        );
                         match actingcommand_ledger::project_subscription_event(
                             &event,
                             &query,
@@ -2418,6 +2471,9 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                             ),
                         }
                     }
+                    eprintln!(
+                        "authoritative {event_type:?} association counts: request={request_matches} correlation={correlation_matches} owner={owner_matches}; selected existing event types only; absent or unmatched facts do not establish server progress or client receipt"
+                    );
                 }
             }
             Err(reader_error) => {

@@ -48,6 +48,74 @@ error. A missing position is unobserved. The original scope, stage, elapsed/limi
 values, checks and sleeps are unchanged; entry recovery forwards the same error
 position while retaining its original observation phase and budget origin.
 
+Each phase may also carry a fixed `boundaries` object. `capture_page` covers the
+original kernel call from before capture through page/scene/OCR result handling,
+including returned errors. `capture` covers the complete Host capture call;
+`capture_active_pressure` covers its initial active and pressure checks,
+`capture_backend` the original retained backend call, and `capture_material` the
+successful backend arm through its returned frame or error (FrameStore, PNG,
+material persistence, pinning, pressure and configuration handling).
+`capture_completed_record` and `recognition_started_record` cover their original
+Host arms. `input` covers the complete original Host input call. `post_input_wait`,
+`retry_wait`, `page_recognition_wait` and `postcondition_wait` cover only their
+original wait calls, with the original duration expressions and results.
+
+`recognition_payload_append` and `recognition_task_append` retain the two ordered
+RecognitionCompleted commits separately. Their fixed `recognition_payload_stages`
+and `recognition_task_stages` contain `fact_gate` (original lock acquisition),
+`draft` (construction and sanitization), `writer_response` (the original Ledger
+call), `device_diagnostics`, `fact_sync` (including required invalidation), and
+`pipeline` (the original performance callback after dropping the Fact gate).
+An original error completes the entered observations before it propagates;
+later, unentered stages remain Unobserved.
+
+The same Ledger append reply transports process-local endpoints for `ledger_queue`
+(immediately before sending through writer receipt), `ledger_persistence` (writer
+receipt through backend persist return, including validation/preparation), and
+`ledger_publication` (successful backend return through retention/index/event/
+statistics publication and original reply preparation). `ledger_durable` directly
+covers only that backend persist call inside persistence. An earlier store error
+ends persistence at store return; publication remains unentered. Channel creation,
+sender setup, response send/wakeup tails and post-reply delivery are outside these
+inner spans. No cumulative statistics subtraction supplies a missing endpoint.
+Missing same-request reply observations stay absent; partial endpoints/results
+remain Incomplete, with unknown duration/result represented explicitly.
+
+Boundary samples have no record index. `last_call` adds the same call's budget
+after return and its already known logical step/action. Identity is frozen before
+the original clearing; a frame or recognition identity not yet issued is null.
+The two append samples retain their common original frame/recognition identity.
+All summaries use checked counters and microseconds in constant space. Parent
+and child spans overlap and must not be added together.
+
+`first_observed_expiry`, when present, retains the first completed interval
+observed with a nonexpired Task budget at entry and an expired Task budget at
+return. Completed inner append intervals are considered before their enclosing
+append; later outer observations do not replace the first recorded interval.
+This identifies a directly covered interval, not the first actual expiry instant
+or a cause inferred across unmeasured gaps. Already-expired entry, entry-recovery
+budgets, missing endpoints and incomplete aggregates cannot establish it. The
+original four summaries retain their original endpoints and meaning.
+
+An existing `runtime_connection` failure detail may contain fixed process-instant
+`receive`, `validated_dispatch`, `policy_identity_projection` and `receipt_write`
+observations, plus the current owner epoch and Runtime PID. These describe the
+original read-frame, validated operation, projection return and write-frame
+results; dispatch excludes receipt construction. They reset for each original
+read, including idle reads, and are emitted only at that existing legal failure
+point. A cached request has no observed dispatch/projection. Existing failure
+deduplication or a Ledger failure can prevent that carrier; successful requests
+and client timeouts alone create no new server fact. No server span proves that
+the client received a receipt.
+
+The existing Planning process failure output serializes only the original
+header-I/O request/correlation/expected-owner/PID and native I/O kind/code. Its
+already opened snapshot retains the original RuntimeFailed and lifecycle event
+selection, with per-event request/correlation/known-owner comparisons and counts.
+Null means unavailable, false means an observed mismatch. Zero matches within
+those selected kinds cannot establish server progress, shutdown or full-event
+coverage. No additional Runtime query, connection or request supplies evidence.
+
 The optional `diagnostic_record_write.subphases` contains exactly `encode`,
 `framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the
 original serde call (including its typed `to_value` conversion) and checked

@@ -6,6 +6,9 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
+mod boundaries;
+pub use boundaries::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimingObservationClock {
@@ -19,6 +22,7 @@ pub enum TimingObservationIssue {
     DurationOverflow,
     CountOverflow,
     SumOverflow,
+    CallIncomplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +68,7 @@ pub enum TaskTimingPhase {
 pub enum TaskTimingResult {
     Ok,
     Err,
+    Unobserved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +102,8 @@ pub struct TaskTimingSpanSummary {
     pub last: Option<TaskTimingSample>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subphases: Option<Box<TaskRecordSubphases>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_call: Option<TaskTimingCallContext>,
 }
 
 impl Default for TaskTimingSpanSummary {
@@ -109,6 +116,7 @@ impl Default for TaskTimingSpanSummary {
             max_us: None,
             last: None,
             subphases: None,
+            last_call: None,
         }
     }
 }
@@ -238,6 +246,7 @@ impl TaskRecordSubphaseSummary {
             || (!file_write && self.successful_returned_bytes.is_some())
             || self.last.as_ref().is_some_and(|sample| {
                 sample.record_index.is_none_or(|index| index == 0)
+                    || sample.result == TaskTimingResult::Unobserved
                     || (!file_write && sample.returned_bytes.is_some())
                     || (file_write
                         && (sample.result == TaskTimingResult::Ok)
@@ -267,6 +276,7 @@ impl TaskRecordSubphaseSummary {
                     && (!file_write || self.successful_returned_bytes.is_some())
                     && self.last.as_ref().is_some_and(|sample| {
                         matches!(sample.elapsed_us, ObservedMicroseconds::Measured { .. })
+                            && sample.result != TaskTimingResult::Unobserved
                     })
             }
             TaskTimingObservationState::Incomplete { .. } => {
@@ -332,6 +342,19 @@ impl TaskTimingSpanSummary {
     }
 
     fn is_valid(&self) -> bool {
+        if self.last_call.as_ref().is_some_and(|context| {
+            self.last.is_none()
+                || matches!(
+                    context.budget_after,
+                    TaskTimingBudgetObservation::Observed {
+                        remaining_us: 1..,
+                        expired: true,
+                        ..
+                    }
+                )
+        }) {
+            return false;
+        }
         if self.last.as_ref().is_some_and(|sample| {
             sample.record_index == Some(0)
                 || matches!(
@@ -371,6 +394,7 @@ impl TaskTimingSpanSummary {
                     && self.max_us.is_some()
                     && self.last.as_ref().is_some_and(|sample| {
                         matches!(sample.elapsed_us, ObservedMicroseconds::Measured { .. })
+                            && sample.result != TaskTimingResult::Unobserved
                     })
             }
             TaskTimingObservationState::Incomplete { .. } => {
@@ -389,6 +413,8 @@ pub struct TaskTimingPhaseObservations {
     pub capture_recognition: TaskTimingSpanSummary,
     #[serde(default, skip_serializing_if = "TaskTimingSpanSummary::is_unobserved")]
     pub recognition_completed_record: TaskTimingSpanSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundaries: Option<Box<TaskTimingBoundaryObservations>>,
 }
 
 /// A bounded observation of one run, carried by its existing terminal or failure fact.
@@ -408,6 +434,8 @@ pub struct TaskTimingObservations {
     pub finalization: TaskTimingPhaseObservations,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_failure: Option<TaskTimingFailureObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_observed_expiry: Option<Box<TaskTimingObservedExpiry>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,6 +479,10 @@ impl TaskTimingObservations {
                             .as_ref()
                             .is_some_and(|sample| sample.record_index.is_some())
                 })
+                || phase
+                    .boundaries
+                    .as_ref()
+                    .is_some_and(|value| !value.is_valid())
             {
                 return Err(SanitizationError::new(
                     "invalid_task_timing_observations",
@@ -463,6 +495,16 @@ impl TaskTimingObservations {
                 && (failure.timing.scope != TaskTimingScope::Task
                     || failure.timing.stage != TaskTimingStage::Postcondition)
         }) {
+            return Err(SanitizationError::new(
+                "invalid_task_timing_observations",
+                "task_timing",
+            ));
+        }
+        if self
+            .first_observed_expiry
+            .as_ref()
+            .is_some_and(|value| !value.is_valid())
+        {
             return Err(SanitizationError::new(
                 "invalid_task_timing_observations",
                 "task_timing",
