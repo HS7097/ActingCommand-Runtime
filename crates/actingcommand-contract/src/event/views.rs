@@ -50,6 +50,7 @@ impl LedgerView {
                 ],
                 events: &[
                     TaskEvidenceIndexed,
+                    TaskGeometryObserved,
                     TaskRecognitionStarted,
                     TaskRecognitionCompleted,
                     TaskEffectIntent,

@@ -495,6 +495,21 @@ impl EventDraft {
         }
         let payload = self.payload.sanitize(fingerprinter)?;
         payload.validate()?;
+        if let EventPayload::Task(super::TaskPayload::Semantic(semantic)) = &payload
+            && let super::TaskSemanticFact::GeometryObserved { observation } = semantic.fact()
+            && (self.origin.actor() != EventActor::Runtime
+                || self.origin.source() != EventSource::Runtime
+                || self.links.task_id().is_none()
+                || self.links.run_id().is_none()
+                || self.links.instance_id().is_none()
+                || self.links.correlation_id().is_none()
+                || self.links.frame_id() != observation.frame.as_ref().map(|frame| &frame.frame_id))
+        {
+            return Err(SanitizationError::new(
+                "task_geometry_identity_mismatch",
+                "task_geometry",
+            ));
+        }
         if let Some(timing) = payload.task_timing() {
             let admission_carrier = payload.event_type() == super::EventType::RuntimeFailed
                 && timing.admission_request_id.is_some()
