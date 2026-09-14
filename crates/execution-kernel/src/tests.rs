@@ -481,6 +481,7 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
         serial: "neutral-input-selected".to_owned(),
     };
     let capture_selection = actingcommand_device::CaptureSelectionContext {
+        nemu_frame: None,
         requested: actingcommand_device::CaptureBackendChoice::Adb,
         configured_adb: "configured-adb".to_owned(),
         configured_serial: None,

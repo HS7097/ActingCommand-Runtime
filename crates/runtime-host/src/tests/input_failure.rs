@@ -11,6 +11,7 @@ fn backend_failure_is_visible_and_revokes_the_guard() {
     let mut client = TestClient::connect(&host);
     let (_, token) = client.acquire("node.a");
     let input = client.request(RuntimeOperation::Input {
+        frame: None,
         token,
         action: InputAction::Reset,
     });
@@ -316,6 +317,7 @@ fn input_failure_persists_adb_bounds_context() {
         let request = client.request_with_correlation(
             correlation,
             RuntimeOperation::Input {
+                frame: None,
                 token,
                 action: InputAction::Tap { x: 101, y: 50 },
             },
@@ -506,6 +508,7 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::Input {
+            frame: None,
             token,
             action: InputAction::Reset,
         },

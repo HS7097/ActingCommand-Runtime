@@ -4,7 +4,8 @@
 
 use crate::{
     ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
-    ContainedTaskRuntime, ContainedTaskTrace, PreparedContainedTask,
+    ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
+    PreparedContainedTask,
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::Frame;
@@ -275,16 +276,20 @@ enum OfflineBoundary {
 impl ContainedTaskRuntime for OfflineRuntime {
     type Error = OfflineBoundary;
 
-    fn capture(&mut self) -> Result<Frame, Self::Error> {
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
         let frame = self
             .frames
             .pop_front()
             .ok_or(OfflineBoundary::FixtureExhausted)?;
         self.capture_count += 1;
-        Ok(frame)
+        Ok(frame.into())
     }
 
-    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+    fn input(
+        &mut self,
+        action: InputAction,
+        _frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
         let Some(planned) = &self.planned else {
             return Err(OfflineBoundary::Invariant(
                 "offline_simulation_effect_intent_missing",
@@ -797,13 +802,18 @@ mod tests {
     impl ContainedTaskRuntime for EffectingRuntime {
         type Error = EffectingBoundary;
 
-        fn capture(&mut self) -> Result<Frame, Self::Error> {
+        fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
             self.frames
                 .pop_front()
                 .ok_or(EffectingBoundary::FixtureExhausted)
+                .map(ObservedFrame::from)
         }
 
-        fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+        fn input(
+            &mut self,
+            action: InputAction,
+            _frame: Option<InputFrameContext>,
+        ) -> Result<(), Self::Error> {
             let Some(planned) = &self.first_effect else {
                 return Err(EffectingBoundary::Invariant(
                     "effecting_fake_effect_intent_missing",

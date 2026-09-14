@@ -397,6 +397,7 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
 
 fn assert_input_denied(client: &mut TestClient, token: LeaseToken, expected: RuntimeErrorCode) {
     let request = client.request(RuntimeOperation::Input {
+        frame: None,
         token,
         action: InputAction::Tap { x: 10, y: 20 },
     });

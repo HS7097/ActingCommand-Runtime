@@ -10,11 +10,12 @@ use std::path::PathBuf;
 
 use actingcommand_ledger_forensics::{
     ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
-    ForensicReplayRequest, ForensicReport, ForensicRequest, MAX_FORENSIC_EVENTS,
-    TaskRecordsRequest,
+    ForensicReplayRequest, ForensicReport, ForensicRequest, ForensicViewOptions,
+    ForensicViewRequest, MAX_FORENSIC_EVENTS, TaskRecordsRequest,
 };
 
 enum CliRequest {
+    Views(Box<ForensicViewRequest>),
     StateRoot(ForensicRequest),
     Replay(ForensicReplayRequest),
     Signatures(actingcommand_ledger_forensics::ForensicSignatureRequest),
@@ -59,6 +60,7 @@ where
     W: Write,
 {
     let report = match parse_args(args)? {
+        CliRequest::Views(request) => actingcommand_ledger_forensics::run_views(*request),
         CliRequest::StateRoot(request) => actingcommand_ledger_forensics::run(request),
         CliRequest::Replay(request) => actingcommand_ledger_forensics::replay(request),
         CliRequest::Signatures(request) => {
@@ -69,6 +71,8 @@ where
     let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
     let task_evidence_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) if !report.gaps.is_empty());
     let signatures_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Signatures(report)) if !report.evidence_complete);
+    let views_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Views(page))
+        if page.read_scope().is_none_or(|scope| !scope.read_complete));
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -82,6 +86,13 @@ where
         }
     }
     output.flush().map_err(output_error)?;
+    if views_incomplete {
+        return Err(CliError::new(
+            "ledger_view_source_incomplete",
+            "read_ledger_views",
+            "see source completeness and read-through position in the page",
+        ));
+    }
     if signatures_incomplete {
         return Err(CliError::new(
             "signature_replay_incomplete",
@@ -135,6 +146,10 @@ where
     }
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
+        "views" => {
+            return parse_views(state_root, args)
+                .map(|request| CliRequest::Views(Box::new(request)));
+        }
         "signatures" => return parse_signatures(state_root, args).map(CliRequest::Signatures),
         "open" => ForensicCommand::Open,
         "events" => {
@@ -176,6 +191,40 @@ where
     Ok(CliRequest::StateRoot(ForensicRequest::new(
         state_root, command,
     )))
+}
+
+fn parse_views<I>(state_root: PathBuf, mut args: I) -> Result<ForensicViewRequest, CliError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let mut options = ForensicViewOptions::default();
+    while let Some(option) = args.next() {
+        let option = option
+            .into_string()
+            .map_err(|_| invalid_arguments("view option is not UTF-8"))?;
+        let value = next_value(&mut args, &option)?;
+        match option.as_str() {
+            "--query" if options.query.is_none() => options.query = Some(value),
+            "--profile" if options.profile.is_none() => options.profile = Some(value),
+            "--cursor" if options.cursor.is_none() => options.cursor = Some(value),
+            "--snapshot" if options.snapshot.is_none() => {
+                options.snapshot = Some(parse_u64(&value, "--snapshot")?)
+            }
+            "--limit" if options.limit.is_none() => {
+                options.limit = Some(
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| invalid_arguments("invalid view page limit"))?,
+                )
+            }
+            "--query" | "--profile" | "--cursor" | "--snapshot" | "--limit" => {
+                return Err(invalid_arguments(format!("duplicate view option {option}")));
+            }
+            _ => return Err(invalid_arguments(format!("unknown view option {option}"))),
+        }
+    }
+    ForensicViewRequest::from_options(state_root, options)
+        .map_err(|error| invalid_arguments(error.to_string()))
 }
 
 fn parse_signatures<I>(

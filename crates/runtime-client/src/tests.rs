@@ -640,6 +640,8 @@ fn projected_task_event(issuer: &IdentifierIssuer, sequence: u64) -> ProjectedEv
     .sanitize(&RejectProjectionSecrets)
     .expect("sanitize projection fixture");
     ProjectedEvent {
+        views: Vec::new(),
+        artifact_evictions: Vec::new(),
         schema_version: sanitized.schema_version().to_owned(),
         sequence,
         event_id: *sanitized.event_id(),
@@ -687,6 +689,8 @@ fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> Pr
     .sanitize(&RejectProjectionSecrets)
     .expect("sanitize terminal projection fixture");
     ProjectedEvent {
+        views: Vec::new(),
+        artifact_evictions: Vec::new(),
         schema_version: sanitized.schema_version().to_owned(),
         sequence,
         event_id: *sanitized.event_id(),
@@ -3062,8 +3066,10 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::CapturePolicyChanged,
             EventType::ArtifactCreated,
             EventType::ArtifactVerified,
+            EventType::ArtifactPinRecorded,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
         ]
@@ -3298,6 +3304,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
         assert_eq!(
             receipt_response_timeout(
                 &RuntimeOperation::Input {
+                    frame: None,
                     token: token.clone(),
                     action
                 },
@@ -3309,6 +3316,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
     }
     for operation in [
         RuntimeOperation::Input {
+            frame: None,
             token: token.clone(),
             action: InputAction::Reset,
         },
@@ -3329,6 +3337,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
     assert_eq!(
         receipt_response_timeout(
             &RuntimeOperation::Input {
+                frame: None,
                 token,
                 action: overflow
             },

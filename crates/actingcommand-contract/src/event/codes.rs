@@ -141,6 +141,7 @@ closed_code!(EventAction {
     CapturePressure => "capture.pressure",
     CaptureSummaryCommit => "capture.summary_commit",
     RecognitionObserve => "recognition.observe",
+    ArtifactRetention => "artifact.retention",
     ArtifactStore => "artifact.store",
     ArtifactVerify => "artifact.verify",
     ArtifactExport => "artifact.export",

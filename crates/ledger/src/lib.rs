@@ -17,7 +17,7 @@ pub mod critical;
 mod fact;
 pub mod global;
 pub mod signatures;
-pub use fact::PersistedEvent;
+pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";

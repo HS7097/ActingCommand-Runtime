@@ -1734,7 +1734,7 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
             "capture sequence operation gained input authority via {forbidden}"
         );
     }
-    assert!(contract.contains("Self::Input { token, action }"));
+    assert!(contract.contains("Self::Input {\n                token,\n                action,\n                frame,\n            }"));
 
     let host_sequence = host
         .split_once("    fn capture_sequence(")

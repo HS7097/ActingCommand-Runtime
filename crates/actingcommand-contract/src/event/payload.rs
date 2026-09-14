@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod retention;
+pub use retention::*;
 mod ledger_migration;
 mod signature;
 pub use ledger_migration::*;
@@ -1681,6 +1683,9 @@ impl ArtifactFailureRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
+    VendorStdioClose {
+        instance_id: Option<InstanceId>,
+    },
     AdbTargetRecovery,
     DeviceDiagnosticDetail,
     DeviceDiagnosticSummary,
@@ -1709,6 +1714,8 @@ pub enum RuntimeLifecyclePhase {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecyclePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     action: EventAction,
     owner_epoch: OwnerEpoch,
@@ -1719,6 +1726,10 @@ pub struct RuntimeLifecyclePayload {
 }
 
 impl RuntimeLifecyclePayload {
+    pub fn vendor_stdio(&self) -> Option<&VendorStdioFacts> {
+        self.vendor_stdio.as_deref()
+    }
+
     pub fn adb_recovery(&self) -> Option<&AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
@@ -1932,6 +1943,8 @@ pub struct CaptureDedupWindowPayload {
     action: EventAction,
     duplicate_count: u64,
     duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserved_frame_id: Option<crate::FrameId>,
     audit: SanitizedAudit,
 }
 
@@ -4300,6 +4313,10 @@ impl CapturePressurePayload {
 }
 
 impl CaptureDedupWindowPayload {
+    pub fn preserved_frame_id(&self) -> Option<&crate::FrameId> {
+        self.preserved_frame_id.as_ref()
+    }
+
     pub const fn duplicate_count(&self) -> u64 {
         self.duplicate_count
     }
@@ -4949,6 +4966,8 @@ struct CaptureDedupWindowDraft {
     action: EventAction,
     duplicate_count: u64,
     duration_ms: u64,
+    preserved_frame_id: Option<crate::FrameId>,
+    preserving_material: bool,
     audit: AuditInput,
 }
 
@@ -6646,7 +6665,10 @@ impl CaptureDedupWindowDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<CaptureDedupWindowPayload, SanitizationError> {
-        if self.duplicate_count == 0 || self.duration_ms == 0 {
+        if self.duplicate_count == 0
+            || self.duration_ms == 0
+            || (self.preserving_material && self.preserved_frame_id.is_none())
+        {
             return Err(SanitizationError::new(
                 "invalid_capture_dedup_window",
                 "duplicate_count",
@@ -6656,6 +6678,7 @@ impl CaptureDedupWindowDraft {
             action: self.action,
             duplicate_count: self.duplicate_count,
             duration_ms: self.duration_ms,
+            preserved_frame_id: self.preserved_frame_id,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6767,6 +6790,7 @@ enum RuntimeDraftKind {
 }
 
 struct RuntimeLifecycleDraft {
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
@@ -6779,7 +6803,11 @@ impl RuntimeLifecycleDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<RuntimeLifecyclePayload, SanitizationError> {
+        if let Some(facts) = &self.vendor_stdio {
+            facts.validate()?;
+        }
         Ok(RuntimeLifecyclePayload {
+            vendor_stdio: self.vendor_stdio,
             adb_recovery: self.adb_recovery,
             action: EventAction::RuntimeAction,
             owner_epoch: self.owner_epoch,
@@ -6837,6 +6865,7 @@ impl RuntimePayloadDraft {
         summary: bool,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
             phase: if summary {
@@ -6871,6 +6900,7 @@ impl RuntimePayloadDraft {
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
             phase,
@@ -6887,9 +6917,25 @@ impl RuntimePayloadDraft {
 
     pub fn adb_target_recovery(owner_epoch: OwnerEpoch, recovery: AdbTargetRecovery) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             owner_epoch,
             phase: RuntimeLifecyclePhase::AdbTargetRecovery,
             adb_recovery: Some(Box::new(recovery)),
+            device_diagnostics: None,
+            audit: AuditInput::new(),
+        }))
+    }
+
+    pub fn vendor_stdio_close(
+        owner_epoch: OwnerEpoch,
+        instance_id: Option<InstanceId>,
+        facts: VendorStdioFacts,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: Some(Box::new(facts)),
+            owner_epoch,
+            phase: RuntimeLifecyclePhase::VendorStdioClose { instance_id },
+            adb_recovery: None,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -7569,6 +7615,24 @@ impl CapturePayloadDraft {
             action: EventAction::CaptureDedup,
             duplicate_count,
             duration_ms,
+            preserved_frame_id: None,
+            preserving_material: false,
+            audit,
+        }))
+    }
+
+    /// Records a perceptual relation while the original frame remains materialized.
+    pub fn dedup_window_preserving_material(
+        original_frame: &crate::EventLinksDraft,
+        duration_ms: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::DedupWindow(CaptureDedupWindowDraft {
+            action: EventAction::CaptureDedup,
+            duplicate_count: 1,
+            duration_ms,
+            preserved_frame_id: original_frame.frame_id().cloned(),
+            preserving_material: true,
             audit,
         }))
     }
@@ -7646,6 +7710,7 @@ impl RecognitionPayloadDraft {
 }
 
 enum ArtifactDraftKind {
+    Retention(Box<crate::ArtifactRetentionFact>, AuditInput),
     Created(OutcomeDraft),
     Verified(OutcomeDraft),
     StoreFailed(DiagnosticOutcomeDraft),
@@ -8600,6 +8665,7 @@ pub enum RecognitionPayload {
     deny_unknown_fields
 )]
 pub enum ArtifactPayload {
+    Retention(ArtifactRetentionPayload),
     Created(OutcomePayload),
     Verified(OutcomePayload),
     StoreFailed(DiagnosticOutcomePayload),
@@ -8825,14 +8891,28 @@ family_payload!(RecognitionPayload, {
     Completed => EventType::RecognitionCompleted,
     Failed => EventType::RecognitionFailed,
 });
-family_payload!(ArtifactPayload, {
-    Created => EventType::ArtifactCreated,
-    Verified => EventType::ArtifactVerified,
-    StoreFailed => EventType::ArtifactStoreFailed,
-    VerificationFailed => EventType::ArtifactVerificationFailed,
-    ExportCompleted => EventType::ArtifactExportCompleted,
-    ExportFailed => EventType::ArtifactExportFailed,
-});
+impl FamilyPayload for ArtifactPayload {
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::Retention(value) => value.event_type(),
+            Self::Created(_) => EventType::ArtifactCreated,
+            Self::Verified(_) => EventType::ArtifactVerified,
+            Self::StoreFailed(_) => EventType::ArtifactStoreFailed,
+            Self::VerificationFailed(_) => EventType::ArtifactVerificationFailed,
+            Self::ExportCompleted(_) => EventType::ArtifactExportCompleted,
+            Self::ExportFailed(_) => EventType::ArtifactExportFailed,
+        }
+    }
+    fn detail(&self) -> &dyn PayloadDetail {
+        match self {
+            Self::Retention(value) => value,
+            Self::Created(value) | Self::Verified(value) => value,
+            Self::StoreFailed(value) | Self::VerificationFailed(value) => value,
+            Self::ExportCompleted(value) => value,
+            Self::ExportFailed(value) => value,
+        }
+    }
+}
 family_payload!(ClientPayload, {
     Action => EventType::ClientAction,
     UiAction => EventType::UiAction,
@@ -9183,6 +9263,9 @@ impl EventPayloadDraft {
                 }
             }),
             Self::Artifact(value) => EventPayload::Artifact(match value.0 {
+                ArtifactDraftKind::Retention(record, audit) => ArtifactPayload::Retention(
+                    ArtifactRetentionPayload::sanitize(record, audit, fingerprinter)?,
+                ),
                 ArtifactDraftKind::Created(detail) => {
                     ArtifactPayload::Created(detail.sanitize(fingerprinter)?)
                 }
@@ -9285,6 +9368,7 @@ impl EventPayload {
             Self::Input(_) => INPUT_PAYLOAD_SCHEMA,
             Self::Capture(_) => CAPTURE_PAYLOAD_SCHEMA,
             Self::Recognition(_) => RECOGNITION_PAYLOAD_SCHEMA,
+            Self::Artifact(ArtifactPayload::Retention(_)) => ARTIFACT_RETENTION_PAYLOAD_SCHEMA,
             Self::Artifact(_) => ARTIFACT_PAYLOAD_SCHEMA,
             Self::ResourceAuthoring(_) => RESOURCE_AUTHORING_PAYLOAD_SCHEMA,
             Self::Client(_) => CLIENT_PAYLOAD_SCHEMA,
@@ -9295,7 +9379,10 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
-        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some())
+        if let Self::Artifact(ArtifactPayload::Retention(value)) = self {
+            sensitivity = sensitivity.max(value.sensitivity());
+        }
+        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some() || value.vendor_stdio.is_some())
         {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -9404,6 +9491,9 @@ impl EventPayload {
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(retention) = self.artifact_retention() {
+            retention.validate()?;
+        }
         if let Some(rejection) = self.resource_declaration() {
             if self.event_type() != EventType::RuntimeFailed
                 || detail.effect_disposition() != Some(EffectDisposition::NotPerformed)
@@ -9479,6 +9569,17 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            if matches!(value.phase, RuntimeLifecyclePhase::VendorStdioClose { .. })
+                != value.vendor_stdio.is_some()
+            {
+                return Err(SanitizationError::new(
+                    "invalid_vendor_stdio_phase",
+                    "runtime_payload",
+                ));
+            }
+            if let Some(facts) = &value.vendor_stdio {
+                facts.validate()?;
+            }
             if (value.phase == RuntimeLifecyclePhase::AdbTargetRecovery)
                 != value.adb_recovery.is_some()
             {
@@ -9683,7 +9784,9 @@ impl EventPayload {
                 ));
             }
             Self::Capture(CapturePayload::DedupWindow(value))
-                if value.duplicate_count == 0 || value.duration_ms == 0 =>
+                if value.duplicate_count == 0
+                    || value.duration_ms == 0
+                    || value.preserved_frame_id.is_some() && value.duplicate_count != 1 =>
             {
                 return Err(SanitizationError::new(
                     "invalid_capture_dedup_window",
@@ -9769,6 +9872,15 @@ impl EventPayload {
             resident_bytes: capture_pressure(self).map(CapturePressurePayload::resident_bytes),
             duplicate_count: capture_dedup(self).map(CaptureDedupWindowPayload::duplicate_count),
             duration_ms: capture_dedup(self).map(CaptureDedupWindowPayload::duration_ms),
+            preserved_frame_id: capture_dedup(self)
+                .and_then(|value| value.preserved_frame_id)
+                .map(Box::new),
+            artifact_retention: match self {
+                Self::Artifact(ArtifactPayload::Retention(value)) => {
+                    Some(Box::new(value.public_summary()))
+                }
+                _ => None,
+            },
             cadence_ms: capture_policy(self).map(CapturePolicyPayload::cadence_ms),
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
@@ -10187,6 +10299,10 @@ pub struct PublicPayload {
     duplicate_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserved_frame_id: Option<Box<crate::FrameId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact_retention: Option<Box<ArtifactRetentionPublicSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cadence_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -10365,6 +10481,14 @@ impl PublicPayload {
 
     pub const fn duration_ms(&self) -> Option<u64> {
         self.duration_ms
+    }
+
+    pub fn preserved_frame_id(&self) -> Option<&crate::FrameId> {
+        self.preserved_frame_id.as_deref()
+    }
+
+    pub fn artifact_retention(&self) -> Option<&ArtifactRetentionPublicSummary> {
+        self.artifact_retention.as_deref()
     }
 
     pub const fn cadence_ms(&self) -> Option<u64> {

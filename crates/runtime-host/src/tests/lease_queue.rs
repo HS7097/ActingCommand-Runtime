@@ -166,6 +166,7 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
     let input_token = old_token.clone();
     let input_thread = thread::spawn(move || {
         let input = first.request(RuntimeOperation::Input {
+            frame: None,
             token: input_token,
             action: InputAction::Reset,
         });

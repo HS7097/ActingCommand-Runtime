@@ -23,9 +23,16 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
+
+mod nemu_input;
+pub use nemu_input::{
+    InputCheckPhase, InputExecutionContext, InputOperationCheck, NemuAppIndex,
+    NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
+};
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 const IHDR_LENGTH: [u8; 4] = [0, 0, 0, 13];
@@ -218,6 +225,7 @@ pub struct CaptureSelectionContext {
     pub resolved_adb: String,
     pub selected_serial: String,
     pub mumu: Option<CaptureMumuContext>,
+    pub nemu_frame: Option<Arc<NemuFrameGeometry>>,
 }
 
 #[derive(Debug, Clone)]
@@ -325,7 +333,14 @@ pub struct SelectedCaptureBackend {
 impl CaptureBackend for SelectedCaptureBackend {
     fn capture(&mut self) -> DeviceResult<Frame> {
         let mut frame = self.backend.capture()?;
-        frame.selection = self.selection.clone();
+        if let Some(selection) = &self.selection {
+            let mut selection = selection.as_ref().clone();
+            selection.nemu_frame = frame
+                .selection
+                .as_ref()
+                .and_then(|value| value.nemu_frame.clone());
+            frame.selection = Some(Arc::new(selection));
+        }
         Ok(frame)
     }
 
@@ -354,6 +369,7 @@ pub fn create_capture_backend(
         resolved_adb: config.adb_config.adb_path.clone(),
         selected_serial: config.target.resolved_serial(),
         mumu: config.resolved_mumu.clone(),
+        nemu_frame: None,
     };
     let mut selected = match config.requested {
         CaptureBackendChoice::Auto => create_auto_capture_backend(config),
@@ -690,7 +706,7 @@ where
         if let Some(primary) = cleanup_error {
             let mut backend = backend;
             return Err(match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-                Ok(_) => primary,
+                Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
                 Err(winner_cleanup) => {
                     if winner_cleanup.resource_quiescence()
                         == Some(DeviceResourceQuiescence::Unconfirmed)
@@ -728,7 +744,7 @@ fn close_capture_candidates(
         |primary, (index, _name, _elapsed_ms, mut backend)| match backend
             .close_once(DeviceCloseAuthority::LocalOnly)
         {
-            Ok(_) => primary,
+            Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
             Err(cleanup) => {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(backend);
@@ -830,7 +846,7 @@ fn close_capture_backend_after_error(
     primary: DeviceError,
 ) -> DeviceError {
     match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-        Ok(_) => primary,
+        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
         Err(cleanup) => {
             if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                 std::mem::forget(backend);
@@ -1041,7 +1057,7 @@ fn prime_capture_backend(
             ))
         }
         Err(primary) => match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-            Ok(_) => Err(primary),
+            Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
             Err(cleanup) => {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(backend);
@@ -1410,13 +1426,22 @@ pub struct NemuIpcBackend {
 
 type NemuConnect = unsafe extern "C" fn(*const u16, i32) -> i32;
 type NemuDisconnect = unsafe extern "C" fn(i32);
-type NemuCaptureDisplay = unsafe extern "C" fn(i32, i32, i32, *mut i32, *mut i32, *mut u8) -> i32;
+type NemuCaptureDisplay = unsafe extern "C" fn(i32, u32, i32, *mut i32, *mut i32, *mut u8) -> i32;
 
 impl NemuIpcBackend {
     pub fn new(
         target: DeviceTarget,
         config: NemuIpcConfig,
         capture_timeout: Duration,
+    ) -> DeviceResult<Self> {
+        Self::new_with_input(target, config, capture_timeout, None)
+    }
+
+    fn new_with_input(
+        target: DeviceTarget,
+        config: NemuIpcConfig,
+        capture_timeout: Duration,
+        input: Option<nemu_input::NemuInputState>,
     ) -> DeviceResult<Self> {
         if let Some(reason) = &config.mumu_identity_unavailable {
             let mut error = DeviceError::fatal(reason.message.clone());
@@ -1468,12 +1493,13 @@ impl NemuIpcBackend {
             instance_id,
             config.display_id,
             capture_timeout,
+            input,
         );
         let (frame_width, frame_height) = match worker.probe_resolution() {
             Ok(resolution) => resolution,
             Err(primary) => {
                 return match worker.shutdown_once(DeviceCloseAuthority::LocalOnly) {
-                    Ok(_) => Err(primary),
+                    Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
                     Err(cleanup) => {
                         let unconfirmed = cleanup.resource_quiescence()
                             == Some(DeviceResourceQuiescence::Unconfirmed);
@@ -1499,8 +1525,21 @@ impl NemuIpcBackend {
 enum NemuIpcCommand {
     Probe(mpsc::Sender<DeviceResult<(u32, u32)>>),
     Capture(mpsc::Sender<DeviceResult<NemuCapturedFrame>>),
+    InputTap {
+        x: i32,
+        y: i32,
+        context: InputExecutionContext,
+        response: mpsc::Sender<DeviceResult<()>>,
+    },
+    InputSegmented {
+        plan: crate::PreparedSegmentedSwipePlan,
+        context: InputExecutionContext,
+        response: mpsc::Sender<DeviceResult<()>>,
+    },
+    InvalidateDisplay(mpsc::Sender<DeviceResult<()>>),
     Shutdown {
         authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
         response: mpsc::Sender<DeviceResult<DeviceResourceCloseOutcome>>,
     },
 }
@@ -1510,13 +1549,14 @@ struct NemuCapturedFrame {
     height: u32,
     pixels: Vec<u8>,
     vendor_stdio: Vec<VendorStdioCapture>,
+    geometry: Option<Arc<NemuFrameGeometry>>,
 }
 
 struct NemuIpcWorker {
     tx: mpsc::Sender<NemuIpcCommand>,
     handle: Option<JoinHandle<DeviceResult<()>>>,
     timeout: Duration,
-    poisoned: bool,
+    poisoned: Arc<AtomicBool>,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
@@ -1527,11 +1567,14 @@ impl NemuIpcWorker {
         instance_id: i32,
         display_id: i32,
         timeout: Duration,
+        input: Option<nemu_input::NemuInputState>,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
+        let poisoned = Arc::new(AtomicBool::new(false));
+        let worker_poisoned = Arc::clone(&poisoned);
         let handle = thread::spawn(move || {
             let mut state =
-                NemuIpcWorkerState::load(nemu_folder, dll_path, instance_id, display_id);
+                NemuIpcWorkerState::load(nemu_folder, dll_path, instance_id, display_id, input);
             let mut closed = false;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 while let Ok(command) = rx.recv() {
@@ -1552,16 +1595,62 @@ impl NemuIpcWorker {
                                     DeviceError::fatal("Nemu IPC capture response lost")
                                 })?;
                         }
-                        NemuIpcCommand::Shutdown {
-                            authority,
+                        NemuIpcCommand::InputTap {
+                            x,
+                            y,
+                            context,
                             response,
                         } => {
-                            let result =
-                                worker_state_result(&mut state, |state| state.close(authority));
+                            let result = worker_state_result(&mut state, |state| {
+                                state.input_tap(x, y, &context, &worker_poisoned)
+                            });
+                            response
+                                .send(result)
+                                .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
+                        }
+                        NemuIpcCommand::InputSegmented {
+                            plan,
+                            context,
+                            response,
+                        } => {
+                            let result = worker_state_result(&mut state, |state| {
+                                state.input_segmented(&plan, &context, &worker_poisoned)
+                            });
+                            response
+                                .send(result)
+                                .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
+                        }
+                        NemuIpcCommand::InvalidateDisplay(response) => {
+                            response
+                                .send(worker_state_result(&mut state, |state| {
+                                    state.invalidate_display()
+                                }))
+                                .map_err(|_| {
+                                    DeviceError::fatal(
+                                        "Nemu IPC display invalidation response lost",
+                                    )
+                                })?;
+                        }
+                        NemuIpcCommand::Shutdown {
+                            authority,
+                            input_check,
+                            response,
+                        } => {
+                            let result = worker_state_result(&mut state, |state| {
+                                state.close_input_contact(
+                                    authority,
+                                    input_check.as_deref(),
+                                    &worker_poisoned,
+                                )?;
+                                state.close(authority)
+                            });
                             closed = true;
                             if response.send(result.clone()).is_err() {
                                 return Err(match result {
-                                    Ok(_) => DeviceError::fatal("Nemu IPC close response lost"),
+                                    Ok(outcome) => {
+                                        DeviceError::fatal("Nemu IPC close response lost")
+                                            .with_stdio_observations(outcome.vendor_stdio())
+                                    }
                                     Err(primary) => primary,
                                 });
                             }
@@ -1598,7 +1687,9 @@ impl NemuIpcWorker {
                 });
                 match (result, cleanup) {
                     (Ok(()), Ok(_)) => Ok(()),
-                    (Err(primary), Ok(_)) => Err(primary),
+                    (Err(primary), Ok(outcome)) => {
+                        Err(primary.with_stdio_observations(outcome.vendor_stdio()))
+                    }
                     (Ok(()), Err(cleanup)) => Err(cleanup),
                     (Err(primary), Err(cleanup)) => Err(primary.merge_resource_cleanup(cleanup)),
                 }
@@ -1614,7 +1705,7 @@ impl NemuIpcWorker {
             tx,
             handle: Some(handle),
             timeout,
-            poisoned: false,
+            poisoned,
             close_result: None,
         }
     }
@@ -1631,7 +1722,15 @@ impl NemuIpcWorker {
         &mut self,
         command: impl FnOnce(mpsc::Sender<DeviceResult<T>>) -> NemuIpcCommand,
     ) -> DeviceResult<T> {
-        if self.poisoned {
+        self.request_with_timeout(command, self.timeout)
+    }
+
+    fn request_with_timeout<T: Send + 'static>(
+        &mut self,
+        command: impl FnOnce(mpsc::Sender<DeviceResult<T>>) -> NemuIpcCommand,
+        timeout: Duration,
+    ) -> DeviceResult<T> {
+        if self.poisoned.load(Ordering::Acquire) {
             return Err(DeviceError::fatal(
                 "Nemu IPC backend is poisoned after a previous timeout",
             ));
@@ -1641,17 +1740,17 @@ impl NemuIpcWorker {
         self.tx.send(command(tx)).map_err(|err| {
             DeviceError::fatal(format!("failed to send Nemu IPC worker command: {err}"))
         })?;
-        match rx.recv_timeout(self.timeout) {
+        match rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.poisoned = true;
+                self.poisoned.store(true, Ordering::Release);
                 Err(DeviceError::fatal(format!(
                     "Nemu IPC worker timed out after {:?}; backend marked poisoned and will not be reused",
-                    self.timeout
+                    timeout
                 )))
             }
             Err(err) => {
-                self.poisoned = true;
+                self.poisoned.store(true, Ordering::Release);
                 Err(DeviceError::fatal(format!(
                     "Nemu IPC worker disconnected: {err}"
                 )))
@@ -1663,10 +1762,18 @@ impl NemuIpcWorker {
         &mut self,
         authority: DeviceCloseAuthority,
     ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.shutdown_with_input_check(authority, None)
+    }
+
+    fn shutdown_with_input_check(
+        &mut self,
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
         if let Some(result) = &self.close_result {
             return result.clone();
         }
-        if self.poisoned {
+        if self.poisoned.load(Ordering::Acquire) {
             let result = Err(DeviceError::fatal(
                 "Nemu IPC worker state is unconfirmed after a previous timeout",
             )
@@ -1688,6 +1795,7 @@ impl NemuIpcWorker {
             .tx
             .send(NemuIpcCommand::Shutdown {
                 authority,
+                input_check,
                 response: tx,
             })
             .is_err()
@@ -1724,7 +1832,7 @@ impl NemuIpcWorker {
         let result = match (result, self.join_bounded()) {
             (Ok(outcome), Ok(())) => Ok(outcome.combine(DeviceResourceCloseOutcome::confirmed(1))),
             (Err(primary), Ok(())) => Err(primary),
-            (Ok(_), Err(join)) => Err(join),
+            (Ok(outcome), Err(join)) => Err(join.with_stdio_observations(outcome.vendor_stdio())),
             (Err(primary), Err(join)) => Err(primary.merge_resource_cleanup(join)),
         };
         self.close_result = Some(result.clone());
@@ -1799,6 +1907,7 @@ struct NemuIpcWorkerState {
     frame_width: u32,
     frame_height: u32,
     vendor_stdio: Vec<VendorStdioCapture>,
+    input: Option<nemu_input::NemuInputState>,
 }
 
 impl NemuIpcWorkerState {
@@ -1807,6 +1916,7 @@ impl NemuIpcWorkerState {
         dll_path: PathBuf,
         instance_id: i32,
         display_id: i32,
+        input: Option<nemu_input::NemuInputState>,
     ) -> DeviceResult<Self> {
         let nemu_folder = nul_terminated_utf16_path(&nemu_folder)?;
         let mut state = Self {
@@ -1820,6 +1930,7 @@ impl NemuIpcWorkerState {
             frame_width: 0,
             frame_height: 0,
             vendor_stdio: Vec::new(),
+            input,
         };
         let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             state.stdio_session = Some(VendorStdioSession::start()?);
@@ -1868,9 +1979,9 @@ impl NemuIpcWorkerState {
         let connect_id = unsafe { connect(nemu_folder, instance_id) };
         self.connect_id = connect_id;
         self.record_vendor_stdio_snapshot()?;
-        if connect_id == 0 {
+        if connect_id <= 0 {
             return Err(DeviceError::fatal(
-                "Nemu IPC connect returned 0; check MuMu path and running instance",
+                "Nemu IPC connect did not return a positive handle; check MuMu path and running instance",
             ));
         }
         Ok(())
@@ -1910,15 +2021,30 @@ impl NemuIpcWorkerState {
     }
 
     fn probe_resolution(&mut self) -> DeviceResult<(u32, u32)> {
+        self.probe_resolution_with_input(None)
+    }
+
+    fn probe_resolution_with_input(
+        &mut self,
+        context: Option<(&InputExecutionContext, &AtomicBool)>,
+    ) -> DeviceResult<(u32, u32)> {
+        if let Some((context, stopped)) = context {
+            nemu_input::input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
+        }
         self.connect()?;
+        self.resolve_input_display(context)?;
         let capture_display =
             unsafe { self.symbol::<NemuCaptureDisplay>(b"nemu_capture_display\0")? };
         let mut width = 0i32;
         let mut height = 0i32;
         let connect_id = self.connect_id;
-        let display_id = self.display_id;
+        let display_id = u32::try_from(self.display_id)
+            .map_err(|_| DeviceError::fatal("Nemu IPC display id is negative"))?;
         let width_ptr = &mut width as *mut i32;
         let height_ptr = &mut height as *mut i32;
+        if let Some((context, stopped)) = context {
+            nemu_input::input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
+        }
         let ret = unsafe {
             capture_display(
                 connect_id,
@@ -1930,7 +2056,7 @@ impl NemuIpcWorkerState {
             )
         };
         self.record_vendor_stdio_snapshot()?;
-        if ret > 0 {
+        if ret != 0 {
             return Err(DeviceError::fatal(format!(
                 "Nemu IPC resolution probe failed with code {ret}"
             )));
@@ -1968,7 +2094,8 @@ impl NemuIpcWorkerState {
             ))
         })?;
         let connect_id = self.connect_id;
-        let display_id = self.display_id;
+        let display_id = u32::try_from(self.display_id)
+            .map_err(|_| DeviceError::fatal("Nemu IPC display id is negative"))?;
         let width_ptr = &mut width_i32 as *mut i32;
         let height_ptr = &mut height_i32 as *mut i32;
         let buffer_ptr = self.raw_buffer.as_mut_ptr();
@@ -1978,7 +2105,7 @@ impl NemuIpcWorkerState {
             )
         };
         self.record_vendor_stdio_snapshot()?;
-        if ret > 0 {
+        if ret != 0 {
             return Err(DeviceError::fatal(format!(
                 "Nemu IPC capture failed with code {ret}"
             )));
@@ -2001,6 +2128,7 @@ impl NemuIpcWorkerState {
             height,
             pixels,
             vendor_stdio: self.vendor_stdio.clone(),
+            geometry: self.input_geometry(width, height)?,
         })
     }
 
@@ -2066,9 +2194,13 @@ impl NemuIpcWorkerState {
             state.symbol::<NemuDisconnect>(b"nemu_disconnect\0")
         })?;
         let mut failure = None;
+        let mut stdio_observations = Vec::new();
         if let Some(stdio) = self.stdio_session.as_mut() {
             match stdio.finish() {
-                Ok(outcome) => resource_count = resource_count.max(outcome.resource_count()),
+                Ok(outcome) => {
+                    resource_count = resource_count.max(outcome.resource_count());
+                    stdio_observations.extend_from_slice(outcome.vendor_stdio());
+                }
                 Err(error)
                     if error.resource_quiescence() == Some(DeviceResourceQuiescence::Confirmed) =>
                 {
@@ -2095,12 +2227,15 @@ impl NemuIpcWorkerState {
             return Err(match failure {
                 Some(primary) => primary.merge_resource_cleanup(error),
                 None => error,
-            });
+            }
+            .with_stdio_observations(&stdio_observations));
         }
         failure.map_or(
-            Ok(DeviceResourceCloseOutcome::confirmed(resource_count)),
+            Ok(DeviceResourceCloseOutcome::confirmed(resource_count)
+                .with_stdio_observations(&stdio_observations)),
             |error| {
                 Err(error
+                    .with_stdio_observations(&stdio_observations)
                     .with_resource_summary(DeviceResourceQuiescence::Confirmed, resource_count))
             },
         )
@@ -2127,13 +2262,25 @@ impl CaptureBackend for NemuIpcBackend {
         self.frame_width = frame.width;
         self.frame_height = frame.height;
         self.vendor_stdio = frame.vendor_stdio.clone();
-        Frame::from_pixels(
+        let mut captured = Frame::from_pixels(
             frame.width,
             frame.height,
             frame.pixels,
             PixelFormat::Rgba8,
             CaptureBackendName::NemuIpc,
-        )
+        )?;
+        if let Some(geometry) = frame.geometry {
+            captured.selection = Some(Arc::new(CaptureSelectionContext {
+                requested: CaptureBackendChoice::NemuIpc,
+                configured_adb: String::new(),
+                configured_serial: None,
+                resolved_adb: String::new(),
+                selected_serial: String::new(),
+                mumu: None,
+                nemu_frame: Some(geometry),
+            }));
+        }
+        Ok(captured)
     }
 
     fn vendor_stdio(&self) -> &[VendorStdioCapture] {
@@ -2804,6 +2951,7 @@ mod tests {
                 let mut worker_state = None;
                 let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     worker_state = Some(NemuIpcWorkerState {
+                        input: None,
                         // An existing OS library reference exercises real local unload, not an SDK.
                         library: Some(unsafe { Library::new("kernel32.dll") }.expect("OS library")),
                         stdio_session: Some({
@@ -2828,6 +2976,7 @@ mod tests {
                     let NemuIpcCommand::Shutdown {
                         authority,
                         response,
+                        ..
                     } = rx.recv().expect("shutdown")
                     else {
                         panic!("only shutdown is expected");
@@ -3001,7 +3150,7 @@ mod tests {
                         } else {
                             Duration::from_secs(2)
                         },
-                        poisoned: false,
+                        poisoned: Arc::new(AtomicBool::new(false)),
                         close_result: None,
                     }),
                     frame_width: 0,
@@ -4097,6 +4246,7 @@ mod tests {
             }
         }
         let context = CaptureSelectionContext {
+            nemu_frame: None,
             requested: prepared.requested,
             configured_adb: original_adb.clone(),
             configured_serial: prepared.target.serial.clone(),

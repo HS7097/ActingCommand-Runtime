@@ -6,7 +6,8 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
-    DeviceResult, DeviceTarget, InputBackend, TouchBackendChoice, TouchBackendConfig,
+    DeviceResult, DeviceTarget, InputBackend, NemuAppIndex, NemuApplicationTarget, NemuInputConfig,
+    NemuIpcSession, NemuSessionBackends, TouchBackendChoice, TouchBackendConfig,
     create_capture_backend, create_touch_backend_for_fenced_input,
 };
 pub use actingcommand_execution_kernel::{
@@ -26,6 +27,7 @@ pub struct ExecutionBackendRegistration {
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
+    nemu_app_index: Option<NemuAppIndex>,
 }
 
 impl ExecutionBackendRegistration {
@@ -60,6 +62,15 @@ impl ExecutionBackendRegistration {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
+        if input.requested == TouchBackendChoice::NemuIpc
+            && capture.requested != CaptureBackendChoice::NemuIpc
+        {
+            return Err(RuntimeHostError::fatal(
+                "nemu_input_requires_paired_capture",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         let milliseconds = |duration: Duration| {
             u64::try_from(duration.as_millis()).map_err(|_| {
                 RuntimeHostError::fatal(
@@ -89,7 +100,30 @@ impl ExecutionBackendRegistration {
             input,
             capture,
             configuration,
+            nemu_app_index: None,
         })
+    }
+
+    pub fn with_nemu_app_index(mut self, app_index: NemuAppIndex) -> RuntimeHostResult<Self> {
+        if self.input.requested != TouchBackendChoice::NemuIpc
+            || self.capture.requested != CaptureBackendChoice::NemuIpc
+        {
+            return Err(RuntimeHostError::fatal(
+                "nemu_app_index_requires_paired_input",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        NemuApplicationTarget::new(&self.application_id, app_index).map_err(|error| {
+            RuntimeHostError::fatal(
+                "nemu_application_identity_invalid",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+            .with_native_detail(error.to_string())
+        })?;
+        self.nemu_app_index = Some(app_index);
+        Ok(self)
     }
 }
 
@@ -103,6 +137,7 @@ struct ExecutionBackendEntry {
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
+    nemu_app_index: Option<NemuAppIndex>,
 }
 
 pub struct ExecutionBackendRegistry {
@@ -117,6 +152,15 @@ impl ExecutionBackendRegistry {
         let mut entries = BTreeMap::new();
         let mut instance_ids = BTreeSet::new();
         for registration in registrations {
+            if registration.input.requested == TouchBackendChoice::NemuIpc
+                && registration.nemu_app_index.is_none()
+            {
+                return Err(RuntimeHostError::fatal(
+                    "nemu_app_index_missing",
+                    "build_execution_backend_registry",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
             if entries.contains_key(&registration.instance_alias) {
                 return Err(RuntimeHostError::fatal(
                     "duplicate_instance_alias",
@@ -145,6 +189,7 @@ impl ExecutionBackendRegistry {
                     input: registration.input,
                     capture: registration.capture,
                     configuration: registration.configuration,
+                    nemu_app_index: registration.nemu_app_index,
                 },
             );
         }
@@ -209,6 +254,32 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
         create_capture_backend(entry.capture.clone())
             .map(|selected| Box::new(selected) as Box<dyn CaptureBackend>)
+    }
+
+    fn open_nemu_session(&self, instance_alias: &str) -> DeviceResult<Option<NemuSessionBackends>> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        if entry.input.requested != TouchBackendChoice::NemuIpc {
+            return Ok(None);
+        }
+        let application = NemuApplicationTarget::new(
+            &entry.application_id,
+            entry
+                .nemu_app_index
+                .ok_or_else(|| DeviceError::fatal("Nemu application index is missing"))?,
+        )?;
+        NemuIpcSession::open(
+            entry.capture.clone(),
+            application,
+            NemuInputConfig {
+                command_timeout: entry.input.adb_config.command_timeout,
+                shutdown_timeout: entry.input.maatouch_config.shutdown_timeout,
+                tap_hold: entry.input.maatouch_config.tap_hold,
+            },
+        )
+        .map(Some)
     }
 
     fn control_application(

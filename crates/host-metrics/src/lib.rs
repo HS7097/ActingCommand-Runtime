@@ -10,6 +10,24 @@ use std::path::Path;
 mod capacity;
 pub use capacity::{CapacitySample, CapacityTarget, CapacityUnavailable, sample_capacity};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicalMemorySample {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// Uses the same platform memory observation as the existing host RAM counter.
+pub fn sample_physical_memory() -> Result<PhysicalMemorySample, &'static str> {
+    #[cfg(windows)]
+    {
+        windows::sample_physical_memory()
+    }
+    #[cfg(not(windows))]
+    {
+        Err("performance_sampler_unsupported")
+    }
+}
+
 /// Resolve the current binding without taking another free-space sample.
 pub fn capacity_volume(path: &Path) -> Result<String, CapacityUnavailable> {
     capacity::volume(path)

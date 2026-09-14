@@ -22,9 +22,70 @@ pub(super) fn convert(value: &device::VendorStdioFacts) -> ledger::VendorStdioFa
                 before: step.before.as_ref().map(reference_fact),
                 after: step.after.as_ref().map(reference_fact),
                 related: step.related.as_ref().map(reference_fact),
+                target_retirement: step.target_retirement.map(|retirement| match retirement {
+                    device::StdioTargetRetirement::ClosedBeforeReplacement => {
+                        ledger::StdioTargetRetirement::ClosedBeforeReplacement
+                    }
+                }),
             })
             .collect(),
         dropped_count: value.dropped_count,
+        paths: value
+            .paths
+            .iter()
+            .map(|path| ledger::StdioPathFact {
+                reference: reference(path.reference),
+                path_utf16: path.path_utf16.clone(),
+                removal: match &path.removal {
+                    device::StdioPathRemoval::Removed => ledger::StdioPathRemoval::Removed,
+                    device::StdioPathRemoval::Residual(value) => {
+                        ledger::StdioPathRemoval::Residual(error(value))
+                    }
+                },
+            })
+            .collect(),
+        restart_manager: value
+            .restart_manager
+            .as_ref()
+            .map(|facts| ledger::StdioRmFacts {
+                availability: match facts.availability {
+                    device::StdioRmAvailability::Complete => ledger::StdioRmAvailability::Complete,
+                    device::StdioRmAvailability::Incomplete => {
+                        ledger::StdioRmAvailability::Incomplete
+                    }
+                    device::StdioRmAvailability::Unavailable => {
+                        ledger::StdioRmAvailability::Unavailable
+                    }
+                },
+                calls: facts
+                    .calls
+                    .iter()
+                    .map(|call| ledger::StdioRmCall {
+                        api: match call.api {
+                            device::StdioRmApi::StartSession => ledger::StdioRmApi::StartSession,
+                            device::StdioRmApi::RegisterResources => {
+                                ledger::StdioRmApi::RegisterResources
+                            }
+                            device::StdioRmApi::GetList => ledger::StdioRmApi::GetList,
+                            device::StdioRmApi::EndSession => ledger::StdioRmApi::EndSession,
+                        },
+                        status: call.status,
+                        completed_filetime: call.completed_filetime,
+                    })
+                    .collect(),
+                needed_processes: facts.needed_processes,
+                reported_processes: facts.reported_processes,
+                reboot_reasons: facts.reboot_reasons,
+                processes: facts
+                    .processes
+                    .iter()
+                    .map(|process| ledger::StdioRmProcess {
+                        process_id: process.process_id,
+                        created_filetime: process.created_filetime,
+                        rm_app_name_utf16: process.rm_app_name_utf16.clone(),
+                    })
+                    .collect(),
+            }),
     }
 }
 
@@ -99,9 +160,12 @@ fn api(value: device::StdioApi) -> ledger::StdioApi {
         device::StdioApi::Dup => ledger::StdioApi::Dup,
         device::StdioApi::Dup2 => ledger::StdioApi::Dup2,
         device::StdioApi::Open => ledger::StdioApi::Open,
+        device::StdioApi::CreateFile => ledger::StdioApi::CreateFile,
+        device::StdioApi::CloseHandle => ledger::StdioApi::CloseHandle,
         device::StdioApi::GetStdHandle => ledger::StdioApi::GetStdHandle,
         device::StdioApi::GetOsfhandle => ledger::StdioApi::GetOsfhandle,
         device::StdioApi::SetStdHandle => ledger::StdioApi::SetStdHandle,
+        device::StdioApi::SetHandleInformation => ledger::StdioApi::SetHandleInformation,
         device::StdioApi::Flush => ledger::StdioApi::Flush,
         device::StdioApi::Close => ledger::StdioApi::Close,
         device::StdioApi::Unlink => ledger::StdioApi::Unlink,

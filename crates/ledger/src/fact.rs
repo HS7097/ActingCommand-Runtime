@@ -5,11 +5,16 @@
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
     ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
-    EventSeverity, EventType, FrameId, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference,
-    RetentionClass, RunId, SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
+    EventSeverity, EventType, FrameId, ProjectedArtifactReference, RetentionClass, RunId,
+    SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+mod artifact;
+pub use artifact::{ArtifactAvailability, LedgerArtifactReference};
+mod metadata;
+pub(crate) use metadata::{LedgerEventMetadata, LedgerEventRead};
 
 /// A ledger-assigned fact. Consumers can inspect and serialize it, but cannot construct or
 /// deserialize one.
@@ -38,7 +43,9 @@ pub struct PersistedEvent {
     links: EventLinks,
     payload_schema: String,
     payload: EventPayload,
-    artifacts: Vec<ArtifactReference>,
+    artifacts: Vec<LedgerArtifactReference>,
+    #[serde(skip)]
+    artifact_evictions: artifact::ArtifactRetentionReadState,
 }
 
 impl PersistedEvent {
@@ -67,7 +74,12 @@ impl PersistedEvent {
             links: draft.links().clone(),
             payload_schema: draft.payload_schema().to_string(),
             payload: draft.payload().clone(),
-            artifacts: draft.artifacts().to_vec(),
+            artifacts: draft
+                .artifacts()
+                .iter()
+                .map(LedgerArtifactReference::from_issued)
+                .collect(),
+            artifact_evictions: artifact::ArtifactRetentionReadState::default(),
         };
         event.validate()?;
         Ok(event)
@@ -117,59 +129,31 @@ impl PersistedEvent {
         &self.payload
     }
 
-    pub fn artifacts(&self) -> &[ArtifactReference] {
+    pub fn artifacts(&self) -> &[LedgerArtifactReference] {
         &self.artifacts
     }
 
+    pub fn artifact_evictions(&self) -> &[actingcommand_contract::ArtifactEvictionProof] {
+        &self.artifact_evictions.0
+    }
+
+    pub(crate) fn apply_artifact_evictions(
+        &mut self,
+        proofs: Vec<actingcommand_contract::ArtifactEvictionProof>,
+    ) {
+        for artifact in &mut self.artifacts {
+            if let Some(proof) = proofs
+                .iter()
+                .find(|proof| &proof.identity.artifact.artifact_id == artifact.artifact_id())
+            {
+                artifact.apply_retention_proof(proof);
+            }
+        }
+        self.artifact_evictions.0 = proofs;
+    }
+
     fn validate(&self) -> Result<(), FactValidationError> {
-        if self.schema_version != GLOBAL_EVENT_SCHEMA_VERSION {
-            return Err(FactValidationError {
-                code: "unsupported_event_schema",
-            });
-        }
-        if self.sequence == 0 {
-            return Err(FactValidationError {
-                code: "invalid_sequence",
-            });
-        }
-        if self.timestamp_unix_ms == 0 {
-            return Err(FactValidationError {
-                code: "invalid_timestamp",
-            });
-        }
-        if self.event_type != self.payload.event_type()
-            || self.event_type.family() != self.payload.family()
-        {
-            return Err(FactValidationError {
-                code: "payload_type_mismatch",
-            });
-        }
-        if self.payload_schema != self.payload.schema() {
-            return Err(FactValidationError {
-                code: "payload_schema_mismatch",
-            });
-        }
-        let expected_sensitivity = self
-            .artifacts
-            .iter()
-            .fold(self.payload.sensitivity(), |current, artifact| {
-                current.max(artifact.sensitivity())
-            });
-        if self.sensitivity != expected_sensitivity || self.payload.validate().is_err() {
-            return Err(FactValidationError {
-                code: "invalid_typed_payload",
-            });
-        }
-        if self
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.validate().is_err())
-        {
-            return Err(FactValidationError {
-                code: "invalid_artifact_reference",
-            });
-        }
-        Ok(())
+        metadata::validate(self)
     }
 }
 
@@ -224,7 +208,7 @@ struct StoredArtifactRecord {
 }
 
 impl StoredArtifactRecord {
-    fn from_reference(reference: &ArtifactReference) -> Self {
+    fn from_reference(reference: &LedgerArtifactReference) -> Self {
         Self {
             artifact_id: *reference.artifact_id(),
             kind: reference.kind(),
@@ -294,32 +278,31 @@ impl StoredEventRecord {
         self.into_event_with_artifacts(Vec::new())
     }
 
-    pub(crate) fn into_event_with_artifact_verifier<F>(
+    pub(crate) fn into_event_with_artifact_availability<F>(
         self,
-        verifier: &mut F,
+        availability: &mut F,
     ) -> Result<PersistedEvent, FactValidationError>
     where
-        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + ?Sized,
+        F: FnMut(&ProjectedArtifactReference) -> Result<ArtifactAvailability, FactValidationError>
+            + ?Sized,
     {
+        if self.artifacts.is_empty() {
+            return self.into_event();
+        }
         let mut artifacts = Vec::with_capacity(self.artifacts.len());
         for stored in &self.artifacts {
-            let projected = stored.projected();
-            let verified = verifier(&projected).ok_or(FactValidationError {
-                code: "artifact_store_verification_failed",
-            })?;
-            if verified.reference().project(true) != projected {
-                return Err(FactValidationError {
-                    code: "artifact_store_verification_mismatch",
-                });
-            }
-            artifacts.push(verified.into_reference());
+            let reference = stored.projected();
+            artifacts.push(LedgerArtifactReference::restored(
+                reference.clone(),
+                availability(&reference)?,
+            )?);
         }
         self.into_event_with_artifacts(artifacts)
     }
 
     fn into_event_with_artifacts(
         self,
-        artifacts: Vec<ArtifactReference>,
+        artifacts: Vec<LedgerArtifactReference>,
     ) -> Result<PersistedEvent, FactValidationError> {
         let event = PersistedEvent {
             schema_version: self.schema_version,
@@ -334,6 +317,7 @@ impl StoredEventRecord {
             payload_schema: self.payload_schema,
             payload: self.payload,
             artifacts,
+            artifact_evictions: artifact::ArtifactRetentionReadState::default(),
         };
         event.validate()?;
         Ok(event)
@@ -346,6 +330,9 @@ pub(crate) struct FactValidationError {
 }
 
 impl FactValidationError {
+    pub(crate) const fn new(code: &'static str) -> Self {
+        Self { code }
+    }
     pub(crate) const fn code(self) -> &'static str {
         self.code
     }
