@@ -1238,6 +1238,103 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
     let decoded: RuntimeControlPlaneStatus =
         serde_json::from_value(encoded.clone()).expect("status decode");
     decoded.validate().expect("status validation");
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), encoded);
+    assert!(
+        decoded
+            .instances()
+            .iter()
+            .all(|row| row.capabilities().is_none() && row.backend_provenance().is_none())
+    );
+
+    let profile = crate::EmulatorCapabilityProfile::new(
+        "neutral.fixture",
+        crate::EmulatorVersionEvidence::Unavailable {
+            reason: "not probed".to_owned(),
+        },
+        crate::EmulatorCapability::ALL
+            .into_iter()
+            .map(|capability| {
+                crate::EmulatorCapabilityEvidence::new(
+                    capability,
+                    crate::EmulatorCapabilityAvailability::Unverified,
+                    "availability not verified",
+                    "fixture specification",
+                )
+                .unwrap()
+                .with_implementation(crate::EmulatorCapabilityImplementation::Supported)
+                .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap();
+    let row = decoded.instances()[0].clone().with_backend_metadata(
+        crate::ExecutionBackendProvenance::FixtureSimulation,
+        Some(profile.clone()),
+    );
+    let row_json = serde_json::to_value(&row).unwrap();
+    let parsed: RuntimeInstanceStatus = serde_json::from_value(row_json.clone()).unwrap();
+    parsed.validate().unwrap();
+    assert_eq!(parsed, row);
+    for (pointer, invalid) in [
+        ("/backend_provenance", serde_json::json!("unknown")),
+        ("/capabilities/schema_version", serde_json::json!("unknown")),
+        ("/capabilities/provider_id", serde_json::json!("Invalid")),
+        ("/capabilities/version/reason", serde_json::json!("")),
+        (
+            "/capabilities/capabilities/input_tap/capability",
+            serde_json::json!("input_swipe"),
+        ),
+        (
+            "/capabilities/capabilities/input_tap/availability",
+            serde_json::json!("unknown"),
+        ),
+        (
+            "/capabilities/capabilities/input_tap/implementation",
+            serde_json::json!("unknown"),
+        ),
+        (
+            "/capabilities/capabilities/input_tap/implementation",
+            serde_json::json!("unsupported"),
+        ),
+        (
+            "/capabilities/capabilities/input_tap/failure_semantics",
+            serde_json::json!(""),
+        ),
+    ] {
+        let mut invalid_row = row_json.clone();
+        *invalid_row.pointer_mut(pointer).unwrap() = invalid;
+        assert!(
+            serde_json::from_value::<RuntimeInstanceStatus>(invalid_row).is_err(),
+            "{pointer}"
+        );
+    }
+    let mut missing_provenance = row_json.clone();
+    missing_provenance
+        .as_object_mut()
+        .unwrap()
+        .remove("backend_provenance");
+    assert!(
+        serde_json::from_value::<RuntimeInstanceStatus>(missing_provenance)
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+    let mut missing_capability = row_json.clone();
+    missing_capability["capabilities"]["capabilities"]
+        .as_object_mut()
+        .unwrap()
+        .remove("input_tap");
+    assert!(serde_json::from_value::<RuntimeInstanceStatus>(missing_capability).is_err());
+    let duplicate = format!(
+        "\"input_tap\":{},",
+        serde_json::to_string(profile.evidence(crate::EmulatorCapability::InputTap)).unwrap()
+    );
+    let duplicate_json = serde_json::to_string(&row).unwrap().replacen(
+        "\"input_tap\":",
+        &format!("{duplicate}\"input_tap\":"),
+        1,
+    );
+    assert!(serde_json::from_str::<RuntimeInstanceStatus>(&duplicate_json).is_err());
     let request = request(RuntimeOperation::Status);
     RuntimeReceipt::success(
         &request,
