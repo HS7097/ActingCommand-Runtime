@@ -57,9 +57,12 @@ An approval or control call on that handle still needs its original authorizatio
 The original complete paginated correlation query first reaches one frozen Ledger
 snapshot under its existing time, event and page bounds. An interaction flow then
 uses the current validated receipt's request ID and typed run/task anchor. A failed
-task's anchor comes from its exact terminal event ID/sequence, request/correlation
-links and original failure payload. The terminal must be present in the complete
-source and agree with the current request/run. Missing or conflicting ownership
+task's anchor comes from its exact terminal event ID/sequence, correlation/run/task
+links and original failure payload. The validated receipt binds that terminal to
+the current request. An event's optional request link is checked for conflicts when
+present; an absent link is not fabricated or required to duplicate the receipt's
+binding. The terminal must be present in the complete source and agree with the
+current run. Missing or conflicting required ownership
 is a projection error retaining the original after-commit receipt.
 
 The resulting interaction flow includes that request's events and every event in

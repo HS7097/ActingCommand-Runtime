@@ -2576,7 +2576,6 @@ fn receipt_ocr_run(
                         && event.sequence == terminal.sequence
                         && event.event_type == EventType::TaskFailed
                         && event.links.correlation_id() == Some(&correlation_id)
-                        && event.links.request_id() == Some(&receipt.request_id())
                 })
                 .collect::<Vec<_>>();
             let [event] = matching.as_slice() else {
@@ -2584,6 +2583,16 @@ fn receipt_ocr_run(
                     "runtime_official_ocr_terminal_identity_mismatch",
                 ));
             };
+            // The validated receipt binds this exact terminal to its request. Event links are optional.
+            if event
+                .links
+                .request_id()
+                .is_some_and(|id| *id != receipt.request_id())
+            {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_terminal_identity_mismatch",
+                ));
+            }
             let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
                 return Err(official_ocr_error(
                     "runtime_official_ocr_terminal_payload_invalid",
@@ -2632,7 +2641,10 @@ fn validate_interaction_flow_scope(
         .filter(|event| event.event_id == terminal.event_id && event.sequence == terminal.sequence);
     let event = matching.next().ok_or_else(invalid)?;
     if matching.next().is_some()
-        || event.links.request_id() != Some(&receipt.request_id())
+        || event
+            .links
+            .request_id()
+            .is_some_and(|id| *id != receipt.request_id())
         || event.links.correlation_id() != Some(&correlation_id)
         || run.is_some_and(|(run_id, task_id)| {
             event.links.run_id() != Some(&run_id) || event.links.task_id() != Some(&task_id)
