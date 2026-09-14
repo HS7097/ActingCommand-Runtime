@@ -44,9 +44,13 @@ jobs:
           }
           $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
 
-          cargo test --workspace --exclude actingcommand-actingd --no-fail-fast
+          cargo test --workspace --exclude actingcommand-actingd --exclude actingcommand-runtime-client --no-fail-fast
           $workspaceExitCode = $LASTEXITCODE
-          Write-Host "Workspace excluding actingd exit code: $workspaceExitCode"
+          Write-Host "Workspace excluding actingd and runtime-client exit code: $workspaceExitCode"
+
+          cargo test -p actingcommand-runtime-client --no-fail-fast -- --test-threads=1
+          $runtimeClientExitCode = $LASTEXITCODE
+          Write-Host "runtime-client package tests exit code: $runtimeClientExitCode"
 
           cargo test --workspace --bin actingcommand-actingd --no-fail-fast
           $actingdExitCode = $LASTEXITCODE
@@ -56,7 +60,7 @@ jobs:
           $processExitCode = $LASTEXITCODE
           Write-Host "process integration tests exit code: $processExitCode"
 
-          if ($workspaceExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) {
+          if ($workspaceExitCode -ne 0 -or $runtimeClientExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) {
             exit 1
           }
           exit 0

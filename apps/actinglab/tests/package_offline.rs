@@ -811,14 +811,15 @@ fn production_entry_boundaries_remain_explicit() {
 
     let lab_run = capability(&capability_data, "lab run");
     assert_eq!(lab_run["needs"], json!(["device"]));
-    assert_eq!(lab_run["status"], "available");
+    assert_eq!(lab_run["status"], "unverified");
 
     let operation_run = capability(&capability_data, "operation run");
     assert_eq!(
         operation_run["needs"],
         json!(["running_runtime", "device", "lab_lease"])
     );
-    assert_eq!(operation_run["status"], "blocked_until_lab_lease");
+    assert_eq!(operation_run["status"], "unavailable");
+    assert_eq!(operation_run["reason_code"], "lab_lease_required");
 }
 
 struct TestFixture {
