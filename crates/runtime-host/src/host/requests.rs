@@ -5,8 +5,6 @@ use crate::ipc::{FrameRead, read_frame, write_frame};
 use std::net::TcpStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
-
 impl HostShared {
     #[cfg(test)]
     pub(super) fn process_request(

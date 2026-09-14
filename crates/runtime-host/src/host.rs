@@ -136,6 +136,7 @@ use std::time::{Duration, Instant};
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const LEASE_SWEEP_INTERVAL: Duration = Duration::from_millis(50);
 const ACCEPT_IDLE_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_AUTHORITATIVE_POLICY_OUTCOMES: usize = 16_384;
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
