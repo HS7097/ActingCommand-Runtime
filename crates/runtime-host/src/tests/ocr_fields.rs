@@ -159,7 +159,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         let original_ledger = fs::read(original.path().join("runtime-state.sqlite")).unwrap();
         let original_image =
             fs::read(original.path().join(binding.artifact.object_key().unwrap())).unwrap();
-        let package = neutral_post_admission_ocr_contained_task_package();
+        let package = neutral_post_admission_ocr_contained_task_package(false);
         let package_path = original.path().join("saved-ocr.zip");
         fs::write(&package_path, &package).unwrap();
         for mode in 0..7 {
@@ -315,7 +315,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     }
 
     let mut source = zip::ZipArchive::new(Cursor::new(
-        neutral_post_admission_ocr_contained_task_package(),
+        neutral_post_admission_ocr_contained_task_package(true),
     ))
     .expect("existing neutral package");
     let mut files = BTreeMap::new();
@@ -392,6 +392,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         let package_path = root.path().join("fields-callback.zip");
         fs::write(&package_path, &bytes).expect("inline fields package");
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         *state.input_selection.lock().unwrap() = Some(InputSelectionContext {
             backend: TouchBackendName::AdbShellInput,
             serial: "neutral-selected-input".to_owned(),
@@ -739,11 +740,13 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     {
         let root = TempDir::new().unwrap();
         let target = explicit_home_contained_task_package(
+            true,
             "fixture01.configuration-target",
             [0, 0, 255],
             [255, 0, 0],
         );
         let recovery_source = explicit_home_contained_task_package(
+            true,
             "fixture01.configuration-recovery",
             [0, 0, 255],
             [255, 0, 0],
@@ -775,6 +778,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         fs::write(&target_path, &target).unwrap();
         fs::write(&recovery_path, &recovery).unwrap();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         state
             .transition_capture_after_input
             .store(true, Ordering::Release);
@@ -982,6 +986,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         let package_path = root.path().join("zero-input-fields.zip");
         fs::write(&package_path, &bytes).unwrap();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         if explicit_home {
             state.fail_capture_on.store(2, Ordering::Release);
             state

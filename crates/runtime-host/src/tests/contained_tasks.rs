@@ -6,10 +6,11 @@ use super::*;
 fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("neutral-task.zip");
-    let bytes = neutral_contained_task_package();
+    let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
@@ -35,7 +36,7 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     .unwrap();
     invalid_task["operations"][0]["click"]["unused_field"] = serde_json::json!("private-value");
     let invalid_bytes =
-        neutral_contained_task_package_with_task(&serde_json::to_vec(&invalid_task).unwrap());
+        neutral_contained_task_package_with_task(true, &serde_json::to_vec(&invalid_task).unwrap());
     let invalid_path = root.path().join("unconsumed-task.zip");
     fs::write(&invalid_path, &invalid_bytes).unwrap();
     let invalid_hash =

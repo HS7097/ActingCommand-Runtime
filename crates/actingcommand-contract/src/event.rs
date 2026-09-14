@@ -292,6 +292,8 @@ pub enum EventType {
     TaskStepStarted,
     #[serde(rename = "task.evidence_indexed")]
     TaskEvidenceIndexed,
+    #[serde(rename = "task.geometry_observed")]
+    TaskGeometryObserved,
     #[serde(rename = "task.recognition_started")]
     TaskRecognitionStarted,
     #[serde(rename = "task.recognition_completed")]
@@ -476,6 +478,7 @@ impl EventType {
             | Self::TaskStarted
             | Self::TaskStepStarted
             | Self::TaskEvidenceIndexed
+            | Self::TaskGeometryObserved
             | Self::TaskRecognitionStarted
             | Self::TaskRecognitionCompleted
             | Self::TaskEntryPreflight

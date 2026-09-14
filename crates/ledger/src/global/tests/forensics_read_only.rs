@@ -1043,6 +1043,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         links.clone().with_action_id(step).with_frame_id(pre),
         TaskPayloadDraft::semantic(
             TaskSemanticFact::EffectIntent {
+                frame_extent: None,
                 step_index: 4,
                 operation_label: "neutral_swipe".into(),
                 action: action.clone(),

@@ -617,11 +617,11 @@ fn identifier_token_boundary(character: Option<char>) -> bool {
 }
 
 fn page_error(err: actingcommand_page_detector::PageDetectorError) -> TaskLoopError {
-    TaskLoopError::fatal(err.to_string())
+    TaskLoopError::fatal(err.to_string()).with_ppocr_diagnostics(err.ppocr_diagnostics())
 }
 
 fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> TaskLoopError {
-    TaskLoopError::fatal(err.to_string())
+    TaskLoopError::fatal(err.to_string()).with_ppocr_diagnostics(err.ppocr_diagnostics().clone())
 }
 
 const NAVIGATION_DANGEROUS_WORDS: &[&str] = &[

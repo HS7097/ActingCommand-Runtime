@@ -14,10 +14,11 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
         let package = root
             .path()
             .join(format!("neutral-stability-{failure_kind}-failure.zip"));
-        let bytes = neutral_stability_contained_task_package(2, 5);
+        let bytes = neutral_stability_contained_task_package(true, 2, 5);
         fs::write(&package, &bytes).expect("write stability package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         let host = RuntimeHost::start(
             config(&root),
             Arc::new(FakeProvider::one(
@@ -106,10 +107,11 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
 fn contained_task_stability_persists_one_formally_bound_diagnostic_per_comparison() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("neutral-stability-task.zip");
-    let bytes = neutral_stability_contained_task_package(2, 6);
+    let bytes = neutral_stability_contained_task_package(true, 2, 6);
     fs::write(&package, &bytes).expect("write stability package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .stability_region_transition_after_inputs
         .store(3, Ordering::Release);
@@ -270,10 +272,11 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
     for max_steps in [4, 6] {
         let root = TempDir::new().expect("tempdir");
         let package = root.path().join("neutral-stability-max-task.zip");
-        let bytes = neutral_stability_contained_task_package(max_steps - 1, max_steps);
+        let bytes = neutral_stability_contained_task_package(true, max_steps - 1, max_steps);
         fs::write(&package, &bytes).expect("write stability package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         state
             .stability_region_transition_after_inputs
             .store(2, Ordering::Release);

@@ -575,6 +575,7 @@ fn task_fact_kind(fact: &TaskSemanticFact) -> &'static str {
         TaskSemanticFact::PackageAdmitted { .. } => "package_admitted",
         TaskSemanticFact::RunStarted => "run_started",
         TaskSemanticFact::EvidenceIndexed { .. } => "evidence_indexed",
+        TaskSemanticFact::GeometryObserved { .. } => "geometry_observed",
         TaskSemanticFact::RecognitionStarted { .. } => "recognition_started",
         TaskSemanticFact::RecognitionCompleted { .. } => "recognition_completed",
         TaskSemanticFact::EntryRecognition { .. } => "entry_recognition",

@@ -35,21 +35,47 @@ impl HostShared {
         match work {
             Ok(result) => Ok(result),
             Err(error) => {
-                let event = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::failed(
-                        EventAction::RuntimeRecognizeArtifact,
-                        DiagnosticCode::RuntimeDiagnostic,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
+                let ppocr = error.has_ppocr_diagnostics();
+                if ppocr && error.projection().code == RuntimeErrorCode::LedgerFailure {
+                    return Err(RequestFailure::poison_without_terminal(error));
+                }
+                let event = self
+                    .append_event(
+                        EventSeverity::Error,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links.clone(),
+                        RecognitionPayloadDraft::failed(
+                            EventAction::RuntimeRecognizeArtifact,
+                            DiagnosticCode::RuntimeDiagnostic,
+                            EffectDisposition::NotPerformed,
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map_err(|failure| {
+                        if ppocr {
+                            RequestFailure::poison_without_terminal(
+                                error.clone().with_complete_failure(
+                                    crate::error::RuntimeFailureRelation::LifecycleRecord,
+                                    *failure.error,
+                                ),
+                            )
+                        } else {
+                            failure
+                        }
+                    })?;
                 self.record_required_failure(&error, &event, links)
-                    .map_err(RequestFailure::poison_without_terminal)?;
+                    .map_err(|writer| {
+                        RequestFailure::poison_without_terminal(if ppocr {
+                            error.clone().with_complete_failure(
+                                crate::error::RuntimeFailureRelation::LifecycleRecord,
+                                writer,
+                            )
+                        } else {
+                            writer
+                        })
+                    })?;
                 if error.is_fatal() {
                     Err(RequestFailure::poison(error, Some(terminal(&event))))
                 } else {
@@ -208,9 +234,49 @@ impl HostShared {
             .map_err(|error| source_error("saved_ocr_package_invalid", error))?
         };
         check_deadline(deadline)?;
-        let observation =
-            evaluate_saved_artifact_ocr(&bundle, &image, dimensions, &input.target_id, deadline)
-                .map_err(|error| source_error("saved_ocr_evaluation_failed", error))?;
+        let evaluated =
+            evaluate_saved_artifact_ocr(&bundle, &image, dimensions, &input.target_id, deadline);
+        let reports = match &evaluated {
+            Ok(value) => &value.ppocr_diagnostics,
+            Err(error) => error.ppocr_diagnostics(),
+        };
+        let archive = self.archive_ppocr_diagnostics(
+            reports,
+            ppocr_diagnostic::PpocrArchiveContext {
+                links: request.event_links(None, None, None),
+                artifact_links: request.artifact_links(),
+                phase: "saved_artifact_ocr",
+                target: Some(&input.target_id),
+                saved_source: Some(&input.source),
+                drain: evaluated.is_err(),
+            },
+        );
+        let observation = match evaluated {
+            Ok(value) => {
+                archive?;
+                value
+            }
+            Err(error) => {
+                let primary = ppocr_diagnostic::attach_ppocr_source(
+                    ppocr_diagnostic::attach_ppocr_failure(
+                        source_error("saved_ocr_evaluation_failed", &error),
+                        error.ppocr_diagnostics(),
+                        error.to_string(),
+                    ),
+                    crate::error::PpocrFailureSource::Saved {
+                        message: error.message().to_owned(),
+                        conflicting_pages: error.conflicting_pages().map(<[_]>::to_vec),
+                    },
+                );
+                return Err(match archive {
+                    Ok(()) => primary,
+                    Err(secondary) => primary.with_complete_failure(
+                        crate::error::RuntimeFailureRelation::DiagnosticArchive,
+                        secondary,
+                    ),
+                });
+            }
+        };
         check_deadline(deadline)?;
         let links = request.event_links(None, None, None);
         let report = serde_json::json!({

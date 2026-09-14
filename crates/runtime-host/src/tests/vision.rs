@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     use std::io::Read;
-    let source = neutral_vision_contained_task_package();
+    let source = neutral_vision_contained_task_package(true);
     let mut archive = zip::ZipArchive::new(Cursor::new(source)).unwrap();
     let mut output = ZipWriter::new(Cursor::new(Vec::new()));
     for index in 0..archive.len() {
@@ -50,6 +50,9 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     let missing_package = missing_root.path().join("neutral-vision-task.zip");
     fs::write(&missing_package, &bytes).expect("write missing-provider package");
     let missing_state = Arc::new(FakeState::default());
+    missing_state
+        .physical_task_geometry
+        .store(true, Ordering::Release);
     let missing_host = RuntimeHost::start(
         config(&missing_root),
         Arc::new(FakeProvider::one(
@@ -110,6 +113,9 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     let injected_package = injected_root.path().join("neutral-vision-task.zip");
     fs::write(&injected_package, &bytes).expect("write injected-provider package");
     let injected_state = Arc::new(FakeState::default());
+    injected_state
+        .physical_task_geometry
+        .store(true, Ordering::Release);
     injected_state
         .transition_capture_after_input
         .store(true, Ordering::Release);
