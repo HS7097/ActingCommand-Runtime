@@ -2264,6 +2264,11 @@ impl RuntimeClient {
             );
             if receipt.request_id() != request.request_id()
                 || receipt.correlation_id() != request.correlation_id()
+                || (matches!(&operation, RuntimeOperation::RunContainedTask { .. })
+                    && matches!(receipt.result(),
+                        Some(RuntimeResult::ContainedTaskCompleted { task_request_id, .. }
+                            | RuntimeResult::ContainedTaskCancelled { task_request_id, .. })
+                            if *task_request_id != request.request_id()))
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
                     "runtime_receipt_identity_mismatch",

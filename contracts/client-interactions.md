@@ -94,6 +94,8 @@ and optional terminal. A refusal without a terminal remains without a terminal.
 Receipt arrival alone establishes neither Ledger commitment nor execution.
 Transport failure, malformed structure and mismatched identity have no fabricated
 received receipt. A latched error retains its original receipt and original IDs.
+Contained-task completed/cancelled results must also identify the current request
+in their `task_request_id` before reaching flow projection or receipt retention.
 
 `committed_receipt()` keeps its original narrower eligibility and consumers:
 contained-task/shutdown failures with a terminal, the material failure receipt
