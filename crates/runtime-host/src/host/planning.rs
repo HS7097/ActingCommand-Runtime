@@ -1,8 +1,131 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::agent_control::append_agent_wake;
 use super::*;
 
 impl HostShared {
+    pub(super) fn record_policy_planning_signal(
+        &self,
+        signal: PolicyPlanningSignalEventData,
+    ) -> RuntimeHostResult<()> {
+        let mut committed_signal = None;
+        let result: RuntimeHostResult<()> = (|| {
+            let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
+            policy.validate_planning_signal(&signal)?;
+            if let Some(existing) = policy.planning_signal(&signal.signal_id)? {
+                return if existing == signal {
+                    Ok(())
+                } else {
+                    Err(RuntimeHostError::fatal(
+                        "policy_planning_signal_identity_conflict",
+                        "record_policy_planning_signal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                };
+            }
+            let (work, staged_quota) = policy.prepare_planning_signal(&signal)?;
+            let fact_gate = lock(&self.fact_write_gate, "append_planning_transaction")?;
+            if self.lifecycle_append_failed.load(Ordering::Acquire) {
+                return Err(ledger_error("append_planning_transaction"));
+            }
+            let links = self.events.system_links()?;
+            let draft = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+                links.clone(),
+                PolicyPayloadDraft::planning_signal_observed(signal.clone(), AuditInput::new()),
+            )?;
+            let draft = self.events.sanitize(draft)?;
+            let attempt_event_id = *draft.event_id();
+            let persisted = self
+                .ledger
+                .append_transaction(draft, Box::new(work))
+                .map_err(|error| {
+                    let error = crate::policy_host::planning_transaction_error(error);
+                    if error.is_fatal() {
+                        self.lifecycle_append_failed.store(true, Ordering::Release);
+                    }
+                    let context = error.clone().with_native_detail(format!(
+                        "event_id={attempt_event_id:?}; attempted_sequence={:?}",
+                        staged_quota.attempted_sequence()
+                    ));
+                    error.with_related_failure("planning_attempt", &context)
+                })?;
+            committed_signal = Some((*persisted.event_id(), persisted.sequence()));
+            policy.publish_planning_signal(staged_quota);
+            drop(policy);
+            let observed = self
+                .observe_device_diagnostics_under_fact_gate(&persisted, &links)
+                .and_then(|()| self.synchronize_fact_store_under_gate());
+            drop(fact_gate);
+            observed.and_then(|()| self.observe_pipeline_event(&persisted))?;
+            let Some(config) = &self.agent_dispatcher_config else {
+                return Ok(());
+            };
+            let kind = match signal.kind {
+                actingcommand_contract::PolicyPlanningSignalKind::TimelineReached => {
+                    AgentWakeKind::TimelineReached
+                }
+                actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted => {
+                    AgentWakeKind::DriftPredicted
+                }
+                _ => return Ok(()),
+            };
+            let instance_id = lock(&self.registered_instances, "resolve_agent_wake_instance")?
+                .values()
+                .find(|instance| instance.instance_alias == signal.instance_id)
+                .map(|instance| instance.instance_id)
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "agent_wake_instance_unknown",
+                        "record_policy_planning_signal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            let _gate = lock(&self.agent_write_gate, "record_agent_wake")?;
+            let mut agent = lock(&self.agent_dispatcher, "record_agent_wake")?;
+            if !agent.has_wake_for_trigger(persisted.event_id()) {
+                append_agent_wake(
+                    &mut agent,
+                    &self.ledger,
+                    &self.events,
+                    config,
+                    &persisted,
+                    instance_id,
+                    kind,
+                )?;
+            }
+            Ok(())
+        })()
+        .map_err(|error| {
+            if let Some((event_id, sequence)) = committed_signal {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+                let context = error.clone().with_native_detail(format!(
+                    "planning_fact_committed=true; event_id={event_id:?}; sequence={sequence}"
+                ));
+                let error = error
+                    .into_fatal()
+                    .with_related_failure("committed_planning_fact", &context);
+                let _ = error.lifecycle.recorded_event.set(event_id);
+                error
+            } else {
+                error
+            }
+        });
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone()).map_err(|secondary| {
+                let mut combined = error.clone().with_related_failure("fatal_mark", &secondary);
+                combined.lifecycle.recorded_event = Arc::clone(&error.lifecycle.recorded_event);
+                combined
+            })?;
+        }
+        result
+    }
+
     pub(super) fn prepare_strategic_report_ipc(
         &self,
         validated: &ValidatedRuntimeRequest<'_>,
