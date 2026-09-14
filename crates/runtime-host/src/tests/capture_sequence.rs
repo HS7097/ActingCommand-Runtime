@@ -71,14 +71,16 @@ fn bounded_capture_sequence_returns_unique_verified_observations_without_input()
             [
                 EventType::CaptureRequested,
                 EventType::RecognitionRequested,
+                EventType::CapturePolicyChanged,
                 EventType::ArtifactCreated,
                 EventType::ArtifactVerified,
+                EventType::ArtifactPinRecorded,
                 EventType::CaptureCompleted,
                 EventType::RecognitionCompleted,
             ]
             .into_iter()
             .cycle()
-            .take(18),
+            .take(24),
         )
         .collect::<Vec<_>>()
     );

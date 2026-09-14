@@ -33,11 +33,12 @@ use crate::{
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
-    ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
-    EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter,
-    EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
-    PinnedFrameEvidence, PreparedArtifact, StoredArtifact, build_capture_pipeline_summary,
-    capture_summary_record, read_projected_verified,
+    ArtifactWriteContext, ArtifactWriteRequest, CapturePipeline, CapturePipelineConfig,
+    CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
+    EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
+    FrameStoreFrameInput, PackageVerification, PersistedFrameEvidence, PinnedFrameEvidence,
+    PreparedArtifact, RecognitionState, build_capture_pipeline_summary, capture_summary_record,
+    read_projected_verified,
 };
 use actingcommand_contract::{
     ActionId, AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
@@ -60,18 +61,18 @@ use actingcommand_contract::{
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
-    OriginModule, OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PinnedFrameReason,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
-    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
-    ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
-    RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    ObservedMicroseconds, OriginModule, OwnerResourceDisposition, PackageDebugLayout,
+    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
+    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
+    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
+    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, ResourceQuiescence, RetentionClass,
+    RunId, RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryPageRequest,
     RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
     RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase,
     RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
@@ -82,7 +83,8 @@ use actingcommand_contract::{
     SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
     Sensitivity, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
     TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
+    TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
@@ -146,6 +148,7 @@ const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 mod agent_control;
 mod client_events;
 mod device_diagnostic;
+mod frame_retention;
 mod governance;
 mod lab_operation;
 mod lease;
@@ -309,6 +312,7 @@ pub struct RuntimeHostConfig {
     io_timeout: Duration,
     performance_monitor: Option<PerformanceMonitorConfig>,
     capacity_thresholds: actingcommand_contract::CapacityThresholds,
+    frame_retention_enabled: bool,
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -331,6 +335,7 @@ impl RuntimeHostConfig {
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             performance_monitor: None,
             capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
+            frame_retention_enabled: false,
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
@@ -396,6 +401,11 @@ impl RuntimeHostConfig {
         thresholds: actingcommand_contract::CapacityThresholds,
     ) -> Self {
         self.capacity_thresholds = thresholds;
+        self
+    }
+
+    pub fn with_frame_retention_enabled(mut self, enabled: bool) -> Self {
+        self.frame_retention_enabled = enabled;
         self
     }
 
@@ -484,6 +494,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("io_timeout", &self.io_timeout)
             .field("performance_monitor", &self.performance_monitor)
             .field("capacity_thresholds", &self.capacity_thresholds)
+            .field("frame_retention_enabled", &self.frame_retention_enabled)
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
@@ -604,7 +615,7 @@ impl RuntimeHost {
                 .map_err(|error| RuntimeHostError::state(&error))?,
         );
         let artifacts =
-            ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?;
+            Arc::new(ArtifactStore::open(&config.state_root).map_err(RuntimeHostError::artifact)?);
         let limits = actingcommand_runtime_database::MaintenanceLimits::default();
         let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
             &config.state_root,
@@ -670,6 +681,41 @@ impl RuntimeHost {
                 )
                 .with_native_detail(format!("{error:?}"))
             })?;
+        let recovery = limits
+            .deadline()
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            })
+            .and_then(|deadline| {
+                frame_retention::FrameRetention::recover(&ledger, &artifacts, deadline)
+            });
+        if let Err(mut original) = recovery {
+            let ledger_closed = ledger.close().map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            });
+            let owner_closed = config
+                .clock
+                .sample()
+                .and_then(|now| owner.close(now.unix_ms));
+            for result in [ledger_closed, owner_closed] {
+                if let Err(secondary) = result {
+                    original = original
+                        .into_fatal()
+                        .with_related_failure("retention_startup_cleanup", &secondary);
+                }
+            }
+            return Err(original);
+        }
         let performance = (|| {
             PerformanceMonitor::preflight_capacity(
                 crate::performance::CapacityPreflightConfig {
@@ -744,6 +790,7 @@ impl RuntimeHost {
             Arc::clone(&state),
             &ledger,
             config.policy_cadence.clone(),
+            &events,
         )?;
         reconcile_policy_dispatches(&mut policy, &ledger, &events)?;
         let authoritative_policy_outcomes =
@@ -810,7 +857,11 @@ impl RuntimeHost {
         )?;
         let prepared = (|| {
             let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
-            let performance_interval = performance.sample_interval();
+            let performance_interval = performance.sample_interval().or_else(|| {
+                config
+                    .frame_retention_enabled
+                    .then_some(Duration::from_secs(2))
+            });
             let performance_control =
                 PerformanceBalanceController::new(config.performance_control.clone())?;
             let info = RuntimeInfo::new(
@@ -870,6 +921,11 @@ impl RuntimeHost {
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
+            frame_retention: Mutex::new(
+                config
+                    .frame_retention_enabled
+                    .then(frame_retention::FrameRetention::default),
+            ),
             governance_write_gate: Mutex::new(()),
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
@@ -1090,16 +1146,24 @@ impl RuntimeHost {
         &self,
         sources: &CatalogSources,
         expected: CatalogGeneration,
-    ) -> RuntimeHostResult<CatalogGeneration> {
+    ) -> RuntimeHostResult<(
+        RuntimeHostResult<CatalogGeneration>,
+        Option<actingcommand_runtime_state::StateDocument>,
+    )> {
         let shared = self.shared_ref("activate_policy_catalog_with_expected_for_test")?;
         let catalog = lock(&shared.policy, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
-        shared.switch_policy_catalog(
+        let result = shared.switch_policy_catalog(
             catalog,
             Some(expected),
             EventAction::CatalogActivate,
             CatalogTransitionTarget::Activated,
             None,
-        )
+        );
+        let document = shared
+            .state
+            .read_json_document(actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY)
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok((result, document))
     }
 
     pub fn rollback_policy_catalog(
@@ -2416,7 +2480,7 @@ fn initial_registered_instances(
 }
 
 fn reconcile_runtime_state(
-    state: &RuntimeStateStore,
+    state: &Arc<RuntimeStateStore>,
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
@@ -2438,6 +2502,19 @@ fn reconcile_runtime_state(
         .migrations()
         .map_err(|error| RuntimeHostError::state(&error))?
     {
+        if migration.state_key() == actingcommand_runtime_state::RELEASE_BASELINE_STATE_KEY {
+            continue;
+        }
+        if migration.state_key() == actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY {
+            if !migrated.contains(migration.migration_id()) {
+                return Err(RuntimeHostError::fatal(
+                    "catalog_migration_source_missing",
+                    "reconcile_runtime_state",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            continue;
+        }
         if !migrated.contains(migration.migration_id()) {
             append_runtime_state_event(
                 ledger,
@@ -2447,48 +2524,7 @@ fn reconcile_runtime_state(
         }
     }
 
-    let staged =
-        release_event_identities(ledger, EventType::ReleaseStaged, |payload| match payload {
-            ReleasePayload::Staged(value) => Some(value.manifest().release_id().to_owned()),
-            _ => None,
-        })?;
-    for manifest in state
-        .release_generations()
-        .map_err(|error| RuntimeHostError::state(&error))?
-    {
-        if !staged.contains(manifest.release_id()) {
-            append_runtime_state_event(
-                ledger,
-                events,
-                ReleasePayloadDraft::staged(manifest, AuditInput::new()),
-            )?;
-        }
-    }
-
-    let mut completed = release_transition_identities(ledger, EventType::ReleaseActivated)?;
-    completed.extend(release_transition_identities(
-        ledger,
-        EventType::ReleaseRolledBack,
-    )?);
-    for transition in state
-        .release_transitions()
-        .map_err(|error| RuntimeHostError::state(&error))?
-    {
-        if completed.contains(transition.transition_id()) {
-            continue;
-        }
-        let recovered = transition.recovered_for_ledger();
-        let payload = match recovered.kind() {
-            ReleaseTransitionKind::Activate => {
-                ReleasePayloadDraft::activated(recovered, AuditInput::new())
-            }
-            ReleaseTransitionKind::Rollback => {
-                ReleasePayloadDraft::rolled_back(recovered, AuditInput::new())
-            }
-        };
-        append_runtime_state_event(ledger, events, payload)?;
-    }
-    Ok(())
+    state_control::reconcile_release_state(state, ledger, events)
 }
 
 fn reconcile_policy_dispatches(
@@ -3053,37 +3089,6 @@ fn policy_recovery_outcome_matches(
     }
 }
 
-fn release_event_identities(
-    ledger: &GlobalLedger,
-    event_type: EventType,
-    identity: impl Fn(&ReleasePayload) -> Option<String>,
-) -> RuntimeHostResult<BTreeSet<String>> {
-    Ok(ledger
-        .query(EventQuery {
-            event_type: Some(event_type),
-            ..EventQuery::default()
-        })
-        .map_err(|_| ledger_error("query_release_events"))?
-        .into_iter()
-        .filter_map(|event| match event.payload() {
-            EventPayload::Release(payload) => identity(payload),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>())
-}
-
-fn release_transition_identities(
-    ledger: &GlobalLedger,
-    event_type: EventType,
-) -> RuntimeHostResult<BTreeSet<String>> {
-    release_event_identities(ledger, event_type, |payload| match payload {
-        ReleasePayload::Activated(value) | ReleasePayload::RolledBack(value) => {
-            Some(value.transition().transition_id().to_owned())
-        }
-        _ => None,
-    })
-}
-
 fn append_runtime_state_event(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
@@ -3182,6 +3187,7 @@ struct HostShared {
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
+    frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
     governance_capability_sha256: Option<[u8; 32]>,
@@ -3207,7 +3213,7 @@ struct HostShared {
         Mutex<BTreeMap<(String, String), AuthoritativeSchedulingOutcome>>,
     procedure_manifest: Mutex<Option<ProcedureManifest>>,
     ledger: GlobalLedger,
-    artifacts: ArtifactStore,
+    artifacts: Arc<ArtifactStore>,
     state: Arc<RuntimeStateStore>,
     agent_dispatcher_config: Option<AgentDispatcherConfig>,
     agent_dispatcher: Mutex<AgentDispatcherState>,
@@ -3519,6 +3525,9 @@ impl HostShared {
     }
 
     fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
+        if let Some(error) = self.fatal.current()? {
+            return Err(error);
+        }
         Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
     }
 
@@ -3536,6 +3545,9 @@ impl HostShared {
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
             let policy = lock(&self.policy, "stage_policy_catalog")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
             let catalog = policy.stage(sources)?;
             let previous = policy.active_generation();
             (catalog, previous)
@@ -3568,6 +3580,9 @@ impl HostShared {
     fn rollback_policy_catalog(&self, catalog_hash: &str) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
             let policy = lock(&self.policy, "load_policy_catalog_rollback")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
             let previous = policy.active_generation().ok_or_else(|| {
                 RuntimeHostError::request(
                     "policy_catalog_unavailable",
@@ -3607,106 +3622,174 @@ impl HostShared {
         target: CatalogTransitionTarget,
         promotion: Option<CatalogPromotionAuthorization>,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        let generation = catalog.generation().clone();
-        let expected_active_hash = previous
-            .as_ref()
-            .map(|value| value.catalog_hash().to_owned());
-        let data = CatalogTransitionEventData {
-            catalog_id: generation.catalog_id().to_owned(),
-            catalog_version: generation.catalog_version(),
-            catalog_hash: generation.catalog_hash().to_owned(),
-            previous_catalog_hash: previous
+        let result = (|| -> RuntimeHostResult<CatalogGeneration> {
+            let generation = catalog.generation().clone();
+            let expected_active_hash = previous
                 .as_ref()
-                .map(|value| value.catalog_hash().to_owned()),
-            promotion,
-        };
-        let links = self.events.system_links()?;
-        let intent = self.events.draft(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Policy,
-            EventActor::Runtime,
-            links.clone(),
-            CatalogPayloadDraft::transition_intent(action, data.clone(), AuditInput::new()),
-        )?;
-        let intent = self.events.sanitize(intent)?;
-        let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
+                .map(|value| value.catalog_hash().to_owned());
+            let data = CatalogTransitionEventData {
+                catalog_id: generation.catalog_id().to_owned(),
+                catalog_version: generation.catalog_version(),
+                catalog_hash: generation.catalog_hash().to_owned(),
+                previous_catalog_hash: previous
+                    .as_ref()
+                    .map(|value| value.catalog_hash().to_owned()),
+                promotion,
+            };
+            let links = self.events.system_links()?;
+            let intent = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Policy,
+                EventActor::Runtime,
+                links.clone(),
+                CatalogPayloadDraft::transition_intent(action, data.clone(), AuditInput::new()),
+            )?;
+            let intent = self.events.sanitize(intent)?;
+            let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
+                .map_err(|_| critical_plan_error())?;
+            let mut policy = lock(&self.policy, "switch_active_policy_catalog")?;
+            if let Some(error) = self.fatal.current()? {
+                return Err(error);
+            }
+            let intent = self
+                .ledger
+                .append(plan.intent().clone())
+                .map_err(|error| crate::policy_host::catalog_ledger_error(&error))?;
+            let work = policy.prepare_active_transaction(&catalog, expected_active_hash.as_deref());
+            let success = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Policy,
+                EventActor::Runtime,
+                links.clone(),
+                match target {
+                    CatalogTransitionTarget::Activated => {
+                        CatalogPayloadDraft::activated(data.clone(), AuditInput::new())
+                    }
+                    CatalogTransitionTarget::RolledBack => {
+                        CatalogPayloadDraft::rolled_back(data.clone(), AuditInput::new())
+                    }
+                },
+            )?;
+            let success = self.events.sanitize(success)?;
+            actingcommand_ledger::critical::validate_catalog_outcome(
+                target, &intent, &success, true,
+            )
             .map_err(|_| critical_plan_error())?;
-        let success_links = links.clone();
-        let failure_links = links;
-        let success_data = data.clone();
-        let failure_data = data;
-        let result = execute_critical(
-            &self.ledger,
-            self.events.fingerprinter(),
-            plan,
-            || match lock(&self.policy, "switch_active_policy_catalog").and_then(|mut policy| {
-                policy.switch_active(catalog, expected_active_hash.as_deref())
-            }) {
-                Ok(()) => CriticalActionReport::Succeeded {
-                    value: generation.clone(),
-                    effect: DefiniteEffectDisposition::Performed,
-                },
-                Err(error) => CriticalActionReport::Failed {
-                    effect: if error.is_fatal() {
-                        EffectDisposition::Indeterminate
+            let outcome = match self.ledger.append_transaction(success, work) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let Some(rejection) = error.rolled_back_work() else {
+                        let error = crate::policy_host::catalog_ledger_error(&error);
+                        self.fatal.mark(error.clone())?;
+                        return Err(error);
+                    };
+                    let original = if rejection.fatal {
+                        RuntimeHostError::fatal(
+                            rejection.code,
+                            rejection.operation,
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
                     } else {
-                        EffectDisposition::NotPerformed
-                    },
-                    error,
-                },
-            },
-            |_, _| {
-                self.events
-                    .draft(
-                        EventSeverity::Info,
-                        EventSource::Runtime,
-                        OriginModule::Policy,
-                        EventActor::Runtime,
-                        success_links,
-                        match target {
-                            CatalogTransitionTarget::Activated => {
-                                CatalogPayloadDraft::activated(success_data, AuditInput::new())
-                            }
-                            CatalogTransitionTarget::RolledBack => {
-                                CatalogPayloadDraft::rolled_back(success_data, AuditInput::new())
-                            }
-                        },
+                        RuntimeHostError::request(
+                            rejection.code,
+                            rejection.operation,
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                    }
+                    .with_native_detail(rejection.detail.clone());
+                    let failed = self
+                        .events
+                        .draft(
+                            EventSeverity::Error,
+                            EventSource::Runtime,
+                            OriginModule::Policy,
+                            EventActor::Runtime,
+                            links,
+                            CatalogPayloadDraft::transition_failed(
+                                action,
+                                data,
+                                EffectDisposition::NotPerformed,
+                                AuditInput::new(),
+                            ),
+                        )
+                        .and_then(|draft| self.events.sanitize(draft));
+                    let failed = match failed {
+                        Ok(draft) => draft,
+                        Err(error) => {
+                            let error = RuntimeHostError::fatal(
+                                "catalog_failure_fact_undurable",
+                                "build_catalog_failure",
+                                RuntimeErrorCode::LedgerFailure,
+                            )
+                            .with_native_detail(format!(
+                                "original={original:?}; failure={error:?}"
+                            ));
+                            self.fatal.mark(error.clone())?;
+                            return Err(error);
+                        }
+                    };
+                    actingcommand_ledger::critical::validate_catalog_outcome(
+                        target, &intent, &failed, false,
                     )
-                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
-            },
-            |_, effect| {
-                self.events
-                    .draft(
-                        EventSeverity::Error,
-                        EventSource::Runtime,
-                        OriginModule::Policy,
-                        EventActor::Runtime,
-                        failure_links,
-                        CatalogPayloadDraft::transition_failed(
-                            action,
-                            failure_data,
-                            effect,
-                            AuditInput::new(),
-                        ),
-                    )
-                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
-            },
-        );
-        match result {
-            Ok(receipt) => Ok(receipt.into_value()),
-            Err(CriticalExecutionError::Action { error, .. }) => {
-                if error.is_fatal() {
-                    self.fatal.mark(error.clone())?;
+                    .map_err(|error| {
+                        RuntimeHostError::fatal(
+                            "catalog_failure_fact_undurable",
+                            "validate_catalog_failure",
+                            RuntimeErrorCode::LedgerFailure,
+                        )
+                        .with_native_detail(format!("original={original:?}; failure={error:?}"))
+                    })?;
+                    let failed = self.ledger.append(failed).map_err(|error| {
+                        crate::policy_host::catalog_ledger_error(&error).with_native_detail(
+                            format!(
+                                "original={original:?}; failure={error}; detail={:?}",
+                                error.detail()
+                            ),
+                        )
+                    });
+                    drop(policy);
+                    match failed {
+                        Ok(event) => {
+                            if original.is_fatal() {
+                                self.fatal.mark(original.clone())?;
+                            }
+                            if let Err(error) = self
+                                .synchronize_fact_store()
+                                .and_then(|()| self.observe_pipeline_event(&event))
+                            {
+                                return Err(error.into_fatal().with_native_detail(format!(
+                                    "original={original:?}; failed outcome was committed"
+                                )));
+                            }
+                            return Err(original);
+                        }
+                        Err(error) => {
+                            self.fatal.mark(error.clone())?;
+                            return Err(error);
+                        }
+                    }
                 }
-                Err(error)
-            }
-            Err(error) => {
-                let error = critical_execution_error(&error);
+            };
+            policy.publish_active(catalog);
+            drop(policy);
+            let post = self
+                .synchronize_fact_store()
+                .and_then(|()| self.observe_pipeline_event(&outcome));
+            if let Err(error) = post {
+                let error = error.into_fatal();
                 self.fatal.mark(error.clone())?;
-                Err(error)
+                return Err(error);
             }
+            Ok(generation)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
         }
+        result
     }
 
     fn evaluate_policy_cycle(&self, trigger: PolicyTrigger) -> RuntimeHostResult<PolicyCycle> {
@@ -4422,9 +4505,11 @@ impl HostShared {
         let result: RuntimeHostResult<EventId> = (|| {
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
             self.synchronize_fact_store_under_gate()?;
-            if let Some(event_id) = lock(&self.facts, "publish_fact")?
-                .preview_observation(&observation, self.clock.sample()?.unix_ms)?
-            {
+            if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_observation(
+                &observation,
+                self.clock.sample()?.unix_ms,
+                &self.ledger,
+            )? {
                 return Ok(event_id);
             }
             let scope = &observation.records[0].scope;
@@ -5768,6 +5853,7 @@ impl HostShared {
         &self,
         signal: PolicyPlanningSignalEventData,
     ) -> RuntimeHostResult<()> {
+        let mut committed_signal = None;
         let result: RuntimeHostResult<()> = (|| {
             let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
             policy.validate_planning_signal(&signal)?;
@@ -5782,17 +5868,44 @@ impl HostShared {
                     ))
                 };
             }
+            let (work, staged_quota) = policy.prepare_planning_signal(&signal)?;
+            let fact_gate = lock(&self.fact_write_gate, "append_planning_transaction")?;
+            if self.lifecycle_append_failed.load(Ordering::Acquire) {
+                return Err(ledger_error("append_planning_transaction"));
+            }
             let links = self.events.system_links()?;
-            let persisted = self.append_event_raw(
+            let draft = self.events.draft(
                 EventSeverity::Info,
                 EventSource::Scheduler,
                 OriginModule::Policy,
                 EventActor::Scheduler,
-                links,
+                links.clone(),
                 PolicyPayloadDraft::planning_signal_observed(signal.clone(), AuditInput::new()),
             )?;
-            policy.commit_planning_signal(persisted.sequence(), signal.clone())?;
+            let draft = self.events.sanitize(draft)?;
+            let attempt_event_id = *draft.event_id();
+            let persisted = self
+                .ledger
+                .append_transaction(draft, Box::new(work))
+                .map_err(|error| {
+                    let error = crate::policy_host::planning_transaction_error(error);
+                    if error.is_fatal() {
+                        self.lifecycle_append_failed.store(true, Ordering::Release);
+                    }
+                    let context = error.clone().with_native_detail(format!(
+                        "event_id={attempt_event_id:?}; attempted_sequence={:?}",
+                        staged_quota.attempted_sequence()
+                    ));
+                    error.with_related_failure("planning_attempt", &context)
+                })?;
+            committed_signal = Some((*persisted.event_id(), persisted.sequence()));
+            policy.publish_planning_signal(staged_quota);
             drop(policy);
+            let observed = self
+                .observe_device_diagnostics_under_fact_gate(&persisted, &links)
+                .and_then(|()| self.synchronize_fact_store_under_gate());
+            drop(fact_gate);
+            observed.and_then(|()| self.observe_pipeline_event(&persisted))?;
             let Some(config) = &self.agent_dispatcher_config else {
                 return Ok(());
             };
@@ -5830,11 +5943,30 @@ impl HostShared {
                 )?;
             }
             Ok(())
-        })();
+        })()
+        .map_err(|error| {
+            if let Some((event_id, sequence)) = committed_signal {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+                let context = error.clone().with_native_detail(format!(
+                    "planning_fact_committed=true; event_id={event_id:?}; sequence={sequence}"
+                ));
+                let error = error
+                    .into_fatal()
+                    .with_related_failure("committed_planning_fact", &context);
+                let _ = error.lifecycle.recorded_event.set(event_id);
+                error
+            } else {
+                error
+            }
+        });
         if let Err(error) = &result
             && error.is_fatal()
         {
-            self.fatal.mark(error.clone())?;
+            self.fatal.mark(error.clone()).map_err(|secondary| {
+                let mut combined = error.clone().with_related_failure("fatal_mark", &secondary);
+                combined.lifecycle.recorded_event = Arc::clone(&error.lifecycle.recorded_event);
+                combined
+            })?;
         }
         result
     }
@@ -7463,28 +7595,67 @@ impl HostShared {
             ledger: &self.ledger,
             events: &self.events,
             verified: None,
+            frame_retention: Some((
+                self.owner_epoch,
+                frame_retention::capture_pin_reason(request),
+            )),
         };
-        let stored = self
-            .artifacts
-            .put(
-                ArtifactWriteRequest::new(
-                    ArtifactKind::CaptureFrame,
-                    &artifact_png,
-                    write_context,
-                    ArtifactIssuePolicy::new(
-                        ArtifactProducer::CaptureStore,
-                        if request.actor() == EventActor::Lab
-                            && request.source() == EventSource::Lab
-                        {
-                            RetentionClass::DebugFull
-                        } else {
-                            RetentionClass::Adaptive
-                        },
-                        ArtifactRedactionState::NotRequired,
-                    ),
-                ),
+        let frame_id = links.frame_id().ok_or_else(|| {
+            online_observation::observation_integrity_failure("observation_frame_identity_missing")
+        })?;
+        let mut pipeline = CapturePipeline::open_with_store(
+            Arc::clone(&self.artifacts),
+            frame_retention::spill_root(self.artifacts.root(), frame_id)
+                .map_err(online_observation::observation_artifact_failure)?,
+            CapturePipelineConfig {
+                frame_store: frame_retention::capture_frame_store_config(),
+                retention_class: if request.actor() == EventActor::Lab
+                    && request.source() == EventSource::Lab
+                {
+                    RetentionClass::DebugFull
+                } else {
+                    RetentionClass::Adaptive
+                },
+                redaction_state: ArtifactRedactionState::NotRequired,
+                ..CapturePipelineConfig::default()
+            },
+            write_context.clone(),
+            &mut sink,
+        )
+        .map_err(online_observation::observation_artifact_failure)?;
+        let mut retained = frame.clone();
+        retained.original_png = Some(artifact_png);
+        let captured = pipeline
+            .record_frame(
+                FrameStoreFrameInput {
+                    frame_index: 0,
+                    file_name: "frame-0.png".to_owned(),
+                    label: "initial".to_owned(),
+                    recognition_state: RecognitionState::CompletedNoMatch,
+                    pinned_reason: None,
+                    frame: retained,
+                },
+                write_context.clone(),
                 &mut sink,
             )
+            .map_err(online_observation::observation_artifact_failure)?;
+        if !captured.frame.warnings.is_empty() {
+            return Err(online_observation::observation_artifact_failure(
+                ArtifactStoreError::fatal(
+                    "capture_spill_failed",
+                    "persist_readonly_frame",
+                    captured.frame.warnings.join("; "),
+                ),
+            ));
+        }
+        let reference = pipeline
+            .persist_frame(0, &mut sink)
+            .map_err(online_observation::observation_artifact_failure)?;
+        pipeline
+            .poll_pressure(&write_context, &mut sink)
+            .map_err(online_observation::observation_artifact_failure)?;
+        pipeline
+            .cleanup_spills()
             .map_err(online_observation::observation_artifact_failure)?;
         let observation = ReadonlyObservation::new(
             frame.width,
@@ -7492,7 +7663,7 @@ impl HostShared {
             RecognitionVerdict::FrameDecoded,
             runtime_capture_backend(frame.backend_name)
                 .map_err(RequestFailure::poison_without_terminal)?,
-            stored.reference().project(true),
+            reference.project(true),
         )
         .map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -8353,7 +8524,9 @@ impl HostShared {
             execution
         };
         if let Err(ContainedTaskRunError::Task(error)) = &execution {
-            runtime.task_timing.task_failure(error.timing());
+            runtime
+                .task_timing
+                .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
@@ -8466,18 +8639,17 @@ impl HostShared {
                     } else {
                         TaskOutcome::Cancelled
                     };
-                    let capture_summary =
-                        capture_evidence
-                            .finalize(terminal_outcome)
-                            .map_err(|summary_failure| {
-                                self.cleanup_composite_failure_with_run_links(
-                                    request,
-                                    token.clone(),
-                                    connection_id,
-                                    run_links,
-                                    summary_failure,
-                                )
-                            })?;
+                    let capture_summary = capture_evidence
+                        .finalize(terminal_outcome, self)
+                        .map_err(|summary_failure| {
+                            self.cleanup_composite_failure_with_run_links(
+                                request,
+                                token.clone(),
+                                connection_id,
+                                run_links,
+                                summary_failure,
+                            )
+                        })?;
                     let task_terminal = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -8541,18 +8713,19 @@ impl HostShared {
                 let task_failure = scheduled.then_some(failure.task_failure).flatten();
                 let failure_severity = task_failure.map(|evidence| evidence.severity);
                 if failure_severity.is_some() || !scheduled && !failure.poison_runtime {
-                    let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure) {
-                        Ok(summary) => summary,
-                        Err(summary_failure) => {
-                            return Err(self.cleanup_composite_failure_with_run_links(
-                                request,
-                                token,
-                                connection_id,
-                                run_links,
-                                summary_failure,
-                            ));
-                        }
-                    };
+                    let capture_summary =
+                        match capture_evidence.finalize(TaskOutcome::Failure, self) {
+                            Ok(summary) => summary,
+                            Err(summary_failure) => {
+                                return Err(self.cleanup_composite_failure_with_run_links(
+                                    request,
+                                    token,
+                                    connection_id,
+                                    run_links,
+                                    summary_failure,
+                                ));
+                            }
+                        };
                     let event = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -8612,7 +8785,7 @@ impl HostShared {
                         pin_failure,
                     ));
                 }
-                let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure) {
+                let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure, self) {
                     Ok(summary) => summary,
                     Err(summary_failure) => {
                         return Err(self.cleanup_composite_failure_with_run_links(
@@ -8689,7 +8862,7 @@ impl HostShared {
                 )),
             ));
         }
-        let capture_summary = match capture_evidence.finalize(outcome.outcome) {
+        let capture_summary = match capture_evidence.finalize(outcome.outcome, self) {
             Ok(summary) => summary,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure_with_run_links(
@@ -8873,7 +9046,9 @@ impl HostShared {
             recovery.run_entry_recovery(&mut recovery_runtime)
         };
         if let Err(ContainedTaskRunError::Task(error)) = &recovery_execution {
-            runtime.task_timing.task_failure(error.timing());
+            runtime
+                .task_timing
+                .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.task_timing.replace_context(previous_timing);
         let nonfatal_operation = matches!(
@@ -11979,6 +12154,32 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)
     }
 
+    fn append_event_observed(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        payload: impl Into<actingcommand_contract::EventPayloadDraft>,
+    ) -> (
+        Result<PersistedEvent, RequestFailure>,
+        task_timing::AppendObservation,
+    ) {
+        let mut observation = task_timing::AppendObservation::default();
+        let result = self
+            .append_event_raw_with_observation(
+                severity,
+                source,
+                module,
+                actor,
+                links,
+                (payload, Some(&mut observation)),
+            )
+            .map_err(RequestFailure::poison_without_terminal);
+        (result, observation)
+    }
+
     fn append_lifecycle_observed(
         &self,
         phase: RuntimeLifecyclePhase,
@@ -12246,11 +12447,17 @@ impl HostShared {
                     "local_ipc",
                     error.operation(),
                     format!(
-                        "host_code={} fatal={} connection_id={} request_decoded={}",
+                        "host_code={} fatal={} connection_id={} request_decoded={} observation={}",
                         error.code(),
                         error.is_fatal(),
                         context.connection_serial,
                         context.request_decoded,
+                        serde_json::json!({
+                            "owner_epoch": self.owner_epoch,
+                            "runtime_pid": std::process::id(),
+                            "clock": "process_instant",
+                            "stages": &context.timing,
+                        }),
                     ),
                     Sensitivity::Internal,
                 ),
@@ -12270,12 +12477,62 @@ impl HostShared {
         links: EventLinksDraft,
         payload: impl Into<actingcommand_contract::EventPayloadDraft>,
     ) -> RuntimeHostResult<PersistedEvent> {
-        let gate = lock(&self.fact_write_gate, "append_runtime_event")?;
-        let event =
-            self.append_event_under_fact_gate(severity, source, module, actor, links, payload)?;
-        self.synchronize_fact_store_under_gate()?;
+        self.append_event_raw_with_observation(
+            severity,
+            source,
+            module,
+            actor,
+            links,
+            (payload, None),
+        )
+    }
+
+    fn append_event_raw_with_observation(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        input: (
+            impl Into<actingcommand_contract::EventPayloadDraft>,
+            Option<&mut task_timing::AppendObservation>,
+        ),
+    ) -> RuntimeHostResult<PersistedEvent> {
+        let (payload, mut observation) = input;
+        if let Some(value) = observation.as_mut() {
+            value.fact_gate.begin();
+        }
+        let gate = lock(&self.fact_write_gate, "append_runtime_event");
+        if let Some(value) = observation.as_mut() {
+            value.fact_gate.finish(gate.is_ok());
+        }
+        let gate = gate?;
+        let event = self.append_event_under_fact_gate_with_observation(
+            severity,
+            source,
+            module,
+            actor,
+            links,
+            (payload, observation.as_deref_mut()),
+        )?;
+        if let Some(value) = observation.as_mut() {
+            value.fact_sync.begin();
+        }
+        let synchronized = self.synchronize_fact_store_under_gate();
+        if let Some(value) = observation.as_mut() {
+            value.fact_sync.finish(synchronized.is_ok());
+        }
+        synchronized?;
         drop(gate);
-        self.observe_pipeline_event(&event)?;
+        if let Some(value) = observation.as_mut() {
+            value.pipeline.begin();
+        }
+        let pipeline = self.observe_pipeline_event(&event);
+        if let Some(value) = observation.as_mut() {
+            value.pipeline.finish(pipeline.is_ok());
+        }
+        pipeline?;
         Ok(event)
     }
 
@@ -12288,18 +12545,70 @@ impl HostShared {
         links: EventLinksDraft,
         payload: impl Into<actingcommand_contract::EventPayloadDraft>,
     ) -> RuntimeHostResult<PersistedEvent> {
+        self.append_event_under_fact_gate_with_observation(
+            severity,
+            source,
+            module,
+            actor,
+            links,
+            (payload, None),
+        )
+    }
+
+    fn append_event_under_fact_gate_with_observation(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        input: (
+            impl Into<actingcommand_contract::EventPayloadDraft>,
+            Option<&mut task_timing::AppendObservation>,
+        ),
+    ) -> RuntimeHostResult<PersistedEvent> {
+        let (payload, mut observation) = input;
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
             return Err(ledger_error("append_runtime_event"));
         }
-        let draft = self
-            .events
-            .draft(severity, source, module, actor, links.clone(), payload)?;
-        let draft = self.events.sanitize(draft)?;
-        let event = self.ledger.append(draft).map_err(|_| {
+        if let Some(value) = observation.as_mut() {
+            value.draft.begin();
+        }
+        let draft = (|| {
+            let draft =
+                self.events
+                    .draft(severity, source, module, actor, links.clone(), payload)?;
+            self.events.sanitize(draft)
+        })();
+        if let Some(value) = observation.as_mut() {
+            value.draft.finish(draft.is_ok());
+        }
+        let draft = draft?;
+        if let Some(value) = observation.as_mut() {
+            value.writer_response.begin();
+        }
+        let appended = if let Some(value) = observation.as_mut() {
+            let (result, ledger_observation) = self.ledger.append_with_observation(draft);
+            value.ledger = ledger_observation;
+            result
+        } else {
+            self.ledger.append(draft)
+        };
+        if let Some(value) = observation.as_mut() {
+            value.writer_response.finish(appended.is_ok());
+        }
+        let event = appended.map_err(|_| {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             ledger_error("append_runtime_event")
         })?;
-        if let Err(error) = self.observe_device_diagnostics_under_fact_gate(&event, &links) {
+        if let Some(value) = observation.as_mut() {
+            value.device_diagnostics.begin();
+        }
+        let diagnostic = self.observe_device_diagnostics_under_fact_gate(&event, &links);
+        if let Some(value) = observation.as_mut() {
+            value.device_diagnostics.finish(diagnostic.is_ok());
+        }
+        if let Err(error) = diagnostic {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
             return Err(error);
@@ -12317,15 +12626,39 @@ impl HostShared {
             let mut facts = lock(&self.facts, "synchronize_fact_store")?;
             facts.synchronize(&self.ledger)?;
             for invalidation in facts.pending_invalidations() {
-                let persisted = self.append_event_under_fact_gate(
+                if self.lifecycle_append_failed.load(Ordering::Acquire) {
+                    return Err(ledger_error("append_fact_transaction"));
+                }
+                let work = facts.prepare_invalidation(&self.ledger, &invalidation)?;
+                let links = self.events.system_links()?;
+                let draft = self.events.draft(
                     EventSeverity::Info,
                     EventSource::Runtime,
                     OriginModule::FactStore,
                     EventActor::Runtime,
-                    self.events.system_links()?,
-                    FactPayloadDraft::invalidated(invalidation.clone(), AuditInput::new()),
+                    links.clone(),
+                    FactPayloadDraft::invalidated(invalidation.data.clone(), AuditInput::new()),
                 )?;
-                facts.acknowledge_generated_invalidation(&invalidation, persisted.sequence())?;
+                let draft = self.events.sanitize(draft)?;
+                let persisted = self
+                    .ledger
+                    .append_transaction(draft, Box::new(work))
+                    .map_err(|error| {
+                        let error = crate::fact_store::fact_transaction_error(error);
+                        if error.is_fatal() {
+                            self.lifecycle_append_failed.store(true, Ordering::Release);
+                        }
+                        error
+                    })?;
+                facts
+                    .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
+                    .and_then(|()| {
+                        self.observe_device_diagnostics_under_fact_gate(&persisted, &links)
+                    })
+                    .inspect_err(|error| {
+                        self.lifecycle_append_failed.store(true, Ordering::Release);
+                        let _ = error.lifecycle.recorded_event.set(*persisted.event_id());
+                    })?;
             }
             Ok(())
         })();
@@ -12561,6 +12894,8 @@ impl Drop for ActiveContainedRun<'_> {
 
 #[derive(Default)]
 struct CaptureEvidenceAccumulator {
+    pipeline: Option<CapturePipeline>,
+    pipeline_failure: Option<ArtifactStoreError>,
     counts: CapturePipelineCounts,
     next_frame_index: usize,
     last_frame_index: Option<usize>,
@@ -12592,7 +12927,7 @@ impl CaptureEvidenceAccumulator {
     fn persisted(
         &mut self,
         frame_index: usize,
-        stored: &StoredArtifact,
+        artifact: &ArtifactReference,
     ) -> Result<(), RequestFailure> {
         if self
             .frames
@@ -12617,7 +12952,7 @@ impl CaptureEvidenceAccumulator {
         self.frames.push(PersistedFrameEvidence {
             frame_index,
             pinned_reason: None,
-            artifact: stored.reference().clone(),
+            artifact: artifact.clone(),
         });
         self.last_frame_index = Some(frame_index);
         if self.pending_post_input {
@@ -12691,13 +13026,51 @@ impl CaptureEvidenceAccumulator {
         Ok(())
     }
 
-    fn finalize(mut self, outcome: TaskOutcome) -> Result<CapturePipelineSummary, RequestFailure> {
+    fn finalize(
+        mut self,
+        outcome: TaskOutcome,
+        host: &HostShared,
+    ) -> Result<CapturePipelineSummary, RequestFailure> {
         if self.pending_post_input {
             self.pin(None, PinnedFrameReason::PostInput, None)?;
         }
         self.pin_last(PinnedFrameReason::Terminal)?;
         if outcome == TaskOutcome::Failure {
             self.pin_last(PinnedFrameReason::Failure)?;
+        }
+        if let Some(pipeline) = self.pipeline.as_mut() {
+            if let Some(error) = self.pipeline_failure.take() {
+                return Err(online_observation::observation_artifact_failure(error));
+            }
+            let mut sink = online_observation::ObservationArtifactSink {
+                ledger: &host.ledger,
+                events: &host.events,
+                verified: None,
+                frame_retention: Some((
+                    host.owner_epoch,
+                    actingcommand_contract::ArtifactPinReason::Explicit,
+                )),
+            };
+            for ((index, reason), original) in &self.pinned {
+                if let Some(index) = index {
+                    let material = pipeline
+                        .pin_frame(*index, *reason, &mut sink)
+                        .map_err(online_observation::observation_artifact_failure)?;
+                    if original.as_ref() != Some(&material) {
+                        return Err(online_observation::observation_integrity_failure(
+                            "capture_pin_material_changed",
+                        ));
+                    }
+                }
+            }
+            let summary = pipeline
+                .finish(&mut sink)
+                .map_err(online_observation::observation_artifact_failure)?;
+            pipeline
+                .cleanup_spills()
+                .map_err(online_observation::observation_artifact_failure)?;
+            self.counts = summary.counts;
+            self.frames = summary.frames;
         }
         let pinned = self
             .pinned
@@ -12771,6 +13144,20 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.task_timing.replace_context(Some(context));
     }
 
+    fn task_boundary_identity(
+        &self,
+        boundary: TaskTimingBoundary,
+    ) -> task_timing::BoundaryIdentity {
+        self.inner.timing_identity(boundary)
+    }
+
+    fn observe_task_boundary(
+        &mut self,
+        timing: actingcommand_execution_kernel::ContainedTaskBoundaryTiming,
+    ) {
+        self.inner.task_timing.kernel_boundary(timing);
+    }
+
     fn record_page_evaluations(
         &mut self,
         phase: &'static str,
@@ -12784,7 +13171,8 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
                 self.inner.current_recognition_id.map(|id| *id.transport()),
             );
         }
-        self.inner.diagnostic_pages(phase, results)
+        self.inner.diagnostic_pages(phase, results)?;
+        self.inner.record_capture_recognition(results)
     }
     fn record_guard_evaluation(
         &mut self,
@@ -13082,6 +13470,165 @@ impl RuntimeContainedTask<'_> {
             RuntimeReceiptState::Failed,
             None,
         ))
+    }
+
+    fn poll_capture_pressure(&mut self) -> Result<(), RequestFailure> {
+        if !self
+            .capture_evidence
+            .pipeline
+            .as_ref()
+            .is_some_and(CapturePipeline::is_paused)
+        {
+            return Ok(());
+        }
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.host.ledger,
+            events: &self.host.events,
+        };
+        let context = ArtifactWriteContext::new(
+            self.request.task_artifact_links(self.run_id),
+            self.links(),
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+        );
+        loop {
+            self.ensure_active()?;
+            self.host.ledger.check_writer_health().map_err(|error| {
+                RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        error.code(),
+                        error.operation(),
+                        RuntimeErrorCode::LedgerFailure,
+                    )
+                    .with_native_detail(error.to_string()),
+                )
+            })?;
+            let pipeline = self
+                .capture_evidence
+                .pipeline
+                .as_mut()
+                .expect("paused pipeline exists");
+            pipeline
+                .poll_pressure(&context, &mut sink)
+                .map_err(online_observation::observation_artifact_failure)?;
+            if !pipeline.is_paused() || self.finalizing.is_some() {
+                return Ok(());
+            }
+            // The original run deadline/cancellation bounds the pause before any capture effect.
+            if self.control.deadline() == 0 || self.host.fatal.is_shutdown_requested() {
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "capture_pressure_pause_stopped",
+                        "admit_contained_task_capture",
+                        RuntimeErrorCode::CaptureFailed,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn record_capture_recognition(
+        &mut self,
+        results: &actingcommand_page_detector::PageBatchResult,
+    ) -> Result<(), RequestFailure> {
+        let frame_id = self.last_frame_id.map(|id| *id.transport());
+        let recognition_id = self.current_recognition_id.map(|id| *id.transport());
+        let started = Instant::now();
+        let budget_before = self.task_timing.budget_at(started);
+        let result = (|| {
+            let Some(index) = self.capture_evidence.last_frame_index else {
+                return Ok(());
+            };
+            let state = match results {
+                Ok(outcomes) => {
+                    if let Some(error) = outcomes
+                        .iter()
+                        .find_map(|outcome| outcome.result.as_ref().err())
+                    {
+                        RecognitionState::Failed {
+                            reason: error.to_string().chars().take(256).collect(),
+                        }
+                    } else {
+                        let mut matches = outcomes
+                            .iter()
+                            .filter_map(|outcome| outcome.result.as_ref().ok())
+                            .filter(|evaluation| evaluation.matched);
+                        let first = matches.next();
+                        if matches.next().is_some() {
+                            // No unique page relation is available to the frame cache.
+                            return Ok(());
+                        }
+                        RecognitionState::from_matched_page(
+                            first.map(|evaluation| evaluation.page_id.clone()),
+                        )
+                    }
+                }
+                Err(error) => RecognitionState::Failed {
+                    reason: error.to_string().chars().take(256).collect(),
+                },
+            };
+            let mut sink = RuntimeArtifactEventSink {
+                ledger: &self.host.ledger,
+                events: &self.host.events,
+            };
+            if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
+                pipeline
+                    .record_recognition(index, state, &mut sink)
+                    .map_err(online_observation::observation_artifact_failure)?;
+            }
+            Ok(())
+        })();
+        let elapsed_us =
+            actingcommand_execution_kernel::observe_instant_span(started, Instant::now());
+        self.task_timing
+            .capture_recognition(actingcommand_contract::TaskTimingSample {
+                elapsed_us,
+                budget_before,
+                result: if result.is_ok() {
+                    actingcommand_contract::TaskTimingResult::Ok
+                } else {
+                    actingcommand_contract::TaskTimingResult::Err
+                },
+                record_index: None,
+                frame_id,
+                recognition_id,
+            });
+        result
+    }
+
+    fn timing_identity(
+        &self,
+        boundary: actingcommand_contract::TaskTimingBoundary,
+    ) -> task_timing::BoundaryIdentity {
+        use actingcommand_contract::TaskTimingBoundary as Boundary;
+        let before_capture = matches!(
+            boundary,
+            Boundary::Capture | Boundary::CapturePage | Boundary::CaptureActivePressure
+        );
+        let before_recognition = before_capture
+            || matches!(
+                boundary,
+                Boundary::CaptureBackend
+                    | Boundary::CaptureMaterial
+                    | Boundary::CaptureCompletedRecord
+                    | Boundary::RecognitionStartedRecord
+            );
+        task_timing::BoundaryIdentity {
+            frame_id: (!before_capture)
+                .then(|| self.last_frame_id.map(|id| *id.transport()))
+                .flatten(),
+            recognition_id: (!before_recognition)
+                .then(|| self.current_recognition_id.map(|id| *id.transport()))
+                .flatten(),
+            step_index: self.diagnostic_step.as_ref().map(|step| step.index),
+            action_id: if boundary == Boundary::Input {
+                self.input_step_action_id
+            } else {
+                self.diagnostic_step.as_ref().map(|step| step.action_id)
+            },
+        }
     }
 
     const fn capture_origin(&self) -> (EventSource, OriginModule) {
@@ -13825,6 +14372,20 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.task_timing.begin_execution(context);
     }
 
+    fn task_boundary_identity(
+        &self,
+        boundary: TaskTimingBoundary,
+    ) -> task_timing::BoundaryIdentity {
+        self.timing_identity(boundary)
+    }
+
+    fn observe_task_boundary(
+        &mut self,
+        timing: actingcommand_execution_kernel::ContainedTaskBoundaryTiming,
+    ) {
+        self.task_timing.kernel_boundary(timing);
+    }
+
     fn record_page_evaluations(
         &mut self,
         phase: &'static str,
@@ -13838,7 +14399,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 self.current_recognition_id.map(|id| *id.transport()),
             );
         }
-        self.diagnostic_pages(phase, results)
+        self.diagnostic_pages(phase, results)?;
+        self.record_capture_recognition(results)
     }
     fn record_guard_evaluation(
         &mut self,
@@ -13871,160 +14433,241 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn capture(&mut self) -> Result<Frame, Self::Error> {
-        self.ensure_active()?;
-        let instance_guard = self.host.instance_guard(self.token.instance_id())?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        let frame_id = self
-            .host
-            .events
-            .issuer()
-            .mint_frame_id()
-            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        let input_action_id = self.post_input_action_id.take();
-        let links = RuntimeRunLinks::new(self.task_id, self.run_id)
-            .apply(self.host.events.request_links(
-                self.request,
-                Some(self.token.instance_id()),
-                Some(self.token.lease_id()),
-                input_action_id,
-            ))
-            .with_frame_id(frame_id);
-        let (source, module) = self.capture_origin();
-        let requested = self.host.append_event(
-            EventSeverity::Info,
-            source,
-            module,
-            EventActor::Runtime,
-            links.clone(),
-            CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
-        )?;
-        let registration = self.host.mark_resources_in_use()?;
-        match self
-            .host
-            .execution
-            .capture_retained_with_registration_guard(self.instance_alias, registration)
-        {
-            Ok(frame) => {
+        use actingcommand_contract::TaskTimingBoundary as Boundary;
+        let capture_started = self
+            .task_timing
+            .begin_boundary(Boundary::Capture, self.timing_identity(Boundary::Capture));
+        let result = (|| {
+            let active_started = self.task_timing.begin_boundary(
+                Boundary::CaptureActivePressure,
+                self.timing_identity(Boundary::CaptureActivePressure),
+            );
+            let active = (|| {
                 self.ensure_active()?;
-                let frame_index = self.capture_evidence.captured()?;
-                let artifact_png = frame.png_for_artifact().map_err(|_| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_invalid",
-                        "run_contained_task_capture",
-                        RuntimeErrorCode::CaptureFailed,
-                    ))
+                self.poll_capture_pressure()
+            })();
+            self.task_timing
+                .finish_boundary(active_started, active.is_ok());
+            active?;
+            let instance_guard = self.host.instance_guard(self.token.instance_id())?;
+            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let frame_id =
+                self.host.events.issuer().mint_frame_id().map_err(|_| {
+                    RequestFailure::poison_without_terminal(runtime_identifier_error())
                 })?;
-                let write_context = ArtifactWriteContext::new(
-                    self.request
-                        .task_artifact_links(self.run_id)
-                        .with_frame_id(frame_id),
-                    links,
-                    unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
-                );
-                let mut sink = RuntimeArtifactEventSink {
-                    ledger: &self.host.ledger,
-                    events: &self.host.events,
-                };
-                let stored = self
-                    .host
-                    .artifacts
-                    .put(
-                        ArtifactWriteRequest::new(
-                            ArtifactKind::CaptureFrame,
-                            &artifact_png,
-                            write_context,
-                            ArtifactIssuePolicy::new(
-                                ArtifactProducer::CaptureStore,
-                                RetentionClass::DebugFull,
-                                ArtifactRedactionState::NotRequired,
-                            ),
-                        ),
-                        &mut sink,
-                    )
-                    .map_err(online_observation::observation_artifact_failure)?;
-                self.capture_evidence.persisted(frame_index, &stored)?;
-                self.last_frame_id = Some(frame_id);
-                self.last_capture_input_action_id = input_action_id;
-                if self.configuration_records > 0 && !self.configuration_capture_recorded {
-                    let selection =
-                        frame
-                            .selection
-                            .as_ref()
-                            .map(|selection| EffectiveCaptureSelection {
-                                requested_backend: selection.requested.as_str().to_owned(),
-                                configured_adb: selection.configured_adb.clone(),
-                                configured_serial: selection.configured_serial.clone(),
-                                resolved_adb: selection.resolved_adb.clone(),
-                                selected_serial: selection.selected_serial.clone(),
-                                mumu: selection.mumu.as_ref().map(|mumu| {
-                                    EffectiveMumuInstallation {
-                                        root: mumu.root.clone(),
-                                        adb_path: mumu.adb_path.clone(),
-                                        capture_dll_path: mumu.capture_dll_path.clone(),
-                                        source: mumu.source.as_str().to_owned(),
+            let input_action_id = self.post_input_action_id.take();
+            let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+                .apply(self.host.events.request_links(
+                    self.request,
+                    Some(self.token.instance_id()),
+                    Some(self.token.lease_id()),
+                    input_action_id,
+                ))
+                .with_frame_id(frame_id);
+            let (source, module) = self.capture_origin();
+            let requested = self.host.append_event(
+                EventSeverity::Info,
+                source,
+                module,
+                EventActor::Runtime,
+                links.clone(),
+                CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
+            )?;
+            let registration = self.host.mark_resources_in_use()?;
+            let identity = task_timing::BoundaryIdentity {
+                frame_id: Some(*frame_id.transport()),
+                ..self.timing_identity(Boundary::CaptureBackend)
+            };
+            let backend_started = self
+                .task_timing
+                .begin_boundary(Boundary::CaptureBackend, identity);
+            let captured = self
+                .host
+                .execution
+                .capture_retained_with_registration_guard(self.instance_alias, registration);
+            self.task_timing
+                .finish_boundary(backend_started, captured.is_ok());
+            match captured {
+                Ok(frame) => {
+                    let material_started = self
+                        .task_timing
+                        .begin_boundary(Boundary::CaptureMaterial, identity);
+                    let material = (|| {
+                        self.ensure_active()?;
+                        let frame_index = self.capture_evidence.captured()?;
+                        let write_context = ArtifactWriteContext::new(
+                            self.request
+                                .task_artifact_links(self.run_id)
+                                .with_frame_id(frame_id),
+                            links,
+                            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+                        );
+                        let mut sink = online_observation::ObservationArtifactSink {
+                            ledger: &self.host.ledger,
+                            events: &self.host.events,
+                            verified: None,
+                            frame_retention: Some((
+                                self.host.owner_epoch,
+                                frame_retention::capture_pin_reason(self.request),
+                            )),
+                        };
+                        let persistence = (|| {
+                            if self.capture_evidence.pipeline.is_none() {
+                                self.capture_evidence.pipeline =
+                                    Some(CapturePipeline::open_with_store(
+                                        Arc::clone(&self.host.artifacts),
+                                        frame_retention::spill_root(
+                                            self.host.artifacts.root(),
+                                            self.run_id.transport(),
+                                        )?,
+                                        CapturePipelineConfig {
+                                            frame_store:
+                                                frame_retention::capture_frame_store_config(),
+                                            retention_class: RetentionClass::DebugFull,
+                                            redaction_state: ArtifactRedactionState::NotRequired,
+                                            ..CapturePipelineConfig::default()
+                                        },
+                                        write_context.clone(),
+                                        &mut sink,
+                                    )?);
+                            }
+                            let pipeline = self
+                                .capture_evidence
+                                .pipeline
+                                .as_mut()
+                                .expect("capture pipeline initialized");
+                            let result = pipeline.record_frame(
+                                FrameStoreFrameInput {
+                                    frame_index,
+                                    file_name: format!("frame-{frame_index}.png"),
+                                    label: if frame_index == 0 {
+                                        "initial"
+                                    } else if input_action_id.is_some() {
+                                        "after-input"
+                                    } else {
+                                        "capture"
                                     }
-                                }),
+                                    .to_owned(),
+                                    recognition_state: RecognitionState::Pending,
+                                    pinned_reason: self
+                                        .finalizing
+                                        .map(|_| PinnedFrameReason::Terminal),
+                                    frame: frame.clone(),
+                                },
+                                write_context.clone(),
+                                &mut sink,
+                            )?;
+                            if !result.frame.warnings.is_empty() {
+                                return Err(ArtifactStoreError::fatal(
+                                    "capture_spill_failed",
+                                    "persist_contained_task_frame",
+                                    result.frame.warnings.join("; "),
+                                ));
+                            }
+                            let reference = pipeline.persist_frame(frame_index, &mut sink)?;
+                            pipeline.poll_pressure(&write_context, &mut sink)?;
+                            Ok(reference)
+                        })();
+                        let reference = match persistence {
+                            Ok(reference) => reference,
+                            Err(error) => {
+                                self.capture_evidence
+                                    .pipeline_failure
+                                    .get_or_insert(error.clone());
+                                return Err(online_observation::observation_artifact_failure(
+                                    error,
+                                ));
+                            }
+                        };
+                        self.capture_evidence.persisted(frame_index, &reference)?;
+                        self.last_frame_id = Some(frame_id);
+                        self.last_capture_input_action_id = input_action_id;
+                        if self.configuration_records > 0 && !self.configuration_capture_recorded {
+                            let selection = frame.selection.as_ref().map(|selection| {
+                                EffectiveCaptureSelection {
+                                    requested_backend: selection.requested.as_str().to_owned(),
+                                    configured_adb: selection.configured_adb.clone(),
+                                    configured_serial: selection.configured_serial.clone(),
+                                    resolved_adb: selection.resolved_adb.clone(),
+                                    selected_serial: selection.selected_serial.clone(),
+                                    mumu: selection.mumu.as_ref().map(|mumu| {
+                                        EffectiveMumuInstallation {
+                                            root: mumu.root.clone(),
+                                            adb_path: mumu.adb_path.clone(),
+                                            capture_dll_path: mumu.capture_dll_path.clone(),
+                                            source: mumu.source.as_str().to_owned(),
+                                        }
+                                    }),
+                                }
                             });
-                    self.record_configuration(
-                        EffectiveConfigurationFacts::Capture {
-                            backend: frame.backend_name.as_str().to_owned(),
-                            selection,
-                        },
-                        Some(frame_id),
-                        None,
-                        Some(requested.sequence()),
+                            self.record_configuration(
+                                EffectiveConfigurationFacts::Capture {
+                                    backend: frame.backend_name.as_str().to_owned(),
+                                    selection,
+                                },
+                                Some(frame_id),
+                                None,
+                                Some(requested.sequence()),
+                            )?;
+                            self.configuration_capture_recorded = true;
+                        }
+                        Ok(frame)
+                    })();
+                    self.task_timing
+                        .finish_boundary(material_started, material.is_ok());
+                    material
+                }
+                Err(error) => {
+                    let error = self
+                        .host
+                        .finish_capture_failure_while_guarded(error, links.clone(), &admission)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                    let runtime_error =
+                        RuntimeHostError::execution("run_contained_task_capture", &error);
+                    if self
+                        .host
+                        .retain_unconfirmed_resources(&runtime_error, links.clone())?
+                    {
+                        return Err(RequestFailure::poison_without_terminal(runtime_error));
+                    }
+                    let payload = CapturePayloadDraft::failed_with_causes(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        runtime_error.diagnostic_detail().cloned(),
+                        runtime_error.cleanup_cause().cloned(),
+                        AuditInput::new(),
+                    );
+                    let failed = self.host.append_event(
+                        EventSeverity::Error,
+                        source,
+                        module,
+                        EventActor::Runtime,
+                        links.clone(),
+                        payload,
                     )?;
-                    self.configuration_capture_recorded = true;
+                    self.host
+                        .record_required_failure(&runtime_error, &failed, links)?;
+                    Err(RequestFailure {
+                        state: RuntimeReceiptState::Failed,
+                        terminal: Some(terminal(&failed)),
+                        poison_runtime: runtime_error.is_fatal(),
+                        task_failure: Some(TaskFailureEvidence {
+                            code: runtime_error.code(),
+                            severity: if runtime_error.is_fatal() {
+                                EventSeverity::Fatal
+                            } else {
+                                EventSeverity::Warning
+                            },
+                        }),
+                        error: Box::new(runtime_error),
+                    })
                 }
-                Ok(frame)
             }
-            Err(error) => {
-                let error = self
-                    .host
-                    .finish_capture_failure_while_guarded(error, links.clone(), &admission)
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                let runtime_error =
-                    RuntimeHostError::execution("run_contained_task_capture", &error);
-                if self
-                    .host
-                    .retain_unconfirmed_resources(&runtime_error, links.clone())?
-                {
-                    return Err(RequestFailure::poison_without_terminal(runtime_error));
-                }
-                let payload = CapturePayloadDraft::failed_with_causes(
-                    EventAction::CaptureObserve,
-                    DiagnosticCode::CaptureFailed,
-                    EffectDisposition::NotPerformed,
-                    runtime_error.diagnostic_detail().cloned(),
-                    runtime_error.cleanup_cause().cloned(),
-                    AuditInput::new(),
-                );
-                let failed = self.host.append_event(
-                    EventSeverity::Error,
-                    source,
-                    module,
-                    EventActor::Runtime,
-                    links.clone(),
-                    payload,
-                )?;
-                self.host
-                    .record_required_failure(&runtime_error, &failed, links)?;
-                Err(RequestFailure {
-                    state: RuntimeReceiptState::Failed,
-                    terminal: Some(terminal(&failed)),
-                    poison_runtime: runtime_error.is_fatal(),
-                    task_failure: Some(TaskFailureEvidence {
-                        code: runtime_error.code(),
-                        severity: if runtime_error.is_fatal() {
-                            EventSeverity::Fatal
-                        } else {
-                            EventSeverity::Warning
-                        },
-                    }),
-                    error: Box::new(runtime_error),
-                })
-            }
-        }
+        })();
+        self.task_timing
+            .finish_boundary(capture_started, result.is_ok());
+        result
     }
 
     fn action_seed(
@@ -14057,47 +14700,56 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-        self.ensure_active()?;
-        let (success, selection) = self.host.input(
-            self.request,
-            self.token,
-            &action,
-            self.connection_id,
-            self.execution_provenance,
-            RuntimeInputContext {
-                run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
-                source_step_action_id: self.input_step_action_id.take(),
-                before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
-            },
-        )?;
-        self.ensure_active()?;
-        if let RuntimeResult::InputCommitted { action_id } = success.result {
-            self.post_input_action_id = Some(action_id);
-            self.diagnostic_physical = Some(action_id);
-            if self.configuration_records > 0 && !self.configuration_input_recorded {
-                self.record_configuration(
-                    EffectiveConfigurationFacts::Input {
-                        selection: selection.map(|selection| EffectiveInputSelection {
-                            backend: selection.backend.as_str().to_owned(),
-                            serial: selection.serial,
-                        }),
-                    },
-                    self.last_frame_id,
-                    Some(action_id),
-                    success.terminal.map(|terminal| terminal.sequence),
-                )?;
-                self.configuration_input_recorded = true;
+        let input_started = self.task_timing.begin_boundary(
+            actingcommand_contract::TaskTimingBoundary::Input,
+            self.timing_identity(actingcommand_contract::TaskTimingBoundary::Input),
+        );
+        let result = (|| {
+            self.ensure_active()?;
+            let (success, selection) = self.host.input(
+                self.request,
+                self.token,
+                &action,
+                self.connection_id,
+                self.execution_provenance,
+                RuntimeInputContext {
+                    run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+                    source_step_action_id: self.input_step_action_id.take(),
+                    before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
+                },
+            )?;
+            self.ensure_active()?;
+            if let RuntimeResult::InputCommitted { action_id } = success.result {
+                self.post_input_action_id = Some(action_id);
+                self.diagnostic_physical = Some(action_id);
+                if self.configuration_records > 0 && !self.configuration_input_recorded {
+                    self.record_configuration(
+                        EffectiveConfigurationFacts::Input {
+                            selection: selection.map(|selection| EffectiveInputSelection {
+                                backend: selection.backend.as_str().to_owned(),
+                                serial: selection.serial,
+                            }),
+                        },
+                        self.last_frame_id,
+                        Some(action_id),
+                        success.terminal.map(|terminal| terminal.sequence),
+                    )?;
+                    self.configuration_input_recorded = true;
+                }
+                Ok(())
+            } else {
+                Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "contained_task_input_result_invalid",
+                        "run_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ))
             }
-            Ok(())
-        } else {
-            Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "contained_task_input_result_invalid",
-                    "run_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ))
-        }
+        })();
+        self.task_timing
+            .finish_boundary(input_started, result.is_ok());
+        result
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -14172,109 +14824,129 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 })
             }
             ContainedTaskTrace::CaptureCompleted { width, height } => {
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let input_action_id = self.last_capture_input_action_id.take();
-                let links = RuntimeRunLinks::new(self.task_id, self.run_id)
-                    .apply(self.host.events.request_links(
-                        self.request,
-                        Some(self.token.instance_id()),
-                        Some(self.token.lease_id()),
-                        input_action_id,
-                    ))
-                    .with_frame_id(frame_id);
-                let (source, module) = self.capture_origin();
-                self.host.append_event(
-                    EventSeverity::Info,
-                    source,
-                    module,
-                    EventActor::Runtime,
-                    links.clone(),
-                    CapturePayloadDraft::completed(
-                        EventAction::CaptureObserve,
-                        EffectDisposition::NotPerformed,
-                        width,
-                        height,
-                        AuditInput::new(),
+                let observed = self.task_timing.begin_boundary(
+                    actingcommand_contract::TaskTimingBoundary::CaptureCompletedRecord,
+                    self.timing_identity(
+                        actingcommand_contract::TaskTimingBoundary::CaptureCompletedRecord,
                     ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::EvidenceIndexed {
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )
+                );
+                let result = (|| {
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let input_action_id = self.last_capture_input_action_id.take();
+                    let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+                        .apply(self.host.events.request_links(
+                            self.request,
+                            Some(self.token.instance_id()),
+                            Some(self.token.lease_id()),
+                            input_action_id,
+                        ))
+                        .with_frame_id(frame_id);
+                    let (source, module) = self.capture_origin();
+                    self.host.append_event(
+                        EventSeverity::Info,
+                        source,
+                        module,
+                        EventActor::Runtime,
+                        links.clone(),
+                        CapturePayloadDraft::completed(
+                            EventAction::CaptureObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            AuditInput::new(),
+                        ),
+                    )?;
+                    self.append_task(
+                        EventSeverity::Info,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::EvidenceIndexed {
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    )
+                })();
+                self.task_timing.finish_boundary(observed, result.is_ok());
+                result
             }
             ContainedTaskTrace::RecognitionStarted {
                 candidate_pages,
                 width,
                 height,
             } => {
-                if self.current_recognition_id.is_some() {
-                    return Err(RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            "contained_task_recognition_state_invalid",
+                let observed = self.task_timing.begin_boundary(
+                    actingcommand_contract::TaskTimingBoundary::RecognitionStartedRecord,
+                    self.timing_identity(
+                        actingcommand_contract::TaskTimingBoundary::RecognitionStartedRecord,
+                    ),
+                );
+                let result = (|| {
+                    if self.current_recognition_id.is_some() {
+                        return Err(RequestFailure::poison_without_terminal(
+                            RuntimeHostError::fatal(
+                                "contained_task_recognition_state_invalid",
+                                "run_contained_task",
+                                RuntimeErrorCode::RuntimeFatal,
+                            ),
+                        ));
+                    }
+                    self.capture_evidence
+                        .pin_last(PinnedFrameReason::RecognitionEvidence)?;
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
                             "run_contained_task",
                             RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let recognition_id =
+                        self.host
+                            .events
+                            .issuer()
+                            .mint_recognition_id()
+                            .map_err(|_| {
+                                RequestFailure::poison_without_terminal(runtime_identifier_error())
+                            })?;
+                    let links = self
+                        .links()
+                        .with_frame_id(frame_id)
+                        .with_recognition_id(recognition_id);
+                    self.host.append_event(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links.clone(),
+                        RecognitionPayloadDraft::requested(
+                            EventAction::RecognitionObserve,
+                            AuditInput::new(),
                         ),
-                    ));
-                }
-                self.capture_evidence
-                    .pin_last(PinnedFrameReason::RecognitionEvidence)?;
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let recognition_id =
-                    self.host
-                        .events
-                        .issuer()
-                        .mint_recognition_id()
-                        .map_err(|_| {
-                            RequestFailure::poison_without_terminal(runtime_identifier_error())
-                        })?;
-                let links = self
-                    .links()
-                    .with_frame_id(frame_id)
-                    .with_recognition_id(recognition_id);
-                self.host.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::requested(
-                        EventAction::RecognitionObserve,
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::RecognitionStarted {
-                            candidate_pages,
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.current_recognition_id = Some(recognition_id);
-                Ok(())
+                    )?;
+                    self.append_task(
+                        EventSeverity::Info,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::RecognitionStarted {
+                                candidate_pages,
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    )?;
+                    self.current_recognition_id = Some(recognition_id);
+                    Ok(())
+                })();
+                self.task_timing.finish_boundary(observed, result.is_ok());
+                result
             }
             ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
@@ -14282,58 +14954,100 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 width,
                 height,
             } => {
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let recognition_id = self.current_recognition_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_recognition_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let links = self
-                    .links()
-                    .with_frame_id(frame_id)
-                    .with_recognition_id(recognition_id);
-                self.host.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::completed(
-                        EventAction::RecognitionObserve,
-                        EffectDisposition::NotPerformed,
-                        width,
-                        height,
-                        if page_label.is_some() {
-                            RecognitionVerdict::PageMatched
+                let observed_frame_id = self.last_frame_id.map(|id| *id.transport());
+                let observed_recognition_id = self.current_recognition_id.map(|id| *id.transport());
+                let started = Instant::now();
+                let budget_before = self.task_timing.budget_at(started);
+                let result = (|| {
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let recognition_id = self.current_recognition_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_recognition_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let links = self
+                        .links()
+                        .with_frame_id(frame_id)
+                        .with_recognition_id(recognition_id);
+                    let identity = self.timing_identity(
+                        actingcommand_contract::TaskTimingBoundary::RecognitionPayloadAppend,
+                    );
+                    let append_started = self
+                        .task_timing
+                        .begin_append(task_timing::TaskAppend::RecognitionPayload, identity);
+                    let (appended, observation) = self.host.append_event_observed(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links.clone(),
+                        RecognitionPayloadDraft::completed(
+                            EventAction::RecognitionObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            if page_label.is_some() {
+                                RecognitionVerdict::PageMatched
+                            } else {
+                                RecognitionVerdict::PageUnmatched
+                            },
+                            AuditInput::new(),
+                        ),
+                    );
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
+                    let append_started = self
+                        .task_timing
+                        .begin_append(task_timing::TaskAppend::RecognitionTask, identity);
+                    let (appended, observation) = self.host.append_event_observed(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::RecognitionCompleted {
+                                candidate_pages,
+                                matched_page: page_label,
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    );
+                    let appended = appended.map(|_| ());
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
+                    self.current_recognition_id = None;
+                    Ok(())
+                })();
+                let elapsed_us =
+                    actingcommand_execution_kernel::observe_instant_span(started, Instant::now());
+                self.task_timing.recognition_completed_record(
+                    actingcommand_contract::TaskTimingSample {
+                        elapsed_us,
+                        budget_before,
+                        result: if result.is_ok() {
+                            actingcommand_contract::TaskTimingResult::Ok
                         } else {
-                            RecognitionVerdict::PageUnmatched
+                            actingcommand_contract::TaskTimingResult::Err
                         },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::RecognitionCompleted {
-                            candidate_pages,
-                            matched_page: page_label,
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.current_recognition_id = None;
-                Ok(())
+                        record_index: None,
+                        frame_id: observed_frame_id,
+                        recognition_id: observed_recognition_id,
+                    },
+                );
+                result
             }
             ContainedTaskTrace::StepStarted {
                 step_index,
@@ -14419,8 +15133,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 let action_id =
                     contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
-                self.append_task(
+                let identity = task_timing::BoundaryIdentity {
+                    step_index: Some(step_index),
+                    action_id: Some(*action_id.transport()),
+                    ..self.timing_identity(TaskTimingBoundary::EffectCompletedAppend)
+                };
+                let append_started = self
+                    .task_timing
+                    .begin_append(task_timing::TaskAppend::EffectCompleted, identity);
+                let (appended, observation) = self.host.append_event_observed(
                     EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
                     self.links().with_action_id(action_id),
                     TaskPayloadDraft::semantic(
                         TaskSemanticFact::EffectCompleted {
@@ -14429,7 +15154,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )?;
+                );
+                let appended = appended.map(|_| ());
+                self.task_timing
+                    .finish_append(append_started, appended.is_ok(), observation);
+                appended?;
                 self.capture_evidence.effect_completed()
             }
             ContainedTaskTrace::StepFinished {
@@ -14920,6 +15649,63 @@ struct ConnectionFailureContext {
     stage: Option<ConnectionFailureStage>,
     request_decoded: bool,
     links: EventLinksDraft,
+    timing: ConnectionTiming,
+}
+
+#[derive(Default, serde::Serialize)]
+struct ConnectionTiming {
+    receive: ConnectionCallTiming,
+    validated_dispatch: ConnectionCallTiming,
+    policy_identity_projection: ConnectionCallTiming,
+    receipt_write: ConnectionCallTiming,
+}
+
+#[derive(serde::Serialize)]
+struct ConnectionCallTiming {
+    status: TaskTimingObservationState,
+    elapsed_us: Option<ObservedMicroseconds>,
+    result: Option<TaskTimingResult>,
+    #[serde(skip)]
+    started: Option<Instant>,
+}
+
+impl Default for ConnectionCallTiming {
+    fn default() -> Self {
+        Self {
+            status: TaskTimingObservationState::Unobserved,
+            elapsed_us: None,
+            result: None,
+            started: None,
+        }
+    }
+}
+
+impl ConnectionCallTiming {
+    fn begin(&mut self) {
+        self.started = Some(Instant::now());
+        self.status = TaskTimingObservationState::Incomplete {
+            reason: TimingObservationIssue::CallIncomplete,
+        };
+    }
+
+    fn finish(&mut self, succeeded: bool) {
+        let ended = Instant::now();
+        self.result = Some(if succeeded {
+            TaskTimingResult::Ok
+        } else {
+            TaskTimingResult::Err
+        });
+        if let Some(started) = self.started {
+            let elapsed = actingcommand_execution_kernel::observe_instant_span(started, ended);
+            self.status = match elapsed {
+                ObservedMicroseconds::Measured { .. } => TaskTimingObservationState::Observed,
+                ObservedMicroseconds::Unavailable { reason } => {
+                    TaskTimingObservationState::Incomplete { reason }
+                }
+            };
+            self.elapsed_us = Some(elapsed);
+        }
+    }
 }
 
 fn connection_boundary(
@@ -14935,6 +15721,7 @@ fn connection_boundary(
         stage: None,
         request_decoded: false,
         links: EventLinksDraft::default(),
+        timing: ConnectionTiming::default(),
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         connection_loop(
@@ -15054,7 +15841,11 @@ fn connection_loop(
         context.stage = Some(ConnectionFailureStage::RequestRead);
         context.request_decoded = false;
         context.links = EventLinksDraft::default();
-        let frame = match read_frame(stream, maximum_frame_bytes) {
+        context.timing = ConnectionTiming::default();
+        context.timing.receive.begin();
+        let received = read_frame(stream, maximum_frame_bytes);
+        context.timing.receive.finish(received.is_ok());
+        let frame = match received {
             Ok(FrameRead::Data(frame)) => frame,
             Ok(FrameRead::Idle) => continue,
             Ok(FrameRead::Closed) => {
@@ -15117,7 +15908,7 @@ fn connection_loop(
             Ok(None) => {
                 context.stage = Some(ConnectionFailureStage::Dispatch);
                 shared
-                    .process_request(&request, connection_id)
+                    .process_request_observed(&request, connection_id, Some(&mut context.timing))
                     .inspect(|receipt| {
                         cache.insert(request.clone(), receipt.clone());
                     })
@@ -15161,7 +15952,10 @@ fn connection_loop(
             &receipt,
         );
         context.stage = Some(ConnectionFailureStage::ReceiptWrite);
-        match write_frame(stream, &receipt, maximum_frame_bytes) {
+        context.timing.receipt_write.begin();
+        let written = write_frame(stream, &receipt, maximum_frame_bytes);
+        context.timing.receipt_write.finish(written.is_ok());
+        match written {
             Ok(()) => {
                 #[cfg(feature = "test-observation")]
                 crate::test_observation::emit_receipt(

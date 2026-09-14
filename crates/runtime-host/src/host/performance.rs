@@ -278,13 +278,16 @@ pub(super) fn performance_monitor_loop(
             break;
         };
         let observed_at_unix_ms = unix_ms_now()?;
-        match shared.sample_performance(observed_at_unix_ms) {
-            Ok(true) => break,
-            Ok(false) => {}
+        let stop_sampling = match shared.sample_performance(observed_at_unix_ms) {
+            Ok(stop_sampling) => stop_sampling,
             Err(error) => {
                 shared.fatal.mark(error.clone())?;
                 return Err(error);
             }
+        };
+        let retention_enabled = shared.maintain_frame_retention()?;
+        if stop_sampling && !retention_enabled {
+            break;
         }
     }
     Ok(())

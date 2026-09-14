@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{ArtifactStoreError, ArtifactStoreResult};
+use crate::{ArtifactStoreError, ArtifactStoreResult, ArtifactUseGuard};
 use actingcommand_contract::{
     ArtifactFailureStage, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactMaterial,
     ArtifactMaterialAccumulator, ArtifactPayloadDraft, ArtifactReference, ArtifactStoreIssuer,
@@ -121,6 +121,7 @@ impl StoredArtifact {
 
 /// Store-issued identity held before an artifact transaction is published.
 pub struct PreparedArtifact {
+    _use_guard: ArtifactUseGuard,
     issued: StoreIssuedArtifact,
     path: PathBuf,
     context: ArtifactWriteContext,
@@ -441,6 +442,23 @@ impl ArtifactStore {
                 "bounded restore budget exhausted",
             ));
         }
+        let source_root = source_root.canonicalize().map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_root_failed",
+                "restore_recovery_artifact",
+                error.to_string(),
+            )
+        })?;
+        let (mut source, _target_use) = if self.root <= source_root {
+            let guard = crate::usage::publication_guard(&self.root, reference)?;
+            (open_projected_stream(&source_root, reference)?, guard)
+        } else {
+            let reader = open_projected_stream(&source_root, reference)?;
+            (
+                reader,
+                crate::usage::publication_guard(&self.root, reference)?,
+            )
+        };
         let _writer = self.writer.lock().map_err(|_| {
             ArtifactStoreError::fatal(
                 "artifact_writer_poisoned",
@@ -448,7 +466,6 @@ impl ArtifactStore {
                 "artifact writer lock is poisoned",
             )
         })?;
-        let mut source = open_projected_stream(source_root, reference)?;
         let path = safe_object_path(
             &self.root,
             reference.object_key().ok_or_else(|| {
@@ -605,13 +622,6 @@ impl ArtifactStore {
                 "stream belongs to another artifact root",
             )));
         }
-        let _writer = self.writer.lock().map_err(|_| {
-            stream.fail(ArtifactStoreError::fatal(
-                "artifact_writer_poisoned",
-                "store_artifact",
-                "artifact writer lock is poisoned",
-            ))
-        })?;
         let material = (|| {
             let file = stream.file.as_mut().ok_or_else(|| {
                 ArtifactStoreError::fatal(
@@ -672,6 +682,16 @@ impl ArtifactStore {
             })?;
         let path = safe_object_path(&self.root, issued.reference().object_key())
             .map_err(|error| stream.fail(error))?;
+        let use_guard =
+            crate::usage::publication_guard(&self.root, &issued.reference().project(true))
+                .map_err(|error| stream.fail(error))?;
+        let _writer = self.writer.lock().map_err(|_| {
+            stream.fail(ArtifactStoreError::fatal(
+                "artifact_writer_poisoned",
+                "store_artifact",
+                "artifact writer lock is poisoned",
+            ))
+        })?;
         // Sealing is a trusted drain of already-written bytes; retain the current
         // decision for a real publication error without blocking normal completion.
         if let Some(admission) = self.capacity.get() {
@@ -711,6 +731,7 @@ impl ArtifactStore {
         }
         self.finish_publication(
             PreparedArtifact {
+                _use_guard: use_guard,
                 issued,
                 path,
                 context: stream.context,
@@ -754,7 +775,10 @@ impl ArtifactStore {
                 )
             })?;
         let path = safe_object_path(&self.root, issued.reference().object_key())?;
+        let use_guard =
+            crate::usage::publication_guard(&self.root, &issued.reference().project(true))?;
         Ok(PreparedArtifact {
+            _use_guard: use_guard,
             issued,
             path,
             context: request.context,
@@ -854,61 +878,26 @@ impl ArtifactStore {
     }
 
     pub fn read_verified(&self, reference: &ArtifactReference) -> ArtifactStoreResult<Vec<u8>> {
-        reference.validate().map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_reference_invalid",
-                "read_artifact",
-                error.to_string(),
-            )
-        })?;
-        let path = safe_object_path(&self.root, reference.object_key())?;
-        verify_file(&path, reference)?;
-        fs::read(path).map_err(|error| {
-            ArtifactStoreError::fatal("artifact_read_failed", "read_artifact", error.to_string())
-        })
+        read_projected_verified(&self.root, &reference.project(true))
     }
 
     pub fn verify_recovery_reference(
         &self,
         projected: &ProjectedArtifactReference,
     ) -> ArtifactStoreResult<VerifiedArtifactReference> {
-        projected.validate().map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_reference_invalid",
-                "verify_recovery_artifact",
-                error.to_string(),
-            )
-        })?;
-        let object_key = projected.object_key().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "artifact_object_key_missing",
-                "verify_recovery_artifact",
-                "persisted artifact reference has no object key",
-            )
-        })?;
-        let path = safe_object_path(&self.root, object_key)?;
-        let mut file = File::open(path).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_read_failed",
-                "verify_recovery_artifact",
-                error.to_string(),
-            )
-        })?;
-        let material = ArtifactMaterial::read_from(&mut file).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_read_failed",
-                "verify_recovery_artifact",
-                error.to_string(),
-            )
-        })?;
-        self.artifacts
-            .verify_existing_material(projected.clone(), material)
+        open_projected_stream(&self.root, projected)?
+            .finish()
             .map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_verify_failed",
-                    "verify_recovery_artifact",
-                    error.to_string(),
-                )
+                if error.code() == "artifact_hash_mismatch" {
+                    ArtifactStoreError::fatal(
+                        "artifact_verify_failed",
+                        "verify_recovery_artifact",
+                        error.detail(),
+                    )
+                    .with_secondary(&error)
+                } else {
+                    error
+                }
             })
     }
 
@@ -1035,6 +1024,7 @@ fn admit_bytes(
 #[must_use = "finish the reader before treating any streamed bytes as verified"]
 pub struct ArtifactReader {
     file: File,
+    _use_guard: ArtifactUseGuard,
     reference: ProjectedArtifactReference,
     material: ArtifactMaterialAccumulator,
     verified: Option<VerifiedArtifactReference>,
@@ -1165,8 +1155,10 @@ pub fn open_projected_stream(
             error.to_string(),
         )
     })?;
+    let use_guard = crate::usage::reader_guard(&root, reference, &file)?;
     Ok(ArtifactReader {
         file,
+        _use_guard: use_guard,
         reference: reference.clone(),
         material: ArtifactMaterialAccumulator::default(),
         verified: None,
@@ -1178,42 +1170,17 @@ pub fn read_projected_verified(
     root: impl AsRef<Path>,
     reference: &ProjectedArtifactReference,
 ) -> ArtifactStoreResult<Vec<u8>> {
-    reference.validate().map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_reference_invalid",
-            "read_projected_artifact",
-            error.to_string(),
-        )
-    })?;
-    let object_key = reference.object_key().ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "artifact_object_key_missing",
-            "read_projected_artifact",
-            "projected artifact reference does not include an object key",
-        )
-    })?;
-    let root = root.as_ref().canonicalize().map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_root_failed",
-            "read_projected_artifact",
-            error.to_string(),
-        )
-    })?;
-    let path = safe_object_path(&root, object_key)?;
+    let mut reader = open_projected_stream(root, reference)?;
     let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| {
-            file.take(reference.byte_count.saturating_add(1))
-                .read_to_end(&mut bytes)
-        })
-        .map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_read_failed",
-                "read_projected_artifact",
-                error.to_string(),
-            )
-        })?;
-    verify_projected_bytes(&bytes, reference)?;
+    let mut buffer = [0_u8; 65_536];
+    loop {
+        let count = reader.read_chunk(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    reader.finish()?;
     Ok(bytes)
 }
 
@@ -1224,7 +1191,7 @@ pub fn verify_projected_read_only(
     open_projected_stream(root, reference)?.finish()
 }
 
-fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
+pub(crate) fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
     let relative = Path::new(object_key);
     if relative.is_absolute()
         || relative.components().any(|component| {
@@ -1393,27 +1360,6 @@ fn verify_bytes(bytes: &[u8], reference: &ArtifactReference) -> ArtifactStoreRes
     Ok(())
 }
 
-fn verify_projected_bytes(
-    bytes: &[u8],
-    reference: &ProjectedArtifactReference,
-) -> ArtifactStoreResult<()> {
-    let byte_count = u64::try_from(bytes.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "artifact_verify_failed",
-            "verify_projected_artifact",
-            "artifact byte count exceeds u64",
-        )
-    })?;
-    if byte_count != reference.byte_count() || canonical_sha256(bytes) != reference.sha256() {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_hash_mismatch",
-            "verify_projected_artifact",
-            "artifact byte count or SHA-256 does not match projected metadata",
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn canonical_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut value = String::with_capacity(71);
@@ -1501,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_artifact_has_no_side_effect_until_committed() {
+    fn prepared_artifact_has_no_material_or_event_until_committed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
         let mut sink = RecordingSink::default();
@@ -1511,7 +1457,7 @@ mod tests {
         let reference = prepared.reference().clone();
 
         assert!(sink.event_types.is_empty());
-        assert!(all_files(temp.path()).is_empty());
+        assert!(material_files(temp.path()).is_empty());
 
         let stored = store
             .commit_prepared(prepared, b"prepared artifact bytes", &mut sink)
@@ -1537,7 +1483,7 @@ mod tests {
             .expect_err("mismatched prepared bytes");
         assert_eq!(error.code(), "artifact_hash_mismatch");
         assert!(sink.event_types.is_empty());
-        assert!(all_files(temp.path()).is_empty());
+        assert!(material_files(temp.path()).is_empty());
     }
 
     #[test]
@@ -1593,13 +1539,13 @@ mod tests {
             expected_bytes
         );
         assert!(stream_sink.event_types.is_empty());
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
 
         let streamed = store
             .seal_stream(stream, &mut stream_sink)
             .expect("sealed stream");
         assert!(!staging.exists());
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
         assert!(streamed.path().starts_with(store.root()));
         assert_eq!(streamed.reference().kind(), ArtifactKind::DiagnosticJson);
         assert_eq!(streamed.reference().byte_count(), expected_bytes);
@@ -1705,6 +1651,7 @@ mod tests {
             open_projected_stream(temp.path(), &stream_reference).expect("open before corruption");
         reader.read_chunk(&mut buffer).expect("provisional prefix");
         assert!(reader.verified.is_none());
+        drop(reader);
         let mut corrupt = OpenOptions::new()
             .write(true)
             .open(streamed.path())
@@ -1712,6 +1659,10 @@ mod tests {
         corrupt.seek(std::io::SeekFrom::End(-1)).expect("seek tail");
         corrupt.write_all(b"x").expect("corrupt same-length tail");
         drop(corrupt);
+        let mut reader =
+            open_projected_stream(temp.path(), &stream_reference).expect("open corrupt material");
+        reader.read_chunk(&mut buffer).expect("provisional prefix");
+        assert!(reader.verified.is_none());
         assert_eq!(
             reader
                 .finish()
@@ -1810,9 +1761,9 @@ mod tests {
             .expect_err("event failure");
 
         assert_eq!(error.code(), "injected_event_failure");
-        assert_eq!(all_files(temp.path()).len(), 1);
+        assert_eq!(material_files(temp.path()).len(), 1);
         assert_eq!(
-            fs::read(&all_files(temp.path())[0]).expect("published bytes"),
+            fs::read(&material_files(temp.path())[0]).expect("published bytes"),
             b"must not become success"
         );
         assert!(
@@ -1838,7 +1789,7 @@ mod tests {
         assert_eq!(error.code(), "injected_event_failure");
         assert!(error.is_fatal());
         assert!(sink.event_types.is_empty());
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
     }
 
     #[test]
@@ -1855,7 +1806,7 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert_eq!(sink.event_types, [EventType::ArtifactCreated]);
-        assert_eq!(all_files(temp.path()).len(), 1);
+        assert_eq!(material_files(temp.path()).len(), 1);
         assert_eq!(
             store
                 .read_verified(&sink.references[0])
@@ -1889,7 +1840,7 @@ mod tests {
         assert!(error.is_fatal());
         assert_eq!(stream_sink.event_types, [EventType::ArtifactCreated]);
         assert_eq!(stream_sink.references.len(), 1);
-        assert_eq!(all_files(temp.path()).len(), 2);
+        assert_eq!(material_files(temp.path()).len(), 2);
         assert_eq!(
             store
                 .read_verified(&stream_sink.references[0])
@@ -2111,7 +2062,7 @@ mod tests {
         )
     }
 
-    fn all_files(root: &Path) -> Vec<PathBuf> {
+    fn material_files(root: &Path) -> Vec<PathBuf> {
         let mut files = Vec::new();
         if !root.exists() {
             return files;
@@ -2121,7 +2072,10 @@ mod tests {
             for entry in fs::read_dir(directory).expect("read directory") {
                 let path = entry.expect("entry").path();
                 if path.is_dir() {
-                    pending.push(path);
+                    // Fixed OS locks coordinate use; material and staging files stay counted.
+                    if path != root.join("artifact-use-locks") {
+                        pending.push(path);
+                    }
                 } else {
                     files.push(path);
                 }

@@ -230,8 +230,12 @@ impl HostShared {
                 RuntimeErrorCode::InvalidRequest,
             )));
         }
-        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let approvals = {
+            let _approval_gate = lock(&self.governance_write_gate, "recover_proposal_approvals")
+                .map_err(RequestFailure::poison_without_terminal)?;
+            ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+                .map_err(RequestFailure::poison_without_terminal)?
+        };
         let mut approval_fact_ids = approvals.active_for_plan(
             preview.proposal_id(),
             target_hash,

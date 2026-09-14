@@ -408,6 +408,34 @@ impl EvidenceExporter {
         let mut frames = request.pipeline.frames.clone();
         frames.sort_by_key(|frame| frame.frame_index);
         for frame in frames {
+            if let Some(observation) = request
+                .events
+                .iter()
+                .flat_map(|event| &event.artifact_evictions)
+                .find(|observation| &observation.artifact_id == frame.artifact.artifact_id())
+            {
+                observation.validate().map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        "evidence_retention_observation_invalid",
+                        "build_evidence_entries",
+                        error.to_string(),
+                    )
+                })?;
+                return Err(ArtifactStoreError::fatal(
+                    match observation.disposition {
+                        Some(
+                            actingcommand_contract::ArtifactEvictionDisposition::Deleted
+                            | actingcommand_contract::ArtifactEvictionDisposition::RecoveryAbsent,
+                        ) => "evidence_artifact_evicted",
+                        Some(actingcommand_contract::ArtifactEvictionDisposition::Failed) => {
+                            "evidence_artifact_eviction_failed"
+                        }
+                        None => "evidence_artifact_pending_eviction",
+                    },
+                    "build_evidence_entries",
+                    "complete evidence export requires every original frame material",
+                ));
+            }
             if frame.artifact.kind() != ArtifactKind::CaptureFrame {
                 return Err(ArtifactStoreError::fatal(
                     "evidence_artifact_invalid",
@@ -1485,7 +1513,8 @@ mod tests {
             TaskOutcome::Success,
             complete_summary(vec![(1, frame)], None),
         );
-        let source_files = all_files(&artifact_root).len();
+        let material_root = artifact_root.join("artifacts");
+        let source_files = all_files(&material_root).len();
         sink.fail_next = Some(EventType::ArtifactExportCompleted);
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
 
@@ -1495,7 +1524,7 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert!(!output.exists());
-        assert_eq!(all_files(&artifact_root).len(), source_files + 1);
+        assert_eq!(all_files(&material_root).len(), source_files + 1);
         assert!(sink.event_types.contains(&EventType::ArtifactExportFailed));
         assert!(
             !sink
@@ -1754,6 +1783,8 @@ mod tests {
         .sanitize(&TestFingerprinter)
         .expect("sanitize capture summary");
         ProjectedEvent {
+            views: Vec::new(),
+            artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),
@@ -1813,6 +1844,8 @@ mod tests {
         .sanitize(&TestFingerprinter)
         .expect("sanitize terminal");
         ProjectedEvent {
+            views: Vec::new(),
+            artifact_evictions: Vec::new(),
             schema_version: sanitized.schema_version().to_string(),
             sequence,
             event_id: *sanitized.event_id(),
