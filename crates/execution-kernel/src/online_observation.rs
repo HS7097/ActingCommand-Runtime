@@ -10,7 +10,7 @@ use actingcommand_contract::page_projection::{
     FrameIdentity, Geometry, MissingTarget, NotEvaluatedReason, PageProjection, Privacy,
     ProjectionInput,
 };
-use actingcommand_contract::{ObservationFacts, PageObservationStatus};
+use actingcommand_contract::{ObservationFacts, PageObservationStatus, PpocrDiagnostics};
 use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
@@ -24,6 +24,7 @@ pub struct OnlineObservationError {
     code: &'static str,
     stage: &'static str,
     cause: String,
+    ppocr_diagnostics: PpocrDiagnostics,
 }
 impl std::fmt::Debug for OnlineObservationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -36,6 +37,7 @@ impl OnlineObservationError {
             code,
             stage,
             cause: cause.to_string(),
+            ppocr_diagnostics: Vec::new(),
         }
     }
     pub fn code(&self) -> &'static str {
@@ -46,6 +48,15 @@ impl OnlineObservationError {
     }
     pub fn cause(&self) -> &str {
         &self.cause
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(mut self, diagnostics: PpocrDiagnostics) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 }
 impl std::fmt::Display for OnlineObservationError {
@@ -74,6 +85,7 @@ pub struct EvaluatedPageObservation {
     pub rgb8_sha256: String,
     pub facts: ObservationFacts,
     pub private_facts: ObservationFacts,
+    pub ppocr_diagnostics: PpocrDiagnostics,
 }
 
 impl PreparedPageObservation {
@@ -251,6 +263,17 @@ impl PreparedPageObservation {
             Ok(pages) => (pages, None),
             Err(error) => (error.completed.clone(), Some(error)),
         };
+        // Reports travel separately from the bounded, serialized observation facts.
+        let mut ppocr_diagnostics: PpocrDiagnostics = match &batch_error {
+            Some(error) => error.ppocr_diagnostics(),
+            None => pages
+                .iter()
+                .flat_map(|page| match &page.result {
+                    Ok(value) => value.ppocr_diagnostics(),
+                    Err(error) => error.ppocr_diagnostics(),
+                })
+                .collect(),
+        };
         let mut complete = batch_error.is_none() && pages.iter().all(|page| page.result.is_ok());
         let mut private_facts = ObservationFacts::default();
         let mut facts = ObservationFacts::default();
@@ -272,7 +295,9 @@ impl PreparedPageObservation {
                     .cloned()
                     .map(|value| (Some(page.page_id.clone()), value)),
             );
-            let mut summary = serde_json::to_value(page).map_err(fact_error)?;
+            let mut summary = serde_json::to_value(page).map_err(|error| {
+                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+            })?;
             for branch in ["Ok", "Err"] {
                 if let Some(result) = summary["result"][branch].as_object_mut() {
                     result.remove("target_results");
@@ -280,17 +305,21 @@ impl PreparedPageObservation {
                 }
             }
             let row = json!({"kind":"page_evaluation", "stage":"evaluate_page", "outcome":summary, "target_evaluation_count":values.len()});
-            private_facts.push(row.clone(), 0).map_err(fact_error)?;
-            facts
-                .push(redact_row(row, metadata), 0)
-                .map_err(fact_error)?;
+            private_facts.push(row.clone(), 0).map_err(|error| {
+                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+            })?;
+            facts.push(redact_row(row, metadata), 0).map_err(|error| {
+                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+            })?;
             for (index, value) in values.iter().enumerate() {
                 let row = json!({"kind":"target_evaluation", "stage":"evaluate_page_target", "page_id":page.page_id, "page_index":page.index,
                     "evaluation_index":actual.len() - values.len() + index, "target":value});
-                private_facts.push(row.clone(), 1).map_err(fact_error)?;
-                facts
-                    .push(redact_row(row, metadata), 1)
-                    .map_err(fact_error)?;
+                private_facts.push(row.clone(), 1).map_err(|error| {
+                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                })?;
+                facts.push(redact_row(row, metadata), 1).map_err(|error| {
+                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                })?;
             }
             if let Err(error) = &page.result {
                 let definition = &detector.page_definitions()[page.index];
@@ -315,17 +344,23 @@ impl PreparedPageObservation {
                     let row = json!({"kind":"target_not_evaluated", "stage":"evaluate_page_target", "page_id":page.page_id,
                         "page_index":page.index, "target_id":target, "role":role, "group_index":group, "target_index":index,
                         "state":"not_evaluated", "reason":"earlier_target_failed"});
-                    private_facts.push(row.clone(), 0).map_err(fact_error)?;
-                    facts.push(row, 0).map_err(fact_error)?;
+                    private_facts.push(row.clone(), 0).map_err(|error| {
+                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?;
+                    facts.push(row, 0).map_err(|error| {
+                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?;
                 }
             }
         }
         if let Some(error) = batch_error {
             let row = json!({"kind":"page_batch_failure", "stage":"evaluate_pages", "cause":error.cause, "unexecuted":error.unexecuted});
-            private_facts.push(row.clone(), 0).map_err(fact_error)?;
-            facts
-                .push(redact_row(row, metadata), 0)
-                .map_err(fact_error)?;
+            private_facts.push(row.clone(), 0).map_err(|error| {
+                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+            })?;
+            facts.push(redact_row(row, metadata), 0).map_err(|error| {
+                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+            })?;
         }
         for target in &self.targets {
             let uses = actual
@@ -336,8 +371,12 @@ impl PreparedPageObservation {
                 .collect::<Vec<_>>();
             if !uses.is_empty() {
                 let row = json!({"kind":"explicit_target_uses", "target_id":target, "evaluation_uses":uses});
-                private_facts.push(row.clone(), 0).map_err(fact_error)?;
-                facts.push(row, 0).map_err(fact_error)?;
+                private_facts.push(row.clone(), 0).map_err(|error| {
+                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                })?;
+                facts.push(row, 0).map_err(|error| {
+                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                })?;
                 continue;
             }
             // A target which failed in this frame is not called again for projection.
@@ -349,12 +388,17 @@ impl PreparedPageObservation {
                     .is_some_and(|failed| failed.target_id == *target)
             }) {
                 let row = json!({"kind":"explicit_target_uses_failure", "target_id":target});
-                private_facts.push(row.clone(), 0).map_err(fact_error)?;
-                facts.push(row, 0).map_err(fact_error)?;
+                private_facts.push(row.clone(), 0).map_err(|error| {
+                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                })?;
+                facts.push(row, 0).map_err(|error| {
+                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                })?;
                 continue;
             }
             match context.evaluate_target(target) {
                 Ok(value) => {
+                    ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned());
                     let evaluated = PageTargetEvaluation {
                         target_id: target.clone(),
                         role: PageTargetRole::Optional,
@@ -365,19 +409,24 @@ impl PreparedPageObservation {
                         evaluation: value,
                     };
                     let row = json!({"kind":"explicit_target", "stage":"evaluate_requested_target", "target":evaluated});
-                    private_facts.push(row.clone(), 1).map_err(fact_error)?;
-                    facts
-                        .push(redact_row(row, metadata), 1)
-                        .map_err(fact_error)?;
+                    private_facts.push(row.clone(), 1).map_err(|error| {
+                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?;
+                    facts.push(redact_row(row, metadata), 1).map_err(|error| {
+                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?;
                     actual.push((None, evaluated));
                 }
                 Err(error) => {
+                    ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned());
                     complete = false;
                     let row = json!({"kind":"target_failure", "stage":"evaluate_requested_target", "target_id":target, "cause":error});
-                    private_facts.push(row.clone(), 0).map_err(fact_error)?;
-                    facts
-                        .push(redact_row(row, metadata), 0)
-                        .map_err(fact_error)?;
+                    private_facts.push(row.clone(), 0).map_err(|error| {
+                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?;
+                    facts.push(redact_row(row, metadata), 0).map_err(|error| {
+                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                    })?;
                 }
             }
         }
@@ -417,7 +466,9 @@ impl PreparedPageObservation {
                             ElementResolution::Target {
                                 target_id: target_id.clone(),
                                 passed: value.passed,
-                                geometry: target_geometry(value, evaluator)?,
+                                geometry: target_geometry(value, evaluator).map_err(|error| {
+                                    error.with_ppocr_diagnostics(ppocr_diagnostics.clone())
+                                })?,
                             }
                         }
                         [_, _, ..] => ElementResolution::Ambiguous {
@@ -429,7 +480,10 @@ impl PreparedPageObservation {
                         },
                     }
                 }
-                input => ElementResolution::Declared(geometry(input)?),
+                input => ElementResolution::Declared(
+                    geometry(input)
+                        .map_err(|error| error.with_ppocr_diagnostics(ppocr_diagnostics.clone()))?,
+                ),
             };
             elements.push(ElementInput {
                 action: element.action.clone(),
@@ -506,6 +560,7 @@ impl PreparedPageObservation {
                 "project_observation",
                 error,
             )
+            .with_ppocr_diagnostics(ppocr_diagnostics.clone())
         })?;
         Ok(EvaluatedPageObservation {
             projection,
@@ -513,6 +568,7 @@ impl PreparedPageObservation {
             rgb8_sha256: format!("{:x}", Sha256::digest(scene.rgb8_pixels())),
             facts,
             private_facts,
+            ppocr_diagnostics,
         })
     }
 }
