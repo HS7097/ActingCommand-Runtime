@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::{
+    CaptureBackendName, CaptureExtent, CaptureGeometryObservation, TaskGeometryConclusion,
+    TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
+    TaskGeometryRecheckTrigger,
+};
+use actingcommand_execution_kernel::CaptureGeometrySessionRef;
 
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
@@ -398,6 +404,11 @@ pub(super) struct RuntimeContainedTask<'a> {
     execution_provenance: ExecutionBackendProvenance,
     pub(super) control: Arc<ContainedRunControl>,
     pub(super) last_frame_id: Option<IssuedFrameId>,
+    geometry_session: Option<CaptureGeometrySessionRef>,
+    geometry_frame: Option<TaskGeometryFrame>,
+    geometry_initial: Option<(CaptureExtent, CaptureGeometryObservation)>,
+    geometry_deadline: Option<Instant>,
+    geometry_rechecked: bool,
     input_step_action_id: Option<ActionId>,
     post_input_action_id: Option<ActionId>,
     last_capture_input_action_id: Option<ActionId>,
@@ -621,7 +632,423 @@ struct RuntimeContainedTaskOcrFailureDiagnostic<'a> {
     detail_sha256: String,
 }
 
+fn task_geometry_error(code: &'static str) -> RuntimeHostError {
+    RuntimeHostError::request(
+        code,
+        "observe_task_geometry",
+        RuntimeErrorCode::CaptureFailed,
+    )
+}
+
+fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
+    TaskGeometryFailure {
+        code: error.code().to_owned(),
+        event_id: error.lifecycle.recorded_event.get().copied(),
+    }
+}
+
+fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> RuntimeHostError {
+    task_geometry_error(match conclusion {
+        TaskGeometryConclusion::AspectMismatch { .. } => "contained_task_geometry_aspect_mismatch",
+        TaskGeometryConclusion::Unknown { .. } => "contained_task_geometry_unknown",
+        TaskGeometryConclusion::Unavailable => "contained_task_geometry_unavailable",
+        TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable => {
+            "contained_task_geometry_producer_binding_mismatch"
+        }
+    })
+}
+
+fn task_geometry_request_failure(
+    error: RuntimeHostError,
+    event: Option<&PersistedEvent>,
+) -> RequestFailure {
+    if let Some(event) = event {
+        let _ = error.lifecycle.recorded_event.set(*event.event_id());
+    }
+    RequestFailure {
+        state: RuntimeReceiptState::Failed,
+        terminal: event.map(terminal),
+        poison_runtime: error.is_fatal(),
+        task_failure: Some(TaskFailureEvidence {
+            code: error.code(),
+            severity: if error.is_fatal() {
+                EventSeverity::Fatal
+            } else {
+                EventSeverity::Warning
+            },
+        }),
+        error: Box::new(error),
+    }
+}
+
 impl RuntimeContainedTask<'_> {
+    fn geometry_operation_deadline(&self) -> Result<Instant, RequestFailure> {
+        let deadline = self
+            .host
+            .package_material_deadline(self.control.deadline())?;
+        Ok(self
+            .task_timing
+            .context()
+            .map_or(deadline, |context| deadline.min(context.deadline())))
+    }
+
+    fn read_task_geometry(
+        &self,
+        reuse_frame: bool,
+    ) -> RuntimeHostResult<CaptureGeometryObservation> {
+        let deadline = self
+            .geometry_deadline
+            .ok_or_else(|| task_geometry_error("contained_task_geometry_budget_unavailable"))?;
+        let now = self.host.monotonic_ms()?;
+        if Instant::now() >= deadline || self.control.cancellation_reason(now).is_some() {
+            return Err(task_geometry_error(
+                "contained_task_geometry_budget_unavailable",
+            ));
+        }
+        let session = self
+            .geometry_session
+            .as_ref()
+            .ok_or_else(|| task_geometry_error("contained_task_geometry_session_unavailable"))?;
+        let frame = self
+            .geometry_frame
+            .as_ref()
+            .ok_or_else(|| task_geometry_error("contained_task_geometry_frame_unavailable"))?;
+        // This checks the original session; it cannot create or reopen a producer.
+        self.host
+            .execution
+            .validate_capture_geometry_session(session, deadline)
+            .map_err(|error| {
+                RuntimeHostError::execution("validate_task_geometry_session", &error)
+            })?;
+        if frame.backend == CaptureBackendName::FixtureSimulation
+            || reuse_frame && frame.backend == CaptureBackendName::NemuIpc
+        {
+            return Ok(frame.producer.clone());
+        }
+        self.host
+            .execution
+            .observe_capture_geometry(session, deadline)
+            .map_err(|error| RuntimeHostError::execution("observe_task_geometry", &error))
+    }
+
+    fn record_task_geometry(
+        &self,
+        phase: TaskGeometryPhase,
+        trigger: Option<TaskGeometryRecheckTrigger>,
+        original_failure: Option<TaskGeometryFailure>,
+        result: &RuntimeHostResult<CaptureGeometryObservation>,
+    ) -> Result<(TaskGeometryConclusion, PersistedEvent), RequestFailure> {
+        if let Err(error) = result {
+            // Preserve the original fatal/Unconfirmed boundary before attempting another fact.
+            if error.projection().code == RuntimeErrorCode::LedgerFailure {
+                return Err(RequestFailure::poison_without_terminal(error.clone()));
+            }
+            let retained = self
+                .host
+                .retain_unconfirmed_resources(error, self.links())
+                .map_err(|failure| {
+                    RequestFailure::poison_without_terminal(
+                        failure.with_related_failure("geometry_observation", error),
+                    )
+                })?;
+            if retained || error.is_fatal() {
+                return Err(RequestFailure::poison_without_terminal(error.clone()));
+            }
+        }
+        let conclusion = match result {
+            Ok(observation) => TaskGeometryObservation::assess(
+                self.geometry_frame.as_ref().ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(task_geometry_error(
+                        "contained_task_geometry_frame_unavailable",
+                    ))
+                })?,
+                observation,
+            ),
+            Err(_) => TaskGeometryConclusion::Unavailable,
+        };
+        let mut links = self.links();
+        if let Some(frame) = self.last_frame_id {
+            links = links.with_frame_id(frame);
+        }
+        // Failure finalization may record this observation after the execution deadline.
+        // It deliberately does not pass through record_entry_fact / ensure_active.
+        let event = self
+            .host
+            .append_event(
+                if matches!(
+                    conclusion,
+                    TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable
+                ) {
+                    EventSeverity::Info
+                } else {
+                    EventSeverity::Warning
+                },
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links.clone(),
+                TaskPayloadDraft::semantic(
+                    TaskSemanticFact::GeometryObserved {
+                        observation: Box::new(TaskGeometryObservation {
+                            phase,
+                            frame: self.geometry_frame.clone(),
+                            observation: result.as_ref().ok().cloned(),
+                            conclusion,
+                            trigger,
+                            original_failure,
+                            unavailable: result.as_ref().err().map(task_geometry_failure_ref),
+                        }),
+                    },
+                    AuditInput::new(),
+                ),
+            )
+            .map_err(|mut failure| {
+                if let Err(observation_error) = result {
+                    failure.error = Box::new(
+                        failure
+                            .error
+                            .as_ref()
+                            .clone()
+                            .with_related_failure("geometry_observation", observation_error),
+                    );
+                }
+                failure
+            })?;
+        if let Err(error) = result {
+            self.host
+                .record_required_failure(error, &event, links)
+                .map_err(|failure| {
+                    RequestFailure::poison_without_terminal(
+                        failure.with_related_failure("geometry_observation", error),
+                    )
+                })?;
+        }
+        Ok((conclusion, event))
+    }
+
+    fn retain_task_geometry(
+        &mut self,
+        frame: &Frame,
+        frame_id: IssuedFrameId,
+        session: CaptureGeometrySessionRef,
+    ) -> Result<(), RequestFailure> {
+        let extent = CaptureExtent::new(frame.width, frame.height).ok_or_else(|| {
+            RequestFailure::poison_without_terminal(task_geometry_error(
+                "contained_task_geometry_frame_extent_invalid",
+            ))
+        })?;
+        self.geometry_frame = Some(TaskGeometryFrame {
+            frame_id: *frame_id.transport(),
+            extent,
+            backend: frame.backend_name,
+            captured_at: frame.captured_at,
+            producer: frame.geometry.clone(),
+        });
+        if session.instance_id() != self.token.instance_id()
+            || self
+                .geometry_session
+                .as_ref()
+                .is_some_and(|original| !original.same_session(&session))
+            || (frame.backend_name == CaptureBackendName::FixtureSimulation)
+                != (self.execution_provenance == ExecutionBackendProvenance::FixtureSimulation)
+        {
+            return Err(task_geometry_request_failure(
+                task_geometry_error("contained_task_geometry_producer_binding_mismatch"),
+                None,
+            ));
+        }
+        if self.geometry_session.is_none() {
+            self.geometry_session = Some(session);
+        }
+        if self.geometry_initial.is_some() {
+            return Ok(());
+        }
+        let result = if frame.backend_name != CaptureBackendName::FixtureSimulation
+            && u64::from(extent.width()) * 9 != u64::from(extent.height()) * 16
+        {
+            // The delivered frame already disproves the prerequisite; no display read is needed.
+            Ok(frame.geometry.clone())
+        } else {
+            self.read_task_geometry(true)
+        };
+        let (conclusion, event) =
+            self.record_task_geometry(TaskGeometryPhase::Initial, None, None, &result)?;
+        match (conclusion, result) {
+            (
+                TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable,
+                Ok(value),
+            ) => {
+                // Only a confirmed GlobalLedger commit opens the input prerequisite.
+                self.geometry_initial = Some((extent, value));
+                Ok(())
+            }
+            (_, Err(error)) => Err(task_geometry_request_failure(error, Some(&event))),
+            (conclusion, Ok(_)) => Err(task_geometry_request_failure(
+                task_geometry_conclusion_error(conclusion),
+                Some(&event),
+            )),
+        }
+    }
+
+    fn require_task_geometry_for_input(&self) -> Result<(), RequestFailure> {
+        let failure = || {
+            task_geometry_request_failure(
+                task_geometry_error("contained_task_geometry_input_prerequisite_missing"),
+                None,
+            )
+        };
+        let (initial_extent, initial_observation) =
+            self.geometry_initial.as_ref().ok_or_else(failure)?;
+        let frame = self.geometry_frame.as_ref().ok_or_else(failure)?;
+        let session = self.geometry_session.as_ref().ok_or_else(failure)?;
+        if self.last_frame_id.map(|id| *id.transport()) != Some(frame.frame_id)
+            || frame.extent != *initial_extent
+        {
+            return Err(failure());
+        }
+        let conclusion = TaskGeometryObservation::assess(frame, initial_observation);
+        if !matches!(
+            (self.execution_provenance, conclusion),
+            (
+                ExecutionBackendProvenance::PhysicalDevice,
+                TaskGeometryConclusion::Pass
+            ) | (
+                ExecutionBackendProvenance::FixtureSimulation,
+                TaskGeometryConclusion::FixtureNotApplicable
+            )
+        ) {
+            return Err(task_geometry_request_failure(
+                task_geometry_conclusion_error(conclusion),
+                None,
+            ));
+        }
+        self.host
+            .execution
+            .validate_capture_geometry_session(session, self.geometry_deadline.ok_or_else(failure)?)
+            .map_err(|error| {
+                task_geometry_request_failure(
+                    RuntimeHostError::execution("validate_task_geometry_input", &error),
+                    None,
+                )
+            })
+    }
+
+    fn recheck_task_geometry(
+        &mut self,
+        execution: &mut Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,
+    ) {
+        if self.geometry_rechecked {
+            return;
+        }
+        let (trigger, primary) = match execution {
+            Err(ContainedTaskRunError::Task(error)) => {
+                let trigger = match error.code() {
+                    "contained_task_recognition_failed" => {
+                        TaskGeometryRecheckTrigger::RecognitionFailed
+                    }
+                    "contained_task_page_unknown" => TaskGeometryRecheckTrigger::PageUnknown,
+                    _ => return,
+                };
+                let mut primary = RuntimeHostError::request(
+                    error.code(),
+                    "run_contained_task",
+                    RuntimeErrorCode::BackendOperationFailed,
+                );
+                if let Some(detail) = error.detail() {
+                    primary = primary.with_native_detail(detail.to_owned());
+                }
+                (trigger, primary)
+            }
+            Err(ContainedTaskRunError::NonfatalOperation(failure))
+                if !failure.poison_runtime
+                    && !failure.error.is_fatal()
+                    && matches!(
+                        failure.error.code(),
+                        "input_backend_operation_failed" | "input_backend_open_failed"
+                    ) =>
+            {
+                (
+                    TaskGeometryRecheckTrigger::InputFailed,
+                    failure.error.as_ref().clone(),
+                )
+            }
+            // In particular, record/ledger errors and fatal exits authorize no new observation.
+            _ => return,
+        };
+        self.geometry_rechecked = true;
+        let result = self.read_task_geometry(false);
+        if let Err(mut failure) = self.record_task_geometry(
+            TaskGeometryPhase::Recheck,
+            Some(trigger),
+            Some(task_geometry_failure_ref(&primary)),
+            &result,
+        ) {
+            let observation_context = failure.error.lifecycle.as_ref();
+            let mut preserved_primary = primary.clone();
+            // A newly unconfirmed producer still belongs to the original close owner.
+            // Keep that lifecycle boundary when retaining the execution error as primary.
+            if observation_context.resource_quiescence == Some(ResourceQuiescence::Unconfirmed) {
+                preserved_primary.lifecycle.resource_quiescence =
+                    observation_context.resource_quiescence;
+                preserved_primary.lifecycle.instance_id = observation_context.instance_id;
+                preserved_primary
+                    .lifecycle
+                    .causes
+                    .extend(observation_context.causes.iter().cloned());
+            }
+            failure.error = Box::new(
+                if failure.error.projection().code == RuntimeErrorCode::LedgerFailure {
+                    failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_related_failure("prior_task", &primary)
+                } else {
+                    preserved_primary
+                        .with_related_failure("geometry_recheck", &failure.error)
+                        .into_fatal()
+                },
+            );
+            *execution = Err(ContainedTaskRunError::Boundary(failure));
+        }
+    }
+
+    fn record_geometry_triggered_recovery_failure(
+        &self,
+        package_sha256: String,
+        primary: &RuntimeHostError,
+    ) -> Result<(), RequestFailure> {
+        // Preserve the two original recovery failure facts after a classified failure,
+        // even when the operation has consumed its last remaining execution budget.
+        for fact in [
+            TaskSemanticFact::EntryRecoveryFailed {
+                package_sha256,
+                failure_code: primary.code().to_owned(),
+            },
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::FailClosed,
+                failure_code: Some(primary.code().to_owned()),
+            },
+        ] {
+            self.append_task(
+                EventSeverity::Warning,
+                self.links(),
+                TaskPayloadDraft::semantic(fact, AuditInput::new()),
+            )
+            .map_err(|mut failure| {
+                failure.error = Box::new(
+                    failure
+                        .error
+                        .as_ref()
+                        .clone()
+                        .with_related_failure("prior_task", primary),
+                );
+                failure
+            })?;
+        }
+        Ok(())
+    }
+
     fn record_initial_configuration(
         &mut self,
         request: &ContainedTaskRequest,
@@ -1745,6 +2172,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             self.task_timing
                 .finish_boundary(active_started, active.is_ok());
             active?;
+            self.geometry_deadline = Some(self.geometry_operation_deadline()?);
             let instance_guard = self.host.instance_guard(self.token.instance_id())?;
             let admission = lock(&instance_guard, "lock_instance_admission")?;
             let frame_id =
@@ -1780,11 +2208,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             let captured = self
                 .host
                 .execution
-                .capture_retained_with_registration_guard(self.instance_alias, registration);
+                .capture_retained_with_geometry_session_and_registration_guard(
+                    self.instance_alias,
+                    registration,
+                );
             self.task_timing
                 .finish_boundary(backend_started, captured.is_ok());
             match captured {
-                Ok(frame) => {
+                Ok((frame, geometry_session)) => {
                     let material_started = self
                         .task_timing
                         .begin_boundary(Boundary::CaptureMaterial, identity);
@@ -1911,7 +2342,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     })();
                     self.task_timing
                         .finish_boundary(material_started, material.is_ok());
-                    material
+                    let frame = material?;
+                    self.retain_task_geometry(&frame, frame_id, geometry_session)?;
+                    Ok(frame)
                 }
                 Err(error) => {
                     let error = self
@@ -2002,6 +2435,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         );
         let result = (|| {
             self.ensure_active()?;
+            self.geometry_deadline = Some(self.geometry_operation_deadline()?);
+            self.require_task_geometry_for_input()?;
             let (success, selection) = self.host.input(
                 self.request,
                 self.token,
@@ -3659,6 +4094,11 @@ impl HostShared {
             execution_provenance,
             control: Arc::clone(&control),
             last_frame_id: None,
+            geometry_session: None,
+            geometry_frame: None,
+            geometry_initial: None,
+            geometry_deadline: None,
+            geometry_rechecked: false,
             input_step_action_id: None,
             post_input_action_id: None,
             last_capture_input_action_id: None,
@@ -3715,6 +4155,7 @@ impl HostShared {
                 .task_timing
                 .task_failure(error.timing(), error.timing_check_position());
         }
+        runtime.recheck_task_geometry(&mut execution);
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
@@ -4245,6 +4686,23 @@ impl HostShared {
         let recovery_outcome = match recovery_execution {
             Ok(outcome) => outcome,
             Err(ContainedTaskRunError::Task(error)) => {
+                if matches!(
+                    error.code(),
+                    "contained_task_recognition_failed" | "contained_task_page_unknown"
+                ) {
+                    let mut primary = RuntimeHostError::request(
+                        error.code(),
+                        "run_contained_task",
+                        RuntimeErrorCode::BackendOperationFailed,
+                    );
+                    if let Some(detail) = error.detail() {
+                        primary = primary.with_native_detail(detail.to_owned());
+                    }
+                    runtime
+                        .record_geometry_triggered_recovery_failure(recovery_sha256, &primary)
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    return Err(ContainedTaskRunError::Task(error));
+                }
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: recovery_sha256,
@@ -4257,6 +4715,19 @@ impl HostShared {
                 ContainedTaskRunError::Boundary(failure)
                 | ContainedTaskRunError::NonfatalOperation(failure),
             ) => {
+                if nonfatal_operation
+                    && !failure.poison_runtime
+                    && !failure.error.is_fatal()
+                    && matches!(
+                        failure.error.code(),
+                        "input_backend_operation_failed" | "input_backend_open_failed"
+                    )
+                {
+                    runtime
+                        .record_geometry_triggered_recovery_failure(recovery_sha256, &failure.error)
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    return Err(ContainedTaskRunError::NonfatalOperation(failure));
+                }
                 let code = failure.error.code();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {

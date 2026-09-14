@@ -190,7 +190,16 @@ impl RuntimeHostError {
             "input_backend_operation_failed" => RuntimeErrorCode::BackendOperationFailed,
             "capture_backend_open_failed"
             | "capture_backend_operation_failed"
-            | "execution_session_close_pending" => RuntimeErrorCode::CaptureFailed,
+            | "execution_session_close_pending"
+            | "capture_geometry_kernel_busy"
+            | "capture_geometry_kernel_closed"
+            | "capture_geometry_session_missing"
+            | "capture_geometry_session_changed"
+            | "capture_geometry_queue_full"
+            | "capture_geometry_deadline_elapsed"
+            | "capture_geometry_session_busy"
+            | "capture_geometry_session_closed"
+            | "capture_geometry_read_failed" => RuntimeErrorCode::CaptureFailed,
             "monitor_observation_unavailable" | "monitor_observation_failed" => {
                 RuntimeErrorCode::RecognitionFailed
             }
