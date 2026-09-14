@@ -2827,6 +2827,258 @@ pub enum TaskEntryTargetDisposition {
     FailClosed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskGeometryPhase {
+    Initial,
+    Recheck,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskGeometryRecheckTrigger {
+    RecognitionFailed,
+    InputFailed,
+    PageUnknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskGeometryConclusion {
+    Pass,
+    AspectMismatch { reason: TaskGeometryAspectMismatch },
+    Unknown { reason: TaskGeometryUnknownReason },
+    Unavailable,
+    FixtureNotApplicable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskGeometryAspectMismatch {
+    FrameNotSixteenByNine,
+    FrameAndLogicalDisplayDiffer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskGeometryUnknownReason {
+    BackendUnsupported,
+    ProducerObservationAbsent,
+    ProducerUnavailable,
+    ProducerBindingMismatch,
+    RotationUnavailable,
+    FixtureSourceMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskGeometryFrame {
+    pub frame_id: crate::FrameId,
+    pub extent: crate::CaptureExtent,
+    pub backend: crate::CaptureBackendName,
+    pub captured_at: std::time::SystemTime,
+    pub producer: crate::CaptureGeometryObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskGeometryFailure {
+    pub code: String,
+    pub event_id: Option<crate::EventId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskGeometryObservation {
+    pub phase: TaskGeometryPhase,
+    pub frame: Option<TaskGeometryFrame>,
+    pub observation: Option<crate::CaptureGeometryObservation>,
+    pub conclusion: TaskGeometryConclusion,
+    pub trigger: Option<TaskGeometryRecheckTrigger>,
+    pub original_failure: Option<TaskGeometryFailure>,
+    pub unavailable: Option<TaskGeometryFailure>,
+}
+
+impl TaskGeometryObservation {
+    /// Classifies ordered, already-delivered frame dimensions without transforming them.
+    pub fn assess(
+        frame: &TaskGeometryFrame,
+        observation: &crate::CaptureGeometryObservation,
+    ) -> TaskGeometryConclusion {
+        use crate::{CaptureBackendName, CaptureGeometryObservation, CaptureGeometryUnknownReason};
+        if frame.backend == CaptureBackendName::FixtureSimulation {
+            return if matches!(observation, CaptureGeometryObservation::NotApplicable(_))
+                && matches!(frame.producer, CaptureGeometryObservation::NotApplicable(_))
+            {
+                TaskGeometryConclusion::FixtureNotApplicable
+            } else {
+                TaskGeometryConclusion::Unknown {
+                    reason: TaskGeometryUnknownReason::FixtureSourceMismatch,
+                }
+            };
+        }
+        if u64::from(frame.extent.width()) * 9 != u64::from(frame.extent.height()) * 16 {
+            return TaskGeometryConclusion::AspectMismatch {
+                reason: TaskGeometryAspectMismatch::FrameNotSixteenByNine,
+            };
+        }
+        let geometry = match observation {
+            CaptureGeometryObservation::Observed(geometry) => geometry,
+            CaptureGeometryObservation::Unknown(reason) => {
+                return TaskGeometryConclusion::Unknown {
+                    reason: match reason {
+                        CaptureGeometryUnknownReason::BackendUnsupported => {
+                            TaskGeometryUnknownReason::BackendUnsupported
+                        }
+                        CaptureGeometryUnknownReason::ProducerObservationAbsent => {
+                            TaskGeometryUnknownReason::ProducerObservationAbsent
+                        }
+                        CaptureGeometryUnknownReason::ProducerUnavailable => {
+                            TaskGeometryUnknownReason::ProducerUnavailable
+                        }
+                    },
+                };
+            }
+            CaptureGeometryObservation::NotApplicable(_) => {
+                return TaskGeometryConclusion::Unknown {
+                    reason: TaskGeometryUnknownReason::FixtureSourceMismatch,
+                };
+            }
+        };
+        let source_matches_backend = matches!(
+            (&geometry.source, geometry.backend),
+            (
+                crate::CaptureGeometrySource::NemuSdkDisplay { .. },
+                CaptureBackendName::NemuIpc
+            ) | (
+                crate::CaptureGeometrySource::AdbDefaultDisplay { .. },
+                CaptureBackendName::AdbScreencap
+                    | CaptureBackendName::AdbScreencapEncode
+                    | CaptureBackendName::AdbScreencapRawGzip
+                    | CaptureBackendName::DroidcastRaw
+            )
+        );
+        if geometry.backend != frame.backend
+            || !source_matches_backend
+            || matches!(
+                &frame.producer,
+                CaptureGeometryObservation::Observed(producer)
+                    if producer.backend != frame.backend
+                        || !same_geometry_source_binding(&producer.source, &geometry.source)
+            )
+            || matches!(frame.producer, CaptureGeometryObservation::NotApplicable(_))
+        {
+            return TaskGeometryConclusion::Unknown {
+                reason: TaskGeometryUnknownReason::ProducerBindingMismatch,
+            };
+        }
+        if matches!(
+            geometry.source,
+            crate::CaptureGeometrySource::AdbDefaultDisplay { .. }
+        ) && matches!(
+            geometry.rotation,
+            crate::CaptureRotationObservation::NotProvidedBySource
+        ) {
+            return TaskGeometryConclusion::Unknown {
+                reason: TaskGeometryUnknownReason::RotationUnavailable,
+            };
+        }
+        if u64::from(frame.extent.width()) * u64::from(geometry.logical_display_extent.height())
+            != u64::from(frame.extent.height()) * u64::from(geometry.logical_display_extent.width())
+            || matches!(
+                &frame.producer,
+                CaptureGeometryObservation::Observed(producer)
+                    if u64::from(frame.extent.width())
+                        * u64::from(producer.logical_display_extent.height())
+                        != u64::from(frame.extent.height())
+                            * u64::from(producer.logical_display_extent.width())
+            )
+        {
+            return TaskGeometryConclusion::AspectMismatch {
+                reason: TaskGeometryAspectMismatch::FrameAndLogicalDisplayDiffer,
+            };
+        }
+        TaskGeometryConclusion::Pass
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        let phase_valid = match self.phase {
+            TaskGeometryPhase::Initial => {
+                self.frame.is_some() && self.trigger.is_none() && self.original_failure.is_none()
+            }
+            TaskGeometryPhase::Recheck => self.trigger.is_some() && self.original_failure.is_some(),
+        };
+        if !phase_valid {
+            return Err(SanitizationError::new(
+                "invalid_task_geometry_phase",
+                "geometry",
+            ));
+        }
+        for failure in self.original_failure.iter().chain(self.unavailable.iter()) {
+            validate_task_semantic_label(&failure.code, "geometry_failure_code")?;
+        }
+        if let Some(frame) = &self.frame {
+            validate_geometry_source(&frame.producer)?;
+        }
+        if let Some(observation) = &self.observation {
+            validate_geometry_source(observation)?;
+        }
+        let conclusion_valid = if self.unavailable.is_some() {
+            self.observation.is_none() && self.conclusion == TaskGeometryConclusion::Unavailable
+        } else {
+            match (&self.frame, &self.observation) {
+                (Some(frame), Some(observation)) => {
+                    self.conclusion == Self::assess(frame, observation)
+                }
+                _ => false,
+            }
+        };
+        if !conclusion_valid {
+            return Err(SanitizationError::new(
+                "invalid_task_geometry_conclusion",
+                "geometry",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn same_geometry_source_binding(
+    left: &crate::CaptureGeometrySource,
+    right: &crate::CaptureGeometrySource,
+) -> bool {
+    match (left, right) {
+        (
+            crate::CaptureGeometrySource::AdbDefaultDisplay { serial: left, .. },
+            crate::CaptureGeometrySource::AdbDefaultDisplay { serial: right, .. },
+        ) => left == right,
+        (
+            crate::CaptureGeometrySource::NemuSdkDisplay {
+                sdk_instance_id: left_instance,
+                sdk_display_id: left_display,
+                ..
+            },
+            crate::CaptureGeometrySource::NemuSdkDisplay {
+                sdk_instance_id: right_instance,
+                sdk_display_id: right_display,
+                ..
+            },
+        ) => left_instance == right_instance && left_display == right_display,
+        _ => false,
+    }
+}
+
+fn validate_geometry_source(
+    observation: &crate::CaptureGeometryObservation,
+) -> Result<(), SanitizationError> {
+    if let crate::CaptureGeometryObservation::Observed(geometry) = observation
+        && let crate::CaptureGeometrySource::AdbDefaultDisplay { serial, .. } = &geometry.source
+    {
+        validate_task_semantic_label(serial, "geometry_adb_source")?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSemanticFact {
@@ -2841,6 +3093,9 @@ pub enum TaskSemanticFact {
     EvidenceIndexed {
         frame_width: u32,
         frame_height: u32,
+    },
+    GeometryObserved {
+        observation: Box<TaskGeometryObservation>,
     },
     RecognitionStarted {
         candidate_pages: Vec<String>,
@@ -3509,6 +3764,7 @@ impl TaskSemanticFact {
             Self::PackageAdmitted { .. } => EventType::TaskRequested,
             Self::RunStarted => EventType::TaskStarted,
             Self::EvidenceIndexed { .. } => EventType::TaskEvidenceIndexed,
+            Self::GeometryObserved { .. } => EventType::TaskGeometryObserved,
             Self::RecognitionStarted { .. } => EventType::TaskRecognitionStarted,
             Self::RecognitionCompleted { .. } => EventType::TaskRecognitionCompleted,
             Self::EntryRecognition { .. }
@@ -3557,6 +3813,7 @@ impl TaskSemanticFact {
                 }
             }
             Self::RunStarted => {}
+            Self::GeometryObserved { observation } => observation.validate()?,
             Self::EvidenceIndexed {
                 frame_width,
                 frame_height,
@@ -9365,6 +9622,13 @@ impl EventPayload {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
         if matches!(self, Self::Provider(_)) {
+            sensitivity = sensitivity.max(Sensitivity::Sensitive);
+        }
+        if matches!(
+            self,
+            Self::Task(TaskPayload::Semantic(payload))
+                if matches!(payload.fact(), TaskSemanticFact::GeometryObserved { .. })
+        ) {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
         if let Some(budget) = self.device_diagnostics() {
