@@ -28,6 +28,21 @@ pub(crate) struct RuntimeCompleteFailure {
     pub(crate) secondary: Vec<(RuntimeFailureRelation, RuntimeHostError)>,
 }
 
+/// Original values held only while returning a B7 archive/recording failure.
+#[derive(Clone, PartialEq, serde::Serialize)]
+pub(crate) enum PpocrFailureSource {
+    Pages(Box<actingcommand_page_detector::PageBatchResult>),
+    Recognition(Box<actingcommand_recognition_pack::RecognitionPackError>),
+    Observation {
+        status: actingcommand_contract::PageObservationStatus,
+        facts: actingcommand_contract::ObservationFacts,
+    },
+    Saved {
+        message: String,
+        conflicting_pages: Option<Vec<String>>,
+    },
+}
+
 #[derive(Clone)]
 pub struct RuntimeHostError {
     code: &'static str,
@@ -38,6 +53,11 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
+    pub(crate) ppocr_message: Option<String>,
+    pub(crate) ppocr_source: Option<Arc<PpocrFailureSource>>,
+    pub(crate) ppocr_artifact_failure:
+        Option<Arc<actingcommand_artifact_store::ArtifactStoreError>>,
     pub(crate) complete_failure: Option<Box<RuntimeCompleteFailure>>,
     pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
@@ -63,6 +83,10 @@ impl PartialEq for RuntimeHostError {
             && self.operation == other.operation
             && self.projection == other.projection
             && self.lifecycle.complete_failure == other.lifecycle.complete_failure
+            && self.lifecycle.ppocr_message == other.lifecycle.ppocr_message
+            && self.lifecycle.ppocr_source == other.lifecycle.ppocr_source
+            && self.lifecycle.ppocr_diagnostics == other.lifecycle.ppocr_diagnostics
+            && self.lifecycle.ppocr_artifact_failure == other.lifecycle.ppocr_artifact_failure
             && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
             && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
             && self.lifecycle.policy_rejection == other.lifecycle.policy_rejection
@@ -86,6 +110,21 @@ impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
 }
 
 impl RuntimeHostError {
+    pub(crate) fn has_ppocr_diagnostics(&self) -> bool {
+        !self.lifecycle.ppocr_diagnostics.is_empty()
+            || self
+                .lifecycle
+                .complete_failure
+                .as_ref()
+                .is_some_and(|complete| {
+                    complete.primary.has_ppocr_diagnostics()
+                        || complete
+                            .secondary
+                            .iter()
+                            .any(|(_, error)| error.has_ppocr_diagnostics())
+                })
+    }
+
     /// Joins one of B7's original admission/archive/recording boundaries. Callers
     /// join once per boundary; this is not a retry or an input-driven error queue.
     pub(crate) fn with_complete_failure(
@@ -274,6 +313,10 @@ impl RuntimeHostError {
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
                 complete_failure: None,
+                ppocr_diagnostics: Vec::new(),
+                ppocr_message: None,
+                ppocr_source: None,
+                ppocr_artifact_failure: None,
                 task_timing: None,
                 capacity: None,
                 raw_os_error: None,
@@ -326,6 +369,10 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        if self.has_ppocr_diagnostics() || other.has_ppocr_diagnostics() {
+            return self
+                .with_complete_failure(RuntimeFailureRelation::DiagnosticArchive, other.clone());
+        }
         if self.lifecycle.task_timing.is_none() {
             self.lifecycle.task_timing = other.lifecycle.task_timing.clone();
         }

@@ -162,6 +162,7 @@ mod performance;
 mod planning;
 mod policy_catalog;
 mod policy_dispatch;
+mod ppocr_diagnostic;
 mod read_events;
 mod requests;
 mod saved_artifact_ocr;
@@ -7447,7 +7448,12 @@ impl RequestFailure {
     }
 
     fn replace_with_poison(self, error: RuntimeHostError) -> Self {
-        let mut error = if self.error.lifecycle.capacity.is_some() {
+        let mut error = if self.error.has_ppocr_diagnostics() {
+            self.error.as_ref().clone().with_complete_failure(
+                crate::error::RuntimeFailureRelation::DiagnosticArchive,
+                error,
+            )
+        } else if self.error.lifecycle.capacity.is_some() {
             error.with_related_failure("prior_capacity_admission", &self.error)
         } else {
             error

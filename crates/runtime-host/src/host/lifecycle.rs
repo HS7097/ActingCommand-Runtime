@@ -175,12 +175,13 @@ impl HostShared {
                 host_error.and_then(|error| error.lifecycle.adb_recovery.as_deref().cloned()),
             )
             .with_native_detail(
-                host_error
-                    .and_then(|error| error.lifecycle.native_detail.as_deref().cloned())
+                client_part
+                    .map(|(text, _, _)| {
+                        actingcommand_contract::LifecycleNativeDetail::new(text, false)
+                    })
                     .or_else(|| {
-                        client_part.map(|(text, _, _)| {
-                            actingcommand_contract::LifecycleNativeDetail::new(text, false)
-                        })
+                        host_error
+                            .and_then(|error| error.lifecycle.native_detail.as_deref().cloned())
                     }),
             )
             .with_capacity(host_error.and_then(|error| error.lifecycle.capacity.clone()))
@@ -222,7 +223,12 @@ impl HostShared {
                             operation.unwrap_or("actingd_process"),
                             match client_part {
                                 Some((_, index, count)) => {
-                                    format!("{message}; client_message_part={index}/{count}")
+                                    let kind = if host_error.is_some() {
+                                        "ppocr_message_part"
+                                    } else {
+                                        "client_message_part"
+                                    };
+                                    format!("{message}; {kind}={index}/{count}")
                                 }
                                 None => message.clone(),
                             },
@@ -248,7 +254,30 @@ impl HostShared {
                 cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
             });
             if error.lifecycle.recorded_event.get().is_none() && !phase_close {
-                let id = emit(None, entered_event_id, None)?;
+                let mut parts = Vec::new();
+                let mut remaining = error.lifecycle.ppocr_message.as_deref().unwrap_or("");
+                while !remaining.is_empty() {
+                    let mut end = remaining.len().min(1024);
+                    while !remaining.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    parts.push(&remaining[..end]);
+                    remaining = &remaining[end..];
+                }
+                let mut first = None;
+                for (index, part) in parts.iter().enumerate() {
+                    let id = emit(
+                        None,
+                        first.or(entered_event_id),
+                        Some((part, index + 1, parts.len())),
+                    )?;
+                    first.get_or_insert(id);
+                }
+                let id = match first {
+                    Some(id) => id,
+                    None => emit(None, entered_event_id, None)?,
+                };
+                // A partial message is not a fully recorded error.
                 let _ = error.lifecycle.recorded_event.set(id);
             }
             let reference =
@@ -351,6 +380,7 @@ impl HostShared {
             && error.lifecycle.raw_os_error.is_none()
             && error.lifecycle.adb_recovery.is_none()
             && error.lifecycle.complete_failure.is_none()
+            && error.lifecycle.ppocr_message.is_none()
         {
             let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
         }
