@@ -29,9 +29,12 @@ jobs:
             ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Build locked workspace
+        run: cargo build --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
       - name: Test
+        id: test
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
@@ -61,6 +64,26 @@ jobs:
           Write-Host "process integration tests exit code: $processExitCode"
 
           if ($workspaceExitCode -ne 0 -or $runtimeClientExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) {
+            exit 1
+          }
+          exit 0
+      - name: Test observation
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::runtime_input_proxy_renews_before_short_lease_expiry -- --exact --test-threads=1
+          $heartbeatObservationExitCode = $LASTEXITCODE
+          Write-Host "Heartbeat proxy observation test exit code: $heartbeatObservationExitCode"
+
+          cargo test --locked -p actingcommand-runtime-client --features test-observation --lib tests::long_input_extends_only_its_response_wait -- --exact --test-threads=1
+          $longInputObservationExitCode = $LASTEXITCODE
+          Write-Host "Long input observation test exit code: $longInputObservationExitCode"
+
+          if ($heartbeatObservationExitCode -ne 0 -or $longInputObservationExitCode -ne 0) {
             exit 1
           }
           exit 0

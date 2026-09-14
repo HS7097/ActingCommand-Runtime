@@ -8,10 +8,6 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-[[bin]]
-name = "actinglab-command-inventory"
-path = "src/main.rs"
-
 [dependencies]
 serde_json = { workspace = true }
 syn = { version = "2", features = ["full", "visit"] }
