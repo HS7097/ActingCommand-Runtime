@@ -16,6 +16,7 @@ fn task_teardown_precedes_terminal_and_lease_release() {
         .store(true, Ordering::Release);
     let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
@@ -229,6 +230,7 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             .expect("capture close error") = Some(close_error);
         let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
         let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
         let request = client.request_with_correlation(

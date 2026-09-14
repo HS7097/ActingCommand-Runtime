@@ -7,6 +7,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// Workflow #182: environment readers and writers share one test-only lock.
+#[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub mod adb;
 mod adb_bounds_diagnostic;
 pub mod capture;
