@@ -7,6 +7,12 @@ Existing roots without a formal marker require explicit maintenance. An empty
 root initializes formal schema and metadata atomically. Candidate, partial,
 invalid or unauthenticated metadata never enables a production writer.
 
+Segment construction, append, rotation and repair writes compile only in Ledger's
+own physical specifications. Production retains the Legacy read-only parser,
+repair journal and quarantine verification used by maintenance and forensic
+consumers. The shared ownership and lock metadata remain part of the SQLite
+writer; retiring Segment writes does not remove those files or read capabilities.
+
 ## Offline entry
 
 `actingd ledger-maintenance` reads the normal configuration only for state root

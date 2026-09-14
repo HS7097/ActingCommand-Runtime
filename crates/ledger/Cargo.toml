@@ -12,6 +12,7 @@ publish = false
 sqlite-candidate = []
 
 [dependencies]
+actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
 actingcommand-contract = { workspace = true }
 actingcommand-runtime-database = { workspace = true }
 rusqlite = { workspace = true }
@@ -20,7 +21,14 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 
 [dev-dependencies]
-actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
+actingcommand-artifact-store = { path = "../artifact-store", default-features = false, features = ["capture"] }
+actingcommand-device = { workspace = true }
+actingcommand-ledger-forensics = { workspace = true }
+actingcommand-policy = { workspace = true }
+actingcommand-recognition-pack = { workspace = true }
 actingcommand-runtime-database = { workspace = true }
+actingcommand-runtime-host = { workspace = true }
+actingcommand-runtime-state = { workspace = true }
+actingcommand-scheduler = { workspace = true }
 rusqlite = { workspace = true }
 tempfile = "3"

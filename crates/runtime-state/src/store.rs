@@ -28,6 +28,15 @@ const MAX_STATE_DOCUMENT_BYTES: usize = 1024 * 1024;
 const MAX_PROJECTION_ENTRY_BYTES: usize = 64 * 1024;
 static RELEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+mod approval;
+pub use approval::*;
+mod release;
+pub use release::*;
+mod planning;
+pub use planning::*;
+mod fact;
+pub use fact::*;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDocument {
     state_key: String,
@@ -211,7 +220,273 @@ pub struct RuntimeStateStore {
     release_blobs: PathBuf,
 }
 
+pub const CATALOG_ACTIVE_STATE_KEY: &str = "policy.catalog.active";
+const MAX_CATALOG_STATE_BYTES: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogStateObservation {
+    Applied,
+    Unchanged,
+    Unknown,
+}
+
+pub struct PreparedCatalogState {
+    store: Arc<RuntimeStateStore>,
+    schema_version: String,
+    payload: Vec<u8>,
+    expected_payload_sha256: Option<String>,
+    migration: Option<StateMigrationData>,
+    baseline: Option<StateDocument>,
+    migration_baseline: Option<StateMigrationData>,
+}
+
+impl PreparedCatalogState {
+    pub fn migration(&self) -> Option<&StateMigrationData> {
+        self.migration.as_ref()
+    }
+
+    pub fn observe(
+        &self,
+        scope: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> RuntimeStateResult<CatalogStateObservation> {
+        if !scope.belongs_to(&self.store.database) {
+            return Err(fatal(
+                "state_transaction_owner_mismatch",
+                "observe_catalog_state",
+            ));
+        }
+        let connection = scope.sql();
+        let current = query_document(connection, CATALOG_ACTIVE_STATE_KEY)?
+            .map(|row| {
+                self.store
+                    .validate_document_row(row, "observe_catalog_state")
+            })
+            .transpose()?;
+        let highest: Option<i64> = connection
+            .query_row(
+                "SELECT MAX(revision) FROM state_document_history WHERE state_key=?1",
+                [CATALOG_ACTIVE_STATE_KEY],
+                |row| row.get(0),
+            )
+            .map_err(|_| fatal("state_document_query_failed", "observe_catalog_state"))?;
+        if highest.and_then(|value| u64::try_from(value).ok())
+            != current.as_ref().map(|value| value.revision())
+        {
+            return Ok(CatalogStateObservation::Unknown);
+        }
+        if let Some(document) = &current {
+            let history =
+                query_document_revision(connection, CATALOG_ACTIVE_STATE_KEY, document.revision())?
+                    .ok_or_else(|| {
+                        fatal("state_document_history_missing", "observe_catalog_state")
+                    })?;
+            if self
+                .store
+                .validate_document_row(history, "observe_catalog_state")?
+                != *document
+            {
+                return Ok(CatalogStateObservation::Unknown);
+            }
+        }
+        let migration = if let Some(data) = &self.migration {
+            query_migration(connection, data.migration_id())?
+                .map(|row| {
+                    self.store
+                        .validate_migration_row(&row, "observe_catalog_state")
+                        .map(|value| value.data)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let unchanged = current == self.baseline && migration == self.migration_baseline;
+        let expected_revision = self.baseline.as_ref().map_or(Some(1), |value| {
+            if value.schema_version() == self.schema_version && value.payload() == self.payload {
+                Some(value.revision())
+            } else {
+                value.revision().checked_add(1)
+            }
+        });
+        let expected_previous = self.baseline.as_ref().and_then(|value| {
+            if Some(value.revision()) == expected_revision {
+                value.previous_payload_sha256()
+            } else {
+                Some(value.payload_sha256())
+            }
+        });
+        let applied = current.as_ref().is_some_and(|value| {
+            value.schema_version() == self.schema_version
+                && value.payload() == self.payload
+                && Some(value.revision()) == expected_revision
+                && value.previous_payload_sha256() == expected_previous
+        }) && migration == self.migration;
+        Ok(if applied {
+            CatalogStateObservation::Applied
+        } else if unchanged {
+            CatalogStateObservation::Unchanged
+        } else {
+            CatalogStateObservation::Unknown
+        })
+    }
+
+    pub fn apply(
+        &self,
+        scope: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> RuntimeStateResult<()> {
+        if !scope.belongs_to(&self.store.database) {
+            return Err(fatal(
+                "state_transaction_owner_mismatch",
+                "apply_catalog_state",
+            ));
+        }
+        let transaction = scope.sql();
+        if let Some(current) = query_document(transaction, CATALOG_ACTIVE_STATE_KEY)? {
+            self.store
+                .validate_document_row(current, "apply_catalog_state")?;
+        }
+        match &self.migration {
+            Some(migration) => {
+                let actual = self.store.migrate_document_in_transaction(
+                    transaction,
+                    CATALOG_ACTIVE_STATE_KEY,
+                    migration.from_schema_version(),
+                    &self.schema_version,
+                    &self.payload,
+                )?;
+                if actual != *migration {
+                    return Err(fatal(
+                        "state_migration_identity_conflict",
+                        "apply_catalog_state",
+                    ));
+                }
+            }
+            None => {
+                self.store.write_document_in_transaction(
+                    transaction,
+                    CATALOG_ACTIVE_STATE_KEY,
+                    &self.schema_version,
+                    &self.payload,
+                    self.expected_payload_sha256.as_deref(),
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn reject_catalog_key(state_key: &str) -> RuntimeStateResult<()> {
+    release::reject_release_key(state_key)?;
+    if state_key == CATALOG_ACTIVE_STATE_KEY {
+        return Err(request(
+            "catalog_state_owner_required",
+            "write_state_document",
+        ));
+    }
+    Ok(())
+}
+
 impl RuntimeStateStore {
+    pub fn catalog_migration_document(
+        &self,
+        data: &StateMigrationData,
+    ) -> RuntimeStateResult<StateDocument> {
+        if data.state_key() != CATALOG_ACTIVE_STATE_KEY {
+            return Err(request(
+                "catalog_migration_identity_invalid",
+                "read_catalog_migration",
+            ));
+        }
+        let connection = self.connection("read_catalog_migration")?;
+        let stored = query_migration(&connection, data.migration_id())?
+            .ok_or_else(|| fatal("state_migration_record_missing", "read_catalog_migration"))?;
+        if self
+            .validate_migration_row(&stored, "read_catalog_migration")?
+            .data
+            != *data
+        {
+            return Err(fatal(
+                "state_migration_identity_conflict",
+                "read_catalog_migration",
+            ));
+        }
+        let row = connection.query_row(
+            "SELECT state_key, schema_version, revision, payload, payload_sha256, previous_payload_sha256, integrity_tag FROM state_document_history WHERE state_key=?1 AND schema_version=?2 AND payload_sha256=?3 ORDER BY revision LIMIT 1",
+            params![CATALOG_ACTIVE_STATE_KEY, data.to_schema_version(), data.payload_sha256()], map_document_row,
+        ).optional().map_err(|_| fatal("state_document_query_failed", "read_catalog_migration"))?
+            .ok_or_else(|| fatal("state_migration_state_missing", "read_catalog_migration"))?;
+        self.validate_document_row(row, "read_catalog_migration")
+    }
+
+    pub fn prepare_catalog_write(
+        self: &Arc<Self>,
+        schema_version: &str,
+        payload: &[u8],
+        expected_payload_sha256: Option<&str>,
+    ) -> RuntimeStateResult<PreparedCatalogState> {
+        validate_document_input(CATALOG_ACTIVE_STATE_KEY, schema_version, payload)?;
+        if payload.len() > MAX_CATALOG_STATE_BYTES {
+            return Err(request("catalog_state_too_large", "prepare_catalog_state"));
+        }
+        Ok(PreparedCatalogState {
+            store: Arc::clone(self),
+            schema_version: schema_version.to_owned(),
+            payload: payload.to_vec(),
+            expected_payload_sha256: expected_payload_sha256.map(str::to_owned),
+            migration: None,
+            baseline: self.read_json_document(CATALOG_ACTIVE_STATE_KEY)?,
+            migration_baseline: None,
+        })
+    }
+
+    pub fn prepare_catalog_migration(
+        self: &Arc<Self>,
+        from_schema_version: &str,
+        to_schema_version: &str,
+        payload: &[u8],
+    ) -> RuntimeStateResult<PreparedCatalogState> {
+        let mut prepared = self.prepare_catalog_write(to_schema_version, payload, None)?;
+        validate_version(from_schema_version, "prepare_catalog_migration")?;
+        if from_schema_version == to_schema_version {
+            return Err(request(
+                "state_migration_schema_unchanged",
+                "migrate_state_document",
+            ));
+        }
+        let hash = sha256(payload);
+        prepared.migration = Some(
+            StateMigrationData::new(
+                migration_id(
+                    CATALOG_ACTIVE_STATE_KEY,
+                    from_schema_version,
+                    to_schema_version,
+                    &hash,
+                ),
+                CATALOG_ACTIVE_STATE_KEY,
+                from_schema_version,
+                to_schema_version,
+                hash,
+                StateValidationResult::Passed,
+                StateRecoveryAction::ImportedLegacy,
+            )
+            .map_err(|_| request("state_migration_invalid", "migrate_state_document"))?,
+        );
+        let connection = self.connection("prepare_catalog_migration")?;
+        prepared.migration_baseline = query_migration(
+            &connection,
+            prepared
+                .migration
+                .as_ref()
+                .expect("prepared migration")
+                .migration_id(),
+        )?
+        .map(|row| {
+            self.validate_migration_row(&row, "prepare_catalog_migration")
+                .map(|value| value.data)
+        })
+        .transpose()?;
+        Ok(prepared)
+    }
+
     pub fn open(root: &Path, integrity_key: &[u8]) -> RuntimeStateResult<Self> {
         Self::from_database(Arc::new(Self::open_database(root, integrity_key)?))
     }
@@ -366,18 +641,64 @@ impl RuntimeStateStore {
         ledger_sequence: u64,
         payload: &[u8],
     ) -> RuntimeStateResult<ProjectionEntry> {
+        release::reject_release_namespace(namespace)?;
+        if namespace == FACT_TOMBSTONE_NAMESPACE {
+            return Err(request(
+                "fact_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
+        if namespace == APPROVAL_PROJECTION_NAMESPACE {
+            return Err(request(
+                "approval_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
+        if namespace == PLANNING_SIGNAL_PROJECTION_NAMESPACE
+            || namespace == DETECTION_QUOTA_PROJECTION_NAMESPACE
+        {
+            return Err(request(
+                "planning_projection_owner_required",
+                "write_projection_entry",
+            ));
+        }
         validate_projection_input(namespace, entry_key, ledger_sequence, payload)?;
         let payload_sha256 = sha256(payload);
         let mut connection = self.connection("write_projection_entry")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| fatal("state_transaction_begin_failed", "write_projection_entry"))?;
-        if let Some(existing) = query_projection_entry(&transaction, namespace, entry_key)? {
+        let entry = self.write_projection_in_transaction(
+            &transaction,
+            namespace,
+            entry_key,
+            ledger_sequence,
+            payload,
+            &payload_sha256,
+        )?;
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "write_projection_entry"))?;
+        Ok(entry)
+    }
+
+    fn write_projection_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        namespace: &str,
+        entry_key: &str,
+        ledger_sequence: u64,
+        payload: &[u8],
+        payload_sha256: &str,
+    ) -> RuntimeStateResult<ProjectionEntry> {
+        let sqlite_sequence = sqlite_integer(
+            ledger_sequence,
+            "projection_sequence_overflow",
+            "write_projection_entry",
+        )?;
+        if let Some(existing) = query_projection_entry(transaction, namespace, entry_key)? {
             let existing = self.validate_projection_row(existing, "write_projection_entry")?;
             if existing.ledger_sequence > ledger_sequence {
-                transaction.commit().map_err(|_| {
-                    fatal("state_transaction_commit_failed", "write_projection_entry")
-                })?;
                 return Ok(existing);
             }
             if existing.ledger_sequence == ledger_sequence {
@@ -387,9 +708,6 @@ impl RuntimeStateStore {
                         "write_projection_entry",
                     ));
                 }
-                transaction.commit().map_err(|_| {
-                    fatal("state_transaction_commit_failed", "write_projection_entry")
-                })?;
                 return Ok(existing);
             }
         }
@@ -404,11 +722,6 @@ impl RuntimeStateStore {
                 payload_sha256.as_bytes(),
             ],
         );
-        let sqlite_sequence = sqlite_integer(
-            ledger_sequence,
-            "projection_sequence_overflow",
-            "write_projection_entry",
-        )?;
         transaction
             .execute(
                 "INSERT INTO projection_entries
@@ -429,15 +742,12 @@ impl RuntimeStateStore {
                 ],
             )
             .map_err(|_| fatal("projection_entry_write_failed", "write_projection_entry"))?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "write_projection_entry"))?;
         Ok(ProjectionEntry {
             namespace: namespace.to_owned(),
             entry_key: entry_key.to_owned(),
             ledger_sequence,
             payload: payload.to_vec(),
-            payload_sha256,
+            payload_sha256: payload_sha256.to_owned(),
         })
     }
 
@@ -448,13 +758,36 @@ impl RuntimeStateStore {
         payload: &[u8],
         expected_payload_sha256: Option<&str>,
     ) -> RuntimeStateResult<StateDocument> {
+        reject_catalog_key(state_key)?;
         validate_document_input(state_key, schema_version, payload)?;
-        let payload_sha256 = sha256(payload);
         let mut connection = self.connection("write_state_document")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| fatal("state_transaction_begin_failed", "write_state_document"))?;
-        let current = query_document(&transaction, state_key)?;
+        let result = self.write_document_in_transaction(
+            &transaction,
+            state_key,
+            schema_version,
+            payload,
+            expected_payload_sha256,
+        )?;
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "write_state_document"))?;
+        Ok(result)
+    }
+
+    fn write_document_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        state_key: &str,
+        schema_version: &str,
+        payload: &[u8],
+        expected_payload_sha256: Option<&str>,
+    ) -> RuntimeStateResult<StateDocument> {
+        validate_document_input(state_key, schema_version, payload)?;
+        let payload_sha256 = sha256(payload);
+        let current = query_document(transaction, state_key)?;
         if current.as_ref().map(|row| row.payload_sha256.as_str()) != expected_payload_sha256 {
             return Err(request("state_document_changed", "write_state_document"));
         }
@@ -470,9 +803,6 @@ impl RuntimeStateStore {
                 previous_payload_sha256: current.previous_payload_sha256.clone(),
                 integrity_tag: current.integrity_tag.clone(),
             };
-            transaction
-                .commit()
-                .map_err(|_| fatal("state_transaction_commit_failed", "write_state_document"))?;
             return self.validate_document_row(current, "write_state_document");
         }
         let revision = current
@@ -489,7 +819,7 @@ impl RuntimeStateStore {
             previous.as_deref(),
         );
         insert_document_revision(
-            &transaction,
+            transaction,
             state_key,
             schema_version,
             revision,
@@ -498,9 +828,6 @@ impl RuntimeStateStore {
             previous.as_deref(),
             &integrity_tag,
         )?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "write_state_document"))?;
         Ok(StateDocument {
             state_key: state_key.to_owned(),
             schema_version: schema_version.to_owned(),
@@ -513,6 +840,40 @@ impl RuntimeStateStore {
 
     pub fn migrate_legacy_json_document(
         &self,
+        state_key: &str,
+        from_schema_version: &str,
+        to_schema_version: &str,
+        payload: &[u8],
+    ) -> RuntimeStateResult<StateMigrationData> {
+        reject_catalog_key(state_key)?;
+        validate_document_input(state_key, to_schema_version, payload)?;
+        validate_version(from_schema_version, "migrate_state_document")?;
+        if from_schema_version == to_schema_version {
+            return Err(request(
+                "state_migration_schema_unchanged",
+                "migrate_state_document",
+            ));
+        }
+        let mut connection = self.connection("migrate_state_document")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| fatal("state_transaction_begin_failed", "migrate_state_document"))?;
+        let result = self.migrate_document_in_transaction(
+            &transaction,
+            state_key,
+            from_schema_version,
+            to_schema_version,
+            payload,
+        )?;
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "migrate_state_document"))?;
+        Ok(result)
+    }
+
+    fn migrate_document_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
         state_key: &str,
         from_schema_version: &str,
         to_schema_version: &str,
@@ -545,12 +906,8 @@ impl RuntimeStateStore {
         .map_err(|_| request("state_migration_invalid", "migrate_state_document"))?;
         let data_json = serde_json::to_vec(&data)
             .map_err(|_| fatal("state_migration_encode_failed", "migrate_state_document"))?;
-        let mut connection = self.connection("migrate_state_document")?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| fatal("state_transaction_begin_failed", "migrate_state_document"))?;
-        let current = query_document(&transaction, state_key)?;
-        let existing_migration = query_migration(&transaction, data.migration_id())?;
+        let current = query_document(transaction, state_key)?;
+        let existing_migration = query_migration(transaction, data.migration_id())?;
         match current {
             Some(current) if current.payload_sha256 != payload_sha256 => {
                 return Err(fatal(
@@ -574,7 +931,7 @@ impl RuntimeStateStore {
                     None,
                 );
                 insert_document_revision(
-                    &transaction,
+                    transaction,
                     state_key,
                     to_schema_version,
                     1,
@@ -604,7 +961,7 @@ impl RuntimeStateStore {
                     Some(&current.payload_sha256),
                 );
                 insert_document_revision(
-                    &transaction,
+                    transaction,
                     state_key,
                     to_schema_version,
                     revision,
@@ -646,9 +1003,6 @@ impl RuntimeStateStore {
                 )
                 .map_err(|_| fatal("state_migration_write_failed", "migrate_state_document"))?;
         }
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "migrate_state_document"))?;
         Ok(data)
     }
 
@@ -658,6 +1012,7 @@ impl RuntimeStateStore {
         target_revision: u64,
         expected_payload_sha256: &str,
     ) -> RuntimeStateResult<StateDocument> {
+        reject_catalog_key(state_key)?;
         validate_state_key(state_key)?;
         if target_revision == 0 {
             return Err(request(
@@ -750,6 +1105,7 @@ impl RuntimeStateStore {
         manifest: RuntimeReleaseSet,
         sources: &ReleaseArtifactSources,
     ) -> RuntimeStateResult<StagedRelease> {
+        self.require_legacy_release_writer()?;
         manifest
             .validate()
             .map_err(|_| request("release_manifest_invalid", "stage_release"))?;
@@ -768,8 +1124,12 @@ impl RuntimeStateStore {
                 manifest_json.as_slice(),
             ],
         );
-        let connection = self.connection("stage_release")?;
-        let created = connection
+        let mut connection = self.connection("stage_release")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| fatal("state_transaction_begin_failed", "stage_release"))?;
+        self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))?;
+        let created = transaction
             .execute(
                 "INSERT OR IGNORE INTO release_generations
                  (release_id, manifest_json, manifest_sha256, integrity_tag)
@@ -784,7 +1144,7 @@ impl RuntimeStateStore {
             .map_err(|_| fatal("release_generation_write_failed", "stage_release"))?
             == 1;
         if !created {
-            let existing = query_release(&connection, manifest.release_id())?
+            let existing = query_release(&transaction, manifest.release_id())?
                 .ok_or_else(|| fatal("release_generation_missing", "stage_release"))?;
             let existing = self.validate_release_row(existing, "stage_release")?;
             if existing != manifest {
@@ -794,6 +1154,9 @@ impl RuntimeStateStore {
                 ));
             }
         }
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "stage_release"))?;
         Ok(StagedRelease { manifest, created })
     }
 
@@ -855,8 +1218,18 @@ impl RuntimeStateStore {
     }
 
     pub fn active_release(&self) -> RuntimeStateResult<Option<ActiveRelease>> {
-        let connection = self.connection("read_active_release")?;
-        self.read_active_release(&connection, "read_active_release")
+        let mut connection = self.connection("read_active_release")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|_| fatal("state_transaction_begin_failed", "read_active_release"))?;
+        self.verify_release_read_sources(&self.database.borrow_transaction(&transaction))?;
+        let active = self.read_active_release_metadata(&transaction, "read_active_release")?;
+        drop(transaction);
+        drop(connection);
+        if let Some(active) = &active {
+            self.verify_release_artifacts(active.manifest(), "read_active_release")?;
+        }
+        Ok(active)
     }
 
     pub fn preview_release_transition(
@@ -927,6 +1300,7 @@ impl RuntimeStateStore {
         &self,
         preview: &ReleaseTransitionPreview,
     ) -> RuntimeStateResult<ActiveRelease> {
+        self.require_legacy_release_writer()?;
         preview
             .data
             .validate()
@@ -940,8 +1314,27 @@ impl RuntimeStateStore {
                     "commit_release_transition",
                 )
             })?;
-        if let Some(existing) =
-            query_release_transition(&transaction, preview.data.transition_id())?
+        self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))?;
+        let current = self.read_active_release(&transaction, "commit_release_transition")?;
+        let active = self.apply_release_transition_metadata(&transaction, preview)?;
+        if current.as_ref().map(ActiveRelease::manifest) != Some(active.manifest()) {
+            self.verify_release_artifacts(active.manifest(), "commit_release_transition")?;
+        }
+        transaction.commit().map_err(|_| {
+            fatal(
+                "state_transaction_commit_failed",
+                "commit_release_transition",
+            )
+        })?;
+        Ok(active)
+    }
+
+    fn apply_release_transition_metadata(
+        &self,
+        transaction: &Transaction<'_>,
+        preview: &ReleaseTransitionPreview,
+    ) -> RuntimeStateResult<ActiveRelease> {
+        if let Some(existing) = query_release_transition(transaction, preview.data.transition_id())?
         {
             let existing =
                 self.validate_release_transition_row(&existing, "commit_release_transition")?;
@@ -952,22 +1345,17 @@ impl RuntimeStateStore {
                 ));
             }
             let active = self
-                .read_active_release(&transaction, "commit_release_transition")?
+                .read_active_release_metadata(transaction, "commit_release_transition")?
                 .ok_or_else(|| {
                     fatal(
                         "release_pointer_missing_after_transition",
                         "commit_release_transition",
                     )
                 })?;
-            transaction.commit().map_err(|_| {
-                fatal(
-                    "state_transaction_commit_failed",
-                    "commit_release_transition",
-                )
-            })?;
             return Ok(active);
         }
-        let current = self.read_active_release(&transaction, "commit_release_transition")?;
+        let current =
+            self.read_active_release_metadata(transaction, "commit_release_transition")?;
         let expected_revision = current
             .as_ref()
             .map_or(Some(1), |active| active.revision.checked_add(1));
@@ -980,9 +1368,9 @@ impl RuntimeStateStore {
                 "commit_release_transition",
             ));
         }
-        let target = query_release(&transaction, preview.data.release_id())?
+        let target = query_release(transaction, preview.data.release_id())?
             .ok_or_else(|| request("release_generation_unknown", "commit_release_transition"))?;
-        let target = self.validate_release_row(target, "commit_release_transition")?;
+        let target = self.validate_release_metadata(target, "commit_release_transition")?;
         if target.manifest_sha256() != preview.data.manifest_sha256() {
             return Err(fatal(
                 "release_transition_manifest_changed",
@@ -990,7 +1378,7 @@ impl RuntimeStateStore {
             ));
         }
         if preview.data.kind() == ReleaseTransitionKind::Rollback
-            && !was_release_active(&transaction, preview.data.release_id())?
+            && !was_release_active(transaction, preview.data.release_id())?
             && current
                 .as_ref()
                 .and_then(ActiveRelease::previous_release_id)
@@ -1072,12 +1460,6 @@ impl RuntimeStateStore {
                     "commit_release_transition",
                 )
             })?;
-        transaction.commit().map_err(|_| {
-            fatal(
-                "state_transaction_commit_failed",
-                "commit_release_transition",
-            )
-        })?;
         Ok(ActiveRelease {
             revision: preview.data.pointer_revision(),
             manifest: target,
@@ -1137,6 +1519,18 @@ impl RuntimeStateStore {
         connection: &Connection,
         operation: &'static str,
     ) -> RuntimeStateResult<Option<ActiveRelease>> {
+        let active = self.read_active_release_metadata(connection, operation)?;
+        if let Some(active) = &active {
+            self.verify_release_artifacts(active.manifest(), operation)?;
+        }
+        Ok(active)
+    }
+
+    fn read_active_release_metadata(
+        &self,
+        connection: &Connection,
+        operation: &'static str,
+    ) -> RuntimeStateResult<Option<ActiveRelease>> {
         let pointer = query_pointer(connection)?;
         let Some(pointer) = pointer else {
             return Ok(None);
@@ -1144,7 +1538,7 @@ impl RuntimeStateStore {
         self.validate_pointer_row(&pointer, operation)?;
         let manifest = query_release(connection, &pointer.release_id)?
             .ok_or_else(|| fatal("release_pointer_target_missing", operation))?;
-        let manifest = self.validate_release_row(manifest, operation)?;
+        let manifest = self.validate_release_metadata(manifest, operation)?;
         Ok(Some(ActiveRelease {
             revision: pointer.revision,
             manifest,
@@ -1246,6 +1640,16 @@ impl RuntimeStateStore {
         row: ReleaseRow,
         operation: &'static str,
     ) -> RuntimeStateResult<RuntimeReleaseSet> {
+        let manifest = self.validate_release_metadata(row, operation)?;
+        self.verify_release_artifacts(&manifest, operation)?;
+        Ok(manifest)
+    }
+
+    fn validate_release_metadata(
+        &self,
+        row: ReleaseRow,
+        operation: &'static str,
+    ) -> RuntimeStateResult<RuntimeReleaseSet> {
         let manifest = serde_json::from_slice::<RuntimeReleaseSet>(&row.manifest_json)
             .map_err(|_| fatal("release_manifest_invalid", operation))?;
         manifest
@@ -1266,7 +1670,6 @@ impl RuntimeStateStore {
         {
             return Err(fatal("release_generation_integrity_mismatch", operation));
         }
-        self.verify_release_artifacts(&manifest, operation)?;
         Ok(manifest)
     }
 
@@ -2267,9 +2670,24 @@ mod tests {
     fn projection_entries_are_latest_by_identity_and_tamper_evident() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        for (namespace, code) in [
+            (
+                APPROVAL_PROJECTION_NAMESPACE,
+                "approval_projection_owner_required",
+            ),
+            (FACT_TOMBSTONE_NAMESPACE, "fact_projection_owner_required"),
+        ] {
+            assert_eq!(
+                store
+                    .write_projection_entry(namespace, "approval-a", 7, br#"{"state":"approved"}"#)
+                    .expect_err("projection requires its verified fact owner")
+                    .code(),
+                code,
+            );
+        }
         let first = store
             .write_projection_entry(
-                "approval.latest.v1",
+                "fixture.latest.v1",
                 "approval-a",
                 7,
                 br#"{"state":"approved"}"#,
@@ -2278,7 +2696,7 @@ mod tests {
         assert_eq!(first.ledger_sequence(), 7);
         assert_eq!(
             store
-                .read_projection_entry("approval.latest.v1", "approval-a")
+                .read_projection_entry("fixture.latest.v1", "approval-a")
                 .expect("read projection")
                 .expect("projection")
                 .payload(),
@@ -2287,7 +2705,7 @@ mod tests {
 
         let older = store
             .write_projection_entry(
-                "approval.latest.v1",
+                "fixture.latest.v1",
                 "approval-a",
                 6,
                 br#"{"state":"rejected"}"#,
@@ -2297,7 +2715,7 @@ mod tests {
         assert_eq!(
             store
                 .write_projection_entry(
-                    "approval.latest.v1",
+                    "fixture.latest.v1",
                     "approval-a",
                     7,
                     br#"{"state":"rejected"}"#,
@@ -2313,7 +2731,7 @@ mod tests {
         connection
             .execute(
                 "UPDATE projection_entries SET payload = ?1
-                 WHERE namespace = 'approval.latest.v1' AND entry_key = 'approval-a'",
+                 WHERE namespace = 'fixture.latest.v1' AND entry_key = 'approval-a'",
                 [br#"{"state":"revoked"}"#.as_slice()],
             )
             .expect("tamper projection");
@@ -2791,6 +3209,38 @@ mod tests {
     fn state_document_rollback_creates_a_new_monotonic_revision() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        // Workflow #109 CATALOG-ATOMIC-STATE-v1: specification criterion.
+        assert_eq!(
+            store
+                .write_json_document(
+                    CATALOG_ACTIVE_STATE_KEY,
+                    "pointer.v1",
+                    br#"{"value":1}"#,
+                    None
+                )
+                .expect_err("catalog writes require the catalog owner")
+                .code(),
+            "catalog_state_owner_required"
+        );
+        assert_eq!(
+            store
+                .migrate_legacy_json_document(
+                    CATALOG_ACTIVE_STATE_KEY,
+                    "old.v1",
+                    "pointer.v1",
+                    br#"{"value":1}"#
+                )
+                .expect_err("catalog migration requires the catalog owner")
+                .code(),
+            "catalog_state_owner_required"
+        );
+        assert_eq!(
+            store
+                .rollback_json_document(CATALOG_ACTIVE_STATE_KEY, 1, "unused")
+                .expect_err("catalog rollback requires the catalog owner")
+                .code(),
+            "catalog_state_owner_required"
+        );
         let first = store
             .write_json_document("policy.active", "pointer.v1", br#"{"value":1}"#, None)
             .expect("first");
