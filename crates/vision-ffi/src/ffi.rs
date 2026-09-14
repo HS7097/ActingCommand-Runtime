@@ -73,13 +73,13 @@ pub struct VisionFfiOwnedBuffer {
 }
 
 impl VisionFfiOwnedBuffer {
-    /// PPOCR's response length is bounded separately from spare Vec allocation capacity.
+    /// PPOCR's response length and allocation capacity share the owned-buffer bound.
     pub fn has_ppocr_releasable_metadata(&self) -> bool {
         !self.data.is_null()
             && self.capacity > 0
             && self.len <= self.capacity
             && self.len <= crate::PPOCR_MAX_RESPONSE_BYTES
-            && self.capacity <= isize::MAX as usize
+            && self.capacity <= crate::PPOCR_MAX_RESPONSE_BYTES
     }
 
     /// Reports whether this metadata can be passed to the paired provider deallocator.

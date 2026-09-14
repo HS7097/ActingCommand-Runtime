@@ -1620,8 +1620,11 @@ fn write_response<T: serde::Serialize>(
 
 fn write_error(response_out: *mut VisionFfiOwnedBuffer, status: i32, message: &str) -> i32 {
     let mut bytes = Vec::new();
-    if bytes.try_reserve_exact(message.len()).is_err() {
-        // The failed allocation cannot carry a response; the ABI still fails explicitly.
+    if message.len() > actingcommand_vision_ffi::PPOCR_MAX_BUSINESS_JSON_BYTES
+        || bytes.try_reserve_exact(message.len()).is_err()
+        || bytes.capacity() > actingcommand_vision_ffi::PPOCR_MAX_RESPONSE_BYTES
+    {
+        // An unavailable bounded error buffer still produces an explicit ABI failure.
         if !response_out.is_null() {
             // SAFETY: non-null response_out is writable caller-owned ABI storage.
             unsafe { *response_out = VisionFfiOwnedBuffer::default() };

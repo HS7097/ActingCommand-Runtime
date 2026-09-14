@@ -50,6 +50,11 @@ impl Write for ResponseWriter {
                 .map_err(|error| {
                     io::Error::other(format!("PPOCR response allocation failed: {error}"))
                 })?;
+            if self.bytes.capacity() > PPOCR_MAX_RESPONSE_BYTES {
+                return Err(io::Error::other(
+                    "PPOCR response allocation exceeds its owned-buffer budget",
+                ));
+            }
         }
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
