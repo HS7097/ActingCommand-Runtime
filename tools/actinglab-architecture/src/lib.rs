@@ -417,7 +417,7 @@ pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec
                 continue;
             };
             if impl_self_ident(item_impl)
-                .is_none_or(|ident| resolve_alias(&ident.to_string(), &aliases) != "GlobalLedger")
+                .is_none_or(|ident| resolve_alias(&ident.to_string(), aliases) != "GlobalLedger")
             {
                 continue;
             }
@@ -481,7 +481,7 @@ pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec
                                 "PersistedEvent",
                             ]
                             .iter()
-                            .any(|name| type_uses_resolved_ident(&argument.ty, name, &aliases))
+                            .any(|name| type_uses_resolved_ident(&argument.ty, name, aliases))
                         }))
                 {
                     alternate_ingress_methods.push((method.sig.ident.to_string(), owner));
@@ -509,7 +509,7 @@ pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec
             })
             .collect::<Vec<_>>();
         let exact = typed.len() == 1
-            && resolved_type_ident(&typed[0].ty, &aliases)
+            && resolved_type_ident(&typed[0].ty, aliases)
                 .is_some_and(|ident| ident == "SanitizedEventDraft");
         if !exact {
             violations.push(format!(
@@ -561,11 +561,11 @@ pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec
                             .is_some_and(|ident| ident == "Self" || ident == "GlobalLedger")));
             let inputs_known = typed.len() == if request { 2 } else { 1 }
                 && typed.first().is_some_and(|argument| {
-                    resolved_type_ident(&argument.ty, &aliases)
+                    resolved_type_ident(&argument.ty, aliases)
                         .is_some_and(|ident| ident == "SanitizedEventDraft")
                 })
                 && (!request || typed.get(1).is_some_and(|argument| {
-                    resolved_type_ident(&argument.ty, &aliases)
+                    resolved_type_ident(&argument.ty, aliases)
                         .is_some_and(|ident| ident == "bool")
                 }))
                 && typed.iter().all(|argument| {
