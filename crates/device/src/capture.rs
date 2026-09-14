@@ -12,6 +12,12 @@ use crate::{
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     NemuResolutionContext, NemuResolutionCountKind, NemuResolutionReason,
 };
+pub use actingcommand_contract::{
+    CaptureAdbDisplayMapping, CaptureBackendName, CaptureExtent, CaptureFrameTransform,
+    CaptureGeometry, CaptureGeometryNotApplicable, CaptureGeometryObservation,
+    CaptureGeometrySource, CaptureGeometryUnknownReason, CaptureRotation,
+    CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+};
 use image::{
     ColorType, ImageEncoder,
     codecs::png::{CompressionType, FilterType, PngEncoder},
@@ -40,6 +46,14 @@ const DEFAULT_CAPTURE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
 /// Single-shot screenshot boundary for device capture backends.
 pub trait CaptureBackend {
     fn capture(&mut self) -> DeviceResult<Frame>;
+
+    /// Read this producer's display geometry within the caller's absolute deadline.
+    /// Unsupported implementations report unknown without creating a producer.
+    fn observe_geometry(&mut self, _deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        Ok(CaptureGeometryObservation::Unknown(
+            CaptureGeometryUnknownReason::BackendUnsupported,
+        ))
+    }
 
     fn close_once(
         &mut self,
@@ -76,29 +90,6 @@ impl PixelFormat {
         match self {
             Self::Rgb8 => "rgb8",
             Self::Rgba8 => "rgba8",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CaptureBackendName {
-    FixtureSimulation,
-    AdbScreencap,
-    AdbScreencapEncode,
-    AdbScreencapRawGzip,
-    DroidcastRaw,
-    NemuIpc,
-}
-
-impl CaptureBackendName {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FixtureSimulation => "fixture_simulation",
-            Self::AdbScreencap => "adb_screencap",
-            Self::AdbScreencapEncode => "adb_screencap_encode",
-            Self::AdbScreencapRawGzip => "adb_screencap_raw_gzip",
-            Self::DroidcastRaw => "droidcast_raw",
-            Self::NemuIpc => "nemu_ipc",
         }
     }
 }
@@ -150,6 +141,8 @@ pub struct Frame {
     pub backend_name: CaptureBackendName,
     /// Context from the same selected producer; decoded or synthetic frames have none.
     pub selection: Option<Arc<CaptureSelectionContext>>,
+    /// Observation made by this frame's producer, without an additional capture.
+    pub geometry: CaptureGeometryObservation,
 }
 
 impl Frame {
@@ -167,6 +160,15 @@ impl Frame {
             captured_at: SystemTime::now(),
             backend_name,
             selection: None,
+            geometry: if backend_name == CaptureBackendName::FixtureSimulation {
+                CaptureGeometryObservation::NotApplicable(
+                    CaptureGeometryNotApplicable::FixtureSimulation,
+                )
+            } else {
+                CaptureGeometryObservation::Unknown(
+                    CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                )
+            },
         })
     }
 
@@ -187,6 +189,15 @@ impl Frame {
             captured_at: SystemTime::now(),
             backend_name,
             selection: None,
+            geometry: if backend_name == CaptureBackendName::FixtureSimulation {
+                CaptureGeometryObservation::NotApplicable(
+                    CaptureGeometryNotApplicable::FixtureSimulation,
+                )
+            } else {
+                CaptureGeometryObservation::Unknown(
+                    CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                )
+            },
         })
     }
 
