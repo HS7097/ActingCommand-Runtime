@@ -1628,6 +1628,7 @@ fn c3b_selection_policy_is_a_pure_decision_crate() {
         !sources.is_empty(),
         "crates/selection-policy contains no Rust source files"
     );
+    let bin_root = root.join("crates/selection-policy/src/bin");
     for path in sources {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -1647,6 +1648,25 @@ fn c3b_selection_policy_is_a_pure_decision_crate() {
             "actingcommand_lab",
             "actingcommand_ledger",
             "actingcommand_runtime_host",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden decision-crate token {forbidden}",
+                path.display()
+            );
+        }
+        // The offline debugging binary is the crate's declared IO shell; the library half
+        // reads no clock and no file, and the walk covers every module it gains later.
+        if path.starts_with(&bin_root) {
+            continue;
+        }
+        for forbidden in [
+            "std::fs",
+            "std::net",
+            "std::process",
+            "std::thread::sleep",
+            "SystemTime::now",
+            "Instant::now",
         ] {
             assert!(
                 !source.contains(forbidden),
