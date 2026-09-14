@@ -125,7 +125,7 @@ pub(crate) fn production_attributes(attributes: &[Attribute]) -> Result<bool, St
     Ok(true)
 }
 
-fn item_attributes(item: &Item) -> Result<&[Attribute], String> {
+pub(super) fn item_attributes(item: &Item) -> Result<&[Attribute], String> {
     Ok(match item {
         Item::Const(value) => &value.attrs,
         Item::Enum(value) => &value.attrs,

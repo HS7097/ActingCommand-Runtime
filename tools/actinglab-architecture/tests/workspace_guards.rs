@@ -969,7 +969,9 @@ fn c5_run_state_machine_returns_data_only_successors() {
 
 #[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
-    let root = workspace_root();
+    let root = workspace_root()
+        .canonicalize()
+        .expect("resolve checked workspace root");
     let owners = ledger_owners(&root);
     for owner in &owners {
         println!(

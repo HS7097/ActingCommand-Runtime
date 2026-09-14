@@ -944,6 +944,16 @@ struct C1SourceVisitor<'a> {
     violations: &'a mut Vec<String>,
 }
 impl C1SourceVisitor<'_> {
+    fn production(&mut self, attributes: &[syn::Attribute]) -> bool {
+        match ledger_owners::production_attributes(attributes) {
+            Ok(production) => production,
+            Err(error) => {
+                self.violations
+                    .push(format!("{}: unresolved C1 cfg scope: {error}", self.path));
+                false
+            }
+        }
+    }
     fn inspect(&mut self, value: &str) {
         for forbidden in [
             "ClassifiedField",
@@ -962,6 +972,43 @@ impl C1SourceVisitor<'_> {
     }
 }
 impl<'ast> Visit<'ast> for C1SourceVisitor<'_> {
+    fn visit_item(&mut self, item: &'ast Item) {
+        match ledger_owners::item_attributes(item) {
+            Ok(attributes) if self.production(attributes) => syn::visit::visit_item(self, item),
+            Ok(_) => {}
+            Err(error) => self.violations.push(format!("{}: {error}", self.path)),
+        }
+    }
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if self.production(&local.attrs) {
+            syn::visit::visit_local(self, local);
+        }
+    }
+    fn visit_stmt_macro(&mut self, statement: &'ast syn::StmtMacro) {
+        if self.production(&statement.attrs) {
+            syn::visit::visit_stmt_macro(self, statement);
+        }
+    }
+    fn visit_expr_block(&mut self, expression: &'ast syn::ExprBlock) {
+        if self.production(&expression.attrs) {
+            syn::visit::visit_expr_block(self, expression);
+        }
+    }
+    fn visit_field_value(&mut self, field: &'ast syn::FieldValue) {
+        if self.production(&field.attrs) {
+            syn::visit::visit_field_value(self, field);
+        }
+    }
+    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+        if self.production(&method.attrs) {
+            syn::visit::visit_impl_item_fn(self, method);
+        }
+    }
+    fn visit_trait_item_fn(&mut self, method: &'ast syn::TraitItemFn) {
+        if self.production(&method.attrs) {
+            syn::visit::visit_trait_item_fn(self, method);
+        }
+    }
     fn visit_ident(&mut self, ident: &'ast syn::Ident) {
         self.inspect(&ident.to_string());
         if ident == "events_after" {
@@ -3121,6 +3168,14 @@ mod tests {
         ));
         assert!(
             super::inspect_ledger_forbidden_sources(&test_only)
+                .unwrap()
+                .is_empty()
+        );
+        let test_block = scoped(&format!(
+            "{writer} fn production() {{ #[cfg(test)] {{ std::panic::catch_unwind(|| ()); }} }}"
+        ));
+        assert!(
+            super::inspect_ledger_forbidden_sources(&test_block)
                 .unwrap()
                 .is_empty()
         );
