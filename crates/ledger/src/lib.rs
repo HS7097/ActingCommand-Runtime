@@ -681,43 +681,6 @@ impl LastResortError {
     }
 }
 
-pub fn write_last_resort_error(
-    run_root: Option<&Path>,
-    error: &LastResortError,
-) -> LabLogResult<PathBuf> {
-    eprintln!(
-        "actingcommand-ledger last resort: command={} phase={} code={} error={} attempted_ledger_path={}",
-        error.command,
-        error.phase,
-        error.error_code,
-        error.error_message,
-        error.attempted_ledger_path.as_deref().unwrap_or("unknown")
-    );
-    let preferred = run_root.map(|root| root.join("last-error.json"));
-    if let Some(path) = preferred
-        && write_last_resort_file(&path, error).is_ok()
-    {
-        return Ok(path);
-    }
-    let fallback = std::env::temp_dir().join(format!(
-        "actingcommand-last-error-{}.json",
-        error.timestamp_unix_ms
-    ));
-    write_last_resort_file(&fallback, error)?;
-    Ok(fallback)
-}
-
-fn write_last_resort_file(path: &Path, error: &LastResortError) -> LabLogResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let bytes = serde_json::to_vec_pretty(error)?;
-    let mut file = File::create(path)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetentionCandidate {
     pub path: PathBuf,

@@ -550,449 +550,545 @@ impl HostShared {
         context: &PolicyAdmissionContext,
         task_request: Option<&ContainedTaskRequest>,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        {
-            let policy = lock(&self.policy, "validate_policy_dispatch")?;
-            if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
-                return Ok(replay);
-            }
-        }
-        let trusted = lock(
-            &self.trusted_policy_dispatches,
-            "authorize_trusted_policy_dispatch",
-        )?
-        .authorize(intent, reason_chain)?;
-        if context.fact_ledger_position != trusted.intent.input_ledger_position
-            || context.fact_snapshot_id != trusted.intent.fact_snapshot_id
-            || context.fencing_owner_epoch != self.owner_epoch
-        {
-            return Err(policy_admission_request(
-                "policy_admission_context_untrusted",
-                "admit_policy_dispatch",
-            ));
-        }
-        let elapsed_ms = self
-            .monotonic_ms()?
-            .checked_sub(trusted.observed_monotonic_ms)
-            .ok_or_else(|| {
-                policy_admission_fatal("policy_admission_clock_regressed", "admit_policy_dispatch")
-            })?;
-        let now_unix_ms = trusted
-            .intent
-            .prerequisites
-            .evaluated_at_unix_ms
-            .checked_add(elapsed_ms)
-            .ok_or_else(|| {
-                policy_admission_fatal("policy_admission_clock_overflow", "admit_policy_dispatch")
-            })?;
-        // Approval projection and dispatch admission share one order so a concurrent revocation
-        // cannot appear in the ledger before a dispatch authorized by the superseded fact.
-        let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
-        let approval_fact_ids =
-            match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
-                Ok(projection) => projection.active_for_dispatch(intent),
-                Err(error) => {
-                    self.fatal.mark(error.clone())?;
-                    return Err(error);
+        let mut rejection = None;
+        let result = (|| {
+            {
+                let policy = lock(&self.policy, "validate_policy_dispatch")?;
+                if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
+                    return Ok(replay);
                 }
-            };
-        let authoritative_context = PolicyAdmissionContext {
-            fact_ledger_position: trusted.intent.input_ledger_position,
-            fact_snapshot_id: trusted.intent.fact_snapshot_id.clone(),
-            approval_fact_ids,
-            fencing_owner_epoch: self.owner_epoch,
-            now_unix_ms,
-        };
-        let context = &authoritative_context;
-        let mut gate_error = match lock(
-            &self.performance_control,
-            "gate_policy_performance_dispatch",
-        )?
-        .gate_dispatch(
-            &intent.instance_id,
-            intent.prerequisites.urgency_milli,
-            context.now_unix_ms,
-        )? {
-            PerformanceDispatchGate::Allowed => None,
-            PerformanceDispatchGate::Deferred {
-                reason,
-                deadline_disposition,
-                event,
-            } => {
-                if let Some(event) = event {
-                    self.record_performance_events(&[PerformanceSemanticEvent::BalanceChanged(
-                        event,
-                    )])?;
-                }
-                let code = if deadline_disposition
-                    == Some(actingcommand_contract::PerformanceDeadlineDisposition::CapacityFailure)
-                {
-                    "performance_capacity_deadline_conflict"
-                } else {
-                    reason
-                };
-                Some(RuntimeHostError::request(
-                    code,
-                    "admit_policy_dispatch",
-                    RuntimeErrorCode::InvalidRequest,
-                ))
             }
-        };
-        if gate_error.is_none()
-            && let Err(error) = self.admit_capacity()
-        {
-            if error.is_fatal() {
-                return Err(error);
-            }
-            gate_error = Some(error);
-        }
-        let resolved = self
-            .resolve_instance(&intent.instance_id)
-            .map_err(|failure| *failure.error)?;
-        let request_id = self
-            .events
-            .issuer()
-            .mint_request_id()
-            .map_err(|_| policy_id_error("issue_policy_request_id"))?;
-        let correlation_id = self
-            .events
-            .issuer()
-            .mint_correlation_id()
-            .map_err(|_| policy_id_error("issue_policy_correlation_id"))?;
-        let holder = self
-            .events
-            .issuer()
-            .mint_holder_id()
-            .map_err(|_| policy_id_error("issue_policy_holder_id"))?;
-        let task_id = self
-            .events
-            .issuer()
-            .mint_task_id()
-            .map_err(|_| policy_id_error("issue_policy_task_id"))?;
-        let run_id = self
-            .events
-            .issuer()
-            .mint_run_id()
-            .map_err(|_| policy_id_error("issue_policy_run_id"))?;
-        let run_links = RuntimeRunLinks::new(task_id, run_id);
-        let holder_id = *holder.transport();
-        let request = RuntimeRequest::new(
-            request_id,
-            correlation_id,
-            None,
-            EventActor::Agent,
-            EventSource::Adapter,
-            context.now_unix_ms,
-            RuntimeOperation::acquire_lease(intent.instance_id.clone(), holder),
-        )
-        .map_err(|_| policy_contract_error("build_policy_runtime_request"))?;
-        let validated = request
-            .validate()
-            .map_err(|_| policy_contract_error("validate_policy_runtime_request"))?;
-        let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
-            .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
-        let action_id = self.events.action_id()?;
-        let links = run_links.apply(self.events.request_links(
-            &validated,
-            Some(resolved.instance_id()),
-            None,
-            Some(action_id),
-        ));
-        let data = policy_event_data(intent, reason_chain)?;
-        let event = self.events.draft(
-            EventSeverity::Info,
-            EventSource::Scheduler,
-            OriginModule::Policy,
-            EventActor::Scheduler,
-            links.clone(),
-            PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
-        )?;
-        let event = self.events.sanitize(event)?;
-        let plan = CriticalEventPlan::new(CriticalOperation::PolicyDispatch, event)
-            .map_err(|_| critical_plan_error())?;
-        let (outcome_keys, current_facts, fact_gate) = {
-            let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let outcome_keys =
-                lock(&self.policy, "read_policy_outcome_keys")?.outcome_key_snapshot()?;
-            if outcome_keys.generation.as_ref().is_none_or(|generation| {
-                generation.catalog_hash() != intent.catalog_hash
-                    || generation.catalog_version() != intent.catalog_version
-            }) {
+            let trusted = lock(
+                &self.trusted_policy_dispatches,
+                "authorize_trusted_policy_dispatch",
+            )?
+            .authorize(intent, reason_chain)?;
+            if context.fact_ledger_position != trusted.intent.input_ledger_position
+                || context.fact_snapshot_id != trusted.intent.fact_snapshot_id
+                || context.fencing_owner_epoch != self.owner_epoch
+            {
                 return Err(policy_admission_request(
-                    "catalog_active_generation_changed",
+                    "policy_admission_context_untrusted",
                     "admit_policy_dispatch",
                 ));
             }
-            let fact_gate = lock(&self.fact_write_gate, "validate_policy_fact_freshness")?;
-            let (current_facts, _) = self.project_authoritative_policy_inputs_under_gate(
-                "admit_policy_dispatch",
-                &outcome_keys,
-                None,
-            )?;
-            (outcome_keys, current_facts, fact_gate)
-        };
-        if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
-            return Err(policy_admission_request(
-                "policy_facts_stale",
-                "admit_policy_dispatch",
-            ));
-        }
-        lock(&self.procedure_manifest, "validate_procedure_manifest")?
-            .as_ref()
-            .ok_or_else(|| {
-                policy_admission_request("procedure_manifest_unconfigured", "admit_policy_dispatch")
-            })?
-            .validate_intent(intent, "admit_policy_dispatch")?;
-        let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
-        let success_links = links.clone();
-        let failure_links = links;
-        let success_data = data.clone();
-        let failure_data = data;
-        let result = execute_critical(
-            &appender,
-            self.events.fingerprinter(),
-            plan,
-            || {
-                #[cfg(test)]
-                policy_crash_test_barrier("after_policy_intent");
-                if let Some(error) = gate_error.clone() {
-                    return CriticalActionReport::Failed {
-                        error: RequestFailure::request(error, RuntimeReceiptState::Denied, None),
-                        effect: EffectDisposition::NotPerformed,
-                    };
-                }
-                let ledger_high_watermark = match self.ledger.latest_sequence() {
-                    Ok(position) => position,
-                    Err(_) => {
-                        return CriticalActionReport::Failed {
-                            error: RequestFailure::poison_without_terminal(ledger_error(
-                                "read_policy_ledger_position",
-                            )),
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
-                };
-                let mut policy = match lock(&self.policy, "validate_policy_dispatch") {
-                    Ok(policy) => policy,
-                    Err(error) => {
-                        return CriticalActionReport::Failed {
-                            error: RequestFailure::poison_without_terminal(error),
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
-                };
-                if let Err(error) = policy.validate_outcome_key_snapshot(&outcome_keys) {
-                    return CriticalActionReport::Failed {
-                        error: RequestFailure::request(error, RuntimeReceiptState::Denied, None),
-                        effect: EffectDisposition::NotPerformed,
-                    };
-                }
-                let catalog = match policy.validate_dispatch(
-                    intent,
-                    reason_chain,
-                    context,
-                    self.owner_epoch,
-                    ledger_high_watermark,
-                ) {
-                    Ok(catalog) => catalog,
-                    Err(error) => {
-                        let failure = if error.is_fatal() {
-                            RequestFailure::poison_without_terminal(error)
-                        } else {
-                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                        };
-                        return CriticalActionReport::Failed {
-                            error: failure,
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
-                };
-                let admission_record = match policy.preview_admission(intent, context.now_unix_ms) {
-                    Ok(record) => record,
-                    Err(error) => {
-                        let failure = if error.is_fatal() {
-                            RequestFailure::poison_without_terminal(error)
-                        } else {
-                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                        };
-                        return CriticalActionReport::Failed {
-                            error: failure,
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
-                };
-                let lease_ttl_ms = task_request
-                    .map(|task_request| {
-                        task_request.validate().map_err(|_| {
-                            RequestFailure::request(
-                                policy_admission_request(
-                                    "policy_task_request_invalid",
-                                    "admit_policy_dispatch",
-                                ),
-                                RuntimeReceiptState::Denied,
-                                None,
-                            )
-                        })?;
-                        if intent.package_digest.as_ref() != Some(task_request.expected_sha256()) {
-                            return Err(RequestFailure::request(
-                                policy_admission_request(
-                                    "procedure_package_digest_mismatch",
-                                    "admit_policy_dispatch",
-                                ),
-                                RuntimeReceiptState::Denied,
-                                None,
-                            ));
-                        }
-                        self.contained_task_lease_ttl(task_request)
-                    })
-                    .transpose();
-                let lease_ttl_ms = match lease_ttl_ms {
-                    Ok(ttl) => ttl,
-                    Err(error) => {
-                        return CriticalActionReport::Failed {
-                            error,
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
-                };
-                let admission = self.acquire_lease(RuntimeLeaseAcquisition {
-                    request: &validated,
-                    request_id: request.request_id(),
-                    instance_alias: &intent.instance_id,
-                    holder_id,
-                    connection_id,
-                    run_links: Some(run_links),
-                    lease_ttl_ms,
-                });
-                match admission {
-                    Ok(success) => match success.result {
-                        RuntimeResult::LeaseGranted { token } => {
-                            #[cfg(test)]
-                            policy_crash_test_barrier("after_lease_grant");
-                            if let Err(error) = policy.commit_admission(intent, &admission_record) {
-                                return CriticalActionReport::Failed {
-                                    error: RequestFailure::poison_without_terminal(error),
-                                    effect: EffectDisposition::Indeterminate,
-                                };
-                            }
-                            #[cfg(test)]
-                            policy_crash_test_barrier("after_budget_commit");
-                            CriticalActionReport::Succeeded {
-                                value: (token, catalog, admission_record),
-                                effect: DefiniteEffectDisposition::Performed,
-                            }
-                        }
-                        _ => CriticalActionReport::Failed {
-                            error: RequestFailure::poison_without_terminal(
-                                RuntimeHostError::fatal(
-                                    "policy_lease_result_invalid",
-                                    "admit_policy_dispatch",
-                                    RuntimeErrorCode::RuntimeFatal,
-                                ),
-                            ),
-                            effect: EffectDisposition::Indeterminate,
-                        },
-                    },
-                    Err(error) => {
-                        let effect = if error.poison_runtime {
-                            EffectDisposition::Indeterminate
-                        } else {
-                            EffectDisposition::NotPerformed
-                        };
-                        CriticalActionReport::Failed { error, effect }
-                    }
-                }
-            },
-            |(_, _, admission), _| {
-                self.events
-                    .draft(
-                        EventSeverity::Info,
-                        EventSource::Scheduler,
-                        OriginModule::Policy,
-                        EventActor::Scheduler,
-                        success_links,
-                        PolicyPayloadDraft::dispatch_admitted(
-                            success_data,
-                            admission.clone(),
-                            AuditInput::new(),
-                        ),
+            let elapsed_ms = self
+                .monotonic_ms()?
+                .checked_sub(trusted.observed_monotonic_ms)
+                .ok_or_else(|| {
+                    policy_admission_fatal(
+                        "policy_admission_clock_regressed",
+                        "admit_policy_dispatch",
                     )
-                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
-            },
-            |failure, effect| {
-                self.events
-                    .draft(
-                        EventSeverity::Error,
-                        EventSource::Scheduler,
-                        OriginModule::Policy,
-                        EventActor::Scheduler,
-                        failure_links,
-                        PolicyPayloadDraft::dispatch_rejected_with_reason(
-                            failure_data,
-                            effect,
-                            failure.error.policy_rejection(),
-                            AuditInput::new(),
-                        ),
+                })?;
+            let now_unix_ms = trusted
+                .intent
+                .prerequisites
+                .evaluated_at_unix_ms
+                .checked_add(elapsed_ms)
+                .ok_or_else(|| {
+                    policy_admission_fatal(
+                        "policy_admission_clock_overflow",
+                        "admit_policy_dispatch",
                     )
-                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
-            },
-        );
-        self.refresh_policy_dispatches()?;
-        match result {
-            Ok(receipt) => {
-                let started_at_monotonic_ms = self.monotonic_ms()?;
-                let (token, catalog, admission) = receipt.into_value();
-                let clock = PolicyDispatchClock::live(
-                    admission.activity.admitted_at_unix_ms,
-                    started_at_monotonic_ms,
-                );
-                if lock(&self.policy_dispatch_clocks, "record_policy_dispatch_start")?
-                    .insert(intent.decision_id.clone(), clock)
-                    .is_some()
-                {
-                    let error = policy_admission_fatal(
-                        "policy_dispatch_clock_identity_conflict",
-                        "record_policy_dispatch_start",
-                    );
-                    self.fatal.mark(error.clone())?;
+                })?;
+            // Approval projection and dispatch admission share one order so a concurrent revocation
+            // cannot appear in the ledger before a dispatch authorized by the superseded fact.
+            let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
+            let approval_fact_ids =
+                match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
+                    Ok(projection) => projection.active_for_dispatch(intent),
+                    Err(error) => {
+                        self.fatal.mark(error.clone())?;
+                        return Err(error);
+                    }
+                };
+            let authoritative_context = PolicyAdmissionContext {
+                fact_ledger_position: trusted.intent.input_ledger_position,
+                fact_snapshot_id: trusted.intent.fact_snapshot_id.clone(),
+                approval_fact_ids,
+                fencing_owner_epoch: self.owner_epoch,
+                now_unix_ms,
+            };
+            let context = &authoritative_context;
+            let mut gate_error = match lock(
+                &self.performance_control,
+                "gate_policy_performance_dispatch",
+            )?
+            .gate_dispatch(
+                &intent.instance_id,
+                intent.prerequisites.urgency_milli,
+                context.now_unix_ms,
+            )? {
+                PerformanceDispatchGate::Allowed => None,
+                PerformanceDispatchGate::Deferred {
+                    reason,
+                    deadline_disposition,
+                    event,
+                } => {
+                    if let Some(event) = event {
+                        self.record_performance_events(&[
+                            PerformanceSemanticEvent::BalanceChanged(event),
+                        ])?;
+                    }
+                    let code = if deadline_disposition
+                        == Some(
+                            actingcommand_contract::PerformanceDeadlineDisposition::CapacityFailure,
+                        ) {
+                        "performance_capacity_deadline_conflict"
+                    } else {
+                        reason
+                    };
+                    Some(RuntimeHostError::request(
+                        code,
+                        "admit_policy_dispatch",
+                        RuntimeErrorCode::InvalidRequest,
+                    ))
+                }
+            };
+            if gate_error.is_none()
+                && let Err(error) = self.admit_capacity()
+            {
+                if error.is_fatal() {
                     return Err(error);
                 }
-                Ok(PolicyDispatchAdmission::Granted {
-                    context: Box::new(PolicyRunContext::new(
-                        request,
-                        correlation_id,
-                        run_id,
-                        task_id,
-                        catalog,
-                        token,
-                        admission,
-                        intent.clone(),
-                        reason_chain.clone(),
-                    )?),
-                })
+                gate_error = Some(error);
             }
-            Err(CriticalExecutionError::Action { error, outcome, .. }) => {
-                if error.error.lifecycle.capacity.is_some() {
-                    self.record_required_failure(
-                        &error.error,
-                        &outcome,
+            let resolved = self
+                .resolve_instance(&intent.instance_id)
+                .map_err(|failure| *failure.error)?;
+            let request_id = self
+                .events
+                .issuer()
+                .mint_request_id()
+                .map_err(|_| policy_id_error("issue_policy_request_id"))?;
+            let correlation_id = self
+                .events
+                .issuer()
+                .mint_correlation_id()
+                .map_err(|_| policy_id_error("issue_policy_correlation_id"))?;
+            let holder = self
+                .events
+                .issuer()
+                .mint_holder_id()
+                .map_err(|_| policy_id_error("issue_policy_holder_id"))?;
+            let task_id = self
+                .events
+                .issuer()
+                .mint_task_id()
+                .map_err(|_| policy_id_error("issue_policy_task_id"))?;
+            let run_id = self
+                .events
+                .issuer()
+                .mint_run_id()
+                .map_err(|_| policy_id_error("issue_policy_run_id"))?;
+            let run_links = RuntimeRunLinks::new(task_id, run_id);
+            let holder_id = *holder.transport();
+            let request = RuntimeRequest::new(
+                request_id,
+                correlation_id,
+                None,
+                EventActor::Agent,
+                EventSource::Adapter,
+                context.now_unix_ms,
+                RuntimeOperation::acquire_lease(intent.instance_id.clone(), holder),
+            )
+            .map_err(|_| policy_contract_error("build_policy_runtime_request"))?;
+            let validated = request
+                .validate()
+                .map_err(|_| policy_contract_error("validate_policy_runtime_request"))?;
+            let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
+                .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+            let action_id = self.events.action_id()?;
+            let links = run_links.apply(self.events.request_links(
+                &validated,
+                Some(resolved.instance_id()),
+                None,
+                Some(action_id),
+            ));
+            let data = policy_event_data(intent, reason_chain)?;
+            let event = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+                links.clone(),
+                PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
+            )?;
+            let event = self.events.sanitize(event)?;
+            let plan = CriticalEventPlan::new(CriticalOperation::PolicyDispatch, event)
+                .map_err(|_| critical_plan_error())?;
+            let (outcome_keys, current_facts, fact_gate) = {
+                let _outcome_gate =
+                    lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
+                let outcome_keys =
+                    lock(&self.policy, "read_policy_outcome_keys")?.outcome_key_snapshot()?;
+                if outcome_keys.generation.as_ref().is_none_or(|generation| {
+                    generation.catalog_hash() != intent.catalog_hash
+                        || generation.catalog_version() != intent.catalog_version
+                }) {
+                    return Err(policy_admission_request(
+                        "catalog_active_generation_changed",
+                        "admit_policy_dispatch",
+                    ));
+                }
+                let fact_gate = lock(&self.fact_write_gate, "validate_policy_fact_freshness")?;
+                let (current_facts, _) = self.project_authoritative_policy_inputs_under_gate(
+                    "admit_policy_dispatch",
+                    &outcome_keys,
+                    None,
+                )?;
+                (outcome_keys, current_facts, fact_gate)
+            };
+            if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
+                return Err(policy_admission_request(
+                    "policy_facts_stale",
+                    "admit_policy_dispatch",
+                ));
+            }
+            lock(&self.procedure_manifest, "validate_procedure_manifest")?
+                .as_ref()
+                .ok_or_else(|| {
+                    policy_admission_request(
+                        "procedure_manifest_unconfigured",
+                        "admit_policy_dispatch",
+                    )
+                })?
+                .validate_intent(intent, "admit_policy_dispatch")?;
+            let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
+            let success_links = links.clone();
+            let failure_links = links;
+            let success_data = data.clone();
+            let failure_data = data;
+            let result = execute_critical(
+                &appender,
+                self.events.fingerprinter(),
+                plan,
+                || {
+                    #[cfg(test)]
+                    policy_crash_test_barrier("after_policy_intent");
+                    if let Some(error) = gate_error.clone() {
+                        return CriticalActionReport::Failed {
+                            error: RequestFailure::request(
+                                error,
+                                RuntimeReceiptState::Denied,
+                                None,
+                            ),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                    let ledger_high_watermark = match self.ledger.latest_sequence() {
+                        Ok(position) => position,
+                        Err(_) => {
+                            return CriticalActionReport::Failed {
+                                error: RequestFailure::poison_without_terminal(ledger_error(
+                                    "read_policy_ledger_position",
+                                )),
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    let mut policy = match lock(&self.policy, "validate_policy_dispatch") {
+                        Ok(policy) => policy,
+                        Err(error) => {
+                            return CriticalActionReport::Failed {
+                                error: RequestFailure::poison_without_terminal(error),
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    if let Err(error) = policy.validate_outcome_key_snapshot(&outcome_keys) {
+                        return CriticalActionReport::Failed {
+                            error: RequestFailure::request(
+                                error,
+                                RuntimeReceiptState::Denied,
+                                None,
+                            ),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                    let catalog = match policy.validate_dispatch(
+                        intent,
+                        reason_chain,
+                        context,
+                        self.owner_epoch,
+                        ledger_high_watermark,
+                    ) {
+                        Ok(catalog) => catalog,
+                        Err(error) => {
+                            let failure = if error.is_fatal() {
+                                RequestFailure::poison_without_terminal(error)
+                            } else {
+                                RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                            };
+                            return CriticalActionReport::Failed {
+                                error: failure,
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    let admission_record = match policy
+                        .preview_admission(intent, context.now_unix_ms)
+                    {
+                        Ok(record) => record,
+                        Err(error) => {
+                            let failure = if error.is_fatal() {
+                                RequestFailure::poison_without_terminal(error)
+                            } else {
+                                RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                            };
+                            return CriticalActionReport::Failed {
+                                error: failure,
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    let lease_ttl_ms = task_request
+                        .map(|task_request| {
+                            task_request.validate().map_err(|_| {
+                                RequestFailure::request(
+                                    policy_admission_request(
+                                        "policy_task_request_invalid",
+                                        "admit_policy_dispatch",
+                                    ),
+                                    RuntimeReceiptState::Denied,
+                                    None,
+                                )
+                            })?;
+                            if intent.package_digest.as_ref()
+                                != Some(task_request.expected_sha256())
+                            {
+                                return Err(RequestFailure::request(
+                                    policy_admission_request(
+                                        "procedure_package_digest_mismatch",
+                                        "admit_policy_dispatch",
+                                    ),
+                                    RuntimeReceiptState::Denied,
+                                    None,
+                                ));
+                            }
+                            self.contained_task_lease_ttl(task_request)
+                        })
+                        .transpose();
+                    let lease_ttl_ms = match lease_ttl_ms {
+                        Ok(ttl) => ttl,
+                        Err(error) => {
+                            return CriticalActionReport::Failed {
+                                error,
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
+                    let admission = self.acquire_lease(RuntimeLeaseAcquisition {
+                        request: &validated,
+                        request_id: request.request_id(),
+                        instance_alias: &intent.instance_id,
+                        holder_id,
+                        connection_id,
+                        run_links: Some(run_links),
+                        lease_ttl_ms,
+                    });
+                    match admission {
+                        Ok(success) => match success.result {
+                            RuntimeResult::LeaseGranted { token } => {
+                                #[cfg(test)]
+                                policy_crash_test_barrier("after_lease_grant");
+                                if let Err(error) =
+                                    policy.commit_admission(intent, &admission_record)
+                                {
+                                    return CriticalActionReport::Failed {
+                                        error: RequestFailure::poison_without_terminal(error),
+                                        effect: EffectDisposition::Indeterminate,
+                                    };
+                                }
+                                #[cfg(test)]
+                                policy_crash_test_barrier("after_budget_commit");
+                                CriticalActionReport::Succeeded {
+                                    value: (token, catalog, admission_record),
+                                    effect: DefiniteEffectDisposition::Performed,
+                                }
+                            }
+                            _ => CriticalActionReport::Failed {
+                                error: RequestFailure::poison_without_terminal(
+                                    RuntimeHostError::fatal(
+                                        "policy_lease_result_invalid",
+                                        "admit_policy_dispatch",
+                                        RuntimeErrorCode::RuntimeFatal,
+                                    ),
+                                ),
+                                effect: EffectDisposition::Indeterminate,
+                            },
+                        },
+                        Err(error) => {
+                            let effect = if error.poison_runtime {
+                                EffectDisposition::Indeterminate
+                            } else {
+                                EffectDisposition::NotPerformed
+                            };
+                            CriticalActionReport::Failed { error, effect }
+                        }
+                    }
+                },
+                |(_, _, admission), _| {
+                    self.events
+                        .draft(
+                            EventSeverity::Info,
+                            EventSource::Scheduler,
+                            OriginModule::Policy,
+                            EventActor::Scheduler,
+                            success_links,
+                            PolicyPayloadDraft::dispatch_admitted(
+                                success_data,
+                                admission.clone(),
+                                AuditInput::new(),
+                            ),
+                        )
+                        .map_err(|_| {
+                            actingcommand_contract::SanitizationError::fingerprinter_failure()
+                        })
+                },
+                |failure, effect| {
+                    self.events
+                        .draft(
+                            EventSeverity::Error,
+                            EventSource::Scheduler,
+                            OriginModule::Policy,
+                            EventActor::Scheduler,
+                            failure_links,
+                            PolicyPayloadDraft::dispatch_rejected_with_reason(
+                                failure_data,
+                                effect,
+                                failure.error.policy_rejection(),
+                                AuditInput::new(),
+                            ),
+                        )
+                        .map_err(|_| {
+                            actingcommand_contract::SanitizationError::fingerprinter_failure()
+                        })
+                },
+            );
+            if let Err(refresh) = self.refresh_policy_dispatches() {
+                return Err(match result {
+                    Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                        rejection = Some((
+                            outcome,
+                            self.events.request_links(
+                                &validated,
+                                Some(resolved.instance_id()),
+                                None,
+                                None,
+                            ),
+                        ));
+                        (*error.error).with_complete_failure(
+                            crate::error::RuntimeFailureRelation::AdmissionRecord,
+                            refresh,
+                        )
+                    }
+                    Err(error) => critical_execution_error(&error).with_complete_failure(
+                        crate::error::RuntimeFailureRelation::AdmissionRecord,
+                        refresh,
+                    ),
+                    Ok(_) => refresh,
+                });
+            }
+            match result {
+                Ok(receipt) => {
+                    let started_at_monotonic_ms = self.monotonic_ms()?;
+                    let (token, catalog, admission) = receipt.into_value();
+                    let clock = PolicyDispatchClock::live(
+                        admission.activity.admitted_at_unix_ms,
+                        started_at_monotonic_ms,
+                    );
+                    if lock(&self.policy_dispatch_clocks, "record_policy_dispatch_start")?
+                        .insert(intent.decision_id.clone(), clock)
+                        .is_some()
+                    {
+                        let error = policy_admission_fatal(
+                            "policy_dispatch_clock_identity_conflict",
+                            "record_policy_dispatch_start",
+                        );
+                        self.fatal.mark(error.clone())?;
+                        return Err(error);
+                    }
+                    Ok(PolicyDispatchAdmission::Granted {
+                        context: Box::new(PolicyRunContext::new(
+                            request,
+                            correlation_id,
+                            run_id,
+                            task_id,
+                            catalog,
+                            token,
+                            admission,
+                            intent.clone(),
+                            reason_chain.clone(),
+                        )?),
+                    })
+                }
+                Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                    rejection = Some((
+                        outcome,
                         self.events.request_links(
                             &validated,
                             Some(resolved.instance_id()),
                             None,
                             None,
                         ),
-                    )?;
+                    ));
+                    if error.poison_runtime {
+                        self.fatal.mark((*error.error).clone())?;
+                    }
+                    Err(*error.error)
                 }
-                if error.poison_runtime {
-                    self.fatal.mark((*error.error).clone())?;
+                Err(error) => {
+                    let error = critical_execution_error(&error);
+                    self.fatal.mark(error.clone())?;
+                    Err(error)
                 }
-                Err(*error.error)
             }
-            Err(error) => {
-                let error = critical_execution_error(&error);
-                self.fatal.mark(error.clone())?;
-                Err(error)
+        })();
+        self.record_policy_admission_result(intent, result, rejection)
+    }
+
+    pub(super) fn record_policy_admission_result(
+        &self,
+        intent: &DispatchIntent,
+        result: RuntimeHostResult<PolicyDispatchAdmission>,
+        rejection: Option<(PersistedEvent, EventLinksDraft)>,
+    ) -> RuntimeHostResult<PolicyDispatchAdmission> {
+        match result {
+            Err(error) if !error.is_fatal() || rejection.is_some() => {
+                let recorded = match rejection {
+                    Some((outcome, links)) => self.record_required_failure(&error, &outcome, links),
+                    None => self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::OperationCleanup,
+                        RuntimeLifecycleFailure::PolicyAdmission {
+                            error: &error,
+                            decision_id: &intent.decision_id,
+                        },
+                        EventLinksDraft::default(),
+                        None,
+                    ),
+                };
+                match recorded {
+                    Ok(()) => Err(error),
+                    Err(writer) => {
+                        let complete = error
+                            .with_complete_failure(
+                                crate::error::RuntimeFailureRelation::AdmissionRecord,
+                                writer,
+                            )
+                            .into_fatal();
+                        match self.fatal.mark(complete.clone()) {
+                            Ok(()) => Err(complete),
+                            Err(mark) => Err(complete.with_complete_failure(
+                                crate::error::RuntimeFailureRelation::LifecycleRecord,
+                                mark,
+                            )),
+                        }
+                    }
+                }
             }
+            result => result,
         }
     }
 

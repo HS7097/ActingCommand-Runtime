@@ -197,11 +197,16 @@ pub enum RuntimeLifecycleFailureStage {
 
 pub enum RuntimeLifecycleFailure<'a> {
     Host(&'a RuntimeHostError),
+    PolicyAdmission {
+        error: &'a RuntimeHostError,
+        decision_id: &'a str,
+    },
     Client {
         code: &'static str,
         operation: &'static str,
         fatal: bool,
         runtime_code: Option<RuntimeErrorCode>,
+        message: &'a str,
     },
     Process {
         code: &'static str,
@@ -1240,8 +1245,12 @@ impl RuntimeHost {
         reason_chain: &DecisionReasonChain,
         context: &PolicyAdmissionContext,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        self.work_ref("admit_policy_dispatch")?
-            .admit_policy_dispatch(intent, reason_chain, context, None)
+        match self.work_ref("admit_policy_dispatch") {
+            Ok(work) => work.admit_policy_dispatch(intent, reason_chain, context, None),
+            Err(error) => self
+                .shared_ref("record_policy_admission_failure")?
+                .record_policy_admission_result(intent, Err(error), None),
+        }
     }
 
     /// Admits a contained policy run using its bounded request budget for the lease.
@@ -1252,8 +1261,14 @@ impl RuntimeHost {
         context: &PolicyAdmissionContext,
         task_request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        self.work_ref("admit_policy_dispatch")?
-            .admit_policy_dispatch(intent, reason_chain, context, Some(task_request))
+        match self.work_ref("admit_policy_dispatch") {
+            Ok(work) => {
+                work.admit_policy_dispatch(intent, reason_chain, context, Some(task_request))
+            }
+            Err(error) => self
+                .shared_ref("record_policy_admission_failure")?
+                .record_policy_admission_result(intent, Err(error), None),
+        }
     }
 
     pub fn pinned_policy_catalog(
