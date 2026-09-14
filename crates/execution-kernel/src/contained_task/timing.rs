@@ -6,8 +6,27 @@ use actingcommand_contract::{
 };
 use std::time::{Duration, Instant};
 
-/// Only the kernel constructs this read-only observation of its existing deadline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContainedTaskBoundaryIdentity {
+    pub frame_id: Option<actingcommand_contract::FrameId>,
+    pub recognition_id: Option<actingcommand_contract::RecognitionId>,
+    pub step_index: Option<u32>,
+    pub action_id: Option<actingcommand_contract::ActionId>,
+}
+
+/// Direct endpoints of one original kernel call, returned only to its run owner.
 #[derive(Debug, Clone, Copy)]
+pub struct ContainedTaskBoundaryTiming {
+    pub boundary: actingcommand_contract::TaskTimingBoundary,
+    pub identity: ContainedTaskBoundaryIdentity,
+    pub context: ContainedTaskTimingContext,
+    pub started: Instant,
+    pub ended: Instant,
+    pub succeeded: bool,
+}
+
+/// Only the kernel constructs this read-only observation of its existing deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContainedTaskTimingContext {
     started: Instant,
     deadline: Instant,

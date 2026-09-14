@@ -223,8 +223,10 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::CapturePolicyChanged,
             EventType::ArtifactCreated,
             EventType::ArtifactVerified,
+            EventType::ArtifactPinRecorded,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
         ]

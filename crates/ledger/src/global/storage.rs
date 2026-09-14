@@ -1,20 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#[cfg(test)]
+use super::GlobalLedgerConfig;
 use super::{
-    CommitStatistics, GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult,
-    Sha256SecretFingerprinter, is_identifier, projection::EventIndexes,
+    CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerAppendObservation,
+    LedgerProjectViewObservation, Sha256SecretFingerprinter, is_identifier,
+    projection::EventIndexes,
 };
 use crate::PersistedEvent;
+#[cfg(test)]
+use crate::fact::LedgerEventRead;
 use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
     EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
-    EventType, GLOBAL_EVENT_SCHEMA_VERSION, IdentifierIssuer, IssuedActionId, LeasePayload,
-    LedgerPayload, LedgerPayloadDraft, OriginModule, PolicyDispatchEventData,
-    PolicyDispatchPayload, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, PolicyPayloadDraft, ProjectedArtifactReference,
-    RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation, Sensitivity,
-    TaskOutcome, TaskPayload, TaskSemanticFact, VerifiedArtifactReference,
+    EventType, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload, LedgerPayloadDraft,
+    OriginModule, PolicyDispatchEventData, PolicyDispatchPayload, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation,
+    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
+};
+#[cfg(test)]
+use actingcommand_contract::{
+    GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference, VerifiedArtifactReference,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -33,6 +41,7 @@ const REPAIR_SCHEMA_VERSION: &str = "actingcommand.ledger-repair.v1";
 const REPAIR_JOURNAL_FILE: &str = "repair-journal.jsonl";
 pub(super) const LINE_TYPE: &str = "event";
 
+#[cfg(test)]
 type ArtifactVerifier<'a> =
     dyn FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + 'a;
 
@@ -150,7 +159,29 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
 }
 
 pub(super) trait DurableStorage: Send + 'static {
+    fn material_root(&self) -> &Path;
+
+    fn project_view_page(
+        &self,
+        _query: &actingcommand_contract::EventQuery,
+        _profile: actingcommand_contract::ProjectionProfile,
+        _request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        _observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> Option<GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage>> {
+        None
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>>;
+    fn persist_transaction(
+        &mut self,
+        _event: &PersistedEvent,
+        _work: &dyn super::LedgerTransactionWork,
+    ) -> GlobalLedgerResult<Option<u64>> {
+        Err(GlobalLedgerError::request(
+            "ledger_joint_transaction_unsupported",
+            "append_transaction",
+        ))
+    }
     fn close(&mut self) -> GlobalLedgerResult<()>;
 }
 
@@ -158,13 +189,17 @@ pub(super) trait DurableStorage: Send + 'static {
 pub(super) struct EventStore<B> {
     pub(super) commit_statistics: Arc<CommitStatistics>,
     pub(super) backend: B,
-    next_sequence: u64,
-    events: Vec<PersistedEvent>,
-    indexes: EventIndexes,
+    pub(super) next_sequence: u64,
+    pub(super) events: Vec<PersistedEvent>,
+    pub(super) indexes: EventIndexes,
+    pub(super) retention: super::retention::RetentionIndex,
+    pub(super) recovering_retention: bool,
 }
 
+#[cfg(test)]
 pub(super) type SegmentStore = EventStore<SegmentStorage>;
 
+#[cfg(test)]
 pub(super) struct SegmentStorage {
     root: PathBuf,
     segments_dir: PathBuf,
@@ -175,6 +210,7 @@ pub(super) struct SegmentStorage {
     active_file: File,
 }
 
+#[cfg(test)]
 impl SegmentStore {
     pub(super) fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
         Self::open_inner(config, None)
@@ -244,10 +280,14 @@ impl SegmentStore {
                     return Err(error);
                 }
             };
+        let retention = super::retention::RetentionIndex::from_events(&events)?;
+        let recovering_retention = retention.has_pending();
         let mut store = Self {
             commit_statistics,
             backend: SegmentStorage {
-                root: config.root.clone(),
+                root: config.root.canonicalize().map_err(|error| {
+                    GlobalLedgerError::io("ledger_io", "canonicalize_ledger_root", &error)
+                })?,
                 segments_dir,
                 ownership,
                 segment_max_bytes: config.segment_max_bytes,
@@ -257,6 +297,8 @@ impl SegmentStore {
             },
             next_sequence,
             indexes: EventIndexes::from_events(&events),
+            retention,
+            recovering_retention,
             events,
         };
         let recovery_result = (|| {
@@ -300,11 +342,15 @@ impl<B: DurableStorage> EventStore<B> {
                     return Err(error);
                 }
             };
+        let retention = super::retention::RetentionIndex::from_events(&events)?;
+        let recovering_retention = retention.has_pending();
         Ok(Self {
             commit_statistics,
             backend,
             next_sequence,
             indexes: EventIndexes::from_events(&events),
+            retention,
+            recovering_retention,
             events,
         })
     }
@@ -313,6 +359,20 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        self.append_observed(draft, &mut None)
+    }
+
+    pub(super) fn append_observed(
+        &mut self,
+        draft: SanitizedEventDraft,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        if self.recovering_retention && draft.event_type() != EventType::LedgerRecovered {
+            return Err(GlobalLedgerError::request(
+                "artifact_retention_recovery_pending",
+                "append_event",
+            ));
+        }
         if matches!(draft.payload(), EventPayload::Ledger(actingcommand_contract::LedgerPayload::Recovered(payload)) if payload.migration().is_some())
         {
             return Err(GlobalLedgerError::request(
@@ -326,7 +386,44 @@ impl<B: DurableStorage> EventStore<B> {
                 "append_event",
             ));
         }
-        self.append_with_event_id(draft, None)
+        self.append_with_event_id(draft, None, observation)
+    }
+
+    pub(super) fn append_transaction(
+        &mut self,
+        draft: SanitizedEventDraft,
+        work: &dyn super::LedgerTransactionWork,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        if !matches!(
+            draft.event_type(),
+            EventType::CatalogActivated
+                | EventType::CatalogRolledBack
+                | EventType::StateMigrated
+                | EventType::ApprovalDecision
+                | EventType::ReleaseStaged
+                | EventType::ReleaseActivated
+                | EventType::ReleaseRolledBack
+                | EventType::PolicyPlanningSignalObserved
+                | EventType::FactInvalidated
+        ) {
+            return Err(GlobalLedgerError::request(
+                "joint_event_type_unsupported",
+                "append_transaction",
+            ));
+        }
+        let event = PersistedEvent::from_sanitized(self.next_sequence, draft).map_err(|error| {
+            GlobalLedgerError::request(error.code(), "validate_sanitized_event")
+        })?;
+        let following_sequence = increment_sequence(self.next_sequence)?;
+        if self.indexes.contains_event_id(event.event_id()) {
+            return Err(GlobalLedgerError::request(
+                "duplicate_event_id",
+                "append_transaction",
+            ));
+        }
+        self.validate_retention_admission(&event, false)?;
+        let write_sync_ns = self.backend.persist_transaction(&event, work)?;
+        self.publish_committed(event, following_sequence, write_sync_ns)
     }
 
     /// The only ledger-owned continuation for a persisted scheduled policy settlement.
@@ -432,6 +529,7 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
         event_id: Option<EventId>,
+        observation: &mut Option<LedgerAppendObservation>,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let event = match event_id {
             Some(event_id) => {
@@ -440,7 +538,7 @@ impl<B: DurableStorage> EventStore<B> {
             None => PersistedEvent::from_sanitized(self.next_sequence, draft),
         }
         .map_err(|error| GlobalLedgerError::request(error.code(), "validate_sanitized_event"))?;
-        self.persist_event(event)
+        self.persist_event(event, observation)
     }
 
     fn append_with_scheduled_recovery_continuation(
@@ -451,7 +549,7 @@ impl<B: DurableStorage> EventStore<B> {
         let draft = continuation.apply_to(draft).map_err(|error| {
             GlobalLedgerError::request(error.code(), "validate_recovered_scheduled_event")
         })?;
-        self.append_with_event_id(draft, None)
+        self.append_with_event_id(draft, None, &mut None)
     }
 
     fn append_recovered_policy_completion(
@@ -1113,7 +1211,46 @@ impl<B: DurableStorage> EventStore<B> {
         self.append_with_scheduled_recovery_continuation(draft, continuation)
     }
 
-    fn persist_event(&mut self, event: PersistedEvent) -> GlobalLedgerResult<PersistedEvent> {
+    fn persist_event(
+        &mut self,
+        event: PersistedEvent,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        self.persist_retention_checked_observed(event, false, observation)
+    }
+
+    pub(super) fn validate_retention_admission(
+        &self,
+        event: &PersistedEvent,
+        guarded: bool,
+    ) -> GlobalLedgerResult<()> {
+        if self.recovering_retention
+            && event.event_type() != EventType::LedgerRecovered
+            && !(guarded && event.event_type() == EventType::ArtifactEvictionOutcome)
+        {
+            return Err(GlobalLedgerError::request(
+                "artifact_retention_recovery_pending",
+                "append_event",
+            ));
+        }
+        self.retention
+            .validate(event, &self.events, &self.indexes, guarded)
+    }
+
+    pub(super) fn persist_retention_checked(
+        &mut self,
+        event: PersistedEvent,
+        guarded: bool,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        self.persist_retention_checked_observed(event, guarded, &mut None)
+    }
+
+    fn persist_retention_checked_observed(
+        &mut self,
+        event: PersistedEvent,
+        guarded: bool,
+        observation: &mut Option<LedgerAppendObservation>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
@@ -1121,8 +1258,26 @@ impl<B: DurableStorage> EventStore<B> {
                 "append_event",
             ));
         }
-        let write_sync_ns = self.backend.persist(&event)?;
+        self.validate_retention_admission(&event, guarded)?;
+        if let Some(value) = observation {
+            value.durable_started_at = Some(Instant::now());
+        }
+        let result = self.backend.persist(&event);
+        if let Some(value) = observation {
+            value.persisted(result.is_ok());
+        }
+        let write_sync_ns = result?;
+        self.publish_committed(event, following_sequence, write_sync_ns)
+    }
+
+    fn publish_committed(
+        &mut self,
+        event: PersistedEvent,
+        following_sequence: u64,
+        write_sync_ns: Option<u64>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         self.next_sequence = following_sequence;
+        self.retention.apply(&event);
         self.indexes.insert(&event, self.events.len());
         self.events.push(event.clone());
         self.commit_statistics
@@ -1131,7 +1286,11 @@ impl<B: DurableStorage> EventStore<B> {
     }
 
     pub(super) fn query(&self, query: &actingcommand_contract::EventQuery) -> Vec<PersistedEvent> {
-        self.indexes.query(&self.events, query)
+        let mut events = self.indexes.query(&self.events, query);
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        events
     }
 
     pub(super) fn query_page(
@@ -1141,17 +1300,64 @@ impl<B: DurableStorage> EventStore<B> {
         through_sequence: u64,
         page_events: usize,
     ) -> Vec<PersistedEvent> {
-        self.indexes.query_page(
+        let mut events = self.indexes.query_page(
             &self.events,
             query,
             after_sequence,
             through_sequence,
             page_events,
-        )
+        );
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        events
     }
 
     pub(super) fn latest_sequence(&self) -> u64 {
         self.events.last().map_or(0, PersistedEvent::sequence)
+    }
+
+    pub(super) fn project_view_page(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        self.project_view_page_observed(query, profile, request, &mut None)
+    }
+
+    pub(super) fn project_view_page_observed(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &actingcommand_contract::RuntimeEventQueryPageRequest,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<actingcommand_contract::RuntimeEventQueryPage> {
+        if let Some(page) = self
+            .backend
+            .project_view_page(query, profile, request, observation)
+        {
+            return page;
+        }
+        *observation = None;
+        self.indexes.project_view_page(
+            &self.events,
+            query,
+            profile,
+            request,
+            actingcommand_contract::LedgerReadScope {
+                source: actingcommand_contract::LedgerReadSource::Runtime,
+                material_read: actingcommand_contract::LedgerMaterialReadState::NotRequested,
+                scanned_through_position: self.latest_sequence(),
+                read_complete: true,
+                limits: Vec::new(),
+            },
+            super::projection::PageSelection {
+                through_sequence: self.latest_sequence(),
+                sequences: None,
+                retention: Some(&self.retention),
+            },
+        )
     }
 
     pub(super) fn replay_page(
@@ -1163,12 +1369,16 @@ impl<B: DurableStorage> EventStore<B> {
         let start = self
             .events
             .partition_point(|event| event.sequence() <= after_sequence);
-        self.events[start..]
+        let mut events = self.events[start..]
             .iter()
             .take_while(|event| event.sequence() <= through_sequence)
             .take(page_events)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        for event in &mut events {
+            self.retention.annotate_event(event);
+        }
+        events
     }
 
     pub(super) fn close(mut self) -> GlobalLedgerResult<()> {
@@ -1215,11 +1425,16 @@ impl<B: DurableStorage> EventStore<B> {
         .map_err(|_| {
             GlobalLedgerError::fatal("recovery_event_failed", "sanitize_recovery_event")
         })?;
-        self.append_with_event_id(draft, event_id)
+        self.append_with_event_id(draft, event_id, &mut None)
     }
 }
 
+#[cfg(test)]
 impl DurableStorage for SegmentStorage {
+    fn material_root(&self) -> &Path {
+        &self.root
+    }
+
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
         let mut bytes = serde_json::to_vec(&StoredLine {
             line_type: LINE_TYPE.to_string(),
@@ -1256,6 +1471,7 @@ impl DurableStorage for SegmentStorage {
     }
 }
 
+#[cfg(test)]
 impl SegmentStorage {
     fn rotate(&mut self) -> GlobalLedgerResult<()> {
         self.active_file
@@ -1509,6 +1725,7 @@ pub(super) struct StoredLine {
     pub(super) event: StoredEventRecord,
 }
 
+#[cfg(test)]
 struct RecoveryState {
     next_sequence: u64,
     events: Vec<PersistedEvent>,
@@ -1537,6 +1754,7 @@ struct TailRepairRecord {
 }
 
 impl TailRepairRecord {
+    #[cfg(test)]
     fn prepared(
         segment_index: u64,
         original_len: u64,
@@ -1563,6 +1781,7 @@ impl TailRepairRecord {
         })
     }
 
+    #[cfg(test)]
     fn completed(&self) -> Self {
         let mut completed = self.clone();
         completed.state = RepairJournalState::Completed;
@@ -1765,6 +1984,7 @@ impl RepairJournal {
         Ok(())
     }
 
+    #[cfg(test)]
     fn unresolved(&self) -> Vec<TailRepairRecord> {
         self.repairs
             .values()
@@ -1773,15 +1993,18 @@ impl RepairJournal {
             .collect()
     }
 
+    #[cfg(test)]
     fn contains(&self, repair_id: &str) -> bool {
         self.repairs.contains_key(repair_id)
     }
 
+    #[cfg(test)]
     fn prepare(&mut self, root: &Path, record: TailRepairRecord) -> GlobalLedgerResult<()> {
         append_repair_record(root, &record)?;
         self.apply(record)
     }
 
+    #[cfg(test)]
     fn complete(&mut self, root: &Path, record: &TailRepairRecord) -> GlobalLedgerResult<()> {
         let completed = record.completed();
         append_repair_record(root, &completed)?;
@@ -1789,6 +2012,7 @@ impl RepairJournal {
     }
 }
 
+#[cfg(test)]
 struct SegmentSnapshot {
     index: u64,
     path: PathBuf,
@@ -1797,6 +2021,7 @@ struct SegmentSnapshot {
     is_last: bool,
 }
 
+#[cfg(test)]
 fn recover_segments(
     root: &Path,
     segments_dir: &Path,
@@ -1807,16 +2032,12 @@ fn recover_segments(
     let snapshots = read_segment_snapshots(&segments)?;
     let mut next_sequence = 1_u64;
     let mut event_ids = BTreeSet::new();
-    let mut events = Vec::new();
+    let mut records = Vec::new();
     for snapshot in &snapshots {
-        parse_segment_records(
-            snapshot,
-            &mut next_sequence,
-            &mut event_ids,
-            &mut events,
-            verifier,
-        )?;
+        parse_segment_records(snapshot, &mut next_sequence, &mut event_ids, &mut records)?;
     }
+
+    let events = super::retention::restore_records(records, verifier, |_| Ok(()))?;
 
     let mut pending_repairs = Vec::new();
     for repair in journal.unresolved() {
@@ -1863,6 +2084,7 @@ fn recover_segments(
     })
 }
 
+#[cfg(test)]
 fn read_segment_snapshots(segments: &[(u64, PathBuf)]) -> GlobalLedgerResult<Vec<SegmentSnapshot>> {
     let mut snapshots = Vec::with_capacity(segments.len());
     for (position, (index, path)) in segments.iter().enumerate() {
@@ -1893,12 +2115,12 @@ fn read_segment_snapshots(segments: &[(u64, PathBuf)]) -> GlobalLedgerResult<Vec
     Ok(snapshots)
 }
 
+#[cfg(test)]
 fn parse_segment_records(
     snapshot: &SegmentSnapshot,
     next_sequence: &mut u64,
     event_ids: &mut BTreeSet<EventId>,
-    events: &mut Vec<PersistedEvent>,
-    verifier: &mut Option<&mut ArtifactVerifier<'_>>,
+    records: &mut Vec<StoredEventRecord>,
 ) -> GlobalLedgerResult<()> {
     let complete_records = if snapshot.complete_len == 0 {
         &snapshot.bytes[..0]
@@ -1943,12 +2165,10 @@ fn parse_segment_records(
                 "validate_line_type",
             ));
         }
-        let event = if let Some(verifier) = verifier.as_deref_mut() {
-            stored.event.into_event_with_artifact_verifier(verifier)
-        } else {
-            stored.event.into_event()
-        }
-        .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+        let event =
+            stored.event.clone().into_metadata().map_err(|error| {
+                GlobalLedgerError::fatal(error.code(), "validate_persisted_event")
+            })?;
         if event.sequence() != *next_sequence {
             return Err(GlobalLedgerError::fatal(
                 "sequence_discontinuity",
@@ -1961,12 +2181,13 @@ fn parse_segment_records(
                 "recover_event_ids",
             ));
         }
-        events.push(event);
+        records.push(stored.event);
         *next_sequence = increment_sequence(*next_sequence)?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn resume_prepared_repair(
     root: &Path,
     snapshots: &[SegmentSnapshot],
@@ -2036,6 +2257,7 @@ fn resume_prepared_repair(
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_quarantine(
     root: &Path,
     repair: &TailRepairRecord,
@@ -2135,6 +2357,7 @@ fn verify_recovery_event(
     Ok(())
 }
 
+#[cfg(test)]
 fn append_repair_record(root: &Path, record: &TailRepairRecord) -> GlobalLedgerResult<()> {
     record.validate()?;
     let mut bytes = serde_json::to_vec(record).map_err(|error| {
@@ -2243,11 +2466,6 @@ pub(super) fn repair_test_barrier(stage: &str) -> GlobalLedgerResult<()> {
     }
 }
 
-#[cfg(not(test))]
-fn repair_test_barrier(_stage: &str) -> GlobalLedgerResult<()> {
-    Ok(())
-}
-
 pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64, PathBuf)>> {
     let mut segments = Vec::new();
     for entry in fs::read_dir(segments_dir)
@@ -2280,6 +2498,7 @@ pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64,
     Ok(segments)
 }
 
+#[cfg(test)]
 fn segment_path(segments_dir: &Path, index: u64) -> PathBuf {
     segments_dir.join(format!("segment-{index:06}.jsonl"))
 }

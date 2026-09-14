@@ -16,8 +16,9 @@ use actingcommand_contract::{
     SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
     SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
     SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingFailure,
-    TaskTimingScope, TaskTimingStage, validate_task_phases,
+    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence,
+    TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
+    validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -38,7 +39,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod timing;
-pub use timing::{ContainedTaskEvaluationTiming, ContainedTaskTimingContext, observe_instant_span};
+pub use timing::{
+    ContainedTaskBoundaryIdentity, ContainedTaskBoundaryTiming, ContainedTaskEvaluationTiming,
+    ContainedTaskTimingContext, observe_instant_span,
+};
 
 const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
 const DEFAULT_CAPTURE_INTERVAL_MS: u64 = 50;
@@ -83,6 +87,7 @@ pub struct ContainedTaskError {
     code: &'static str,
     detail: Option<String>,
     timing: Option<TaskTimingFailure>,
+    timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
 }
 
@@ -92,6 +97,7 @@ impl ContainedTaskError {
             code,
             detail: None,
             timing: None,
+            timing_check_position: None,
             declaration_issue: None,
         }
     }
@@ -101,6 +107,7 @@ impl ContainedTaskError {
             code,
             detail: Some(detail.into()),
             timing: None,
+            timing_check_position: None,
             declaration_issue: None,
         }
     }
@@ -129,6 +136,15 @@ impl ContainedTaskError {
 
     pub fn timing(&self) -> Option<&TaskTimingFailure> {
         self.timing.as_ref()
+    }
+
+    fn with_timing_check_position(mut self, position: TaskTimingCheckPosition) -> Self {
+        self.timing_check_position = Some(position);
+        self
+    }
+
+    pub fn timing_check_position(&self) -> Option<TaskTimingCheckPosition> {
+        self.timing_check_position
     }
 
     pub const fn code(&self) -> &'static str {
@@ -1506,6 +1522,15 @@ pub trait ContainedTaskRuntime {
     /// Supplies the kernel's existing budget only for observation; it changes no execution limit.
     fn observe_task_timing(&mut self, _context: ContainedTaskTimingContext) {}
 
+    fn task_boundary_identity(
+        &self,
+        _boundary: actingcommand_contract::TaskTimingBoundary,
+    ) -> ContainedTaskBoundaryIdentity {
+        ContainedTaskBoundaryIdentity::default()
+    }
+
+    fn observe_task_boundary(&mut self, _timing: ContainedTaskBoundaryTiming) {}
+
     /// Classification comes from the error owner. Unknown errors forbid further reporting.
     fn classify_error(_error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
         ContainedTaskRuntimeErrorClass::Unknown
@@ -2155,16 +2180,41 @@ impl PreparedContainedTask {
                         runtime
                             .input(action)
                             .map_err(ContainedTaskRunError::operation::<R>)?;
-                        runtime
-                            .record(ContainedTaskTrace::EffectCompleted {
-                                step_index,
-                                operation_label: operation_id.clone(),
-                            })
-                            .map_err(ContainedTaskRunError::Boundary)?;
+                        let boundary =
+                            actingcommand_contract::TaskTimingBoundary::EffectCompletedRecord;
+                        let identity = runtime.task_boundary_identity(boundary);
+                        let effect_started = Instant::now();
+                        let effected = runtime.record(ContainedTaskTrace::EffectCompleted {
+                            step_index,
+                            operation_label: operation_id.clone(),
+                        });
+                        let effect_ended = Instant::now();
+                        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                            boundary,
+                            identity,
+                            context: observation_timing,
+                            started: effect_started,
+                            ended: effect_ended,
+                            succeeded: effected.is_ok(),
+                        });
+                        effected.map_err(ContainedTaskRunError::Boundary)?;
                         machine
                             .operation_effect_completed(&operation_id)
                             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
-                        Self::wait_post_input_delay(operation, started, task_timeout)?;
+                        let boundary = actingcommand_contract::TaskTimingBoundary::PostInputWait;
+                        let identity = runtime.task_boundary_identity(boundary);
+                        let wait_started = Instant::now();
+                        let waited = Self::wait_post_input_delay(operation, started, task_timeout);
+                        let wait_ended = Instant::now();
+                        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                            boundary,
+                            identity,
+                            context: observation_timing,
+                            started: wait_started,
+                            ended: wait_ended,
+                            succeeded: waited.is_ok(),
+                        });
+                        waited?;
                         let destination_pages = operation.destination_pages()?;
                         if destination_pages.is_empty() {
                             observation = self.capture_until_page(
@@ -2277,7 +2327,20 @@ impl PreparedContainedTask {
                                         )
                                         .into());
                                 }
+                                let boundary =
+                                    actingcommand_contract::TaskTimingBoundary::RetryWait;
+                                let identity = runtime.task_boundary_identity(boundary);
+                                let wait_started = Instant::now();
                                 thread::sleep(delay);
+                                let wait_ended = Instant::now();
+                                runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                                    boundary,
+                                    identity,
+                                    context: observation_timing,
+                                    started: wait_started,
+                                    ended: wait_ended,
+                                    succeeded: true,
+                                });
                                 match self.await_postcondition(
                                     runtime,
                                     ocr_collector,
@@ -2695,11 +2758,23 @@ impl PreparedContainedTask {
                 )
                 .into());
             }
+            let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = Instant::now();
             thread::sleep(
                 interval
                     .min(timeout.saturating_sub(started.elapsed()))
                     .min(task_deadline.saturating_duration_since(Instant::now())),
             );
+            let wait_ended = Instant::now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: wait_started,
+                ended: wait_ended,
+                succeeded: true,
+            });
         }
     }
 
@@ -2710,133 +2785,148 @@ impl PreparedContainedTask {
         required_entry_page: Option<&str>,
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        let frame = runtime
-            .capture()
-            .map_err(ContainedTaskRunError::operation::<R>)?;
-        self.control.resolution.validate_frame(&frame)?;
-        let stability_sample = self
-            .control
-            .stability_termination
-            .as_ref()
-            .map(|declaration| stability_sample(&frame, declaration))
-            .transpose()?;
-        runtime
-            .record(ContainedTaskTrace::CaptureCompleted {
-                width: frame.width,
-                height: frame.height,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let scene = scene_from_frame(&frame)?;
-        let context = self.evaluator.scene_context(&scene);
-        let candidate_pages = self
-            .detector
-            .page_ids()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        runtime
-            .record(ContainedTaskTrace::RecognitionStarted {
-                candidate_pages: candidate_pages.clone(),
-                width: frame.width,
-                height: frame.height,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let evaluation_started = Instant::now();
-        let budget_before = timing.budget_at(evaluation_started);
-        let results = self.detector.evaluate_all_outcomes_in_context(&context);
-        let evaluation_timing = ContainedTaskEvaluationTiming {
-            elapsed_us: observe_instant_span(evaluation_started, Instant::now()),
-            budget_before,
-            result: if results.is_ok() {
-                actingcommand_contract::TaskTimingResult::Ok
-            } else {
-                actingcommand_contract::TaskTimingResult::Err
-            },
-        };
-        runtime
-            .record_page_evaluations("page", &results, Some(evaluation_timing))
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let matched_pages = results
-            .map_err(|error| {
-                actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
-            })
-            .and_then(require_all_page_evaluations)
-            .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    "contained_task_recognition_failed",
-                    error.to_string(),
+        let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
+        let identity = runtime.task_boundary_identity(boundary);
+        let capture_started = Instant::now();
+        let result = (|| {
+            let frame = runtime
+                .capture()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+            self.control.resolution.validate_frame(&frame)?;
+            let stability_sample = self
+                .control
+                .stability_termination
+                .as_ref()
+                .map(|declaration| stability_sample(&frame, declaration))
+                .transpose()?;
+            runtime
+                .record(ContainedTaskTrace::CaptureCompleted {
+                    width: frame.width,
+                    height: frame.height,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            let scene = scene_from_frame(&frame)?;
+            let context = self.evaluator.scene_context(&scene);
+            let candidate_pages = self
+                .detector
+                .page_ids()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            runtime
+                .record(ContainedTaskTrace::RecognitionStarted {
+                    candidate_pages: candidate_pages.clone(),
+                    width: frame.width,
+                    height: frame.height,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            let evaluation_started = Instant::now();
+            let budget_before = timing.budget_at(evaluation_started);
+            let results = self.detector.evaluate_all_outcomes_in_context(&context);
+            let evaluation_timing = ContainedTaskEvaluationTiming {
+                elapsed_us: observe_instant_span(evaluation_started, Instant::now()),
+                budget_before,
+                result: if results.is_ok() {
+                    actingcommand_contract::TaskTimingResult::Ok
+                } else {
+                    actingcommand_contract::TaskTimingResult::Err
+                },
+            };
+            runtime
+                .record_page_evaluations("page", &results, Some(evaluation_timing))
+                .map_err(ContainedTaskRunError::Boundary)?;
+            let matched_pages = results
+                .map_err(|error| {
+                    actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
+                })
+                .and_then(require_all_page_evaluations)
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_recognition_failed",
+                        error.to_string(),
+                    )
+                })?
+                .into_iter()
+                .filter(|evaluation| evaluation.matched)
+                .map(|evaluation| evaluation.page_id)
+                .collect::<Vec<_>>();
+            if matched_pages.len() > 1 {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_recognition_conflict",
+                    matched_pages.join(","),
                 )
-            })?
-            .into_iter()
-            .filter(|evaluation| evaluation.matched)
-            .map(|evaluation| evaluation.page_id)
-            .collect::<Vec<_>>();
-        if matched_pages.len() > 1 {
-            return Err(ContainedTaskError::with_detail(
-                "contained_task_recognition_conflict",
-                matched_pages.join(","),
-            )
-            .into());
-        }
-        let page = matched_pages.into_iter().next();
-        runtime
-            .record(ContainedTaskTrace::RecognitionCompleted {
-                candidate_pages,
-                page_label: page.clone(),
-                width: frame.width,
-                height: frame.height,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        if let Some(required_page) = required_entry_page {
-            let matched = page.as_deref() == Some(required_page);
-            runtime
-                .record(ContainedTaskTrace::EntryRecognition {
-                    required_page: required_page.to_owned(),
-                    matched,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            if !matched {
-                return Err(
-                    ContainedTaskError::new("contained_task_home_entry_not_matched").into(),
-                );
+                .into());
             }
-        }
-        let Some(page_label) = page else {
-            return Ok(None);
-        };
-        // Preserve a recorder failure's original boundary type across the collector's task error API.
-        let mut recording_failure = None;
-        let observation = ocr_collector.observe_in_context_recorded(
-            &self.control.game,
-            &context,
-            &page_label,
-            &mut |target, result| {
-                runtime
-                    .record_ocr_evaluation(target, result)
-                    .map_err(|error| {
-                        recording_failure = Some(error);
-                        ContainedTaskError::new("contained_task_record_boundary")
-                    })
-            },
-        );
-        if let Some(error) = recording_failure {
-            return Err(ContainedTaskRunError::Boundary(error));
-        }
-        if let Some((frame_index, observation)) = observation? {
+            let page = matched_pages.into_iter().next();
             runtime
-                .record(ContainedTaskTrace::PostAdmissionOcrObservation {
-                    frame_index,
-                    observation,
+                .record(ContainedTaskTrace::RecognitionCompleted {
+                    candidate_pages,
+                    page_label: page.clone(),
+                    width: frame.width,
+                    height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-        }
-        if ocr_collector.field_failure.is_some() {
-            return Err(ContainedTaskError::new("contained_task_ocr_fields_unresolved").into());
-        }
-        Ok(Some(PageObservation {
-            page_label,
-            scene,
-            stability_sample,
-        }))
+            if let Some(required_page) = required_entry_page {
+                let matched = page.as_deref() == Some(required_page);
+                runtime
+                    .record(ContainedTaskTrace::EntryRecognition {
+                        required_page: required_page.to_owned(),
+                        matched,
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                if !matched {
+                    return Err(
+                        ContainedTaskError::new("contained_task_home_entry_not_matched").into(),
+                    );
+                }
+            }
+            let Some(page_label) = page else {
+                return Ok(None);
+            };
+            // Preserve a recorder failure's original boundary type across the collector's task error API.
+            let mut recording_failure = None;
+            let observation = ocr_collector.observe_in_context_recorded(
+                &self.control.game,
+                &context,
+                &page_label,
+                &mut |target, result| {
+                    runtime
+                        .record_ocr_evaluation(target, result)
+                        .map_err(|error| {
+                            recording_failure = Some(error);
+                            ContainedTaskError::new("contained_task_record_boundary")
+                        })
+                },
+            );
+            if let Some(error) = recording_failure {
+                return Err(ContainedTaskRunError::Boundary(error));
+            }
+            if let Some((frame_index, observation)) = observation? {
+                runtime
+                    .record(ContainedTaskTrace::PostAdmissionOcrObservation {
+                        frame_index,
+                        observation,
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+            }
+            if ocr_collector.field_failure.is_some() {
+                return Err(ContainedTaskError::new("contained_task_ocr_fields_unresolved").into());
+            }
+            Ok(Some(PageObservation {
+                page_label,
+                scene,
+                stability_sample,
+            }))
+        })();
+        let capture_ended = Instant::now();
+        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+            boundary,
+            identity,
+            context: timing,
+            started: capture_started,
+            ended: capture_ended,
+            succeeded: result.is_ok(),
+        });
+        result
     }
 
     fn await_postcondition<R: ContainedTaskRuntime>(
@@ -2855,12 +2945,14 @@ impl PreparedContainedTask {
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
             let observation = self.capture_page(runtime, ocr_collector, None, timing)?;
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
             if let Some(observation) = observation {
@@ -2902,11 +2994,23 @@ impl PreparedContainedTask {
                 });
             }
             let remaining = timeout.saturating_sub(started.elapsed());
+            let boundary = actingcommand_contract::TaskTimingBoundary::PostconditionWait;
+            let identity = runtime.task_boundary_identity(boundary);
+            let wait_started = Instant::now();
             thread::sleep(
                 interval
                     .min(remaining)
                     .min(task_deadline.saturating_duration_since(Instant::now())),
             );
+            let wait_ended = Instant::now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity,
+                context: timing,
+                started: wait_started,
+                ended: wait_ended,
+                succeeded: true,
+            });
         }
     }
 }

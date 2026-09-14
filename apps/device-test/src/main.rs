@@ -1980,7 +1980,7 @@ mod tests {
             AuditInput, CommandPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft,
             EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule,
         };
-        use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
+        use actingcommand_ledger::Sha256SecretFingerprinter;
         use actingcommand_ledger_forensics::{ForensicError, ForensicOutput};
 
         let root = temp_fixture_dir("ledger-read");
@@ -2005,11 +2005,26 @@ mod tests {
         let identifiers = IdentifierIssuer::new().expect("identifiers");
         let fingerprint =
             Sha256SecretFingerprinter::new(b"device-test-read-spec").expect("fingerprinter");
-        let writer = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.join("ledger"),
-            "device-test-read-spec",
-        ))
-        .expect("test ledger");
+        let database = std::sync::Arc::new(
+            actingcommand_runtime_database::RuntimeDatabase::open_with_initializer::<
+                actingcommand_ledger::GlobalLedgerError,
+            >(&root, b"device-test-read-spec", |_| Ok(()), |_| Ok(()))
+            .expect("database"),
+        );
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+            &root,
+            true,
+            limits,
+            limits.deadline().expect("deadline"),
+        )
+        .expect("maintenance owner");
+        maintenance
+            .initialize_empty(&database)
+            .expect("ready ledger");
+        let writer = maintenance
+            .open_writer(database, "device-test-read-spec".into(), |_| None)
+            .expect("test ledger");
         for offset in 0..3 {
             let draft = EventDraft::new(
                 identifiers.mint_event_id().expect("event id"),

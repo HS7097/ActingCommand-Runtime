@@ -10,6 +10,11 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::critical::{
+    CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
+    DefiniteEffectDisposition, execute_critical,
+};
+use crate::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor,
     EventDraft, EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
@@ -17,11 +22,6 @@ use actingcommand_contract::{
     OriginModule, ProjectionProfile, SanitizationError, SchedulerPayloadDraft, SecretField,
     SecretFingerprinter, Sha256Fingerprint,
 };
-use actingcommand_ledger::critical::{
-    CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
-    DefiniteEffectDisposition, execute_critical,
-};
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use tempfile::TempDir;
 
 const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_LEDGER_PROCESS_ROOT";
@@ -239,7 +239,11 @@ fn hard_killed_writer_releases_os_lock_and_records_recovery() {
     let ready_path = temp.path().join("child-ready");
     let executable = env::current_exe().expect("test executable");
     let mut child = Command::new(executable)
-        .args(["--exact", "ledger_writer_process_child", "--nocapture"])
+        .args([
+            "--exact",
+            "global::tests::process::ledger_writer_process_child",
+            "--nocapture",
+        ])
         .env(CHILD_ROOT_ENV, temp.path())
         .env(CHILD_READY_ENV, &ready_path)
         .stdout(Stdio::null())
@@ -324,7 +328,11 @@ fn crash_after_intent_never_forges_an_outcome() {
     let temp = TempDir::new().expect("temp root");
     let ready_path = temp.path().join("critical-ready");
     let mut child = Command::new(env::current_exe().expect("test executable"))
-        .args(["--exact", "critical_intent_process_child", "--nocapture"])
+        .args([
+            "--exact",
+            "global::tests::process::critical_intent_process_child",
+            "--nocapture",
+        ])
         .env(CRITICAL_CHILD_ROOT_ENV, temp.path())
         .env(CRITICAL_CHILD_READY_ENV, &ready_path)
         .stdout(Stdio::null())

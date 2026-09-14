@@ -4,6 +4,24 @@
 use super::*;
 use actingcommand_runtime_database::RuntimeDatabase;
 
+// Shared Host startup configuration.
+mod host {
+    use actingcommand_contract::{IdentifierIssuer, InstanceId};
+    use actingcommand_policy::{
+        EvaluationFacts, EvaluationResources, FactValue, HostResourceSnapshot, InstanceSnapshot,
+        ObservedOutcome, PoolValueSnapshot,
+    };
+    use actingcommand_runtime_host::{
+        PolicyInputSnapshot, ProcedureBinding, ProcedureManifest, RuntimeHostConfig,
+    };
+    use actingcommand_scheduler::SchedulerConfig;
+    use sha2::{Digest, Sha256};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    include!("../../../../runtime-host/src/tests/support/startup.rs");
+}
+
 pub(in crate::global) fn database(root: &Path) -> Arc<RuntimeDatabase> {
     Arc::new(
         RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
@@ -270,9 +288,52 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         .expect("imported facts");
     assert_eq!(&facts[..2], &expected);
     assert_eq!(facts.len(), 3);
+    {
+        let mut connection = imported_database
+            .connection("formal original rows")
+            .unwrap();
+        let before = connection.total_changes();
+        let transaction = connection.transaction().unwrap();
+        let borrowed = imported_database.borrow_transaction(&transaction);
+        for event in &facts {
+            verify_transaction_event(&imported_database, &borrowed, event)
+                .expect("imported original fact in the same transaction");
+        }
+        let other_owner = RuntimeDatabase::open_existing(imported_root.path(), true).unwrap();
+        assert_eq!(
+            verify_transaction_event(&other_owner, &borrowed, &facts[0])
+                .expect_err("different Database owner")
+                .code(),
+            "ledger_transaction_owner_mismatch"
+        );
+        assert!(!transaction.is_autocommit());
+        assert_eq!(transaction.total_changes(), before);
+        transaction.rollback().unwrap();
+    }
+    let frozen_metadata =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path())).unwrap();
     imported
         .append(event("after-cutover"))
         .expect("formal append preserves marker");
+    let frozen_page = frozen_metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Ui,
+            &actingcommand_contract::RuntimeEventQueryPageRequest::default(),
+        )
+        .unwrap();
+    assert_eq!(frozen_page.snapshot_ledger_position(), 3);
+    assert_eq!(
+        frozen_page
+            .events()
+            .iter()
+            .map(|event| event.event_id)
+            .collect::<Vec<_>>(),
+        facts
+            .iter()
+            .map(|event| *event.event_id())
+            .collect::<Vec<_>>()
+    );
     let view = GlobalLedger::open_evidence(
         GlobalLedgerEvidenceConfig::new(imported_root.path()),
         |_| None,
@@ -282,7 +343,102 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     assert!(view.is_complete());
     assert_eq!(&view.events()[..2], &expected);
     assert_eq!(view.latest_sequence(), 4);
+    let metadata =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path()))
+            .expect("metadata source verifies the imported prefix and marker");
+    assert_eq!(metadata.backend(), "sqlite");
+    assert!(metadata.read_complete());
+    assert_eq!(metadata.latest_sequence(), view.latest_sequence());
+    let request = actingcommand_contract::RuntimeEventQueryPageRequest::default();
+    let projected = metadata
+        .project_view_page(
+            &EventQuery::default(),
+            ProjectionProfile::Forensic,
+            &request,
+        )
+        .expect("metadata page");
+    let online = imported
+        .project_view_page(EventQuery::default(), ProjectionProfile::Forensic, request)
+        .expect("writer page");
+    assert_eq!(projected.events(), online.events());
+    assert_eq!(
+        projected.snapshot_ledger_position(),
+        online.snapshot_ledger_position()
+    );
+    assert_eq!(
+        projected.read_scope().unwrap().material_read,
+        actingcommand_contract::LedgerMaterialReadState::NotRequested
+    );
+    let bounded_metadata = GlobalLedger::open_metadata(
+        GlobalLedgerEvidenceConfig::new(imported_root.path()).with_budget(1, 1, deadline),
+    )
+    .err()
+    .expect("bounded metadata read");
+    assert_eq!(
+        (
+            bounded_metadata.code(),
+            bounded_metadata.operation(),
+            bounded_metadata.is_fatal(),
+        ),
+        ("ledger_read_budget_exceeded", "read_only_snapshot", false)
+    );
     imported.close().expect("formal writer close");
+    {
+        let connection = imported_database
+            .connection("supported pre-view offline root")
+            .unwrap();
+        let objects = connection
+            .prepare("SELECT type,name FROM sqlite_schema WHERE name GLOB 'ledger_view_*'")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(objects.iter().filter(|(kind, _)| kind == "view").count(), 6);
+        for (kind, name) in objects {
+            connection
+                .execute_batch(&format!("DROP {kind} {name}"))
+                .unwrap();
+        }
+    }
+    let prior_schema =
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path())).unwrap();
+    for ledger_view in actingcommand_contract::LedgerView::ALL {
+        let query = EventQuery {
+            view: Some(ledger_view),
+            ..EventQuery::default()
+        };
+        let request = actingcommand_contract::RuntimeEventQueryPageRequest::default();
+        let page = prior_schema
+            .project_view_page(&query, ProjectionProfile::Forensic, &request)
+            .unwrap();
+        let expected = view.query(&query);
+        assert_eq!(
+            page.events()
+                .iter()
+                .map(|event| event.event_id)
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|event| *event.event_id())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(page.snapshot_ledger_position(), 4);
+    }
+    assert_eq!(
+        imported_database
+            .connection("read-only view schema unchanged")
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name GLOB 'ledger_view_*'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
     let reopened = LedgerMaintenance::acquire(imported_root.path(), false, limits, deadline)
         .expect("formal lock released");
     assert!(matches!(
@@ -306,6 +462,12 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
             .expect_err("malformed marker is fatal")
             .is_fatal()
     );
+    assert!(
+        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(imported_root.path()))
+            .err()
+            .expect("metadata does not skip malformed marker")
+            .is_fatal()
+    );
     imported_database.connection("remove schema in existing integrity specification").unwrap().execute_batch("DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta;").unwrap();
     assert!(
         reopened
@@ -314,4 +476,145 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
             .is_fatal()
     );
     reopened.close().expect("read owner close");
+
+    {
+        use actingcommand_device::{
+            AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
+            TouchBackendChoice, TouchBackendConfig,
+        };
+        use actingcommand_runtime_host::{
+            ExecutionBackendProvider, ExecutionBackendRegistration, ExecutionBackendRegistry,
+            RuntimeHost,
+        };
+        use actingcommand_runtime_state::RuntimeStateStore;
+        use host::{config, instance_id};
+
+        // S3 extends the existing owner/startup specification through the formal offline entry.
+        let source_root = TempDir::new().expect("legacy runtime root");
+        drop(
+            RuntimeStateStore::open(source_root.path(), b"runtime-host-test-salt")
+                .expect("existing State material"),
+        );
+        let segment = GlobalLedger::open(GlobalLedgerConfig::new(
+            source_root.path().join("ledger"),
+            "legacy-source",
+        ))
+        .expect("legacy source");
+        segment.close().expect("source closed");
+        let original_writer = std::fs::read(source_root.path().join("ledger/writer.lock"))
+            .expect("source writer bytes");
+        let external = TempDir::new().expect("maintenance destinations");
+        let backup = external.path().join("backup");
+        let maintenance = |operation, target| {
+            RuntimeHost::maintain_ledger(
+                config(&source_root),
+                actingcommand_runtime_host::LedgerMaintenanceRequest {
+                    operation,
+                    backup: Some(backup.clone()),
+                    target,
+                    artifact_root: None,
+                    limits: Default::default(),
+                },
+            )
+        };
+        let provider: Arc<dyn ExecutionBackendProvider> = Arc::new(
+            ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+                "node.a",
+                instance_id(),
+                "neutral.application",
+                TouchBackendConfig::new(
+                    AdbConfig::default(),
+                    DeviceTarget::default(),
+                    MaaTouchConfig::default(),
+                )
+                .with_requested(TouchBackendChoice::AdbShellInput),
+                CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+                    .with_requested(CaptureBackendChoice::Adb),
+            )
+            .expect("explicit instance configuration")])
+            .expect("single-instance registry"),
+        );
+        let refused = RuntimeHost::start(config(&source_root), provider)
+            .err()
+            .expect("legacy startup requires migration");
+        assert_eq!(refused.code(), "ledger_migration_required");
+        let frozen = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Backup,
+            None,
+        )
+        .expect("formal frozen backup");
+        assert_eq!(frozen.status, "backed-up");
+        let preview = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::DryRun,
+            None,
+        )
+        .expect("formal dry-run");
+        assert_eq!(preview.status, "dry-run");
+        assert_eq!(
+            serde_json::to_value(&preview.ledger).expect("preview status"),
+            serde_json::to_value(LedgerStorageStatus::Missing).expect("missing status")
+        );
+        assert!(!preview.activated);
+        let delivered = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Import,
+            None,
+        )
+        .expect("formal import");
+        assert_eq!(delivered.status, "imported");
+        assert_eq!(delivered.backup_id, frozen.backup_id);
+        let repeated = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Import,
+            None,
+        )
+        .expect("formal idempotent import");
+        assert_eq!(repeated.status, "already-imported");
+        assert_eq!(repeated.ledger, delivered.ledger);
+        assert_eq!(
+            std::fs::read(source_root.path().join("ledger/writer.lock")).unwrap(),
+            original_writer
+        );
+        let restore_target = external.path().join("restored");
+        let restored = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Restore,
+            Some(restore_target.clone()),
+        )
+        .expect("exact pre-cutover restore before later events");
+        assert_eq!(restored.status, "restored");
+        assert!(!restored.activated);
+        assert_eq!(
+            serde_json::to_value(&restored.ledger).expect("restored status"),
+            serde_json::to_value(LedgerStorageStatus::Missing).expect("missing status")
+        );
+        let provider: Arc<dyn ExecutionBackendProvider> = Arc::new(
+            ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+                "node.a",
+                instance_id(),
+                "neutral.application",
+                TouchBackendConfig::new(
+                    AdbConfig::default(),
+                    DeviceTarget::default(),
+                    MaaTouchConfig::default(),
+                )
+                .with_requested(TouchBackendChoice::AdbShellInput),
+                CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+                    .with_requested(CaptureBackendChoice::Adb),
+            )
+            .expect("explicit instance configuration")])
+            .expect("single-instance registry"),
+        );
+        let migrated = RuntimeHost::start(config(&source_root), provider).expect("runtime host");
+        migrated
+            .close()
+            .expect("normal SQLite startup after cutover");
+        let refused = maintenance(
+            actingcommand_runtime_host::LedgerMaintenanceOperation::Restore,
+            Some(external.path().join("discard-forbidden")),
+        )
+        .expect_err("new Runtime facts cannot be lost");
+        assert!(matches!(
+            refused.code.as_str(),
+            "restore_would_discard_new_events" | "restore_state_has_advanced"
+        ));
+        assert!(!external.path().join("discard-forbidden").exists());
+    }
 }
