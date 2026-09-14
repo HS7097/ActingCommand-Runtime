@@ -202,23 +202,23 @@
     },
     {
       "command": "scheduler status",
-      "reason": "Explicit scheduler stub; scheduler implementation is outside issue 33"
+      "reason": "Declared scheduler command awaiting Runtime wiring"
     },
     {
       "command": "scheduler pause",
-      "reason": "Explicit scheduler stub; scheduler implementation is outside issue 33"
+      "reason": "Declared scheduler command awaiting Runtime wiring"
     },
     {
       "command": "scheduler resume",
-      "reason": "Explicit scheduler stub; scheduler implementation is outside issue 33"
+      "reason": "Declared scheduler command awaiting Runtime wiring"
     },
     {
       "command": "scheduler start",
-      "reason": "Explicit scheduler stub; scheduler implementation is outside issue 33"
+      "reason": "Declared scheduler command awaiting Runtime wiring"
     },
     {
       "command": "scheduler stop",
-      "reason": "Explicit scheduler stub; scheduler implementation is outside issue 33"
+      "reason": "Declared scheduler command awaiting Runtime wiring"
     }
   ]
 }

@@ -4,6 +4,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+mod ledger_owners;
+pub use ledger_owners::{LedgerOwnerModule, discover_ledger_owners};
+
 use syn::visit::Visit;
 use syn::{
     BinOp, Expr, ExprMatch, FnArg, Item, ItemFn, Lit, Pat, ReturnType, Stmt, Type, UseTree,
@@ -320,6 +323,38 @@ fn identifier_words(value: &str) -> Vec<String> {
         previous = Some(character);
     }
     push_identifier_word(&mut words, &mut current);
+    // Long identity names remain recognizable inside acronym or mixed-case runs.
+    // Short codes still require an identifier word boundary.
+    for token in value.split(|character: char| !character.is_ascii_alphanumeric()) {
+        let lower = token.to_ascii_lowercase();
+        for identity in [
+            "arknights",
+            "azurlane",
+            "bluearchive",
+            "gacha",
+            "originite",
+            "pyroxene",
+            "sortie",
+        ] {
+            if lower.contains(identity) && !words.iter().any(|word| word == identity) {
+                words.push(identity.to_string());
+            }
+        }
+        if matches!(
+            lower.as_str(),
+            "ak" | "al" | "ark" | "ba" | "alas" | "azur" | "baas" | "pvp"
+        ) && !words.contains(&lower)
+        {
+            words.push(lower.clone());
+        }
+        for suffix in ["cn", "jp", "ko", "maa", "tw"] {
+            if lower.contains(&format!("server{suffix}"))
+                && !contains_word_sequence(&words, &["server", suffix])
+            {
+                words.extend(["server".to_string(), suffix.to_string()]);
+            }
+        }
+    }
     words
 }
 
@@ -339,13 +374,7 @@ fn contains_word_sequence(words: &[String], sequence: &[&str]) -> bool {
 }
 
 fn has_cfg_test(attributes: &[syn::Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        attribute.path().is_ident("cfg")
-            && matches!(
-                &attribute.meta,
-                syn::Meta::List(list) if list.tokens.to_string().split_whitespace().any(|token| token == "test")
-            )
-    })
+    matches!(ledger_owners::production_attributes(attributes), Ok(false))
 }
 
 /// Finds public APIs that expose `serde_json::Value`, including imported aliases.
@@ -361,45 +390,62 @@ pub fn inspect_public_api(path: &str, source: &str) -> Result<Vec<String>, Strin
 /// Observation adapter boundary: https://github.com/HS7097/ActingCommand-Workflow/issues/285#issuecomment-5654739712
 pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
-    let aliases = local_type_aliases(&file.items);
+    let items = ledger_owners::production_items(&file.items)?;
+    let aliases = local_type_aliases(&items);
+    inspect_ledger_append_ingress(&[LedgerOwnerModule {
+        path: path.into(),
+        module: "crate".to_string(),
+        items,
+        aliases,
+    }])
+}
+
+/// Checks the complete discovered Ledger owner set without merging lexical scopes.
+pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec<String>, String> {
+    if owners.is_empty() {
+        return Err("empty Ledger owner collection".to_string());
+    }
+    let path = owners[0].path.display().to_string();
     let mut append_methods = Vec::new();
     let mut observation_methods = Vec::new();
     let mut request_methods = Vec::new();
     let mut alternate_ingress_methods = Vec::new();
-    for item in &file.items {
-        let Item::Impl(item_impl) = item else {
-            continue;
-        };
-        if impl_self_ident(item_impl)
-            .is_none_or(|ident| resolve_alias(&ident.to_string(), &aliases) != "GlobalLedger")
-        {
-            continue;
-        }
-        for item in &item_impl.items {
-            let syn::ImplItem::Fn(method) = item else {
+    for owner in owners {
+        let aliases = &owner.aliases;
+        for item in &owner.items {
+            let Item::Impl(item_impl) = item else {
                 continue;
             };
-            if method.sig.ident == "append" && is_public(&method.vis) {
-                append_methods.push((item_impl, method));
+            if impl_self_ident(item_impl)
+                .is_none_or(|ident| resolve_alias(&ident.to_string(), &aliases) != "GlobalLedger")
+            {
                 continue;
             }
-            if method.sig.ident == "append_with_observation" {
-                observation_methods.push((item_impl, method));
-            }
-            if method.sig.ident == "append_request" {
-                request_methods.push((item_impl, method));
-            }
-            if method.sig.ident == "append_transaction" && is_public(&method.vis) {
-                let typed = method
-                    .sig
-                    .inputs
-                    .iter()
-                    .filter_map(|input| match input {
-                        FnArg::Receiver(_) => None,
-                        FnArg::Typed(argument) => Some(argument),
-                    })
-                    .collect::<Vec<_>>();
-                let typed_work = typed.get(1).is_some_and(|argument| {
+            for item in &item_impl.items {
+                let syn::ImplItem::Fn(method) = item else {
+                    continue;
+                };
+                if method.sig.ident == "append" && is_public(&method.vis) {
+                    append_methods.push((item_impl, method, owner));
+                    continue;
+                }
+                if method.sig.ident == "append_with_observation" {
+                    observation_methods.push((item_impl, method, owner));
+                }
+                if method.sig.ident == "append_request" {
+                    request_methods.push((item_impl, method, owner));
+                }
+                if method.sig.ident == "append_transaction" && is_public(&method.vis) {
+                    let typed = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .filter_map(|input| match input {
+                            FnArg::Receiver(_) => None,
+                            FnArg::Typed(argument) => Some(argument),
+                        })
+                        .collect::<Vec<_>>();
+                    let typed_work = typed.get(1).is_some_and(|argument| {
                     let Type::Path(path) = argument.ty.as_ref() else { return false; };
                     let Some(segment) = path.path.segments.last() else { return false; };
                     if segment.ident != "Box" { return false; }
@@ -409,36 +455,37 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
                     object.dyn_token.is_some() && object.bounds.len() == 1 && matches!(object.bounds.first(),
                         Some(syn::TypeParamBound::Trait(bound)) if bound.path.segments.last().is_some_and(|segment| segment.ident == "LedgerTransactionWork"))
                 });
-                if typed.len() == 2
-                    && method.sig.generics.params.is_empty()
-                    && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
-                    && type_last_ident(&typed[0].ty)
-                        .is_some_and(|ident| ident == "SanitizedEventDraft")
-                    && pattern_ident(&typed[1].pat).is_some_and(|ident| ident == "work")
-                    && typed_work
-                {
-                    continue;
+                    if typed.len() == 2
+                        && method.sig.generics.params.is_empty()
+                        && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
+                        && type_last_ident(&typed[0].ty)
+                            .is_some_and(|ident| ident == "SanitizedEventDraft")
+                        && pattern_ident(&typed[1].pat).is_some_and(|ident| ident == "work")
+                        && typed_work
+                    {
+                        continue;
+                    }
                 }
-            }
-            if is_public(&method.vis)
-                && (method.sig.ident.to_string().starts_with("append")
-                    || method_accepts_event_ingress(method)
-                    || method.sig.inputs.iter().any(|input| {
-                        let FnArg::Typed(argument) = input else {
-                            return false;
-                        };
-                        [
-                            "EventDraft",
-                            "SanitizedEventDraft",
-                            "EventPayloadDraft",
-                            "ArtifactReference",
-                            "PersistedEvent",
-                        ]
-                        .iter()
-                        .any(|name| type_uses_resolved_ident(&argument.ty, name, &aliases))
-                    }))
-            {
-                alternate_ingress_methods.push(method.sig.ident.to_string());
+                if is_public(&method.vis)
+                    && (method.sig.ident.to_string().starts_with("append")
+                        || method_accepts_event_ingress(method)
+                        || method.sig.inputs.iter().any(|input| {
+                            let FnArg::Typed(argument) = input else {
+                                return false;
+                            };
+                            [
+                                "EventDraft",
+                                "SanitizedEventDraft",
+                                "EventPayloadDraft",
+                                "ArtifactReference",
+                                "PersistedEvent",
+                            ]
+                            .iter()
+                            .any(|name| type_uses_resolved_ident(&argument.ty, name, &aliases))
+                        }))
+                {
+                    alternate_ingress_methods.push((method.sig.ident.to_string(), owner));
+                }
             }
         }
     }
@@ -451,6 +498,7 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
         ));
     } else {
         let method = append_methods[0].1;
+        let aliases = &append_methods[0].2.aliases;
         let typed = method
             .sig
             .inputs
@@ -484,11 +532,13 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
                 request_methods.len()
             ));
         }
-        for (item_impl, method) in observation_methods
+        for (item_impl, method, owner) in observation_methods
             .iter()
             .chain(append_methods.iter())
             .chain(request_methods.iter())
         {
+            let aliases = &owner.aliases;
+            let path = owner.path.display();
             let request = method.sig.ident == "append_request";
             let typed = method
                 .sig
@@ -689,10 +739,11 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             && request_methods.len() == 1
             && violations.len() == previous_violations;
     }
-    for method in alternate_ingress_methods {
+    for (method, owner) in alternate_ingress_methods {
         if method == "append_with_observation" && observation_adapter_valid {
             continue;
         }
+        let path = owner.path.display();
         violations.push(format!(
             "{path}: GlobalLedger exposes alternate public event ingress {method}"
         ));
@@ -704,11 +755,27 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
 pub fn inspect_persisted_event_ownership(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
     let mut violations = Vec::new();
-    let mut found = false;
-    for item in &file.items {
+    let items = ledger_owners::production_items(&file.items)?;
+    let found = inspect_persisted_items(path, &items, &local_type_aliases(&items), &mut violations);
+    if found != 1 {
+        violations.push(format!(
+            "{path}: expected one PersistedEvent definition, found {found}"
+        ));
+    }
+    Ok(violations)
+}
+
+fn inspect_persisted_items(
+    path: &str,
+    items: &[Item],
+    aliases: &LocalTypeAliases,
+    violations: &mut Vec<String>,
+) -> usize {
+    let mut found = 0;
+    for item in items {
         match item {
             Item::Struct(item_struct) if item_struct.ident == "PersistedEvent" => {
-                found = true;
+                found += 1;
                 if derives_ident(&item_struct.attrs, "Deserialize") {
                     violations.push(format!("{path}: PersistedEvent derives Deserialize"));
                 }
@@ -719,13 +786,17 @@ pub fn inspect_persisted_event_ownership(path: &str, source: &str) -> Result<Vec
                 }
             }
             Item::Impl(item_impl)
-                if impl_self_ident(item_impl).is_some_and(|ident| ident == "PersistedEvent") =>
+                if impl_self_ident(item_impl).is_some_and(|ident| {
+                    resolve_alias(&ident.to_string(), aliases) == "PersistedEvent"
+                }) =>
             {
                 if item_impl
                     .trait_
                     .as_ref()
                     .and_then(|(_, path, _)| path.segments.last())
-                    .is_some_and(|segment| segment.ident == "Deserialize")
+                    .is_some_and(|segment| {
+                        resolve_alias(&segment.ident.to_string(), aliases) == "Deserialize"
+                    })
                 {
                     violations.push(format!("{path}: PersistedEvent implements Deserialize"));
                 }
@@ -740,7 +811,9 @@ pub fn inspect_persisted_event_ownership(path: &str, source: &str) -> Result<Vec
                         .any(|input| matches!(input, FnArg::Receiver(_)));
                     if is_public(&method.vis)
                         && !has_receiver
-                        && signature_returns_ident(&method.sig, &["Self", "PersistedEvent"])
+                        && ["Self", "PersistedEvent"].iter().any(|name| {
+                            signature_returns_resolved_ident(&method.sig, name, aliases)
+                        })
                     {
                         violations.push(format!(
                             "{path}: PersistedEvent has public constructor {}",
@@ -752,10 +825,156 @@ pub fn inspect_persisted_event_ownership(path: &str, source: &str) -> Result<Vec
             _ => {}
         }
     }
-    if !found {
-        violations.push(format!("{path}: missing public PersistedEvent definition"));
+    found
+}
+
+/// Applies formal fact/event public-surface rules to all discovered production owners.
+pub fn inspect_ledger_public_api(owners: &[LedgerOwnerModule]) -> Result<Vec<String>, String> {
+    if owners.is_empty() {
+        return Err("empty Ledger owner collection".to_string());
+    }
+    let mut violations = Vec::new();
+    let mut facts = 0;
+    for owner in owners {
+        let path = owner.path.display().to_string();
+        facts += inspect_persisted_items(&path, &owner.items, &owner.aliases, &mut violations);
+        let items = owner
+            .items
+            .iter()
+            .filter(|item| owner.module != "crate" || formal_ledger_root_item(item, &owner.aliases))
+            .cloned()
+            .collect::<Vec<_>>();
+        inspect_public_items_scoped(
+            &path,
+            &items,
+            Some(&owner.module),
+            Some(&owner.aliases),
+            &mut violations,
+        );
+    }
+    if facts != 1 {
+        violations.push(format!(
+            "Ledger owners must define exactly one PersistedEvent, found {facts}"
+        ));
     }
     Ok(violations)
+}
+
+fn formal_ledger_root_item(item: &Item, aliases: &LocalTypeAliases) -> bool {
+    const FORMAL: &[&str] = &[
+        "GlobalLedger",
+        "PersistedEvent",
+        "SanitizedEventDraft",
+        "EventDraft",
+        "EventPayload",
+        "ProjectedEvent",
+    ];
+    let signature = |sig: &syn::Signature| {
+        FORMAL
+            .iter()
+            .any(|name| signature_returns_resolved_ident(sig, name, aliases))
+            || sig.inputs.iter().any(|input| match input {
+                FnArg::Typed(input) => FORMAL
+                    .iter()
+                    .any(|name| type_uses_resolved_ident(&input.ty, name, aliases)),
+                FnArg::Receiver(_) => false,
+            })
+    };
+    match item {
+        Item::Use(_) => true,
+        Item::Impl(item) => {
+            impl_self_ident(item).is_some_and(|name| {
+                FORMAL.contains(&resolve_alias(&name.to_string(), aliases).as_str())
+            }) || item
+                .items
+                .iter()
+                .any(|member| matches!(member, syn::ImplItem::Fn(method) if signature(&method.sig)))
+        }
+        Item::Fn(item) => signature(&item.sig),
+        Item::Struct(item) => {
+            FORMAL.contains(&item.ident.to_string().as_str())
+                || item.fields.iter().any(|field| {
+                    FORMAL
+                        .iter()
+                        .any(|name| type_uses_resolved_ident(&field.ty, name, aliases))
+                })
+        }
+        Item::Type(item) => FORMAL
+            .iter()
+            .any(|name| type_uses_resolved_ident(&item.ty, name, aliases)),
+        Item::Enum(item) => item
+            .variants
+            .iter()
+            .flat_map(|variant| &variant.fields)
+            .any(|field| {
+                FORMAL
+                    .iter()
+                    .any(|name| type_uses_resolved_ident(&field.ty, name, aliases))
+            }),
+        Item::Trait(item) => item
+            .items
+            .iter()
+            .any(|member| matches!(member, syn::TraitItem::Fn(method) if signature(&method.sig))),
+        _ => false,
+    }
+}
+
+/// Keeps the existing C1 forbidden constructs out of each production owner scope.
+pub fn inspect_ledger_forbidden_sources(
+    owners: &[LedgerOwnerModule],
+) -> Result<Vec<String>, String> {
+    if owners.is_empty() {
+        return Err("empty Ledger owner collection".to_string());
+    }
+    let mut violations = Vec::new();
+    for owner in owners {
+        let mut visitor = C1SourceVisitor {
+            path: owner.path.display().to_string(),
+            violations: &mut violations,
+        };
+        for item in &owner.items {
+            visitor.visit_item(item);
+        }
+    }
+    Ok(violations)
+}
+
+struct C1SourceVisitor<'a> {
+    path: String,
+    violations: &'a mut Vec<String>,
+}
+impl C1SourceVisitor<'_> {
+    fn inspect(&mut self, value: &str) {
+        for forbidden in [
+            "ClassifiedField",
+            "StructuredPayloadDraft",
+            "ErasedSanitizedEventDraft",
+            "take_hook",
+            "set_hook",
+            "catch_unwind",
+            "events_after(",
+        ] {
+            if value.contains(forbidden) {
+                self.violations
+                    .push(format!("{}: forbidden source token {forbidden}", self.path));
+            }
+        }
+    }
+}
+impl<'ast> Visit<'ast> for C1SourceVisitor<'_> {
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        self.inspect(&ident.to_string());
+        if ident == "events_after" {
+            self.inspect("events_after(");
+        }
+    }
+    fn visit_lit_str(&mut self, value: &'ast syn::LitStr) {
+        self.inspect(&value.value());
+    }
+    fn visit_macro(&mut self, value: &'ast syn::Macro) {
+        self.visit_path(&value.path);
+        self.inspect(&value.tokens.to_string().replace(' ', ""));
+    }
 }
 
 /// Rejects any contract reference to the ledger-owned fact or a contract-owned matches method.
@@ -2171,8 +2390,51 @@ fn inspect_public_items(
     module: Option<&str>,
     violations: &mut Vec<String>,
 ) {
-    let aliases = serde_json_value_aliases(items);
-    let ledger_aliases = ledger_storage_aliases(items);
+    inspect_public_items_scoped(path, items, module, None, violations);
+}
+
+fn inspect_public_items_scoped(
+    path: &str,
+    items: &[Item],
+    module: Option<&str>,
+    scope: Option<&LocalTypeAliases>,
+    violations: &mut Vec<String>,
+) {
+    let mut aliases = serde_json_value_aliases(items);
+    let mut ledger_aliases = ledger_storage_aliases(items);
+    if let Some(scope) = scope {
+        for name in scope.names.keys() {
+            let target = resolve_alias(name, scope);
+            if target == "Value" {
+                aliases.values.insert(name.clone());
+            }
+            if target == "serde_json" {
+                aliases.modules.insert(name.clone());
+            }
+            if is_ledger_storage_type(&target) {
+                ledger_aliases.types.insert(name.clone());
+            }
+            if target == "actingcommand_ledger" {
+                ledger_aliases.modules.insert(name.clone());
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for item in items {
+            if let Item::Type(item) = item {
+                if type_uses_json_value(&item.ty, &aliases) {
+                    changed |= aliases.values.insert(item.ident.to_string());
+                }
+                if type_uses_ledger_storage(&item.ty, &ledger_aliases) {
+                    changed |= ledger_aliases.types.insert(item.ident.to_string());
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     for item in items {
         match item {
             Item::Fn(function) if is_public(&function.vis) => {
@@ -2592,6 +2854,54 @@ mod tests {
             super::identifier_words("HTTPServerBAConfig"),
             ["http", "server", "ba", "config"]
         );
+        for identifier in [
+            "ARKNIGHTSCOMPILER",
+            "aRkNiGhTsCompiler",
+            "BLUEARCHIVEHOME",
+            "bA",
+        ] {
+            let source = format!("struct {identifier};");
+            assert!(
+                !super::inspect_generic_runtime_identity("fixture.rs", &source).is_empty(),
+                "{identifier}"
+            );
+            assert!(
+                !super::inspect_generic_authoring_identity("fixture.rs", &source)
+                    .unwrap()
+                    .is_empty(),
+                "{identifier}"
+            );
+        }
+        for identifier in ["SERVERCN", "sErVeRjP"] {
+            assert!(
+                !super::inspect_generic_runtime_identity("fixture.rs", identifier).is_empty(),
+                "{identifier}"
+            );
+        }
+        let allowed = r#"
+            const SERVER_BASE: &str = "neutral";
+            const BACKUP: &str = "neutral";
+            const BALANCE: &str = "neutral";
+            const AZURE: &str = "neutral";
+            const HASH: &str = "f0a5b8536ac19f3df43dcae823c13466ad4d3a13";
+            const LANGUAGE: &str = "zh_cn";
+            fn backend_banner() {}
+        "#;
+        assert!(super::inspect_generic_runtime_identity("fixture.rs", allowed).is_empty());
+        assert!(
+            super::inspect_generic_authoring_identity("fixture.rs", allowed)
+                .unwrap()
+                .is_empty()
+        );
+        let provider = "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll";
+        assert!(
+            super::inspect_generic_runtime_identity("crates/vision-ffi/src/lib.rs", provider)
+                .is_empty()
+        );
+        assert!(
+            !super::inspect_generic_runtime_identity("crates/runtime-host/src/lib.rs", provider)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2722,6 +3032,98 @@ mod tests {
                     .is_empty()
             );
         }
+        let scoped = |child: &str| {
+            let root = r#"
+                use serde_json::Value as Payload;
+                pub struct GlobalLedger;
+                pub struct PersistedEvent { sequence: u64 }
+                pub struct LedgerRecord { pub payload: Payload }
+                pub struct SanitizedEventDraft;
+                type Owner = GlobalLedger;
+            "#;
+            let mut owners = [
+                ("crate", root),
+                ("crate::writer", child),
+                ("crate::sibling", "type Owner = Unrelated;"),
+            ]
+            .into_iter()
+            .map(|(module, source)| {
+                let file = syn::parse_file(source).unwrap();
+                let items = super::ledger_owners::production_items(&file.items).unwrap();
+                super::LedgerOwnerModule {
+                    path: format!("{module}.rs").into(),
+                    module: module.to_string(),
+                    aliases: super::local_type_aliases(&items),
+                    items,
+                }
+            })
+            .collect::<Vec<_>>();
+            super::ledger_owners::resolve_module_aliases(&mut owners).unwrap();
+            owners
+        };
+        let writer = r#"
+            use super::{Owner as Writer, SanitizedEventDraft as Clean};
+            impl Writer {
+                pub fn append(&self, draft: Clean) {}
+                #[cfg(all(test, feature = "fixture"))]
+                pub fn append_test(&self, draft: Raw) {}
+            }
+        "#;
+        let owners = scoped(writer);
+        assert!(
+            super::inspect_ledger_append_ingress(&owners)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::inspect_ledger_public_api(&owners)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::inspect_ledger_forbidden_sources(&owners)
+                .unwrap()
+                .is_empty()
+        );
+        let duplicate = scoped(&format!(
+            "{writer} impl Writer {{ pub fn append(&self, draft: Clean) {{}} }}"
+        ));
+        assert!(
+            super::inspect_ledger_append_ingress(&duplicate)
+                .unwrap()
+                .iter()
+                .any(|error| error.contains("found 2"))
+        );
+        let raw = scoped(&writer.replace("draft: Clean", "draft: serde_json::Value"));
+        assert!(
+            !super::inspect_ledger_append_ingress(&raw)
+                .unwrap()
+                .is_empty()
+        );
+        let leak = scoped(&format!(
+            r#"{writer}
+            use super::{{Payload, PersistedEvent}};
+            #[cfg(any(test, feature = "production"))]
+            impl PersistedEvent {{ pub fn leaked(&self) -> Payload {{ todo!() }} }}
+        "#
+        ));
+        assert!(!super::inspect_ledger_public_api(&leak).unwrap().is_empty());
+        let forbidden = scoped(&format!(
+            "{writer} fn active_tests_name() {{ std::panic::catch_unwind(|| ()); }}"
+        ));
+        assert!(
+            !super::inspect_ledger_forbidden_sources(&forbidden)
+                .unwrap()
+                .is_empty()
+        );
+        let test_only = scoped(&format!(
+            "{writer} #[cfg(test)] fn excluded() {{ std::panic::catch_unwind(|| ()); }}"
+        ));
+        assert!(
+            super::inspect_ledger_forbidden_sources(&test_only)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

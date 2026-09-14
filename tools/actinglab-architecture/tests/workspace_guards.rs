@@ -4,11 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
-    inspect_generic_authoring_identity, inspect_generic_runtime_identity,
-    inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
+    LedgerOwnerModule, contract_dependency_violations, discover_ledger_owners,
+    extract_command_inventory, inspect_contract_fact_matching, inspect_generic_authoring_identity,
+    inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
+    inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
     ledger_owns_query_matching, resource_tooling_removability_violations,
     workspace_dependency_violations,
@@ -25,6 +27,11 @@ fn workspace_root() -> PathBuf {
 
 fn semantic_caller_row(path: &str, line: &str) -> String {
     format!("{path}:{}\n", line.trim())
+}
+
+fn ledger_owners(root: &Path) -> Vec<LedgerOwnerModule> {
+    discover_ledger_owners(&root.join("crates/ledger/src/lib.rs"))
+        .expect("discover production Ledger owners from module declarations")
 }
 
 const GENERIC_NON_CARGO_ROOTS: &[&str] = &["contracts", "tests"];
@@ -116,7 +123,61 @@ fn workspace_genericity_roots(root: &Path) -> BTreeMap<PathBuf, GenericityDomain
             relative.display()
         );
     }
+    assert_eq!(
+        roots.len(),
+        member_ids.len(),
+        "member classification is incomplete"
+    );
     roots
+}
+
+fn genericity_check_inputs(
+    root: &Path,
+    roots: &BTreeMap<PathBuf, GenericityDomain>,
+    domain: GenericityDomain,
+) -> BTreeMap<PathBuf, Vec<PathBuf>> {
+    let mut inputs = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for (member, actual_domain) in roots {
+        if *actual_domain != domain {
+            continue;
+        }
+        let mut files = Vec::new();
+        match domain {
+            GenericityDomain::Runtime => {
+                collect_generic_runtime_files(&root.join(member), &mut files)
+            }
+            GenericityDomain::Authoring => {
+                collect_rust_files(&root.join(member).join("src"), &mut files)
+            }
+            GenericityDomain::Architecture => {
+                panic!("architecture owns counterexamples, not a neutral-source input")
+            }
+        }
+        assert!(
+            !files.is_empty(),
+            "classified member {} has no check inputs",
+            member.display()
+        );
+        files.sort();
+        for file in &files {
+            assert!(
+                seen.insert(file.clone()),
+                "duplicate genericity input {}",
+                file.display()
+            );
+        }
+        inputs.insert(member.clone(), files);
+    }
+    assert_eq!(
+        inputs.keys().collect::<BTreeSet<_>>(),
+        roots
+            .iter()
+            .filter_map(|(member, actual)| (*actual == domain).then_some(member))
+            .collect(),
+        "classified members and checker inputs differ"
+    );
+    inputs
 }
 
 #[test]
@@ -172,12 +233,11 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
 #[test]
 fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
     let root = workspace_root();
-    let mut files = Vec::new();
-    for (owned_root, domain) in workspace_genericity_roots(&root) {
-        if domain == GenericityDomain::Runtime {
-            collect_generic_runtime_files(&root.join(owned_root), &mut files);
-        }
-    }
+    let roots = workspace_genericity_roots(&root);
+    let mut files = genericity_check_inputs(&root, &roots, GenericityDomain::Runtime)
+        .into_values()
+        .flatten()
+        .collect::<Vec<_>>();
     for owned_root in GENERIC_NON_CARGO_ROOTS {
         collect_generic_runtime_files(&root.join(owned_root), &mut files);
     }
@@ -203,7 +263,25 @@ fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
 
 #[test]
 fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
-    let roots = workspace_genericity_roots(&workspace_root());
+    let root = workspace_root();
+    let roots = workspace_genericity_roots(&root);
+    let runtime = genericity_check_inputs(&root, &roots, GenericityDomain::Runtime);
+    let authoring = genericity_check_inputs(&root, &roots, GenericityDomain::Authoring);
+    let mut classified = runtime
+        .keys()
+        .chain(authoring.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(classified.insert(PathBuf::from("tools/actinglab-architecture")));
+    assert_eq!(
+        classified,
+        roots.keys().cloned().collect(),
+        "actual member classification/checker coverage differs"
+    );
+    for (member, domain) in &roots {
+        println!("genericity member {}: {domain:?}", member.display());
+    }
+    println!("genericity non-Cargo roots: {GENERIC_NON_CARGO_ROOTS:?}");
     for required_root in [
         "crates/host-metrics",
         "crates/policy",
@@ -248,12 +326,10 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
 #[test]
 fn r2f_product_and_authoring_paths_have_no_builtin_game_identity() {
     let root = workspace_root();
-    let mut files = Vec::new();
-    for (owned_root, domain) in workspace_genericity_roots(&root) {
-        if domain == GenericityDomain::Authoring {
-            collect_rust_files(&root.join(owned_root).join("src"), &mut files);
-        }
-    }
+    let roots = workspace_genericity_roots(&root);
+    let files = genericity_check_inputs(&root, &roots, GenericityDomain::Authoring)
+        .into_values()
+        .flatten();
 
     let mut violations = Vec::new();
     for path in files {
@@ -894,10 +970,20 @@ fn c5_run_state_machine_returns_data_only_successors() {
 #[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
-    let global_path = root.join("crates/ledger/src/global.rs");
-    let global = fs::read_to_string(&global_path).expect("read global ledger source");
-    let append_violations = inspect_global_append_ingress("crates/ledger/src/global.rs", &global)
-        .expect("inspect global append ingress");
+    let owners = ledger_owners(&root);
+    for owner in &owners {
+        println!(
+            "Ledger owner {}: {}",
+            owner.module,
+            owner
+                .path
+                .strip_prefix(&root)
+                .expect("owner inside workspace")
+                .display()
+        );
+    }
+    let append_violations =
+        inspect_ledger_append_ingress(&owners).expect("inspect global append ingress");
     assert!(
         append_violations.is_empty(),
         "global append ingress violations:\n{}",
@@ -933,17 +1019,14 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
 #[test]
 fn contract_has_no_public_value_payload_or_persisted_fact() {
     let root = workspace_root();
-    let mut files = vec![
-        root.join("crates/actingcommand-contract/src/event.rs"),
-        root.join("crates/ledger/src/fact.rs"),
-        root.join("crates/ledger/src/global.rs"),
-        root.join("crates/ledger/src/global/projection.rs"),
-    ];
+    let owners = ledger_owners(&root);
+    let mut files = vec![root.join("crates/actingcommand-contract/src/event.rs")];
     collect_rust_files(
         &root.join("crates/actingcommand-contract/src/event"),
         &mut files,
     );
-    let mut violations = Vec::new();
+    let mut violations =
+        inspect_ledger_public_api(&owners).expect("inspect all formal Ledger public surfaces");
     for path in files {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -979,16 +1062,7 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
         &root.join("crates/actingcommand-contract/src/event"),
         &mut files,
     );
-    files.extend([
-        root.join("crates/ledger/src/critical.rs"),
-        root.join("crates/ledger/src/fact.rs"),
-        root.join("crates/ledger/src/global.rs"),
-        root.join("crates/ledger/src/global/projection.rs"),
-        root.join("crates/ledger/src/global/storage.rs"),
-        root.join("crates/ledger/src/global/sqlite.rs"),
-        root.join("crates/ledger/src/global/migration.rs"),
-        root.join("crates/ledger/src/global/evidence.rs"),
-    ]);
+    let owners = ledger_owners(&root);
     let forbidden = [
         "ClassifiedField",
         "StructuredPayloadDraft",
@@ -998,7 +1072,8 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
         "catch_unwind",
         "events_after(",
     ];
-    let mut violations = Vec::new();
+    let mut violations =
+        inspect_ledger_forbidden_sources(&owners).expect("inspect complete C1 Ledger owner set");
     for path in files {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -2136,6 +2211,7 @@ fn command_inventory_matches_checked_in_snapshot() {
         })
         .collect::<Vec<_>>();
     assert_eq!(expected_commands, actual.commands);
+    let mut exemptions = BTreeSet::new();
     for exemption in snapshot["pipeline_exemptions"]
         .as_array()
         .expect("snapshot pipeline_exemptions must be an array")
@@ -2143,6 +2219,10 @@ fn command_inventory_matches_checked_in_snapshot() {
         let command = exemption["command"]
             .as_str()
             .expect("pipeline exemption command must be a string");
+        assert!(
+            exemptions.insert(command),
+            "duplicate pipeline exemption {command}"
+        );
         assert!(
             actual.commands.iter().any(|candidate| candidate == command),
             "pipeline exemption references unknown command {command}"
@@ -2154,6 +2234,20 @@ fn command_inventory_matches_checked_in_snapshot() {
             "pipeline exemption {command} must explain its reason"
         );
     }
+    assert_eq!(
+        exemptions,
+        BTreeSet::from([
+            "help",
+            "version",
+            "doctor",
+            "scheduler status",
+            "scheduler pause",
+            "scheduler resume",
+            "scheduler start",
+            "scheduler stop",
+        ]),
+        "pipeline exemptions must match their named command scope"
+    );
 }
 
 #[test]
@@ -2172,19 +2266,7 @@ fn contract_dependencies_stay_within_budget() {
 
 #[test]
 fn workspace_packages_do_not_depend_on_apps() {
-    let root = workspace_root();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1"])
-        .current_dir(&root)
-        .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let metadata = String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON");
+    let metadata = workspace_metadata();
     let violations = workspace_dependency_violations(&metadata).unwrap();
 
     assert!(
@@ -2555,19 +2637,34 @@ fn cargo_metadata_args() -> [&'static str; 4] {
 }
 
 fn workspace_metadata() -> String {
+    static METADATA: OnceLock<Result<String, String>> = OnceLock::new();
+    METADATA
+        .get_or_init(dependency_metadata)
+        .as_ref()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .clone()
+}
+
+fn dependency_metadata() -> Result<String, String> {
     let root = workspace_root();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .args(cargo_metadata_args())
         .current_dir(&root)
         .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON")
+        .map_err(|error| format!("run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let metadata = String::from_utf8(output.stdout)
+        .map_err(|error| format!("cargo metadata must emit UTF-8 JSON: {error}"))?;
+    serde_json::from_str::<serde_json::Value>(&metadata)
+        .map_err(|error| format!("parse cargo metadata: {error}"))?;
+    Ok(metadata)
 }
 
 const FEATURE_GATED_FORBIDDEN_PATH_METADATA: &str = r#"{
