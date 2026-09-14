@@ -592,7 +592,8 @@ mod tests {
     use actingcommand_contract::{
         MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayloadDraft,
     };
-    use actingcommand_ledger::GlobalLedgerConfig;
+    use actingcommand_ledger::{GlobalLedgerConfig, GlobalLedgerError};
+    use actingcommand_runtime_database::RuntimeDatabase;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -620,10 +621,19 @@ mod tests {
         let mut original = serde_json::to_vec(&legacy).unwrap();
         original.push(b'\n');
         std::fs::write(root.path().join(MONITOR_FILE_NAME), &original).unwrap();
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.path().join("ledger"),
-            "monitor-first",
-        ))
+        let database = Arc::new(
+            RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
+                root.path(),
+                b"monitor-specification-salt",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .unwrap(),
+        );
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "monitor-first"),
+            Arc::clone(&database),
+        )
         .unwrap();
         let mut registry = MonitorRegistry::open(
             root.path(),
@@ -674,10 +684,10 @@ mod tests {
         drop(registry);
         ledger.close().unwrap();
 
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.path().join("ledger"),
-            "monitor-reopened",
-        ))
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "monitor-reopened"),
+            database,
+        )
         .unwrap();
         let next_epoch = *events.issuer().mint_owner_epoch().unwrap().transport();
         let mut reopened = MonitorRegistry::open(
@@ -762,10 +772,19 @@ mod tests {
         )
         .unwrap();
         let owner_epoch = *events.issuer().mint_owner_epoch().unwrap().transport();
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.path().join("ledger"),
-            "monitor-corruption",
-        ))
+        let database = Arc::new(
+            RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
+                root.path(),
+                b"monitor-specification-salt",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .unwrap(),
+        );
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "monitor-corruption"),
+            database,
+        )
         .unwrap();
         let unknown = MonitorRecord {
             schema_version: MONITOR_SCHEMA_VERSION.to_owned(),
@@ -842,10 +861,19 @@ mod tests {
         )
         .unwrap();
         let owner_epoch = *events.issuer().mint_owner_epoch().unwrap().transport();
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.path().join("ledger"),
-            "monitor-probe",
-        ))
+        let database = Arc::new(
+            RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
+                root.path(),
+                b"monitor-specification-salt",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .unwrap(),
+        );
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "monitor-probe"),
+            database,
+        )
         .unwrap();
         let mut registry = MonitorRegistry::open(
             root.path(),
@@ -975,10 +1003,19 @@ mod tests {
         )
         .unwrap();
         let owner_epoch = *events.issuer().mint_owner_epoch().unwrap().transport();
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.path().join("ledger"),
-            "monitor-batch",
-        ))
+        let database = Arc::new(
+            RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
+                root.path(),
+                b"monitor-specification-salt",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .unwrap(),
+        );
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "monitor-batch"),
+            database,
+        )
         .unwrap();
         let aliases = (0..20)
             .map(|index| format!("instance-{index:02}"))

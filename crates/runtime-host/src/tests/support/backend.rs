@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+pub(super) fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> RuntimeHost {
+    RuntimeHost::start(
+        config(root),
+        Arc::new(FakeProvider::one(alias, instance_id(), state)),
+    )
+    .expect("runtime host")
+}
+
 #[derive(Default)]
-struct FakeState {
+pub(super) struct FakeState {
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
@@ -330,7 +338,7 @@ struct FakeEntry {
     state: Arc<FakeState>,
 }
 
-struct FakeProvider {
+pub(super) struct FakeProvider {
     entries: BTreeMap<String, FakeEntry>,
     advertised_aliases: Option<Vec<String>>,
     provenance: ExecutionBackendProvenance,
@@ -339,7 +347,7 @@ struct FakeProvider {
 }
 
 impl FakeProvider {
-    fn one(alias: &str, instance_id: InstanceId, state: Arc<FakeState>) -> Self {
+    pub(super) fn one(alias: &str, instance_id: InstanceId, state: Arc<FakeState>) -> Self {
         Self::from_entries([(alias.to_string(), instance_id, state)])
     }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
     CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
@@ -13,7 +14,6 @@ use actingcommand_contract::{
     EventType, EvidenceCompleteness, IdentifierIssuer, IssuedEventId, OriginModule,
     ProjectionProfile, RetentionClass, SanitizedEventDraft, TaskOutcome, TaskPayloadDraft,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_ledger_forensics::{
     ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
     ForensicReplayRequest, ForensicReport, ForensicRequest, WriterObservationReport, replay, run,
@@ -781,11 +781,16 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         None,
         Some(&correlation_a_text),
     );
+    // Compare complete fact identity across the unit and consumer library copies.
     assert_eq!(
-        page(shared_filter.clone(), 0, Some(6), 10).events,
-        shared_events
+        serde_json::to_value(page(shared_filter.clone(), 0, Some(6), 10).events)
+            .expect("forensic events"),
+        serde_json::to_value(shared_events).expect("writer events")
     );
-    assert_eq!(page(shared_filter, 2, Some(6), 1).events, shared_page);
+    assert_eq!(
+        serde_json::to_value(page(shared_filter, 2, Some(6), 1).events).expect("forensic page"),
+        serde_json::to_value(shared_page).expect("writer page")
+    );
     let exact = filter(None, None, Some("error"), None);
     let first_exact = page(exact.clone(), 0, Some(6), 1);
     assert_eq!(first_exact.events[0].sequence(), 3);
@@ -1895,7 +1900,10 @@ fn performance_pages_preserve_typed_facts_and_read_only_boundaries() {
         .iter()
         .zip([&facts[1], &facts[3], &facts[4], &facts[5]])
     {
-        assert_eq!(&row.event, fact);
+        assert_eq!(
+            serde_json::to_value(&row.event).expect("forensic fact"),
+            serde_json::to_value(fact).expect("writer fact")
+        );
         assert!(row.thread_identity.is_none());
     }
     let json = serde_json::to_value(&rows).expect("rows JSON");

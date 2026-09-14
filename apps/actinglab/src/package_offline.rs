@@ -32,19 +32,17 @@ const MAX_OFFLINE_FIXTURE_RESIDENT_BYTES: u64 = MAX_OFFLINE_FIXTURE_BYTES * 4;
 static RESULT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn capability() -> Value {
-    json!({
-        "command": "package dry-run",
-        "needs": ["offline"],
-        "status": "available",
-        "executed": false,
-        "limits": {
-            "package_compressed_bytes": DEFAULT_MAX_COMPRESSED_BYTES,
-            "fixture_count": MAX_OFFLINE_FIXTURE_COUNT,
-            "fixture_bytes": MAX_OFFLINE_FIXTURE_BYTES,
-            "fixture_decoded_pixels": MAX_OFFLINE_FIXTURE_DECODED_PIXELS,
-            "fixture_aggregate_resident_bytes": MAX_OFFLINE_FIXTURE_RESIDENT_BYTES
-        }
-    })
+    let mut capability =
+        crate::commands::capabilities::command_cap("package dry-run", ["offline"], "available");
+    capability["executed"] = json!(false);
+    capability["limits"] = json!({
+        "package_compressed_bytes": DEFAULT_MAX_COMPRESSED_BYTES,
+        "fixture_count": MAX_OFFLINE_FIXTURE_COUNT,
+        "fixture_bytes": MAX_OFFLINE_FIXTURE_BYTES,
+        "fixture_decoded_pixels": MAX_OFFLINE_FIXTURE_DECODED_PIXELS,
+        "fixture_aggregate_resident_bytes": MAX_OFFLINE_FIXTURE_RESIDENT_BYTES
+    });
+    capability
 }
 
 pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {

@@ -137,6 +137,7 @@ dependencies = [
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-runtime-database",
  "serde",
  "serde_json",
 ]
@@ -193,7 +194,14 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
+ "actingcommand-device",
+ "actingcommand-ledger-forensics",
+ "actingcommand-policy",
+ "actingcommand-recognition-pack",
  "actingcommand-runtime-database",
+ "actingcommand-runtime-host",
+ "actingcommand-runtime-state",
+ "actingcommand-scheduler",
  "rusqlite",
  "serde",
  "serde_json",
