@@ -10,7 +10,9 @@
 //!
 //! Three-valued logic runs through the whole pass. A gate whose predicate cannot be decided,
 //! or a term whose value is unknown, applies the handling its document declares and records
-//! that it did. Nothing is silently read as `false` or `0`.
+//! that it did. A tie-break key whose value is unknown orders its candidate behind every
+//! candidate whose value is known, in either direction, and the candidate's verdict says so.
+//! Nothing is silently read as `false` or `0`.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -439,7 +441,7 @@ impl Resolver<'_> {
 struct Ranked {
     candidate_id: String,
     score_milli: i64,
-    keys: Vec<(Option<ScalarValue>, SortDirection)>,
+    keys: Vec<(Result<ScalarValue, UnknownReason>, SortDirection)>,
 }
 
 enum Assessment {
@@ -637,19 +639,25 @@ fn assess(
         "candidate.scored",
         format!("score_milli={score_milli}"),
     ));
-    let keys = policy
-        .tie_break
-        .iter()
-        .map(|key| match key {
+    let mut keys = Vec::with_capacity(policy.tie_break.len());
+    for (index, key) in policy.tie_break.iter().enumerate() {
+        let resolved = match key {
             TieBreakKey::CandidateId { direction } => (
-                Some(ScalarValue::String(candidate.candidate_id.clone())),
+                Ok(ScalarValue::String(candidate.candidate_id.clone())),
                 *direction,
             ),
             TieBreakKey::Value { value, direction } => {
-                (resolver.read(value, candidate).ok(), *direction)
+                (resolver.read(value, candidate), *direction)
             }
-        })
-        .collect();
+        };
+        if let Err(reason) = &resolved.0 {
+            verdict.reasons.push(DecisionReason::new(
+                "tie_break.unknown",
+                format!("tie-break key {index} is unknown ({reason:?}) and orders last"),
+            ));
+        }
+        keys.push(resolved);
+    }
     Ok(Assessment::Settled {
         ranked: Some(Ranked {
             candidate_id: candidate.candidate_id.clone(),
@@ -775,17 +783,26 @@ fn compare(left: &Ranked, right: &Ranked) -> Ordering {
         .then_with(|| left.candidate_id.cmp(&right.candidate_id))
 }
 
+/// Orders two survivors under the declared tie-break keys.
+///
+/// A key whose value is unknown for one candidate and known for the other orders the known
+/// candidate first, in either direction: an unknown never stands in for a value, so it can
+/// never outrank one. Two unknowns under the same key are indistinguishable and fall through
+/// to the next key. Skipping the key for the pair instead would make the comparison depend on
+/// which pair is compared, so the listing order would decide the ranking.
 fn compare_keys(left: &Ranked, right: &Ranked) -> Ordering {
     for (index, (value, direction)) in left.keys.iter().enumerate() {
         let Some((other, _)) = right.keys.get(index) else {
             break;
         };
-        let (Some(value), Some(other)) = (value.as_ref(), other.as_ref()) else {
-            continue;
-        };
-        let ordering = match direction {
-            SortDirection::HighestFirst => other.cmp(value),
-            SortDirection::LowestFirst => value.cmp(other),
+        let ordering = match (value, other) {
+            (Ok(value), Ok(other)) => match direction {
+                SortDirection::HighestFirst => other.cmp(value),
+                SortDirection::LowestFirst => value.cmp(other),
+            },
+            (Ok(_), Err(_)) => Ordering::Less,
+            (Err(_), Ok(_)) => Ordering::Greater,
+            (Err(_), Err(_)) => Ordering::Equal,
         };
         if ordering != Ordering::Equal {
             return ordering;
@@ -942,7 +959,8 @@ mod tests {
     #[test]
     fn an_expired_fact_is_unknown_rather_than_stale_data() {
         let snapshot = facts();
-        let decision = evaluate(&policy(), &candidates(), &snapshot, 4_600_000).expect("decision");
+        // One millisecond past the record's own expiry; the expiry instant itself still reads.
+        let decision = evaluate(&policy(), &candidates(), &snapshot, 4_600_001).expect("decision");
         assert_eq!(
             verdict(&decision, "slot-1")
                 .terms
@@ -1107,6 +1125,109 @@ mod tests {
         assert_eq!(verdict(&decision, "slot-4").rank, Some(3));
     }
 
+    fn tie_break_candidate(candidate_id: &str, extra: Option<i64>) -> Candidate {
+        let mut fields = BTreeMap::new();
+        fields.insert("value_milli".to_owned(), ScalarValue::Integer(900));
+        fields.insert("ready".to_owned(), ScalarValue::Boolean(true));
+        fields.insert(
+            "grade".to_owned(),
+            ScalarValue::String("grade-mid".to_owned()),
+        );
+        if let Some(extra) = extra {
+            fields.insert("extra".to_owned(), ScalarValue::Integer(extra));
+        }
+        Candidate {
+            candidate_id: candidate_id.to_owned(),
+            fields,
+        }
+    }
+
+    fn tie_break_policy(direction: SortDirection) -> SelectionPolicy {
+        let mut policy = policy();
+        policy.fields.push(FieldDeclaration {
+            name: "extra".to_owned(),
+            value_type: ValueType::Integer,
+        });
+        policy.tie_break = vec![TieBreakKey::Value {
+            value: ValueRef::Field {
+                field: "extra".to_owned(),
+            },
+            direction,
+        }];
+        policy
+    }
+
+    #[test]
+    fn an_unknown_tie_break_key_orders_last_whatever_the_listing_order_is() {
+        let policy = tie_break_policy(SortDirection::HighestFirst);
+        let known_high = tie_break_candidate("unit-1", Some(5));
+        let unknown = tie_break_candidate("unit-2", None);
+        let known_low = tie_break_candidate("unit-3", Some(1));
+        let listings = [
+            vec![known_high.clone(), unknown.clone(), known_low.clone()],
+            vec![known_low.clone(), unknown.clone(), known_high.clone()],
+            vec![unknown.clone(), known_high.clone(), known_low.clone()],
+        ];
+        for listing in &listings {
+            let decision = evaluate(&policy, listing, &facts(), NOW).expect("decision");
+            assert_eq!(decision.outcome, SelectionOutcome::Selected { count: 2 });
+            assert_eq!(decision.selected, ["unit-1", "unit-3"]);
+            let skipped = verdict(&decision, "unit-2");
+            assert_eq!(skipped.rank, Some(3));
+            assert!(
+                skipped
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.code == "tie_break.unknown")
+            );
+        }
+
+        // The direction orders the known values against each other and never promotes the
+        // candidate that has no value for the key.
+        let lowest = tie_break_policy(SortDirection::LowestFirst);
+        let decision = evaluate(&lowest, &listings[0], &facts(), NOW).expect("decision");
+        assert_eq!(decision.selected, ["unit-3", "unit-1"]);
+        assert_eq!(verdict(&decision, "unit-2").rank, Some(3));
+    }
+
+    #[test]
+    fn a_known_tie_break_key_separates_from_an_unknown_one_but_two_unknowns_do_not() {
+        let mut policy = tie_break_policy(SortDirection::HighestFirst);
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::ExactlyOne,
+            required_count: 1,
+        };
+        let decision = evaluate(
+            &policy,
+            &[
+                tie_break_candidate("unit-2", None),
+                tie_break_candidate("unit-4", Some(1)),
+            ],
+            &facts(),
+            NOW,
+        )
+        .expect("decision");
+        assert_eq!(decision.selected, ["unit-4"]);
+
+        let decision = evaluate(
+            &policy,
+            &[
+                tie_break_candidate("unit-2", None),
+                tie_break_candidate("unit-4", None),
+            ],
+            &facts(),
+            NOW,
+        )
+        .expect("decision");
+        assert_eq!(
+            decision.outcome,
+            SelectionOutcome::Ambiguous {
+                candidate_ids: vec!["unit-2".to_owned(), "unit-4".to_owned()],
+            }
+        );
+        assert!(decision.selected.is_empty());
+    }
+
     #[test]
     fn reversing_a_tie_break_direction_reverses_the_choice() {
         let mut policy = policy();
@@ -1252,6 +1373,23 @@ mod tests {
             ("facts.rs", include_str!("facts.rs")),
             ("schema.rs", include_str!("schema.rs")),
         ];
+        // The list is written by hand, so it has to be checked against the modules the crate
+        // declares: a module added later fails here until it is covered.
+        let declared: BTreeSet<String> = include_str!("lib.rs")
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("mod "))
+            .filter_map(|line| line.strip_suffix(';'))
+            .map(|module| format!("{module}.rs"))
+            .collect();
+        let covered: BTreeSet<String> = SOURCES
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .filter(|name| name != "lib.rs")
+            .collect();
+        assert_eq!(
+            covered, declared,
+            "the purity list must cover every module lib.rs declares"
+        );
         for (name, source) in SOURCES {
             let production = source
                 .split("#[cfg(test)]")

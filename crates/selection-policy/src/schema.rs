@@ -437,7 +437,14 @@ impl SelectionPolicy {
 
         for key in &self.tie_break {
             if let TieBreakKey::Value { value, .. } = key {
-                scope.resolve(value, "tie_break")?;
+                // An enumerated string has no declared order, only a declared member list, so
+                // ordering one would fall back to its bytes. Score it through a lookup instead.
+                if let ValueType::EnumString { .. } = scope.resolve(value, "tie_break")? {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        "a tie-break key cannot order an enum_string value".to_owned(),
+                    ));
+                }
             }
         }
 
@@ -596,6 +603,16 @@ fn check_predicate(
         Predicate::StringIn { value, allowed } => {
             expect(value, "string")?;
             check_limit(allowed.len(), MAX_ENUM_VALUES, owner)?;
+            if let ValueType::EnumString { allowed: declared } = scope.resolve(value, owner)? {
+                for member in allowed {
+                    if !declared.iter().any(|value| value == member) {
+                        return Err(SelectionError::new(
+                            SelectionErrorCode::TypeMismatch,
+                            format!("gate `{owner}` lists `{member}` outside the value type"),
+                        ));
+                    }
+                }
+            }
         }
         Predicate::All { of } | Predicate::Any { of } => {
             if of.is_empty() {
@@ -721,6 +738,39 @@ mod tests {
             default_milli: None,
         };
         let error = policy.validate().expect_err("key outside the enum");
+        assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
+    }
+
+    #[test]
+    fn a_string_in_member_outside_the_value_type_is_refused() {
+        let mut policy = fixture();
+        let value = ValueRef::Field {
+            field: "grade".to_owned(),
+        };
+        policy.gates[0].predicate = Predicate::StringIn {
+            value: value.clone(),
+            allowed: vec!["grade-hgih".to_owned()],
+        };
+        let error = policy.validate().expect_err("member outside the enum");
+        assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
+
+        policy.gates[0].predicate = Predicate::StringIn {
+            value,
+            allowed: vec!["grade-high".to_owned()],
+        };
+        policy.validate().expect("a declared member validates");
+    }
+
+    #[test]
+    fn a_tie_break_key_over_an_enum_string_is_refused() {
+        let mut policy = fixture();
+        policy.tie_break[0] = TieBreakKey::Value {
+            value: ValueRef::Field {
+                field: "grade".to_owned(),
+            },
+            direction: SortDirection::HighestFirst,
+        };
+        let error = policy.validate().expect_err("enum_string tie-break");
         assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
     }
 

@@ -169,7 +169,9 @@ impl SelectionFactSnapshot {
                 *confidence_milli,
             ),
         };
-        if expires_at_unix_ms.is_some_and(|expiry| now_unix_ms >= expiry) {
+        // The same predicate the contract's own `FactRecord::is_expired` uses, so one record
+        // has one expiry answer on both sides of the boundary.
+        if expires_at_unix_ms.is_some_and(|expiry| now_unix_ms > expiry) {
             return Err(UnknownReason::FactExpired);
         }
         if now_unix_ms.saturating_sub(published_at_unix_ms) > declaration.max_age_ms {
@@ -346,8 +348,23 @@ mod tests {
                 inline(3),
             )],
         );
+        // The expiry instant itself is still usable, exactly as `FactRecord::is_expired`
+        // reads it; the millisecond after it is not.
         assert_eq!(
             snapshot.resolve(&declaration(), 4_600_000),
+            Ok(&ScalarValue::Integer(3))
+        );
+        assert!(
+            !record(
+                FactScope::Instance {
+                    instance_id: "instance-a".to_owned(),
+                },
+                inline(3),
+            )
+            .is_expired(4_600_000)
+        );
+        assert_eq!(
+            snapshot.resolve(&declaration(), 4_600_001),
             Err(UnknownReason::FactExpired)
         );
         let tight = FactDeclaration {
