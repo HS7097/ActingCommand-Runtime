@@ -2170,6 +2170,10 @@ impl RuntimeClient {
                 maximum_frame_bytes,
                 receipt_deadline,
                 Some(&request),
+                match &operation {
+                    RuntimeOperation::ReadMaterial { request } => Some(request.max_reply_bytes),
+                    _ => None,
+                },
             )
             .map_err(|error| error.with_receipt_header_context(&request, &self.shared.info));
             if connection
@@ -2234,6 +2238,17 @@ impl RuntimeClient {
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
                     "runtime_receipt_identity_mismatch",
+                    operation_name,
+                )));
+            }
+            if let (
+                RuntimeOperation::ReadMaterial { request: expected },
+                Some(RuntimeResult::MaterialRead { result }),
+            ) = (&operation, receipt.result())
+                && &result.request != expected.as_ref()
+            {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "material_read_receipt_selection_mismatch",
                     operation_name,
                 )));
             }

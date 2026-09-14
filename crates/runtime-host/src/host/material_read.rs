@@ -174,7 +174,7 @@ impl HostShared {
                     (RuntimeMaterialReadState::IntegrityFailed, None, error)
                 }
             };
-            self.record_material_read_failure(validated, &error)
+            self.record_material_read_failure(validated, &error, request, result.source.is_some())
                 .map_err(RequestFailure::poison_without_terminal)?;
             result.state = state;
             result.limit = limit;
@@ -197,12 +197,32 @@ impl HostShared {
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         error: &RuntimeHostError,
+        selection: &RuntimeMaterialReadRequest,
+        reference_resolved: bool,
     ) -> RuntimeHostResult<()> {
+        let error = error
+            .clone()
+            .with_diagnostic_detail(DiagnosticDetailDraft::new(
+                "material_read",
+                "attempt",
+                "committed_reference",
+                "read_runtime_material",
+                serde_json::json!({
+                    "event": selection.event,
+                    "artifact_id": selection.artifact_id,
+                    "snapshot_position": selection.snapshot_position,
+                    "offset": selection.offset,
+                    "requested_length": selection.requested_length,
+                    "reference_resolved": reference_resolved,
+                })
+                .to_string(),
+                Sensitivity::Internal,
+            ));
         self.append_lifecycle_failure(
             RuntimeLifecycleFailureStage::OperationCleanup,
-            RuntimeLifecycleFailure::Host(error),
+            RuntimeLifecycleFailure::Host(&error),
             request.event_links(None, None, None),
-            None,
+            reference_resolved.then_some(selection.event.event_id),
         )?;
         if error.is_fatal() {
             self.fatal.mark(error.clone())?;
@@ -240,10 +260,7 @@ impl HostShared {
                 "read_runtime_material",
                 RuntimeErrorCode::InvalidRequest,
             );
-            let validated = request
-                .validate()
-                .map_err(|_| protocol_error("material_read_request_invalid"))?;
-            self.record_material_read_failure(&validated, &error)?;
+            self.record_material_reply_failure(request, &receipt, &error)?;
             receipt
                 .fail_material_read(
                     RuntimeMaterialReadState::NotProvided,
@@ -259,9 +276,7 @@ impl HostShared {
                 "read_runtime_material",
                 RuntimeErrorCode::ProtocolInvalid,
             );
-            if let Ok(validated) = request.validate() {
-                self.record_material_read_failure(&validated, &error)?;
-            }
+            self.record_material_reply_failure(request, &receipt, &error)?;
             return Err(error);
         }
         Ok((receipt, body))
@@ -276,12 +291,25 @@ impl HostShared {
             Ok(body) => Ok(body),
             Err(_) => {
                 let error = protocol_error("material_read_reply_encode_failed");
-                if let Ok(validated) = request.validate() {
-                    self.record_material_read_failure(&validated, &error)?;
-                }
+                self.record_material_reply_failure(request, receipt, &error)?;
                 Err(error)
             }
         }
+    }
+
+    fn record_material_reply_failure(
+        &self,
+        request: &RuntimeRequest,
+        receipt: &RuntimeReceipt,
+        error: &RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
+        if let (Ok(validated), RuntimeOperation::ReadMaterial { request: selection }) =
+            (request.validate(), request.operation())
+        {
+            let resolved = matches!(receipt.result(), Some(RuntimeResult::MaterialRead { result }) if result.source.is_some());
+            self.record_material_read_failure(&validated, error, selection, resolved)?;
+        }
+        Ok(())
     }
 }
 

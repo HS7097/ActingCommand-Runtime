@@ -29,7 +29,9 @@ original whole-material length type and producer limits remain unchanged.
 The client clamps `max_reply_bytes` to its configured receiver bound. The Host
 also applies its own bound and the original 1 MiB maximum. The bound covers the
 complete serialized receipt, not just the raw range. A raw range is encoded using
-the existing JSON byte-array representation. If even the failure receipt cannot
+the existing JSON byte-array representation. The client checks the response header
+against that smaller bound before allocating its body and checks the material
+selection on both successful and failed receipts. If even the failure receipt cannot
 fit the requested bound, no success bytes are written and the connection reports
 the original protocol failure; a client without a valid receipt remains unconfirmed.
 

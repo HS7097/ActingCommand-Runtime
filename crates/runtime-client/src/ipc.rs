@@ -49,6 +49,7 @@ pub(crate) fn exchange<Request, Response>(
     maximum_frame_bytes: usize,
     receipt_deadline: Option<ReceiptReadDeadline>,
     _observation_request: Option<&RuntimeRequest>,
+    maximum_reply_bytes: Option<usize>,
 ) -> RuntimeClientResult<Response>
 where
     Request: Serialize,
@@ -158,7 +159,10 @@ where
         None,
     );
     let length = u32::from_be_bytes(header) as usize;
-    if length == 0 || length > maximum_frame_bytes {
+    let response_limit = maximum_reply_bytes
+        .unwrap_or(maximum_frame_bytes)
+        .min(maximum_frame_bytes);
+    if length == 0 || length > response_limit {
         return Err(RuntimeClientError::fatal(
             "runtime_receipt_frame_invalid",
             "exchange_runtime_request",

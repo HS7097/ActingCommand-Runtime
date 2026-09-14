@@ -15,7 +15,7 @@ use actingcommand_ledger_forensics::{
 };
 
 enum CliRequest {
-    Material(actingcommand_ledger_forensics::ForensicMaterialRequest),
+    Material(Box<actingcommand_ledger_forensics::ForensicMaterialRequest>),
     Views(Box<ForensicViewRequest>),
     StateRoot(ForensicRequest),
     Replay(ForensicReplayRequest),
@@ -62,7 +62,7 @@ where
 {
     let report = match parse_args(args)? {
         CliRequest::Material(request) => {
-            return actingcommand_ledger_forensics::read_material_to(request, output).map_err(
+            return actingcommand_ledger_forensics::read_material_to(*request, output).map_err(
                 |error| CliError::new(error.code(), error.operation(), error.to_string()),
             );
         }
@@ -167,7 +167,7 @@ where
             return actingcommand_ledger_forensics::ForensicMaterialRequest::new(
                 state_root, request,
             )
-            .map(CliRequest::Material)
+            .map(|request| CliRequest::Material(Box::new(request)))
             .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()));
         }
         "views" => {
