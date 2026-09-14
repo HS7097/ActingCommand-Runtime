@@ -2724,56 +2724,68 @@ pub(crate) fn resolve_official_ocr_projection(
         reference
             .validate()
             .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_invalid"))?;
-        let source_run = event
-            .links
-            .run_id()
-            .ok_or_else(|| official_ocr_error("runtime_official_ocr_artifact_identity_mismatch"))?;
-        let source_task = event
-            .links
-            .task_id()
-            .ok_or_else(|| official_ocr_error("runtime_official_ocr_artifact_identity_mismatch"))?;
-        if Some(source_run) != reference.run_id.as_ref()
+        let source_run = event.links.run_id();
+        let source_task = event.links.task_id();
+        if source_run != reference.run_id.as_ref()
             || event.links.correlation_id() != Some(&correlation_id)
             || event.links.frame_id() != reference.frame_id()
             || reference.correlation_id.as_ref() != Some(&correlation_id)
+            || reference.retention_class != RetentionClass::DebugFull
+            || !matches!(
+                reference.redaction_state,
+                ArtifactRedactionState::NotRequired | ArtifactRedactionState::Pending
+            )
             || (event.links.request_id() == Some(&receipt.request_id())
-                && event.links.run_id() != Some(run_id))
+                && source_run != Some(run_id))
         {
             return Err(official_ocr_error(
                 "runtime_official_ocr_artifact_identity_mismatch",
             ));
         }
-        if run_tasks
-            .insert(*source_run, *source_task)
-            .is_some_and(|previous| previous != *source_task)
-        {
-            return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_identity_mismatch",
-            ));
-        }
-        if event.links.run_id() == Some(run_id)
-            && (event.links.task_id() != Some(task_id)
-                || reference.retention_class != RetentionClass::DebugFull
-                || !matches!(
-                    reference.redaction_state,
-                    ArtifactRedactionState::NotRequired | ArtifactRedactionState::Pending
-                ))
-        {
-            return Err(official_ocr_error(
-                "runtime_official_ocr_artifact_identity_mismatch",
-            ));
-        }
-        let entry = lifecycle
-            .entry(reference.artifact_id)
-            .or_insert((reference, None, None));
-        if entry.0 != reference {
+        let request_scope = match (source_run, source_task) {
+            (Some(source_run), Some(source_task)) => {
+                if (*source_run == *run_id && *source_task != *task_id)
+                    || run_tasks
+                        .insert(*source_run, *source_task)
+                        .is_some_and(|previous| previous != *source_task)
+                {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_artifact_identity_mismatch",
+                    ));
+                }
+                None
+            }
+            // A page observation can have a complete request/frame identity without a debug run.
+            (None, None) if event.links.frame_id().is_some() => {
+                let request_id = event
+                    .links
+                    .request_id()
+                    .filter(|id| **id != receipt.request_id())
+                    .ok_or_else(|| {
+                        official_ocr_error("runtime_official_ocr_artifact_identity_mismatch")
+                    })?;
+                Some(*request_id)
+            }
+            _ => {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_artifact_identity_mismatch",
+                ));
+            }
+        };
+        let entry = lifecycle.entry(reference.artifact_id).or_insert((
+            reference,
+            request_scope,
+            None,
+            None,
+        ));
+        if entry.0 != reference || entry.1 != request_scope {
             return Err(official_ocr_error(
                 "runtime_official_ocr_artifact_identity_conflict",
             ));
         }
         let sequence = match event.event_type {
-            EventType::ArtifactCreated => &mut entry.1,
-            EventType::ArtifactVerified => &mut entry.2,
+            EventType::ArtifactCreated => &mut entry.2,
+            EventType::ArtifactVerified => &mut entry.3,
             _ => unreachable!("candidate event type is filtered above"),
         };
         if sequence.replace((event.sequence, event.event_id)).is_some() {
@@ -2785,9 +2797,9 @@ pub(crate) fn resolve_official_ocr_projection(
 
     let logical_artifacts = lifecycle
         .into_values()
-        // Foreign runs were checked for conflicting identities and duplicate lifecycle facts above.
-        .filter(|(reference, _, _)| reference.run_id.as_ref() == Some(run_id))
-        .map(|(reference, created, verified)| {
+        // Every scope's identity and duplicate lifecycle facts were checked before partitioning.
+        .filter(|(reference, _, _, _)| reference.run_id.as_ref() == Some(run_id))
+        .map(|(reference, _, created, verified)| {
             let (created_sequence, created_event_id) = created.ok_or_else(|| {
                 official_ocr_error("runtime_official_ocr_artifact_lifecycle_incomplete")
             })?;

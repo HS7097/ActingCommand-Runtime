@@ -73,7 +73,11 @@ query round, continuation cache or increased limit.
 OCR checks event/reference run, task, correlation and frame relationships before
 selecting the current run's artifacts. Conflicting immutable artifact identities,
 run/task assignments and duplicate lifecycle facts are rejected before other runs
-are excluded. The current run keeps its original complete created/verified pairs,
+are excluded. A preceding page observation may have a complete request/correlation/
+frame identity and no run/task. It is assigned to that distinct request, with the
+same request identity required across its artifact lifecycle. Partial identities,
+an absent request/frame, mismatched source/reference links or an attempt to assign
+the current task's material to that scope still fail. The current run keeps its original complete created/verified pairs,
 retention/redaction requirements, full material/hash/payload verification, frame
 coverage and report/terminal checks. Other runs' material bytes are not read for
 the current projection. An incomplete current source remains a failure or the
