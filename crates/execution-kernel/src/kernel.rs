@@ -38,6 +38,10 @@ impl CaptureGeometrySessionRef {
     pub const fn instance_id(&self) -> InstanceId {
         self.instance_id
     }
+
+    pub fn same_session(&self, other: &Self) -> bool {
+        self.instance_id == other.instance_id && Weak::ptr_eq(&self.session, &other.session)
+    }
 }
 
 impl ExecutionKernel {
