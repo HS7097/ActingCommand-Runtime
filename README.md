@@ -140,6 +140,10 @@ CI 共三个工作流：`ci.yml` 在 windows-latest 上跑 `cargo fmt --all -- -
 
 ## 构建与运行
 
+Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安装说明与未发布候选说明，
+由同一 BUILD-MANIFEST 逐项绑定。见[下载契约](scripts/windows-tools/README.md)与
+[安装说明](distribution/windows/INSTALL.md)；Tools 仍为独立工件。
+
 `apps/actinglab` 的 `build.rs` 会读取 Git 元数据确定 HEAD。当 Git 元数据可用时，若同时设置了 `ACTINGCOMMAND_RUNTIME_HEAD`，它必须是 40 位十六进制且与仓库 HEAD 一致，否则构建 panic；当 Git 元数据不可用（例如无 `.git` 的源码树）时，该变量为必填。
 
 `actingd` 的正常调用只接受 `--config <path>` 两个参数，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
