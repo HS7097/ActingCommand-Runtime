@@ -10,15 +10,31 @@
 //!
 //! Scores and lookup values are integers scaled by one thousand (milli). [`canonical_bytes`]
 //! rejects floating point outright, so no document or input can smuggle one in.
+//!
+//! Absent, stale, low-confidence, and non-scalar facts stay [`UnknownReason`]-typed all the
+//! way into the decision. Nothing here substitutes `false` or `0` for an unknown input; a
+//! term or gate that meets one applies the handling its document declares, and the decision
+//! records that it did.
+//!
+//! The `selection-eval` binary in `src/bin` is an offline debugging shell around
+//! [`evaluate`]. It is the only place in this crate that reads a file, and it is not a
+//! Runtime entry point.
 
 #![forbid(unsafe_code)]
 
 mod canonical;
+mod evaluator;
+mod facts;
 mod schema;
 
 pub use canonical::{
     CanonicalValue, MAX_DOCUMENT_BYTES, canonical_bytes, canonical_sha256, parse_canonical_json,
 };
+pub use evaluator::{
+    CandidateStatus, CandidateVerdict, DecisionReason, GateOutcome, GateResult, SelectionDecision,
+    SelectionOutcome, TermOutcome, TermResult, evaluate,
+};
+pub use facts::{Candidate, ScalarValue, SelectionFactEntry, SelectionFactSnapshot, UnknownReason};
 pub use schema::{
     AppliesTo, FactDeclaration, FieldDeclaration, GateUnknownHandling, HardGate, LookupEntry,
     LookupKey, MAX_CANDIDATES, MAX_ENUM_VALUES, MAX_FACTS, MAX_FIELDS, MAX_GATES, MAX_ID_BYTES,
