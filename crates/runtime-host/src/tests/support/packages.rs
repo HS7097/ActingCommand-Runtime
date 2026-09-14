@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-fn neutral_contained_task_package() -> Vec<u8> {
+fn neutral_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
     neutral_contained_task_package_with_task(
+        physical_task_geometry,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -21,8 +22,9 @@ fn neutral_contained_task_package() -> Vec<u8> {
     )
 }
 
-fn neutral_non_home_start_contained_task_package() -> Vec<u8> {
+fn neutral_non_home_start_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
     neutral_contained_task_package_with_task(
+        physical_task_geometry,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -42,9 +44,15 @@ fn neutral_non_home_start_contained_task_package() -> Vec<u8> {
 }
 
 fn neutral_stability_contained_task_package(
+    physical_task_geometry: bool,
     consecutive_unchanged_threshold: u32,
     max_steps: u32,
 ) -> Vec<u8> {
+    let (width, height) = if physical_task_geometry {
+        (16, 9)
+    } else {
+        (2, 1)
+    };
     let declaration = serde_json::json!({
         "region": {"x": 1, "y": 0, "width": 1, "height": 1},
         "comparison": {"mode": "exact_pixels_v1", "parameters": {}},
@@ -57,7 +65,7 @@ fn neutral_stability_contained_task_package(
         "execution_mode": "in_page_guard",
         "game": "neutral",
         "server": "test",
-        "resolution": {"width": 2, "height": 1},
+        "resolution": {"width": width, "height": height},
         "entry_task_id": "task",
         "capture_interval_ms": 1,
         "step_timeout_ms": 50,
@@ -71,7 +79,7 @@ fn neutral_stability_contained_task_package(
         "task_id": "task",
         "game": "neutral",
         "server_scope": ["test"],
-        "coordinate_space": {"width": 2, "height": 1},
+        "coordinate_space": {"width": width, "height": height},
         "entry_page": "home",
         "stability_termination": declaration,
         "operations": [{
@@ -107,6 +115,14 @@ fn neutral_stability_contained_task_package(
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let recognition = if physical_task_geometry {
+        let mut recognition: serde_json::Value =
+            serde_json::from_slice(recognition).expect("stability recognition JSON");
+        recognition["coordinate_space"] = serde_json::json!({"width": width, "height": height});
+        serde_json::to_vec(&recognition).expect("stability recognition JSON")
+    } else {
+        recognition.to_vec()
+    };
     let files: [(&str, &[u8]); 5] = [
         ("control.json", &control),
         (
@@ -114,7 +130,7 @@ fn neutral_stability_contained_task_package(
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
         ),
         ("resources/operations/task/task.json", &task),
-        ("resources/recognition/neutral.test.pack.json", recognition),
+        ("resources/recognition/neutral.test.pack.json", &recognition),
         ("resources/recognition/neutral.test.pages.json", pages),
     ];
     for (path, contents) in files {
@@ -124,7 +140,12 @@ fn neutral_stability_contained_task_package(
     zip.finish().expect("finish stability zip").into_inner()
 }
 
-fn neutral_post_admission_ocr_contained_task_package() -> Vec<u8> {
+fn neutral_post_admission_ocr_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
+    let (width, height) = if physical_task_geometry {
+        (16, 9)
+    } else {
+        (2, 1)
+    };
     let stability = serde_json::json!({
         "region": {"x": 1, "y": 0, "width": 1, "height": 1},
         "comparison": {"mode": "exact_pixels_v1", "parameters": {}},
@@ -152,7 +173,7 @@ fn neutral_post_admission_ocr_contained_task_package() -> Vec<u8> {
         "execution_mode": "in_page_guard",
         "game": "neutral",
         "server": "test",
-        "resolution": {"width": 2, "height": 1},
+        "resolution": {"width": width, "height": height},
         "entry_task_id": "task",
         "capture_interval_ms": 1,
         "step_timeout_ms": 50,
@@ -166,7 +187,7 @@ fn neutral_post_admission_ocr_contained_task_package() -> Vec<u8> {
         "task_id": "task",
         "game": "neutral",
         "server_scope": ["test"],
-        "coordinate_space": {"width": 2, "height": 1},
+        "coordinate_space": {"width": width, "height": height},
         "entry_page": "home",
         "scheduling_outcome": {
             "mappings": [{
@@ -238,12 +259,20 @@ fn neutral_post_admission_ocr_contained_task_package() -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let recognition = if physical_task_geometry {
+        let mut recognition: serde_json::Value =
+            serde_json::from_slice(recognition).expect("OCR recognition JSON");
+        recognition["coordinate_space"] = serde_json::json!({"width": width, "height": height});
+        serde_json::to_vec(&recognition).expect("OCR recognition JSON")
+    } else {
+        recognition.to_vec()
+    };
     let files: [(&str, &[u8]); 6] = [
         ("control.json", &control),
         ("resources/manifest.json", &manifest),
         ("resources/operations/task/task.json", &task),
         ("resources/operations/task/truth.json", &truth),
-        ("resources/recognition/neutral.test.pack.json", recognition),
+        ("resources/recognition/neutral.test.pack.json", &recognition),
         ("resources/recognition/neutral.test.pages.json", pages),
     ];
     for (path, contents) in files {
@@ -261,8 +290,9 @@ fn expected_contained_task_sampling_seed<T: serde::Serialize>(value: &T) -> u64 
     u64::from_be_bytes(seed)
 }
 
-fn neutral_region_contained_task_package() -> Vec<u8> {
+fn neutral_region_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
     neutral_contained_task_package_with_task(
+        physical_task_geometry,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -282,8 +312,12 @@ fn neutral_region_contained_task_package() -> Vec<u8> {
     )
 }
 
-fn neutral_contained_task_package_with_execution_timeout(timeout_ms: u64) -> Vec<u8> {
+fn neutral_contained_task_package_with_execution_timeout(
+    physical_task_geometry: bool,
+    timeout_ms: u64,
+) -> Vec<u8> {
     neutral_contained_task_package_with_task_and_timeout(
+        physical_task_geometry,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -304,8 +338,9 @@ fn neutral_contained_task_package_with_execution_timeout(timeout_ms: u64) -> Vec
     )
 }
 
-fn neutral_vision_contained_task_package() -> Vec<u8> {
+fn neutral_vision_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
     neutral_contained_task_package_with_task_and_recognition(
+        physical_task_geometry,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -380,6 +415,7 @@ fn neutral_vision_contained_task_package() -> Vec<u8> {
 
 fn neutral_retrying_contained_task_package() -> Vec<u8> {
     neutral_contained_task_package_with_task(
+        false,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -409,6 +445,7 @@ fn neutral_retrying_contained_task_package() -> Vec<u8> {
 
 fn neutral_region_retrying_contained_task_package() -> Vec<u8> {
     neutral_contained_task_package_with_task(
+        false,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -438,6 +475,7 @@ fn neutral_region_retrying_contained_task_package() -> Vec<u8> {
 
 fn neutral_error_page_retrying_contained_task_package() -> Vec<u8> {
     neutral_contained_task_package_with_task(
+        false,
         br#"{
             "schema_version":"0.6",
             "task_id":"task",
@@ -512,11 +550,13 @@ fn neutral_mapped_retrying_contained_task_package(outcome_key: &str) -> Vec<u8> 
         }]
     });
     neutral_contained_task_package_with_task(
+        false,
         &serde_json::to_vec(&task).expect("mapped retrying contained task JSON"),
     )
 }
 
 fn neutral_two_key_mapped_contained_task_package(
+    physical_task_geometry: bool,
     effect_outcome_key: &str,
     no_effect_outcome_key: &str,
 ) -> Vec<u8> {
@@ -558,6 +598,7 @@ fn neutral_two_key_mapped_contained_task_package(
         }]
     });
     neutral_contained_task_package_with_task(
+        physical_task_geometry,
         &serde_json::to_vec(&task).expect("two-key mapped contained task JSON"),
     )
 }
@@ -615,6 +656,7 @@ fn neutral_mapped_contained_task_package_with_pages(
         task["error_pages"] = serde_json::json!(error_pages);
     }
     neutral_contained_task_package_with_task(
+        false,
         &serde_json::to_vec(&task).expect("mapped contained task JSON"),
     )
 }
@@ -646,25 +688,32 @@ fn neutral_non_retryable_destination_package(with_error_page: bool) -> Vec<u8> {
         task["error_pages"] = serde_json::json!(["error"]);
     }
     neutral_contained_task_package_with_task(
+        false,
         &serde_json::to_vec(&task).expect("non-retryable destination task JSON"),
     )
 }
 
-fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
-    neutral_contained_task_package_with_task_and_timeout(task, 5_000)
+fn neutral_contained_task_package_with_task(physical_task_geometry: bool, task: &[u8]) -> Vec<u8> {
+    neutral_contained_task_package_with_task_and_timeout(physical_task_geometry, task, 5_000)
 }
 
 fn explicit_home_contained_task_package(
+    physical_task_geometry: bool,
     package_id: &str,
     home_color: [u8; 3],
     other_color: [u8; 3],
 ) -> Vec<u8> {
+    let (width, height) = if physical_task_geometry {
+        (16, 9)
+    } else {
+        (2, 1)
+    };
     let task = serde_json::to_vec(&serde_json::json!({
         "schema_version": "0.6",
         "task_id": "task",
         "game": "fixture01",
         "server_scope": ["test"],
-        "coordinate_space": {"width": 2, "height": 1},
+        "coordinate_space": {"width": width, "height": height},
         "entry_page": "home",
         "target_page": "home",
         "operations": [{
@@ -681,7 +730,7 @@ fn explicit_home_contained_task_package(
         "schema_version": "0.3",
         "game": "fixture01",
         "server": "test",
-        "coordinate_space": {"width": 2, "height": 1},
+        "coordinate_space": {"width": width, "height": height},
         "defaults": {"color_max_distance": 0.0},
         "targets": [
             {"type": "color", "id": "page/home", "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": home_color},
@@ -717,7 +766,7 @@ fn explicit_home_contained_task_package(
         "execution_mode": "navigable_route",
         "game": "fixture01",
         "server": "test",
-        "resolution": {"width": 2, "height": 1},
+        "resolution": {"width": width, "height": height},
         "entry_task_id": "task",
         "capture_interval_ms": 1,
         "step_timeout_ms": 500,
@@ -750,8 +799,13 @@ fn explicit_home_contained_task_package(
     zip.finish().expect("finish zip").into_inner()
 }
 
-fn neutral_contained_task_package_with_task_and_timeout(task: &[u8], timeout_ms: u64) -> Vec<u8> {
+fn neutral_contained_task_package_with_task_and_timeout(
+    physical_task_geometry: bool,
+    task: &[u8],
+    timeout_ms: u64,
+) -> Vec<u8> {
     neutral_contained_task_package_with_timeout(
+        physical_task_geometry,
         task,
         br#"{
             "schema_version":"0.3",
@@ -771,17 +825,42 @@ fn neutral_contained_task_package_with_task_and_timeout(task: &[u8], timeout_ms:
 }
 
 fn neutral_contained_task_package_with_task_and_recognition(
+    physical_task_geometry: bool,
     task: &[u8],
     recognition_pack: &[u8],
 ) -> Vec<u8> {
-    neutral_contained_task_package_with_timeout(task, recognition_pack, 5_000)
+    neutral_contained_task_package_with_timeout(
+        physical_task_geometry,
+        task,
+        recognition_pack,
+        5_000,
+    )
 }
 
 fn neutral_contained_task_package_with_timeout(
+    physical_task_geometry: bool,
     task: &[u8],
     recognition_pack: &[u8],
     timeout_ms: u64,
 ) -> Vec<u8> {
+    let (width, height) = if physical_task_geometry {
+        (16, 9)
+    } else {
+        (2, 1)
+    };
+    let (task, recognition_pack) = if physical_task_geometry {
+        let mut task: serde_json::Value = serde_json::from_slice(task).expect("Task JSON");
+        let mut recognition: serde_json::Value =
+            serde_json::from_slice(recognition_pack).expect("recognition JSON");
+        task["coordinate_space"] = serde_json::json!({"width": width, "height": height});
+        recognition["coordinate_space"] = serde_json::json!({"width": width, "height": height});
+        (
+            serde_json::to_vec(&task).expect("Task JSON"),
+            serde_json::to_vec(&recognition).expect("recognition JSON"),
+        )
+    } else {
+        (task.to_vec(), recognition_pack.to_vec())
+    };
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -792,7 +871,7 @@ fn neutral_contained_task_package_with_timeout(
             "execution_mode":"navigable_route",
             "game":"neutral",
             "server":"test",
-            "resolution":{{"width":2,"height":1}},
+            "resolution":{{"width":{width},"height":{height}}},
             "entry_task_id":"task",
             "capture_interval_ms":1,
             "step_timeout_ms":50,
@@ -808,11 +887,11 @@ fn neutral_contained_task_package_with_timeout(
         ),
         (
             "resources/operations/task/task.json",
-            task,
+            &task,
         ),
         (
             "resources/recognition/neutral.test.pack.json",
-            recognition_pack,
+            &recognition_pack,
         ),
         (
             "resources/recognition/neutral.test.pages.json",

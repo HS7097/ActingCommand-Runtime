@@ -1017,7 +1017,7 @@ impl RuntimeContainedTask<'_> {
 
     fn record_geometry_triggered_recovery_failure(
         &self,
-        package_sha256: String,
+        package_sha256: actingcommand_contract::PackageRef,
         primary: &RuntimeHostError,
     ) -> Result<(), RequestFailure> {
         // Preserve the two original recovery failure facts after a classified failure,

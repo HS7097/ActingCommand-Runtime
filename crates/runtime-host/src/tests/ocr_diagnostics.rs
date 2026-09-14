@@ -11,10 +11,11 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
     );
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("post-admission-ocr-failure.zip");
-    let bytes = neutral_post_admission_ocr_contained_task_package();
+    let bytes = neutral_post_admission_ocr_contained_task_package(true);
     fs::write(&package, &bytes).expect("write OCR package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     let vision_provider = Arc::new(FakeVisionProvider {
         ocr_failure_detail: Some(PROVIDER_DETAIL),
         ..FakeVisionProvider::default()
@@ -242,10 +243,11 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
     let package = root
         .path()
         .join("post-admission-ocr-persistence-failure.zip");
-    let bytes = neutral_post_admission_ocr_contained_task_package();
+    let bytes = neutral_post_admission_ocr_contained_task_package(true);
     fs::write(&package, &bytes).expect("write OCR package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     let vision_provider = Arc::new(FakeVisionProvider {
         ocr_failure_detail: Some(PROVIDER_DETAIL),
         ..FakeVisionProvider::default()
@@ -367,8 +369,9 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
         let root = TempDir::new().expect("tempdir");
         let package = root.path().join(format!("{case}.zip"));
         let bytes = match case {
-            "task-timeout" => neutral_contained_task_package_with_execution_timeout(50),
+            "task-timeout" => neutral_contained_task_package_with_execution_timeout(true, 50),
             "post-delay-budget" => neutral_contained_task_package_with_task_and_timeout(
+                true,
                 br#"{"schema_version":"0.6","task_id":"task","game":"neutral",
                     "server_scope":["test"],"coordinate_space":{"width":2,"height":1},
                     "entry_page":"home","target_page":"terminal","operations":[{
@@ -378,11 +381,12 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                         "post_delay_ms":5000}]}"#,
                 5_000,
             ),
-            _ => neutral_contained_task_package(),
+            _ => neutral_contained_task_package(true),
         };
         fs::write(&package, &bytes).expect("write task package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         match case {
             "success" => state
                 .transition_capture_after_input
