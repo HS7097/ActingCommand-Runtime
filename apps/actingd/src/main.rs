@@ -78,7 +78,8 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let initial_policy_cycle = match initial_policy_cycle {
         Ok(Some(cycle)) => cycle,
         Ok(None) => return host.close().map_err(ActingdError::runtime),
-        Err(error) => {
+        Err(mut error) => {
+            error.stage = Some("policy_initialization");
             let recorded = error.record_lifecycle_failure(
                 &host,
                 RuntimeLifecycleFailureStage::PolicyInitialization,
@@ -102,7 +103,8 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
         (None, None) => monitor(host),
         _ => {
-            let error = ActingdError::process("policy_bootstrap_state_invalid");
+            let mut error = ActingdError::process("policy_bootstrap_state_invalid");
+            error.stage = Some("policy_bootstrap");
             let recorded = error
                 .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
             let closed = host.close();
@@ -432,7 +434,8 @@ fn monitor_policy(
         Ok(Some(setup)) => setup,
         Ok(None) => return close_policy_host(host),
         Err(error) => {
-            let error: ActingdError = error;
+            let mut error: ActingdError = error;
+            error.stage = Some("policy_monitor_setup");
             let recorded =
                 error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
             let closed = close_policy_host(host);
@@ -575,7 +578,7 @@ fn combine_monitor_results(
         ("close", close),
     ] {
         if let Err(mut error) = result {
-            error.stage = Some(stage);
+            error.stage.get_or_insert(stage);
             match &mut failure {
                 None => failure = Some(error),
                 Some(primary) => {
