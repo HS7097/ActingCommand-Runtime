@@ -1748,6 +1748,17 @@ impl RuntimeHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn replace_capacity_sampler_for_test(
+        &self,
+        sampler: Box<dyn actingcommand_host_metrics::HostSampler>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref("replace_test_capacity_sampler")?;
+        let mut performance = lock(&shared.performance, "replace_test_capacity_sampler")?;
+        performance.replace_capacity_sampler_for_test(sampler);
+        performance.sample_and_record_capacity(&shared.ledger, &shared.events)
+    }
+
+    #[cfg(test)]
     pub(crate) fn capacity_sampler_for_test(
         &self,
     ) -> RuntimeHostResult<Box<dyn Fn() -> RuntimeHostResult<()> + Send>> {
