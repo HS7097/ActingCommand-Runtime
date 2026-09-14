@@ -34,7 +34,9 @@ Schema version `actingcommand.selection-policy.v1`. One document holds:
 Types are closed: `integer`, `boolean`, and `enum_string` with a declared member
 list. A term or predicate reads either a declared field (`{"source":"field"}`)
 or a declared fact (`{"source":"fact"}`); an undeclared reference is a
-validation error, not an unknown.
+validation error, not an unknown. A `string_in` predicate may list only members
+the value's declared type declares; a member outside that list is a validation
+error too, not a gate that quietly never holds.
 
 Every number in a document and in every input is an integer. Scores, weights,
 lookup values, and threshold results are scaled by one thousand (milli).
@@ -69,11 +71,23 @@ or saturated value.
 ### Tie-break
 
 Tie-break keys are applied in document order after the score. A key reads either
-a declared value or the candidate identifier, each with a direction. If the two
-candidates on either side of the cut compare equal under the score and under
-every declared key, the outcome is `ambiguous` and nothing is chosen. The
-candidate listing itself is still fully ordered, with the candidate identifier
-as the last resort, so the report is stable.
+a declared value or the candidate identifier, each with a direction. An
+enumerated string declares a member list but no order, so a tie-break key cannot
+read one; score it through a lookup instead. That is a validation error.
+
+A key whose value is unknown for one candidate and known for the other orders
+the known candidate first, whichever direction the key declares: an unknown
+never stands in for a value, so it can never outrank one. The candidate's
+verdict records a `tie_break.unknown` reason naming the key and the reason it
+could not be read. Two unknowns under the same key are indistinguishable and
+fall through to the next key.
+
+If the two candidates on either side of the cut compare equal under the score
+and under every declared key, the outcome is `ambiguous` and nothing is chosen.
+A pair the keys separate only because one side is unknown is therefore decided,
+and a pair whose keys are unknown on both sides is ambiguous. The candidate
+listing itself is still fully ordered, with the candidate identifier as the last
+resort, so the report is stable whichever order the candidates arrive in.
 
 ## Canonical identity
 
@@ -97,9 +111,10 @@ caller that records both can reproduce the decision exactly.
 The fact snapshot is built from published fact records, keeping the most
 specific scope per key. A fact resolves to a known value only when all of the
 following hold: a record exists under that key; the record is inline and scalar;
-its own expiry has not passed; it is no older than the document's declared
-`max_age_ms`; its confidence is non-zero and at or above the document's declared
-floor; and its value has the declared type.
+its own expiry has not passed, reading the expiry instant itself as still usable
+the way the fact contract's own predicate does; it is no older than the
+document's declared `max_age_ms`; its confidence is non-zero and at or above the
+document's declared floor; and its value has the declared type.
 
 Otherwise it resolves to a typed reason: `fact_missing`, `fact_expired`,
 `fact_stale`, `fact_low_confidence`, `fact_not_scalar`, or `type_mismatch`. A
@@ -117,6 +132,9 @@ unknown, and the document cannot omit that statement:
   substitution and the reason it was needed.
 - `abort_evaluation` — the whole evaluation ends with an `unknown` outcome
   carrying the reason and the rule that met it. Nothing is chosen.
+
+A tie-break key carries no such clause; the one rule above covers it, and the
+verdict records every key it could not read.
 
 Predicates are three-valued. `all` is false if any member is false, unknown if
 any member is unknown and none is false, true otherwise. `any` is true if any
