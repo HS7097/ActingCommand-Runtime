@@ -2282,14 +2282,36 @@ mod tests {
             OriginModule, PerformancePayloadDraft,
         };
         use actingcommand_ledger::{
-            GlobalLedgerConfig, GlobalLedgerReadOnlyConfig, Sha256SecretFingerprinter,
+            GlobalLedgerError, GlobalLedgerEvidenceConfig, LedgerMaintenance,
+            Sha256SecretFingerprinter,
         };
+        use std::sync::Arc;
         let temp = tempfile::tempdir().expect("ledger root");
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+        let database = Arc::new(
+            actingcommand_runtime_database::RuntimeDatabase::open_with_initializer::<
+                GlobalLedgerError,
+            >(
+                temp.path(),
+                b"sqlite-ledger-contract-seed",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .expect("database"),
+        );
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = LedgerMaintenance::acquire(
             temp.path(),
-            "neutral-summary-writer",
-        ))
-        .expect("ledger");
+            true,
+            limits,
+            limits.deadline().expect("deadline"),
+        )
+        .expect("maintenance owner");
+        maintenance
+            .initialize_empty(&database)
+            .expect("ready ledger");
+        let ledger = maintenance
+            .open_writer(database, "neutral-summary-writer".into(), |_| None)
+            .expect("ledger");
         let ids = IdentifierIssuer::new().expect("ids");
         let persist = |data: PerformanceSummaryEventData| {
             ledger
@@ -2365,7 +2387,7 @@ mod tests {
         );
         ledger.close().expect("close writer");
         let snapshot =
-            GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(temp.path()), |_| None)
+            GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(temp.path()), |_| None)
                 .expect("read persisted source");
         assert_eq!(
             snapshot.events(),

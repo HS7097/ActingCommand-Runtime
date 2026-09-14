@@ -38,6 +38,12 @@ jobs:
           TMP: ${{ runner.temp }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
+          cargo build --locked -p actingledger --bin actingledger
+          if ($LASTEXITCODE -ne 0) {
+            throw "actingledger build failed with exit code $LASTEXITCODE"
+          }
+          $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
+
           cargo test --workspace --exclude actingcommand-actingd --no-fail-fast
           $workspaceExitCode = $LASTEXITCODE
           Write-Host "Workspace excluding actingd exit code: $workspaceExitCode"

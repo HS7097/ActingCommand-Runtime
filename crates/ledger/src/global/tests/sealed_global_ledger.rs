@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::{GlobalLedger, GlobalLedgerConfig, GlobalLedgerReadOnlyConfig};
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
     ArtifactWriteContext, ArtifactWriteRequest, CapturePipeline, CapturePipelineConfig,
@@ -18,7 +19,6 @@ use actingcommand_contract::{
     SecretFingerprinter, Sha256Fingerprint, TaskOutcome, TaskPayloadDraft,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, GlobalLedgerReadOnlyConfig};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -670,7 +670,7 @@ fn query_type(
     ledger: &GlobalLedger,
     identity: SealedIdentity,
     event_type: EventType,
-) -> Vec<actingcommand_ledger::PersistedEvent> {
+) -> Vec<crate::PersistedEvent> {
     ledger
         .query(EventQuery {
             event_type: Some(event_type),

@@ -1489,11 +1489,17 @@ mod tests {
 
     #[test]
     fn event_invalidation_removes_only_the_matching_snapshot() {
-        let (_root, mut store) = empty_store();
-        let ledger = GlobalLedger::open(actingcommand_ledger::GlobalLedgerConfig::new(
-            _root.path().join("ledger"),
-            "fact-preview",
-        ))
+        let root = TempDir::new().expect("tempdir");
+        let database = Arc::new(
+            RuntimeStateStore::open_database(root.path(), b"0123456789abcdef").expect("database"),
+        );
+        let state =
+            Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
+        let mut store = store_with_state(state);
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            actingcommand_ledger::GlobalLedgerConfig::new(root.path(), "fact-preview"),
+            database,
+        )
         .expect("ledger");
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         let published = *issuer.mint_event_id().expect("event").transport();
