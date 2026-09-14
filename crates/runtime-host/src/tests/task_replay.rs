@@ -6,7 +6,7 @@ use super::*;
 fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expiry() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("recovered-task.zip");
-    let bytes = neutral_contained_task_package();
+    let bytes = neutral_contained_task_package(false);
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
@@ -103,10 +103,11 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
 fn contained_task_replay_without_connection_cache_reuses_runtime_terminal() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("neutral-task.zip");
-    let bytes = neutral_contained_task_package();
+    let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);

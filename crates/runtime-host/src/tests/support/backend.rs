@@ -10,6 +10,7 @@ pub(super) fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>
 
 #[derive(Default)]
 pub(super) struct FakeState {
+    physical_task_geometry: AtomicBool,
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
@@ -57,6 +58,7 @@ struct FakeBackend {
 struct FakeCapture {
     state: Arc<FakeState>,
     provenance: ExecutionBackendProvenance,
+    audit_endpoint: String,
     close_outcome: Option<DeviceResult<actingcommand_device::DeviceResourceCloseOutcome>>,
 }
 
@@ -247,10 +249,21 @@ impl CaptureBackend for FakeCapture {
         } else {
             [0, 255, 0]
         };
+        let physical_task_geometry = self.provenance == ExecutionBackendProvenance::PhysicalDevice
+            && self.state.physical_task_geometry.load(Ordering::Acquire);
+        let (width, height) = if physical_task_geometry {
+            (16, 9)
+        } else {
+            (2, 1)
+        };
+        let mut pixels = [first.as_slice(), guard.as_slice()].concat();
+        if physical_task_geometry {
+            pixels.resize(16 * 9 * 3, 0);
+        }
         let mut frame = Frame::from_pixels(
-            2,
-            1,
-            [first.as_slice(), guard.as_slice()].concat(),
+            width,
+            height,
+            pixels,
             PixelFormat::Rgb8,
             match self.provenance {
                 ExecutionBackendProvenance::PhysicalDevice => CaptureBackendName::AdbScreencap,
@@ -259,6 +272,15 @@ impl CaptureBackend for FakeCapture {
                 }
             },
         )?;
+        if physical_task_geometry {
+            frame.geometry = self.observe_geometry(std::time::Instant::now())?;
+            if let actingcommand_contract::CaptureGeometryObservation::Observed(geometry) =
+                &mut frame.geometry
+            {
+                geometry.frame_transform =
+                    Some(actingcommand_contract::CaptureFrameTransform::Identity);
+            }
+        }
         frame.selection = self
             .state
             .capture_selection
@@ -267,6 +289,44 @@ impl CaptureBackend for FakeCapture {
             .clone()
             .map(Arc::new);
         Ok(frame)
+    }
+
+    fn observe_geometry(
+        &mut self,
+        _deadline: std::time::Instant,
+    ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
+        use actingcommand_contract::{
+            CaptureExtent, CaptureGeometry, CaptureGeometryNotApplicable,
+            CaptureGeometryObservation, CaptureGeometrySource, CaptureGeometryUnknownReason,
+            CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+        };
+        if self.provenance == ExecutionBackendProvenance::FixtureSimulation {
+            return Ok(CaptureGeometryObservation::NotApplicable(
+                CaptureGeometryNotApplicable::FixtureSimulation,
+            ));
+        }
+        if !self.state.physical_task_geometry.load(Ordering::Acquire) {
+            return Ok(CaptureGeometryObservation::Unknown(
+                CaptureGeometryUnknownReason::BackendUnsupported,
+            ));
+        }
+        // The existing fake supplies these dimensions and binding; no device is queried.
+        let extent = CaptureExtent::new(16, 9).expect("positive fake Task extent");
+        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::AdbScreencap,
+            source: CaptureGeometrySource::AdbDefaultDisplay {
+                serial: self.audit_endpoint.clone(),
+                wm_extent: extent,
+                wm_size_kind: CaptureWmSizeKind::Unlabelled,
+            },
+            logical_display_extent: extent,
+            rotation: CaptureRotationObservation::Observed {
+                rotation: CaptureRotation::R0,
+                source: CaptureRotationSource::DumpsysDisplayOrientation,
+            },
+            sampled_at: std::time::SystemTime::now(),
+            frame_transform: None,
+        }))
     }
 
     fn close_once(
@@ -463,6 +523,11 @@ impl ExecutionBackendProvider for FakeProvider {
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&entry.state),
             provenance: self.provenance,
+            audit_endpoint: self
+                .resolve(instance_alias)
+                .expect("resolved fake capture instance")
+                .audit_endpoint()
+                .to_owned(),
             close_outcome: None,
         }))
     }
