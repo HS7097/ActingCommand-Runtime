@@ -3,7 +3,16 @@
 use actingcommand_ledger::LedgerRecord;
 
 #[derive(Debug, Clone)]
-pub struct LedgerRecordEntry(LedgerRecord);
+pub struct LedgerRecordEntry(
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "The entry owns storage inspected only by unit tests."
+        )
+    )]
+    LedgerRecord,
+);
 
 impl LedgerRecordEntry {
     pub(crate) fn from_storage(record: LedgerRecord) -> Self {
