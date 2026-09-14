@@ -151,6 +151,15 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
 
 #[test]
 fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
+    use actingcommand_contract::{
+        EmulatorCapability as Capability, EmulatorCapabilityAvailability as Availability,
+        EmulatorCapabilityImplementation as Implementation,
+    };
+    use actingcommand_device::{
+        AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
+        TouchBackendChoice, TouchBackendConfig,
+    };
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
     let root = TempDir::new().expect("tempdir");
     let state_a = Arc::new(FakeState::default());
     let state_b = Arc::new(FakeState::default());
@@ -175,6 +184,12 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     assert_eq!(status.instances().len(), 2);
     assert_eq!(status.instances()[0].instance_alias(), "node.a");
     assert_eq!(status.instances()[1].instance_alias(), "node.c");
+    assert!(
+        status
+            .instances()
+            .iter()
+            .all(|row| row.capabilities().is_none())
+    );
     let initial_source = status.source().expect("committed status source").clone();
     let source_events = projected_events(
         &mut owner,
@@ -258,6 +273,127 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     drop(waiter);
     drop(owner);
     host.close().expect("close host");
+
+    // The same Status specification consumes the real Registry's metadata without opening it.
+    for (input, capture, segmented, key_text) in [
+        (
+            TouchBackendChoice::MaaTouch,
+            CaptureBackendChoice::Adb,
+            true,
+            true,
+        ),
+        (
+            TouchBackendChoice::Minitouch,
+            CaptureBackendChoice::DroidcastRaw,
+            true,
+            false,
+        ),
+        (
+            TouchBackendChoice::AdbShellInput,
+            CaptureBackendChoice::NemuIpc,
+            false,
+            false,
+        ),
+    ] {
+        let root = TempDir::new().unwrap();
+        let registry = ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+            "node.a",
+            instance_id(),
+            "neutral.application",
+            TouchBackendConfig::new(
+                AdbConfig::default(),
+                DeviceTarget::default(),
+                MaaTouchConfig::default(),
+            )
+            .with_requested(input),
+            CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+                .with_requested(capture),
+        )
+        .unwrap()])
+        .unwrap();
+        let expected = registry.resolve("node.a").unwrap();
+        let host = RuntimeHost::start(config(&root), Arc::new(registry)).unwrap();
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .unwrap();
+        let status = client.status().expect("official Registry status");
+        assert_eq!(status.instances().len(), 1);
+        let row = &status.instances()[0];
+        assert_eq!(row.instance_id(), expected.instance_id());
+        assert_eq!(
+            row.backend_provenance(),
+            Some(ExecutionBackendProvenance::PhysicalDevice)
+        );
+        assert_eq!(row.capabilities(), expected.capabilities());
+        let profile = row.capabilities().unwrap();
+        for (capability, supported) in [
+            (Capability::InputTap, true),
+            (Capability::InputLongTap, true),
+            (Capability::InputSwipe, true),
+            (Capability::InputReset, true),
+            (Capability::InputSegmentedSwipe, segmented),
+            (Capability::InputKey, key_text),
+            (Capability::InputText, key_text),
+            (Capability::CaptureFrame, true),
+            (Capability::ApplicationLaunch, true),
+            (Capability::ApplicationStop, true),
+            (Capability::ApplicationRestart, true),
+            (Capability::ApplicationControl, false),
+            (Capability::InstanceStart, false),
+        ] {
+            let evidence = profile.evidence(capability);
+            assert_eq!(
+                evidence.implementation(),
+                Some(if supported {
+                    Implementation::Supported
+                } else {
+                    Implementation::Unsupported
+                })
+            );
+            assert_eq!(
+                evidence.availability(),
+                if supported {
+                    Availability::Unverified
+                } else {
+                    Availability::Unavailable
+                }
+            );
+            assert!(profile.capability(capability).is_err());
+        }
+        let encoded = serde_json::to_string(&status).unwrap();
+        assert!(!encoded.contains("neutral.application"));
+        assert!(!encoded.contains("resolved_serial"));
+        assert!(!encoded.contains("input_adb"));
+        let source = status.source().unwrap();
+        let mut observer = TestClient::connect(&host);
+        let events = projected_events(
+            &mut observer,
+            EventQuery {
+                from_sequence: Some(source.sequence),
+                to_sequence: Some(source.sequence),
+                ..EventQuery::default()
+            },
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, source.event_id);
+        let ProjectionPayload::Full(payload) = &events[0].payload else {
+            panic!("full status fact")
+        };
+        let Some(actingcommand_contract::RuntimeStateFact::Observed {
+            state: actingcommand_contract::RuntimeObservedState::ControlPlane { status: recorded },
+            ..
+        }) = payload.runtime_state()
+        else {
+            panic!("committed Registry status")
+        };
+        assert_eq!(recorded.instances(), status.instances());
+        drop(observer);
+        drop(client);
+        host.close().unwrap();
+    }
 }
 
 #[test]
