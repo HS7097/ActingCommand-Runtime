@@ -1732,7 +1732,34 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
     wait_for_runtime_info(&mut child.0, root.path());
-    let client = wait_for_agent_client(&mut child.0, root.path());
+    // Use default I/O for this pagination client's existing readiness loop.
+    let client = {
+        let started = Instant::now();
+        loop {
+            match RuntimeClient::connect(RuntimeClientConfig::new(
+                root.path(),
+                EventActor::Agent,
+                EventSource::Adapter,
+            )) {
+                Ok(client) => break client,
+                Err(error) => {
+                    if let Some(status) = child.0.try_wait().expect("process state") {
+                        let mut stderr = String::new();
+                        if let Some(pipe) = child.0.stderr.as_mut() {
+                            pipe.read_to_string(&mut stderr)
+                                .expect("read actingd stderr");
+                        }
+                        panic!("actingd exited before policy readiness with {status}: {stderr}");
+                    }
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "actingd policy connection timed out after {error}"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+    };
     let started = Instant::now();
     loop {
         let completed = client
@@ -1773,7 +1800,7 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             } else {
                 let from_sequence = snapshot_ledger_position.saturating_sub(31).max(1);
                 eprintln!(
-                    "One Forensic ledger fragment: from_sequence={from_sequence}, to_sequence={snapshot_ledger_position}, limit=32; original 500-ms I/O budget; no continuation or retry. Uncovered events remain unknown."
+                    "One Forensic ledger fragment: from_sequence={from_sequence}, to_sequence={snapshot_ledger_position}, limit=32; default 5-second I/O budget; no continuation or retry. Uncovered events remain unknown."
                 );
                 let fragment = client.query_event_page(
                     EventQuery {
@@ -1989,8 +2016,8 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         "the regression must cross the actual Runtime event-page boundary: {summary}"
     );
     if summary.get("status").and_then(Value::as_str) != Some("simulated_completed") {
-        let mut context = [0_u8; 16 * 1024];
-        let mut remaining = &mut context[..16 * 1024 - 128];
+        let mut context = [0_u8; 64 * 1024];
+        let mut remaining = &mut context[..64 * 1024 - 128];
         let formatted = (|| -> std::io::Result<()> {
             writeln!(
                 remaining,
@@ -2088,11 +2115,11 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             }
             Ok(())
         })();
-        let used = 16 * 1024 - 128 - remaining.len();
+        let used = 64 * 1024 - 128 - remaining.len();
         let valid = std::str::from_utf8(&context[..used])
             .map_or_else(|error| error.valid_up_to(), |_| used);
         let footer: &[u8] = if formatted.is_err() || valid != used {
-            b"\n[truncated: 16-KiB context limit or formatting failure; remaining fields omitted]\n"
+            b"\n[truncated: 64-KiB context limit or formatting failure; remaining fields omitted]\n"
         } else {
             b"\n[end summary failure context]\n"
         };
@@ -2261,11 +2288,15 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
 
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
+    let mut policy_identity_header_io = None;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wait_for_runtime_info(&mut child.0, root.path());
         let client = connect_agent(root.path());
         let identity = client
             .project_policy_input_identity(evidence_sequence)
+            .inspect_err(|error| {
+                policy_identity_header_io = error.receipt_header_io().cloned();
+            })
             .expect("project policy input identity through daemon IPC");
         let report = strategic_report(
             &base,
@@ -2328,6 +2359,20 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
             "preserved actingd failure state root: {}",
             root.path().display()
         );
+        eprintln!(
+            "original policy identity header I/O association: {}",
+            policy_identity_header_io
+                .as_ref()
+                .map(|context| json!({
+                    "request_id": context.request_id(),
+                    "correlation_id": context.correlation_id(),
+                    "expected_owner_epoch": context.expected_owner_epoch(),
+                    "expected_runtime_pid": context.expected_runtime_pid(),
+                    "kind": format!("{:?}", context.kind()),
+                    "raw_os_error": context.raw_os_error(),
+                }))
+                .unwrap_or(Value::Null),
+        );
         let snapshot = actingcommand_ledger::GlobalLedger::open_evidence(
             actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
             |reference| match actingcommand_artifact_store::verify_projected_read_only(
@@ -2371,7 +2416,45 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                         "authoritative {event_type:?} snapshot count={}",
                         events.len()
                     );
+                    let mut request_matches = 0;
+                    let mut correlation_matches = 0;
+                    let mut owner_matches = 0;
                     for event in events {
+                        let event_owner = match event.payload() {
+                            actingcommand_contract::EventPayload::Runtime(
+                                actingcommand_contract::RuntimePayload::LifecycleObserved(value),
+                            ) => Some(value.owner_epoch()),
+                            actingcommand_contract::EventPayload::Runtime(
+                                actingcommand_contract::RuntimePayload::Failed(value),
+                            ) => value.lifecycle_failure().map(|value| value.owner_epoch()),
+                            _ => None,
+                        };
+                        let request_match = policy_identity_header_io
+                            .as_ref()
+                            .and_then(|context| context.request_id())
+                            .map(|id| event.links().request_id() == Some(id));
+                        let correlation_match = policy_identity_header_io
+                            .as_ref()
+                            .and_then(|context| context.correlation_id())
+                            .map(|id| event.links().correlation_id() == Some(id));
+                        let owner_match = policy_identity_header_io
+                            .as_ref()
+                            .and_then(|context| context.expected_owner_epoch())
+                            .zip(event_owner.as_ref())
+                            .map(|(expected, actual)| expected == actual);
+                        request_matches += usize::from(request_match == Some(true));
+                        correlation_matches += usize::from(correlation_match == Some(true));
+                        owner_matches += usize::from(owner_match == Some(true));
+                        eprintln!(
+                            "authoritative failure-snapshot association: {}",
+                            json!({
+                                "sequence": event.sequence(),
+                                "request_match": request_match,
+                                "correlation_match": correlation_match,
+                                "owner_match": owner_match,
+                                "event_owner_epoch": event_owner,
+                            })
+                        );
                         match actingcommand_ledger::project_subscription_event(
                             &event,
                             &query,
@@ -2391,6 +2474,9 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                             ),
                         }
                     }
+                    eprintln!(
+                        "authoritative {event_type:?} association counts: request={request_matches} correlation={correlation_matches} owner={owner_matches}; selected existing event types only; absent or unmatched facts do not establish server progress or client receipt"
+                    );
                 }
             }
             Err(reader_error) => {

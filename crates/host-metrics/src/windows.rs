@@ -415,6 +415,14 @@ fn system_times() -> Result<SystemTimes, &'static str> {
 }
 
 fn memory_used_basis_points() -> Result<u16, &'static str> {
+    let memory = sample_physical_memory()?;
+    Ok(ratio_basis_points(
+        memory.total_bytes.saturating_sub(memory.available_bytes),
+        memory.total_bytes,
+    ))
+}
+
+pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, &'static str> {
     // SAFETY: MEMORYSTATUSEX is initialized with its documented byte size.
     unsafe {
         let mut status: MEMORYSTATUSEX = zeroed();
@@ -423,10 +431,10 @@ fn memory_used_basis_points() -> Result<u16, &'static str> {
         if GlobalMemoryStatusEx(&mut status) == 0 || status.ullTotalPhys == 0 {
             return Err("performance_memory_status_failed");
         }
-        Ok(ratio_basis_points(
-            status.ullTotalPhys.saturating_sub(status.ullAvailPhys),
-            status.ullTotalPhys,
-        ))
+        Ok(super::PhysicalMemorySample {
+            total_bytes: status.ullTotalPhys,
+            available_bytes: status.ullAvailPhys,
+        })
     }
 }
 

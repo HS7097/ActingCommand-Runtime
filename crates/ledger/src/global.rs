@@ -4,14 +4,24 @@
 
 mod evidence;
 mod migration;
-pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig};
+mod planning;
+pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
+pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;
 mod read_only;
+mod retention;
+pub use retention::{
+    ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
+};
 mod sqlite;
 mod storage;
 mod store;
 pub use migration::*;
-pub use sqlite::SqliteLedgerReadOnly;
+pub use sqlite::{
+    RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
+    VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
+    verify_release_source_reference, verify_transaction_event,
+};
 
 pub(crate) use projection::query_matches;
 
@@ -30,9 +40,9 @@ use crate::PersistedEvent;
 use actingcommand_contract::{
     CorrelationId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
     PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    SanitizationError, SanitizedEventDraft, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
-    VerifiedArtifactReference,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, SanitizationError, SanitizedEventDraft,
+    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, SecretField, SecretFingerprinter,
+    Sha256Fingerprint, SubscriptionCursor, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -59,15 +69,341 @@ const MAX_QUERY_PAGE_EVENTS: usize = 1024;
 
 pub type GlobalLedgerResult<T> = Result<T, GlobalLedgerError>;
 
+/// Original append result and optional observations from that same writer command.
+pub type LedgerAppendOutcome = (
+    GlobalLedgerResult<PersistedEvent>,
+    Option<LedgerAppendObservation>,
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerAppendStageResult {
+    Ok,
+    Err,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerAppendObservationState {
+    #[default]
+    Unobserved,
+    Observed,
+    Incomplete,
+}
+
+/// Process-local Instant endpoints. Incomplete endpoints must not become zero durations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerAppendSpan {
+    pub state: LedgerAppendObservationState,
+    pub started_at: Option<Instant>,
+    pub finished_at: Option<Instant>,
+    pub result: Option<LedgerAppendStageResult>,
+}
+
+impl LedgerAppendSpan {
+    fn begin(&mut self, started_at: Instant) {
+        self.state = LedgerAppendObservationState::Incomplete;
+        self.started_at = Some(started_at);
+    }
+
+    fn finish(&mut self, finished_at: Instant, succeeded: bool) {
+        self.finished_at = Some(finished_at);
+        self.result = Some(if succeeded {
+            LedgerAppendStageResult::Ok
+        } else {
+            LedgerAppendStageResult::Err
+        });
+        self.state = if self
+            .started_at
+            .and_then(|started| finished_at.checked_duration_since(started))
+            .is_some()
+        {
+            LedgerAppendObservationState::Observed
+        } else {
+            LedgerAppendObservationState::Incomplete
+        };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerWriterCommandKind {
+    RetentionCandidates,
+    AdmitArtifactEviction,
+    FinishArtifactEviction,
+    AppendTransaction,
+    Append,
+    ReconcileScheduledPolicySettlement,
+    Query,
+    QueryPage,
+    ProjectViewPage,
+    ProjectSchedulingOutcomes,
+    LatestSequence,
+    Subscribe,
+    ReplayPage,
+    Project,
+    ProjectPage,
+    Shutdown,
+    #[cfg(test)]
+    TestTerminalFailure,
+    #[cfg(test)]
+    TestSubscriberCount,
+}
+
+/// The immediately preceding completed writer command, without request identities or data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerWriterWorkObservation {
+    pub command: Option<LedgerWriterCommandKind>,
+    /// Original command handling, including reply and cleanup; result is the handler result.
+    pub processing: LedgerAppendSpan,
+    /// Reply-send return through the end of the original arm, including live delivery.
+    /// Ok means this tail returned normally, not that every subscriber accepted an event.
+    pub after_reply: LedgerAppendSpan,
+    pub reply_result: Option<LedgerAppendStageResult>,
+    /// Same-command SQLite view details; absent for other commands/backends.
+    pub project_view: Option<LedgerProjectViewObservation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerProjectViewCount {
+    #[default]
+    Unobserved,
+    Observed(u64),
+    Incomplete,
+}
+
+impl LedgerProjectViewCount {
+    fn from_len(value: usize) -> Self {
+        u64::try_from(value).map_or(Self::Incomplete, Self::Observed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerProjectViewReadBudget {
+    pub max_bytes: u64,
+    pub max_events: LedgerProjectViewCount,
+    pub deadline: Instant,
+}
+
+/// Fixed process-local stages and sizes of one original SQLite ProjectViewPage call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerProjectViewObservation {
+    pub admission: LedgerAppendSpan,
+    pub connection: LedgerAppendSpan,
+    /// Guard-acquired work through explicit transaction close, before mutex-guard Drop.
+    pub with_connection: LedgerAppendSpan,
+    pub begin_transaction: LedgerAppendSpan,
+    pub read_snapshot: LedgerAppendSpan,
+    pub verify_snapshot: LedgerAppendSpan,
+    pub prepare_events: LedgerAppendSpan,
+    pub select_sequences: LedgerAppendSpan,
+    pub project_page: LedgerAppendSpan,
+    pub commit: LedgerAppendSpan,
+    pub rollback: LedgerAppendSpan,
+    pub read_budget: Option<LedgerProjectViewReadBudget>,
+    pub requested_limit: LedgerProjectViewCount,
+    pub selection_limit: LedgerProjectViewCount,
+    pub max_page_events: LedgerProjectViewCount,
+    pub max_response_bytes: LedgerProjectViewCount,
+    pub max_recovery_context_events: LedgerProjectViewCount,
+    pub raw_bytes: LedgerProjectViewCount,
+    pub raw_event_rows: LedgerProjectViewCount,
+    pub raw_link_rows: LedgerProjectViewCount,
+    pub raw_artifact_rows: LedgerProjectViewCount,
+    pub verified_records: LedgerProjectViewCount,
+    pub prepared_events: LedgerProjectViewCount,
+    pub selected_sequences: LedgerProjectViewCount,
+    pub returned_events: LedgerProjectViewCount,
+    pub returned_recovery_groups: LedgerProjectViewCount,
+}
+
+impl LedgerWriterWorkObservation {
+    fn replied(&mut self, succeeded: bool) {
+        self.after_reply.begin(Instant::now());
+        self.reply_result = Some(if succeeded {
+            LedgerAppendStageResult::Ok
+        } else {
+            LedgerAppendStageResult::Err
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerWriterReceiveOrder {
+    #[default]
+    Unobserved,
+    Incomplete,
+    BeforeSendReturned,
+    AtSendReturn,
+    AfterSendReturned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerPreviousWorkRelation {
+    #[default]
+    Unobserved,
+    Incomplete,
+    /// Previous processing finished at or before send.started_at.
+    CompletedBySendStart,
+    /// Previous processing ended after send started and began before send returned.
+    OverlapsSend,
+    /// Previous processing began at or after send.finished_at.
+    StartedAtOrAfterSendReturn,
+}
+
+/// Fixed-size, non-persistent observations; only the original reply transports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerAppendObservation {
+    /// Immediately before send_command through entry into the writer's Append arm.
+    pub queue: LedgerAppendSpan,
+    /// The original send_command call, paired locally with this command's original reply.
+    pub send: LedgerAppendSpan,
+    pub writer_receive_order: LedgerWriterReceiveOrder,
+    pub previous_writer_work: LedgerWriterWorkObservation,
+    pub previous_work_relation: LedgerPreviousWorkRelation,
+    /// Writer entry through backend.persist return, including validation and preparation.
+    /// An earlier store error ends this span at the store return instead.
+    pub persistence: LedgerAppendSpan,
+    /// Immediately before backend.persist; None means that call was not observed.
+    /// Its return is persistence.finished_at, including on an original backend error.
+    pub durable_started_at: Option<Instant>,
+    /// Successful backend return through reply construction: retention, indexes,
+    /// events, statistics, and the original response preparation/error notification.
+    pub publication: LedgerAppendSpan,
+}
+
+impl LedgerAppendObservation {
+    fn sent(started_at: Instant) -> Self {
+        let mut value = Self::default();
+        value.queue.begin(started_at);
+        value
+    }
+
+    fn writer_received(&mut self) {
+        let now = Instant::now();
+        self.queue.finish(now, true);
+        self.persistence.begin(now);
+    }
+
+    fn persisted(&mut self, succeeded: bool) {
+        let now = Instant::now();
+        self.persistence.finish(now, succeeded);
+        if succeeded {
+            self.publication.begin(now);
+        }
+    }
+
+    fn reply_ready(&mut self, succeeded: bool) {
+        if self.publication.started_at.is_some() {
+            self.publication.finish(Instant::now(), succeeded);
+        }
+    }
+
+    fn with_send(mut self, send: LedgerAppendSpan) -> Self {
+        self.send = send;
+        self.writer_receive_order =
+            match (send.started_at, send.finished_at, self.queue.finished_at) {
+                (Some(started), Some(returned), Some(received))
+                    if send.state == LedgerAppendObservationState::Observed
+                        && self.queue.state == LedgerAppendObservationState::Observed
+                        && received.checked_duration_since(started).is_some() =>
+                {
+                    match received.cmp(&returned) {
+                        std::cmp::Ordering::Less => LedgerWriterReceiveOrder::BeforeSendReturned,
+                        std::cmp::Ordering::Equal => LedgerWriterReceiveOrder::AtSendReturn,
+                        std::cmp::Ordering::Greater => LedgerWriterReceiveOrder::AfterSendReturned,
+                    }
+                }
+                (_, _, None) => LedgerWriterReceiveOrder::Unobserved,
+                _ => LedgerWriterReceiveOrder::Incomplete,
+            };
+        let previous = self.previous_writer_work.processing;
+        self.previous_work_relation = match (
+            previous.started_at,
+            previous.finished_at,
+            send.started_at,
+            send.finished_at,
+            self.queue.finished_at,
+        ) {
+            (
+                Some(work_start),
+                Some(work_end),
+                Some(send_start),
+                Some(send_end),
+                Some(received),
+            ) if previous.state == LedgerAppendObservationState::Observed
+                && send.state == LedgerAppendObservationState::Observed
+                && self.queue.state == LedgerAppendObservationState::Observed
+                && received.checked_duration_since(send_start).is_some()
+                && received.checked_duration_since(work_end).is_some() =>
+            {
+                if work_end <= send_start {
+                    LedgerPreviousWorkRelation::CompletedBySendStart
+                } else if work_start >= send_end {
+                    LedgerPreviousWorkRelation::StartedAtOrAfterSendReturn
+                } else {
+                    LedgerPreviousWorkRelation::OverlapsSend
+                }
+            }
+            _ if previous.state == LedgerAppendObservationState::Unobserved => {
+                LedgerPreviousWorkRelation::Unobserved
+            }
+            _ => LedgerPreviousWorkRelation::Incomplete,
+        };
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalLedgerError {
     code: &'static str,
     operation: &'static str,
     detail: Option<String>,
     terminal: bool,
+    rolled_back_work: Option<Box<TransactionWorkError>>,
+}
+
+/// Error from a named Runtime business owner; only a confirmed SQL rollback exposes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionWorkError {
+    pub code: &'static str,
+    pub operation: &'static str,
+    pub fatal: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionStateObservation {
+    Applied,
+    Unchanged,
+    Unknown,
+}
+
+/// Trusted crate adapter. No RPC, CLI, resource or SQL-text callback entry exists.
+pub trait LedgerTransactionWork: Send + 'static {
+    fn apply(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+        event: &PersistedEvent,
+    ) -> Result<(), TransactionWorkError>;
+    fn observe(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> Result<TransactionStateObservation, TransactionWorkError>;
 }
 
 impl GlobalLedgerError {
+    pub fn rolled_back_work(&self) -> Option<&TransactionWorkError> {
+        self.rolled_back_work.as_deref()
+    }
+
+    fn work_failure(error: TransactionWorkError) -> Self {
+        Self {
+            code: error.code,
+            operation: error.operation,
+            detail: Some(error.detail.clone()),
+            terminal: false,
+            rolled_back_work: Some(Box::new(error)),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         self.code
     }
@@ -90,6 +426,7 @@ impl GlobalLedgerError {
             operation,
             detail: None,
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -99,6 +436,7 @@ impl GlobalLedgerError {
             operation,
             detail: None,
             terminal: false,
+            rolled_back_work: None,
         }
     }
 
@@ -108,6 +446,7 @@ impl GlobalLedgerError {
             operation,
             detail: Some(error.to_string()),
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -117,6 +456,7 @@ impl GlobalLedgerError {
             operation,
             detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
+            rolled_back_work: None,
         }
     }
 
@@ -311,9 +651,29 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 }
 
 enum WriterCommand {
+    RetentionCandidates {
+        after: Option<actingcommand_contract::ArtifactId>,
+        response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
+    },
+    AdmitArtifactEviction {
+        guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
+        response: SyncSender<GlobalLedgerResult<ArtifactEvictionAdmission>>,
+    },
+    FinishArtifactEviction {
+        permit: Box<ArtifactEvictionPermit>,
+        disposition: actingcommand_contract::ArtifactEvictionDisposition,
+        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
+    AppendTransaction {
+        draft: Box<SanitizedEventDraft>,
+        work: Box<dyn LedgerTransactionWork>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
     Append {
         draft: Box<SanitizedEventDraft>,
-        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+        queued_at: Option<Instant>,
+        response: SyncSender<LedgerAppendOutcome>,
     },
     ReconcileScheduledPolicySettlement {
         execution: Box<PolicyExecutionEventData>,
@@ -329,6 +689,12 @@ enum WriterCommand {
         through_sequence: u64,
         page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
+    ProjectViewPage {
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+        response: SyncSender<GlobalLedgerResult<RuntimeEventQueryPage>>,
     },
     ProjectSchedulingOutcomes {
         expected: Box<SchedulingOutcomeIdentity>,
@@ -800,21 +1166,77 @@ impl GlobalLedger {
         }
     }
 
-    pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
+    /// Commits one fact and its named internal database work on the existing writer.
+    pub fn append_transaction(
+        &self,
+        draft: SanitizedEventDraft,
+        work: Box<dyn LedgerTransactionWork>,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
             .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_event"))?;
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_transaction"))?;
         send_command(
             sender,
-            WriterCommand::Append {
+            WriterCommand::AppendTransaction {
                 draft: Box::new(draft),
+                work,
                 response,
             },
-            "append_event",
+            "append_transaction",
         )?;
-        receive_response(receiver, "append_event")?
+        receive_response(receiver, "append_transaction")?
+    }
+
+    pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
+        self.append_request(draft, false).0
+    }
+
+    /// Observes the same append command and returns its original result unchanged.
+    /// Queue rejection or a missing reply leaves inner spans unobserved/incomplete.
+    /// Response transport, caller wakeup and later subscription delivery are outside
+    /// these spans. A backend error retains its original partial-commit semantics.
+    pub fn append_with_observation(&self, draft: SanitizedEventDraft) -> LedgerAppendOutcome {
+        self.append_request(draft, true)
+    }
+
+    fn append_request(&self, draft: SanitizedEventDraft, observe: bool) -> LedgerAppendOutcome {
+        let mut observation = observe.then(LedgerAppendObservation::default);
+        let result = (|| {
+            let (response, receiver) = mpsc::sync_channel(1);
+            let sender = self
+                .sender
+                .as_ref()
+                .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_event"))?;
+            let draft = Box::new(draft);
+            let queued_at = observe.then(Instant::now);
+            observation = queued_at.map(LedgerAppendObservation::sent);
+            let command = WriterCommand::Append {
+                draft,
+                queued_at,
+                response,
+            };
+            if let Some(value) = &mut observation {
+                value.send.begin(Instant::now());
+            }
+            let sent = send_command(sender, command, "append_event");
+            if let Some(value) = &mut observation {
+                value.send.finish(Instant::now(), sent.is_ok());
+            }
+            sent?;
+            receive_response(receiver, "append_event")
+        })();
+        match result {
+            Ok((result, Some(value))) => (
+                result,
+                Some(value.with_send(
+                    observation.map_or_else(LedgerAppendSpan::default, |local| local.send),
+                )),
+            ),
+            Ok(reply) => reply,
+            Err(error) => (Err(error), observation),
+        }
     }
 
     /// Reconciles one already-admitted scheduled-policy outcome from ledger facts.
@@ -844,6 +1266,9 @@ impl GlobalLedger {
     }
 
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "query_events")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -864,6 +1289,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "query_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -881,6 +1309,35 @@ impl GlobalLedger {
             "query_event_page",
         )?;
         receive_response(receiver, "query_event_page")?
+    }
+
+    pub fn project_view_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_ledger_view_page")
+        })?;
+        request.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
+        })?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal("writer_unavailable", "project_ledger_view_page")
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ProjectViewPage {
+                query,
+                profile,
+                request,
+                response,
+            },
+            "project_ledger_view_page",
+        )?;
+        receive_response(receiver, "project_ledger_view_page")?
     }
 
     pub fn project_scheduling_outcomes(
@@ -957,6 +1414,9 @@ impl GlobalLedger {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_events")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -982,6 +1442,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        query.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_event_query_bounds", "project_event_page")
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1071,13 +1534,163 @@ fn writer_loop<S: LedgerStore>(
     subscription_capacity: usize,
 ) -> GlobalLedgerResult<()> {
     let mut subscribers = Vec::new();
+    let mut previous_writer_work = LedgerWriterWorkObservation::default();
     while let Ok(command) = receiver.recv() {
+        let started = Instant::now();
+        let kind = match &command {
+            WriterCommand::RetentionCandidates { .. } => {
+                LedgerWriterCommandKind::RetentionCandidates
+            }
+            WriterCommand::AdmitArtifactEviction { .. } => {
+                LedgerWriterCommandKind::AdmitArtifactEviction
+            }
+            WriterCommand::FinishArtifactEviction { .. } => {
+                LedgerWriterCommandKind::FinishArtifactEviction
+            }
+            WriterCommand::AppendTransaction { .. } => LedgerWriterCommandKind::AppendTransaction,
+            WriterCommand::Append { .. } => LedgerWriterCommandKind::Append,
+            WriterCommand::ReconcileScheduledPolicySettlement { .. } => {
+                LedgerWriterCommandKind::ReconcileScheduledPolicySettlement
+            }
+            WriterCommand::Query { .. } => LedgerWriterCommandKind::Query,
+            WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
+            WriterCommand::ProjectViewPage { .. } => LedgerWriterCommandKind::ProjectViewPage,
+            WriterCommand::ProjectSchedulingOutcomes { .. } => {
+                LedgerWriterCommandKind::ProjectSchedulingOutcomes
+            }
+            WriterCommand::LatestSequence { .. } => LedgerWriterCommandKind::LatestSequence,
+            WriterCommand::Subscribe { .. } => LedgerWriterCommandKind::Subscribe,
+            WriterCommand::ReplayPage { .. } => LedgerWriterCommandKind::ReplayPage,
+            WriterCommand::Project { .. } => LedgerWriterCommandKind::Project,
+            WriterCommand::ProjectPage { .. } => LedgerWriterCommandKind::ProjectPage,
+            WriterCommand::Shutdown { .. } => LedgerWriterCommandKind::Shutdown,
+            #[cfg(test)]
+            WriterCommand::TestTerminalFailure { .. } => {
+                LedgerWriterCommandKind::TestTerminalFailure
+            }
+            #[cfg(test)]
+            WriterCommand::TestSubscriberCount { .. } => {
+                LedgerWriterCommandKind::TestSubscriberCount
+            }
+        };
+        let mut command_observation = LedgerWriterWorkObservation {
+            command: Some(kind),
+            ..LedgerWriterWorkObservation::default()
+        };
+        command_observation.processing.begin(started);
+        let command_succeeded;
         match command {
-            WriterCommand::Append { draft, response } => {
-                let result = store.append(*draft);
+            WriterCommand::RetentionCandidates { after, response } => {
+                command_observation
+                    .replied(response.send(Ok(store.retention_candidates(after))).is_ok());
+                command_succeeded = true;
+            }
+            WriterCommand::AdmitArtifactEviction { guard, response } => {
+                match store.admit_artifact_eviction(*guard) {
+                    Ok((admission, appended)) => {
+                        command_succeeded = true;
+                        for event in &appended {
+                            deliver_live_event(&mut subscribers, event);
+                        }
+                        command_observation.replied(response.send(Ok(admission)).is_ok());
+                    }
+                    Err(error) => {
+                        command_succeeded = false;
+                        let terminal = error.terminal();
+                        command_observation.replied(response.send(Err(error.clone())).is_ok());
+                        if terminal {
+                            notify_terminal_failure(&mut subscribers, error.clone());
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            WriterCommand::FinishArtifactEviction {
+                permit,
+                disposition,
+                io,
+                response,
+            } => {
+                let result = store.finish_artifact_eviction(*permit, disposition, io);
+                let result = match result {
+                    Ok(event) => {
+                        deliver_live_event(&mut subscribers, &event);
+                        if disposition
+                            == actingcommand_contract::ArtifactEvictionDisposition::Failed
+                        {
+                            Err(GlobalLedgerError::fatal(
+                                "artifact_eviction_failed",
+                                "finish_artifact_eviction",
+                            ))
+                        } else {
+                            Ok(event)
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                command_succeeded = result.is_ok();
+                if let Err(error) = &result
+                    && error.terminal()
+                {
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error.clone());
+                }
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::Append {
+                draft,
+                queued_at,
+                response,
+            } => {
+                let mut observation = queued_at.map(LedgerAppendObservation::sent);
+                if let Some(value) = &mut observation {
+                    value.writer_received();
+                    value.previous_writer_work = previous_writer_work;
+                }
+                let result = store.append(*draft, &mut observation);
+                command_succeeded = result.is_ok();
+                if let Some(value) = &mut observation
+                    && value.persistence.finished_at.is_none()
+                {
+                    value.persistence.finish(Instant::now(), result.is_ok());
+                }
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
                 if let Ok(event) = &result {
-                    let _ = response.send(Ok(event.clone()));
+                    let reply = Ok(event.clone());
+                    if let Some(value) = &mut observation {
+                        value.reply_ready(true);
+                    }
+                    command_observation.replied(response.send((reply, observation)).is_ok());
+                    deliver_live_event(&mut subscribers, event);
+                }
+                if terminal {
+                    let error = result.expect_err("terminal append result must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let reply = Err(error.clone());
+                    if let Some(value) = &mut observation {
+                        value.reply_ready(false);
+                    }
+                    let _ = response.send((reply, observation));
+                    return Err(error);
+                }
+                if let Err(error) = result {
+                    if let Some(value) = &mut observation {
+                        value.reply_ready(false);
+                    }
+                    command_observation.replied(response.send((Err(error), observation)).is_ok());
+                }
+            }
+            WriterCommand::AppendTransaction {
+                draft,
+                response,
+                work,
+            } => {
+                let result = store.append_transaction(*draft, work.as_ref());
+                command_succeeded = result.is_ok();
+                let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
+                if let Ok(event) = &result {
+                    command_observation.replied(response.send(Ok(event.clone())).is_ok());
                     deliver_live_event(&mut subscribers, event);
                 }
                 if terminal {
@@ -1087,7 +1700,7 @@ fn writer_loop<S: LedgerStore>(
                     return Err(error);
                 }
                 if let Err(error) = result {
-                    let _ = response.send(Err(error));
+                    command_observation.replied(response.send(Err(error)).is_ok());
                 }
             }
             WriterCommand::ReconcileScheduledPolicySettlement {
@@ -1095,9 +1708,10 @@ fn writer_loop<S: LedgerStore>(
                 response,
             } => {
                 let result = store.reconcile_scheduled_policy_settlement(*execution);
+                command_succeeded = result.is_ok();
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
                 if let Ok((completion, appended)) = &result {
-                    let _ = response.send(Ok(completion.clone()));
+                    command_observation.replied(response.send(Ok(completion.clone())).is_ok());
                     for event in appended {
                         deliver_live_event(&mut subscribers, event);
                     }
@@ -1109,11 +1723,12 @@ fn writer_loop<S: LedgerStore>(
                     return Err(error);
                 }
                 if let Err(error) = result {
-                    let _ = response.send(Err(error));
+                    command_observation.replied(response.send(Err(error)).is_ok());
                 }
             }
             WriterCommand::Query { query, response } => {
-                let _ = response.send(Ok(store.query(&query)));
+                command_observation.replied(response.send(Ok(store.query(&query))).is_ok());
+                command_succeeded = true;
             }
             WriterCommand::QueryPage {
                 query,
@@ -1132,7 +1747,26 @@ fn writer_loop<S: LedgerStore>(
                         "query_event_page",
                     ))
                 };
-                let _ = response.send(result);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            WriterCommand::ProjectViewPage {
+                query,
+                profile,
+                request,
+                response,
+            } => {
+                let mut observation = Some(LedgerProjectViewObservation::default());
+                let result = store.project_view_page(&query, profile, &request, &mut observation);
+                command_observation.project_view = observation;
+                command_succeeded = result.is_ok();
+                if result.as_ref().is_err_and(GlobalLedgerError::terminal) {
+                    let error = result.expect_err("terminal view query must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
+                command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::ProjectSchedulingOutcomes {
                 expected,
@@ -1216,10 +1850,12 @@ fn writer_loop<S: LedgerStore>(
                         &expected,
                     )
                 };
-                let _ = response.send(result);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::LatestSequence { response } => {
-                let _ = response.send(Ok(store.latest_sequence()));
+                command_observation.replied(response.send(Ok(store.latest_sequence())).is_ok());
+                command_succeeded = true;
             }
             WriterCommand::Subscribe { cursor, response } => {
                 let replay_through_sequence = store.latest_sequence();
@@ -1232,7 +1868,9 @@ fn writer_loop<S: LedgerStore>(
                     terminal: terminal_receiver,
                     liveness: Arc::clone(&liveness),
                 };
-                if response.send(Ok(registration)).is_ok() {
+                let replied = response.send(Ok(registration)).is_ok();
+                command_observation.replied(replied);
+                if replied {
                     subscribers.push(ActiveSubscription {
                         after_sequence: cursor.after_sequence.max(replay_through_sequence),
                         live,
@@ -1240,6 +1878,7 @@ fn writer_loop<S: LedgerStore>(
                         liveness: Arc::downgrade(&liveness),
                     });
                 }
+                command_succeeded = true;
             }
             WriterCommand::ReplayPage {
                 after_sequence,
@@ -1255,7 +1894,8 @@ fn writer_loop<S: LedgerStore>(
                         "replay_subscription",
                     ))
                 };
-                let _ = response.send(result);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::Project {
                 query,
@@ -1267,7 +1907,8 @@ fn writer_loop<S: LedgerStore>(
                     .iter()
                     .map(|event| projection::project(event, profile))
                     .collect();
-                let _ = response.send(Ok(projected));
+                command_observation.replied(response.send(Ok(projected)).is_ok());
+                command_succeeded = true;
             }
             WriterCommand::ProjectPage {
                 query,
@@ -1283,7 +1924,7 @@ fn writer_loop<S: LedgerStore>(
                     Ok(store
                         .query_page(&query, after_sequence, through_sequence, page_events)
                         .iter()
-                        .map(|event| projection::project(event, profile))
+                        .map(|event| projection::project_at(event, profile, through_sequence))
                         .collect())
                 } else {
                     Err(GlobalLedgerError::request(
@@ -1291,7 +1932,8 @@ fn writer_loop<S: LedgerStore>(
                         "project_event_page",
                     ))
                 };
-                let _ = response.send(result);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::Shutdown { response } => {
                 let result = store.close();
@@ -1318,9 +1960,18 @@ fn writer_loop<S: LedgerStore>(
             }
             #[cfg(test)]
             WriterCommand::TestSubscriberCount { response } => {
-                let _ = response.send(subscribers.len());
+                command_observation.replied(response.send(subscribers.len()).is_ok());
+                command_succeeded = true;
             }
         }
+        let finished = Instant::now();
+        command_observation
+            .processing
+            .finish(finished, command_succeeded);
+        if command_observation.after_reply.started_at.is_some() {
+            command_observation.after_reply.finish(finished, true);
+        }
+        previous_writer_work = command_observation;
     }
     let result = store.close();
     match &result {
@@ -1373,10 +2024,7 @@ fn send_command(
     }
 }
 
-fn receive_response<T>(
-    receiver: Receiver<GlobalLedgerResult<T>>,
-    operation: &'static str,
-) -> GlobalLedgerResult<GlobalLedgerResult<T>> {
+fn receive_response<T>(receiver: Receiver<T>, operation: &'static str) -> GlobalLedgerResult<T> {
     match receiver.recv_timeout(COMMAND_TIMEOUT) {
         Ok(result) => Ok(result),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::fatal(

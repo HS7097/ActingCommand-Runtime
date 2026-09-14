@@ -138,9 +138,10 @@ fn catalog_cas_conflict_preserves_nonfatal_identity_and_effect() {
         .activate_policy_catalog(&policy_sources(2))
         .expect("activate second catalog");
 
-    let error = host
+    let (result, document) = host
         .activate_policy_catalog_with_expected_for_test(&policy_sources(3), first)
-        .expect_err("stale compare-and-swap must fail");
+        .expect("invoke catalog compare-and-swap and read committed state");
+    let error = result.expect_err("stale compare-and-swap must fail");
     assert_eq!(error.code(), "catalog_active_generation_changed");
     assert_eq!(error.operation(), "switch_active_catalog");
     assert!(!error.is_fatal());
@@ -152,6 +153,14 @@ fn catalog_cas_conflict_preserves_nonfatal_identity_and_effect() {
         second
     );
 
+    let document = document.expect("active pointer");
+    let pointer: serde_json::Value =
+        serde_json::from_slice(document.payload()).expect("catalog pointer");
+    assert_eq!(
+        pointer["generation"]["catalog_hash"],
+        second.catalog_hash(),
+        "confirmed rollback preserves the durable pointer"
+    );
     let mut client = TestClient::connect(&host);
     let failures = projected_events(
         &mut client,

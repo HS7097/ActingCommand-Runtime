@@ -8,12 +8,18 @@ use actingcommand_contract::{
     FactPayload, FactRecord, FactScalar as ContractFactScalar, FactScope,
     FactValue as ContractFactValue, InstanceFactContext, InstanceFactSnapshot, RuntimeErrorCode,
 };
-use actingcommand_ledger::{GlobalLedger, PersistedEvent};
+use actingcommand_ledger::{
+    GlobalLedger, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
+    TransactionWorkError,
+};
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
     FactValue as PolicyFactValue, InstanceSnapshot, ObservedFact, ScopeSelector,
 };
-use actingcommand_runtime_state::RuntimeStateStore;
+use actingcommand_runtime_state::{
+    FACT_TOMBSTONE_NAMESPACE, FactStateObservation, PreparedFactProjection, RuntimeStateStore,
+    fact_tombstone_key,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -98,7 +104,6 @@ fn invalidation_scope_matches(
     }
 }
 const MAX_ACTIVE_FACTS: usize = 256;
-const FACT_TOMBSTONE_NAMESPACE: &str = "fact.tombstone.v1";
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
 
 #[derive(Clone, Copy)]
@@ -121,9 +126,96 @@ struct InvalidationTombstone {
     sequence: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct PendingFactInvalidation {
+    pub(crate) data: FactInvalidationEventData,
+    published_sequence: u64,
+    trigger_sequence: u64,
+}
+
+pub(crate) struct FactTransaction {
+    state: PreparedFactProjection,
+}
+
+impl LedgerTransactionWork for FactTransaction {
+    fn apply(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+        event: &PersistedEvent,
+    ) -> Result<(), TransactionWorkError> {
+        self.state
+            .apply(transaction, event)
+            .map_err(fact_work_error)
+    }
+
+    fn observe(
+        &self,
+        transaction: &actingcommand_runtime_database::RuntimeTransaction<'_, '_>,
+    ) -> Result<TransactionStateObservation, TransactionWorkError> {
+        self.state
+            .observe(transaction)
+            .map(|value| match value {
+                FactStateObservation::Applied => TransactionStateObservation::Applied,
+                FactStateObservation::Unchanged => TransactionStateObservation::Unchanged,
+                FactStateObservation::Unknown => TransactionStateObservation::Unknown,
+            })
+            .map_err(fact_work_error)
+    }
+}
+
+fn fact_work_error(error: actingcommand_runtime_state::RuntimeStateError) -> TransactionWorkError {
+    TransactionWorkError {
+        code: error.code(),
+        operation: error.operation(),
+        fatal: error.is_fatal(),
+        detail: error.to_string(),
+    }
+}
+
+fn fact_state_error(error: actingcommand_runtime_state::RuntimeStateError) -> RuntimeHostError {
+    RuntimeHostError::state(&error).with_native_detail(error.to_string())
+}
+
+pub(crate) fn fact_transaction_error(
+    error: actingcommand_ledger::GlobalLedgerError,
+) -> RuntimeHostError {
+    if let Some(work) = error.rolled_back_work() {
+        let mapped = if work.fatal {
+            RuntimeHostError::fatal(work.code, work.operation, RuntimeErrorCode::RuntimeFatal)
+        } else {
+            RuntimeHostError::request(work.code, work.operation, RuntimeErrorCode::InvalidRequest)
+        };
+        mapped.with_native_detail(work.detail.clone())
+    } else {
+        RuntimeHostError::fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::LedgerFailure,
+        )
+        .with_native_detail(format!("{error}; detail={:?}", error.detail()))
+    }
+}
+
+fn original_at(ledger: &GlobalLedger, sequence: u64) -> RuntimeHostResult<PersistedEvent> {
+    let mut events = ledger
+        .query(EventQuery {
+            from_sequence: Some(sequence),
+            to_sequence: Some(sequence),
+            ..EventQuery::default()
+        })
+        .map_err(fact_transaction_error)?;
+    if events.len() != 1 {
+        return Err(fact_fatal(
+            "fact_projection_source_missing",
+            "read_fact_source",
+        ));
+    }
+    Ok(events.remove(0))
+}
+
 #[derive(Default)]
 struct HistoricalFactProjection {
-    active: BTreeMap<FactIdentity, (FactRecord, EventId)>,
+    active: BTreeMap<FactIdentity, (FactRecord, u64, EventId)>,
     scope_instances: BTreeMap<FactIdentity, Vec<actingcommand_contract::InstanceId>>,
     invalidated: BTreeMap<HistoricalInvalidationIdentity, FactInvalidationEventData>,
     input_boundaries: InputInvalidationBoundaries,
@@ -139,7 +231,7 @@ impl HistoricalFactProjection {
                         fact_fatal("fact_observation_precedes_input", "project_fact_history")
                     })?;
                 for record in payload.records() {
-                    self.publish(record.clone(), *event.event_id())?;
+                    self.publish(record.clone(), event.sequence(), *event.event_id())?;
                     self.scope_instances.insert(
                         (record.scope.clone(), record.key.clone()),
                         payload.scope_instances().to_vec(),
@@ -148,14 +240,25 @@ impl HistoricalFactProjection {
                 Ok(())
             }
             EventPayload::Fact(FactPayload::Invalidated(payload)) => {
-                self.invalidate(payload.invalidation().clone())
+                let data = payload.invalidation();
+                let identity = (
+                    (data.scope.clone(), data.key.clone()),
+                    data.source_snapshot_id.clone(),
+                );
+                if self.invalidated.get(&identity) != Some(data) {
+                    return Err(fact_fatal(
+                        "fact_invalidation_source_mismatch",
+                        "project_fact_history",
+                    ));
+                }
+                Ok(())
             }
             _ => {
                 self.input_boundaries.observe(event)?;
                 let invalidations = self
                     .active
                     .values()
-                    .filter(|(record, _)| {
+                    .filter(|(record, _, _)| {
                         record.invalidate_on.contains(&event.event_type())
                             && invalidation_scope_matches(
                                 event,
@@ -164,7 +267,7 @@ impl HistoricalFactProjection {
                                     .map_or(&[], Vec::as_slice),
                             )
                     })
-                    .map(|(record, _)| FactInvalidationEventData {
+                    .map(|(record, _, _)| FactInvalidationEventData {
                         scope: record.scope.clone(),
                         key: record.key.clone(),
                         source_snapshot_id: record.source_snapshot_id.clone(),
@@ -181,7 +284,12 @@ impl HistoricalFactProjection {
         }
     }
 
-    fn publish(&mut self, record: FactRecord, event_id: EventId) -> RuntimeHostResult<()> {
+    fn publish(
+        &mut self,
+        record: FactRecord,
+        sequence: u64,
+        event_id: EventId,
+    ) -> RuntimeHostResult<()> {
         record
             .validate()
             .map_err(|_| fact_fatal("fact_record_invalid", "project_fact_history"))?;
@@ -195,7 +303,7 @@ impl HistoricalFactProjection {
                 "project_fact_history",
             ));
         }
-        if let Some((existing, existing_event_id)) = self.active.get(&identity)
+        if let Some((existing, _, existing_event_id)) = self.active.get(&identity)
             && existing.source_snapshot_id == record.source_snapshot_id
         {
             if existing != &record || existing_event_id != &event_id {
@@ -212,7 +320,7 @@ impl HistoricalFactProjection {
                 "project_fact_history",
             ));
         }
-        self.active.insert(identity, (record, event_id));
+        self.active.insert(identity, (record, sequence, event_id));
         Ok(())
     }
 
@@ -228,7 +336,7 @@ impl HistoricalFactProjection {
             }
             return Ok(());
         }
-        let (active, _) = self.active.get(&identity).ok_or_else(|| {
+        let (active, _, _) = self.active.get(&identity).ok_or_else(|| {
             fact_fatal("fact_invalidation_target_missing", "project_fact_history")
         })?;
         if active.source_snapshot_id != data.source_snapshot_id
@@ -250,7 +358,7 @@ impl HistoricalFactProjection {
     fn records(self) -> Vec<FactRecord> {
         self.active
             .into_values()
-            .map(|(record, _)| record)
+            .map(|(record, _, _)| record)
             .collect()
     }
 }
@@ -261,7 +369,7 @@ pub(crate) struct InstanceFactStore {
     latest_observed: BTreeMap<FactIdentity, u64>,
     input_boundaries: InputInvalidationBoundaries,
     invalidated: BTreeMap<(FactIdentity, String), InvalidationTombstone>,
-    pending: BTreeMap<InvalidationIdentity, FactInvalidationEventData>,
+    pending: BTreeMap<InvalidationIdentity, PendingFactInvalidation>,
     last_sequence: u64,
     state: Arc<RuntimeStateStore>,
 }
@@ -309,8 +417,16 @@ impl InstanceFactStore {
         let events = ledger
             .query(Default::default())
             .map_err(|_| fact_fatal("fact_store_recovery_failed", "recover_fact_store"))?;
+        let mut history = HistoricalFactProjection::default();
+        for event in &events {
+            history.replay(event)?;
+        }
+        store
+            .state
+            .recover_fact_projections(&events)
+            .map_err(fact_state_error)?;
         for event in events {
-            store.replay_event(&event)?;
+            store.replay_event(&event, ledger)?;
         }
         Ok(store)
     }
@@ -327,13 +443,27 @@ impl InstanceFactStore {
             })
             .map_err(|_| fact_fatal("fact_store_sync_failed", "synchronize_fact_store"))?;
         for event in events {
-            self.replay_event(&event)?;
+            self.replay_event(&event, ledger)?;
         }
         Ok(())
     }
 
-    pub(crate) fn pending_invalidations(&self) -> Vec<FactInvalidationEventData> {
+    pub(crate) fn pending_invalidations(&self) -> Vec<PendingFactInvalidation> {
         self.pending.values().cloned().collect()
+    }
+
+    pub(crate) fn prepare_invalidation(
+        &self,
+        ledger: &GlobalLedger,
+        pending: &PendingFactInvalidation,
+    ) -> RuntimeHostResult<FactTransaction> {
+        let published = original_at(ledger, pending.published_sequence)?;
+        let trigger = original_at(ledger, pending.trigger_sequence)?;
+        let state = self
+            .state
+            .prepare_fact_projection(&pending.data, published, trigger)
+            .map_err(fact_state_error)?;
+        Ok(FactTransaction { state })
     }
 
     pub(crate) fn at_position(
@@ -341,15 +471,13 @@ impl InstanceFactStore {
         ledger: &GlobalLedger,
         position: u64,
     ) -> RuntimeHostResult<Self> {
-        let mut snapshot = Self {
-            active: BTreeMap::new(),
-            latest_observed: BTreeMap::new(),
-            input_boundaries: InputInvalidationBoundaries::default(),
-            invalidated: BTreeMap::new(),
-            pending: BTreeMap::new(),
-            last_sequence: 0,
-            state: Arc::clone(&self.state),
-        };
+        if position == 0 || position > ledger.latest_sequence().map_err(fact_transaction_error)? {
+            return Err(fact_fatal(
+                "fact_ledger_position_invalid",
+                "project_fact_history",
+            ));
+        }
+        let mut history = HistoricalFactProjection::default();
         for event in ledger
             .query(EventQuery {
                 to_sequence: Some(position),
@@ -357,9 +485,36 @@ impl InstanceFactStore {
             })
             .map_err(|_| fact_fatal("fact_history_read_failed", "project_fact_history"))?
         {
-            snapshot.replay_event(&event)?;
+            history.replay(&event)?;
         }
-        Ok(snapshot)
+        let active = history
+            .active
+            .into_iter()
+            .map(|(identity, (record, sequence, event_id))| {
+                let scope_instances =
+                    history.scope_instances.remove(&identity).ok_or_else(|| {
+                        fact_fatal("fact_scope_projection_missing", "project_fact_history")
+                    })?;
+                Ok((
+                    identity,
+                    StoredFact {
+                        record,
+                        sequence,
+                        event_id,
+                        scope_instances,
+                    },
+                ))
+            })
+            .collect::<RuntimeHostResult<_>>()?;
+        Ok(Self {
+            active,
+            latest_observed: BTreeMap::new(),
+            input_boundaries: history.input_boundaries,
+            invalidated: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            last_sequence: position,
+            state: Arc::clone(&self.state),
+        })
     }
 
     pub(crate) fn validate_pool_sources(
@@ -405,7 +560,11 @@ impl InstanceFactStore {
         self.input_boundaries.check(record, instances)
     }
 
-    fn replay_event(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+    fn replay_event(
+        &mut self,
+        event: &PersistedEvent,
+        ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<()> {
         match event.payload() {
             EventPayload::Fact(FactPayload::Published(payload)) => {
                 self.input_boundaries
@@ -415,6 +574,20 @@ impl InstanceFactStore {
                     })?;
                 let mut complete = self.clone();
                 for record in payload.records() {
+                    if complete
+                        .persisted_tombstone(
+                            ledger,
+                            &record.scope,
+                            &record.key,
+                            &record.source_snapshot_id,
+                        )?
+                        .is_some_and(|tombstone| tombstone.sequence <= event.sequence())
+                    {
+                        return Err(fact_fatal(
+                            "fact_source_snapshot_republished",
+                            "replay_fact_event",
+                        ));
+                    }
                     complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
                     complete
                         .active
@@ -426,6 +599,37 @@ impl InstanceFactStore {
                 Ok(())
             }
             EventPayload::Fact(FactPayload::Invalidated(payload)) => {
+                let data = payload.invalidation();
+                let entry = self
+                    .persisted_tombstone(ledger, &data.scope, &data.key, &data.source_snapshot_id)?
+                    .ok_or_else(|| {
+                        fact_fatal("fact_tombstone_projection_missing", "replay_fact_event")
+                    })?;
+                if entry.data != *data || entry.sequence < event.sequence() {
+                    return Err(fact_fatal(
+                        "fact_tombstone_projection_source_mismatch",
+                        "replay_fact_event",
+                    ));
+                }
+                let identity = (
+                    (data.scope.clone(), data.key.clone()),
+                    data.source_snapshot_id.clone(),
+                );
+                if !self.invalidated.contains_key(&identity)
+                    && self.active.get(&identity.0).is_none_or(|active| {
+                        active.record.source_snapshot_id != data.source_snapshot_id
+                    })
+                {
+                    self.invalidated.insert(
+                        identity,
+                        InvalidationTombstone {
+                            data: data.clone(),
+                            sequence: event.sequence(),
+                        },
+                    );
+                    self.trim_recent_tombstones()?;
+                    return self.advance(event.sequence(), "replay_fact_event");
+                }
                 self.commit_invalidation(payload.invalidation().clone(), event.sequence())
             }
             _ => {
@@ -441,6 +645,7 @@ impl InstanceFactStore {
     pub(crate) fn preview_publish(
         &self,
         record: &FactRecord,
+        ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
         record
             .validate()
@@ -450,7 +655,12 @@ impl InstanceFactStore {
             .invalidated
             .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
             || self
-                .persisted_tombstone(&record.scope, &record.key, &record.source_snapshot_id)?
+                .persisted_tombstone(
+                    ledger,
+                    &record.scope,
+                    &record.key,
+                    &record.source_snapshot_id,
+                )?
                 .is_some()
         {
             return Err(fact_request(
@@ -508,15 +718,6 @@ impl InstanceFactStore {
                 "commit_fact",
             ));
         }
-        if self
-            .persisted_tombstone(&record.scope, &record.key, &record.source_snapshot_id)?
-            .is_some_and(|tombstone| tombstone.sequence <= sequence)
-        {
-            return Err(fact_fatal(
-                "fact_source_snapshot_republished",
-                "commit_fact",
-            ));
-        }
         if !self.active.contains_key(&identity) && self.active.len() >= MAX_ACTIVE_FACTS {
             return Err(fact_fatal("fact_store_capacity_exceeded", "commit_fact"));
         }
@@ -552,6 +753,7 @@ impl InstanceFactStore {
         &self,
         observation: &actingcommand_contract::FactObservation,
         now: u64,
+        ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
         observation
             .validate()
@@ -564,7 +766,7 @@ impl InstanceFactStore {
         let mut new_count = 0;
         let mut new_identities = 0;
         for record in &observation.records {
-            match self.preview_publish(record)? {
+            match self.preview_publish(record, ledger)? {
                 Some(event) => {
                     reused.insert(event);
                 }
@@ -676,13 +878,12 @@ impl InstanceFactStore {
             )
         })?;
         let identity = invalidation_identity(data);
-        if existing.data != *data || self.pending.remove(&identity).is_none() {
+        if existing.data != *data || !self.pending.contains_key(&identity) {
             return Err(fact_fatal(
                 "fact_generated_invalidation_mismatch",
                 "acknowledge_fact_invalidation",
             ));
         }
-        self.persist_tombstone(data, sequence)?;
         let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
             fact_fatal(
                 "fact_generated_invalidation_missing",
@@ -690,6 +891,7 @@ impl InstanceFactStore {
             )
         })?;
         tombstone.sequence = sequence;
+        self.pending.remove(&identity);
         self.trim_recent_tombstones()?;
         Ok(())
     }
@@ -699,7 +901,26 @@ impl InstanceFactStore {
         data: FactInvalidationEventData,
         sequence: u64,
     ) -> RuntimeHostResult<()> {
-        self.apply_invalidation(data, sequence, false)
+        let published_sequence = self
+            .active
+            .get(&(data.scope.clone(), data.key.clone()))
+            .ok_or_else(|| {
+                fact_fatal(
+                    "fact_invalidation_target_missing",
+                    "derive_fact_invalidation",
+                )
+            })?
+            .sequence;
+        self.apply_invalidation(data.clone(), sequence, false)?;
+        self.pending.insert(
+            invalidation_identity(&data),
+            PendingFactInvalidation {
+                data,
+                published_sequence,
+                trigger_sequence: sequence,
+            },
+        );
+        Ok(())
     }
 
     fn apply_invalidation(
@@ -719,7 +940,6 @@ impl InstanceFactStore {
             }
             if persisted {
                 self.pending.remove(&invalidation_identity(&data));
-                self.persist_tombstone(&data, sequence)?;
                 let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
                     fact_fatal(
                         "fact_invalidation_target_missing",
@@ -730,15 +950,6 @@ impl InstanceFactStore {
                 self.trim_recent_tombstones()?;
             }
             return self.advance(sequence, "commit_fact_invalidation");
-        }
-        if let Some(existing) =
-            self.persisted_tombstone(&data.scope, &data.key, &data.source_snapshot_id)?
-            && existing.data != data
-        {
-            return Err(fact_fatal(
-                "fact_invalidation_identity_conflict",
-                "commit_fact_invalidation",
-            ));
         }
         let active = self.active.get(&identity).ok_or_else(|| {
             fact_fatal(
@@ -770,28 +981,31 @@ impl InstanceFactStore {
             .and_modify(|at| *at = (*at).max(data.invalidated_at_unix_ms))
             .or_insert(data.invalidated_at_unix_ms);
         if persisted {
-            self.persist_tombstone(&data, sequence)?;
             self.trim_recent_tombstones()?;
-        } else {
-            self.pending.insert(invalidation_identity(&data), data);
         }
         self.advance(sequence, "commit_fact_invalidation")
     }
 
     fn persisted_tombstone(
         &self,
+        ledger: &GlobalLedger,
         scope: &FactScope,
         key: &str,
         source_snapshot_id: &str,
     ) -> RuntimeHostResult<Option<InvalidationTombstone>> {
-        let entry_key = fact_tombstone_key(scope, key, source_snapshot_id)?;
+        let entry_key =
+            fact_tombstone_key(scope, key, source_snapshot_id).map_err(fact_state_error)?;
         let Some(entry) = self
             .state
             .read_projection_entry(FACT_TOMBSTONE_NAMESPACE, &entry_key)
-            .map_err(|error| RuntimeHostError::state(&error))?
+            .map_err(fact_state_error)?
         else {
             return Ok(None);
         };
+        let original = original_at(ledger, entry.ledger_sequence())?;
+        self.state
+            .verify_fact_projection_entry(&entry, &original)
+            .map_err(fact_state_error)?;
         let data = serde_json::from_slice::<FactInvalidationEventData>(entry.payload())
             .map_err(|_| fact_fatal("fact_tombstone_projection_invalid", "read_fact_tombstone"))?;
         if &data.scope != scope || data.key != key || data.source_snapshot_id != source_snapshot_id
@@ -805,28 +1019,6 @@ impl InstanceFactStore {
             data,
             sequence: entry.ledger_sequence(),
         }))
-    }
-
-    fn persist_tombstone(
-        &self,
-        data: &FactInvalidationEventData,
-        sequence: u64,
-    ) -> RuntimeHostResult<()> {
-        let payload = serde_json::to_vec(data).map_err(|_| {
-            fact_fatal(
-                "fact_tombstone_projection_encode_failed",
-                "persist_fact_tombstone",
-            )
-        })?;
-        self.state
-            .write_projection_entry(
-                FACT_TOMBSTONE_NAMESPACE,
-                &fact_tombstone_key(&data.scope, &data.key, &data.source_snapshot_id)?,
-                sequence,
-                &payload,
-            )
-            .map_err(|error| RuntimeHostError::state(&error))?;
-        Ok(())
     }
 
     fn trim_recent_tombstones(&mut self) -> RuntimeHostResult<()> {
@@ -1051,20 +1243,6 @@ impl InstanceFactStore {
     fn active_count(&self) -> usize {
         self.active.len()
     }
-}
-
-fn fact_tombstone_key(
-    scope: &FactScope,
-    key: &str,
-    source_snapshot_id: &str,
-) -> RuntimeHostResult<String> {
-    let identity = serde_json::to_vec(&(scope, key, source_snapshot_id)).map_err(|_| {
-        fact_fatal(
-            "fact_tombstone_identity_encode_failed",
-            "identify_fact_tombstone",
-        )
-    })?;
-    Ok(format!("{:x}", Sha256::digest(identity)))
 }
 
 fn invalidation_identity(data: &FactInvalidationEventData) -> InvalidationIdentity {
@@ -1312,6 +1490,11 @@ mod tests {
     #[test]
     fn event_invalidation_removes_only_the_matching_snapshot() {
         let (_root, mut store) = empty_store();
+        let ledger = GlobalLedger::open(actingcommand_ledger::GlobalLedgerConfig::new(
+            _root.path().join("ledger"),
+            "fact-preview",
+        ))
+        .expect("ledger");
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         let published = *issuer.mint_event_id().expect("event").transport();
         let trigger = *issuer.mint_event_id().expect("event").transport();
@@ -1345,7 +1528,8 @@ mod tests {
                     &actingcommand_contract::FactObservation {
                         records: vec![old.clone()]
                     },
-                    3_000
+                    3_000,
+                    &ledger,
                 )
                 .unwrap_err()
                 .code(),
@@ -1359,7 +1543,8 @@ mod tests {
                     &actingcommand_contract::FactObservation {
                         records: vec![fresh.clone()]
                     },
-                    3_000
+                    3_000,
+                    &ledger,
                 )
                 .is_ok()
         );
@@ -1369,7 +1554,8 @@ mod tests {
                     &actingcommand_contract::FactObservation {
                         records: vec![fresh]
                     },
-                    2_000
+                    2_000,
+                    &ledger,
                 )
                 .unwrap_err()
                 .code(),
@@ -1475,47 +1661,92 @@ mod tests {
 
     #[test]
     fn fact_tombstones_compact_in_memory_without_losing_durable_rejection() {
+        use actingcommand_contract::{
+            AuditInput, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+            EventSeverity, EventSource, FactPayloadDraft, OriginModule, RuntimePayloadDraft,
+        };
+        use actingcommand_ledger::{GlobalLedgerConfig, Sha256SecretFingerprinter};
         let root = TempDir::new().expect("tempdir");
-        let state = Arc::new(
-            RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("state store"),
+        let database = Arc::new(
+            RuntimeStateStore::open_database(root.path(), b"0123456789abcdef").expect("database"),
         );
+        let state =
+            Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
+        let ledger = GlobalLedger::open_sqlite_candidate(
+            GlobalLedgerConfig::new(root.path(), "fact-compaction"),
+            database,
+        )
+        .expect("ledger");
         let mut store = store_with_state(Arc::clone(&state));
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
+        let fingerprinter =
+            Sha256SecretFingerprinter::new(b"fact-compaction-specification").expect("salt");
         let scope = FactScope::Instance {
             instance_id: "instance-a".to_owned(),
         };
         let mut first = None;
-        let mut sequence = 1_u64;
 
         for index in 0..(MAX_RECENT_FACT_TOMBSTONES + 32) {
             let snapshot = format!("snapshot:compaction-{index}");
             let fact = record(scope.clone(), &snapshot, vec![EventType::RuntimeTakeover]);
             first.get_or_insert_with(|| fact.clone());
-            store
-                .commit_publish(
-                    fact,
-                    sequence,
-                    *issuer.mint_event_id().expect("publish event").transport(),
+            let published = EventDraft::new(
+                issuer.mint_event_id().expect("publish event"),
+                1_000,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::FactStore,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                FactPayloadDraft::published(fact, AuditInput::new()).into(),
+            )
+            .sanitize(&fingerprinter)
+            .expect("publish draft");
+            ledger.append(published).expect("publish original fact");
+            let trigger = EventDraft::new(
+                issuer.mint_event_id().expect("trigger event"),
+                2_000 + index as u64,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                RuntimePayloadDraft::takeover(EventAction::RuntimeTakeover, AuditInput::new())
+                    .into(),
+            )
+            .sanitize(&fingerprinter)
+            .expect("trigger draft");
+            ledger.append(trigger).expect("original trigger");
+            store.synchronize(&ledger).expect("derive invalidation");
+            for pending in store.pending_invalidations() {
+                let work = store
+                    .prepare_invalidation(&ledger, &pending)
+                    .expect("prepare tombstone");
+                let draft = EventDraft::new(
+                    issuer.mint_event_id().expect("invalidation event"),
+                    2_000 + index as u64,
+                    EventSeverity::Info,
+                    EventOrigin::new(
+                        EventSource::Runtime,
+                        OriginModule::FactStore,
+                        EventActor::Runtime,
+                    ),
+                    EventLinksDraft::default(),
+                    FactPayloadDraft::invalidated(pending.data.clone(), AuditInput::new()).into(),
                 )
-                .expect("publish fact");
-            sequence += 1;
-            store
-                .commit_invalidation(
-                    FactInvalidationEventData {
-                        scope: scope.clone(),
-                        key: "env.theme".to_owned(),
-                        source_snapshot_id: snapshot,
-                        invalidated_at_unix_ms: 2_000 + index as u64,
-                        invalidated_by_event_id: *issuer
-                            .mint_event_id()
-                            .expect("invalidation event")
-                            .transport(),
-                        invalidated_by_event_type: EventType::RuntimeTakeover,
-                    },
-                    sequence,
-                )
-                .expect("invalidate fact");
-            sequence += 1;
+                .sanitize(&fingerprinter)
+                .expect("invalidation draft");
+                let event = ledger
+                    .append_transaction(draft, Box::new(work))
+                    .expect("joint invalidation");
+                store
+                    .acknowledge_generated_invalidation(&pending.data, event.sequence())
+                    .expect("acknowledge committed tombstone");
+            }
         }
 
         assert_eq!(store.invalidated.len(), MAX_RECENT_FACT_TOMBSTONES);
@@ -1523,17 +1754,17 @@ mod tests {
         let first = first.expect("first fact");
         assert_eq!(
             store
-                .preview_publish(&first)
+                .preview_publish(&first, &ledger)
                 .expect_err("compacted tombstone must still reject republish")
                 .code(),
             "fact_source_snapshot_invalidated"
         );
 
         drop(store);
-        let recovered = store_with_state(state);
+        let recovered = InstanceFactStore::recover(&ledger, state).expect("replay original facts");
         assert_eq!(
             recovered
-                .preview_publish(&first)
+                .preview_publish(&first, &ledger)
                 .expect_err("durable tombstone must survive projection reconstruction")
                 .code(),
             "fact_source_snapshot_invalidated"

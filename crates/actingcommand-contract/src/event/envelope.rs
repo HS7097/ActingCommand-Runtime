@@ -117,6 +117,55 @@ impl EventLinks {
             links: self.clone(),
         }
     }
+
+    /// Captures links from a persisted artifact fact for its Ledger-owned continuation.
+    pub fn artifact_retention_source(&self) -> ArtifactRetentionSource {
+        ArtifactRetentionSource {
+            links: self.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactRetentionSource {
+    links: EventLinks,
+}
+
+impl ArtifactRetentionSource {
+    /// The Ledger validates the source chain; this binds only the original object links.
+    pub fn apply_to(
+        self,
+        mut draft: SanitizedEventDraft,
+    ) -> Result<SanitizedEventDraft, SanitizationError> {
+        let Some(fact) = draft.payload.artifact_retention() else {
+            return Err(SanitizationError::new(
+                "artifact_retention_draft_invalid",
+                "payload",
+            ));
+        };
+        let identity = fact.identity();
+        if draft.origin.source() != EventSource::Runtime
+            || draft.origin.module() != OriginModule::ArtifactStore
+            || draft.origin.actor() != EventActor::Runtime
+            || !draft.artifacts.is_empty()
+            || !event_links_are_empty(&draft.links)
+            || self.links.instance_id != Some(identity.instance_id)
+            || self.links.request_id != Some(identity.request_id)
+            || self.links.correlation_id != Some(identity.correlation_id)
+            || self.links.run_id != identity.run_id
+            || self.links.lease_id != identity.lease_id
+            || self.links.frame_id != identity.artifact.frame_id
+        {
+            return Err(SanitizationError::new(
+                "artifact_retention_link_conflict",
+                "source_links",
+            ));
+        }
+        draft.links = self.links;
+        draft.links.action_id = None;
+        draft.links.recognition_id = None;
+        Ok(draft)
+    }
 }
 
 /// Opaque source material for the one scheduled-policy settlement continuation.

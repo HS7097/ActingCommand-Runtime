@@ -583,6 +583,20 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
     };
     let snapshot = page.snapshot_ledger_position();
     let first_cursor = page.next_cursor().cloned().expect("continuation cursor");
+    assert_eq!(
+        page.read_scope().unwrap().source,
+        actingcommand_contract::LedgerReadSource::Runtime
+    );
+    assert!(page.read_scope().unwrap().read_complete);
+    assert_eq!(
+        page.read_scope().unwrap().material_read,
+        actingcommand_contract::LedgerMaterialReadState::NotRequested
+    );
+    assert!(page.events().iter().all(|event| {
+        event
+            .views
+            .contains(&actingcommand_contract::LedgerView::Events)
+    }));
     let mut sequences = page
         .events()
         .iter()
@@ -600,6 +614,33 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
     };
     host.record_policy_planning_signal(late_signal)
         .expect("record interleaved signal");
+
+    let historical = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery {
+            view: Some(actingcommand_contract::LedgerView::Events),
+            ..query.clone()
+        },
+        profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::new(31, None)
+            .unwrap()
+            .at_snapshot(snapshot)
+            .unwrap(),
+    });
+    let historical = client.send(&historical);
+    let RuntimeResult::EventPage { page: historical } =
+        historical.result().expect("historical first page")
+    else {
+        panic!("expected historical event page")
+    };
+    assert_eq!(historical.snapshot_ledger_position(), snapshot);
+    assert_eq!(
+        historical
+            .events()
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        sequences
+    );
 
     let mismatched = client.request(RuntimeOperation::QueryEvents {
         query: EventQuery::default(),
