@@ -23,9 +23,9 @@ name = "actingcommand-actingctl"
 version = "0.1.0"
 dependencies = [
  "actingcommand-artifact-store",
- "actingcommand-ledger",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
@@ -400,6 +400,16 @@ name = "actingcommand-scheduler"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+]
+
+[[package]]
+name = "actingcommand-selection-policy"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
