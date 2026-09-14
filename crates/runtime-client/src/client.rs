@@ -1897,6 +1897,37 @@ impl RuntimeClient {
         self.query_event_page_with_timeout(query, profile, page, None)
     }
 
+    /// Reads one bounded range after the Runtime has verified its entire committed material.
+    /// Failed or unconfirmed reads invalidate an unfinished assembly; no automatic retry occurs.
+    pub fn read_material(
+        &self,
+        mut request: actingcommand_contract::RuntimeMaterialReadRequest,
+    ) -> RuntimeClientResult<actingcommand_contract::RuntimeMaterialReadResult> {
+        request.max_reply_bytes = request.max_reply_bytes.min(
+            self.connection("read_runtime_material")?
+                .maximum_frame_bytes,
+        );
+        request.validate().map_err(|_| {
+            RuntimeClientError::fatal("material_read_request_invalid", "read_runtime_material")
+        })?;
+        let receipt = self.execute_receipt(
+            "read_runtime_material",
+            RuntimeOperation::ReadMaterial {
+                request: Box::new(request.clone()),
+            },
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::MaterialRead { result }) if result.request == request => {
+                result
+                    .validate()
+                    .map_err(|_| self.unexpected_result("read_runtime_material"))?;
+                Ok(result.as_ref().clone())
+            }
+            _ => Err(self.unexpected_result("read_runtime_material")),
+        }
+    }
+
     fn query_event_page_with_timeout(
         &self,
         query: EventQuery,
@@ -2224,6 +2255,8 @@ impl RuntimeClient {
                     RuntimeOperation::RunContainedTask { .. }
                         | RuntimeOperation::RequestShutdown { .. }
                 ) && receipt.terminal().is_some()
+                    || (matches!(operation, RuntimeOperation::ReadMaterial { .. })
+                        && matches!(receipt.result(), Some(RuntimeResult::MaterialRead { .. })))
                 {
                     error = error.with_committed_receipt(receipt.clone());
                 }

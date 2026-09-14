@@ -9,7 +9,12 @@ impl HostShared {
         request: &RuntimeRequest,
         connection_id: ConnectionId,
     ) -> RuntimeHostResult<RuntimeReceipt> {
-        self.process_request_observed(request, connection_id, None)
+        self.process_request_observed(
+            request,
+            connection_id,
+            None,
+            MaterialReadContext::for_request(request, DEFAULT_RUNTIME_MAX_FRAME_BYTES)?,
+        )
     }
 
     pub(super) fn process_request_observed(
@@ -17,6 +22,7 @@ impl HostShared {
         request: &RuntimeRequest,
         connection_id: ConnectionId,
         mut timing: Option<&mut ConnectionTiming>,
+        material: Option<MaterialReadContext>,
     ) -> RuntimeHostResult<RuntimeReceipt> {
         if let Some(error) = self.fatal.current()? {
             return runtime_error_receipt(
@@ -58,8 +64,13 @@ impl HostShared {
         if let Some(timing) = timing.as_deref_mut() {
             timing.validated_dispatch.begin();
         }
-        let dispatched =
-            self.process_validated(request, &validated, connection_id, timing.as_deref_mut());
+        let dispatched = self.process_validated(
+            request,
+            &validated,
+            connection_id,
+            timing.as_deref_mut(),
+            material,
+        );
         if let Some(timing) = timing {
             timing.validated_dispatch.finish(dispatched.is_ok());
         }
@@ -113,8 +124,18 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         connection_id: ConnectionId,
         timing: Option<&mut ConnectionTiming>,
+        material: Option<MaterialReadContext>,
     ) -> Result<OperationSuccess, RequestFailure> {
         match request.operation() {
+            RuntimeOperation::ReadMaterial { request } => self.read_material(
+                validated,
+                request,
+                material.ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(protocol_error(
+                        "material_read_context_missing",
+                    ))
+                })?,
+            ),
             RuntimeOperation::RequestShutdown { target } => {
                 self.request_shutdown(validated, *target)
             }

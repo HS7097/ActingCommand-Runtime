@@ -683,6 +683,7 @@ fn writer_observation(
             Command::Query => TaskTimingWriterCommand::Query,
             Command::QueryPage => TaskTimingWriterCommand::QueryPage,
             Command::ProjectViewPage => TaskTimingWriterCommand::ProjectViewPage,
+            Command::ResolveArtifact => TaskTimingWriterCommand::ResolveArtifact,
             Command::ProjectSchedulingOutcomes => {
                 TaskTimingWriterCommand::ProjectSchedulingOutcomes
             }
