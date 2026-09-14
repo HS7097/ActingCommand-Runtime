@@ -2847,10 +2847,26 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 })?;
                 let action_id =
                     contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
+                let frame_extent = match (&self.geometry_frame, self.last_frame_id) {
+                    (Some(frame), Some(frame_id)) => {
+                        if frame.frame_id != *frame_id.transport() {
+                            return Err(RequestFailure::poison_without_terminal(
+                                RuntimeHostError::fatal(
+                                    "contained_task_effect_frame_identity_mismatch",
+                                    "run_contained_task",
+                                    RuntimeErrorCode::RuntimeFatal,
+                                ),
+                            ));
+                        }
+                        Some(frame.extent)
+                    }
+                    _ => None,
+                };
                 let fact = TaskSemanticFact::EffectIntent {
                     step_index,
                     operation_label,
                     action,
+                    frame_extent,
                 };
                 let payload = match sampling {
                     Some(sampling) => {

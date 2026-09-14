@@ -3267,6 +3267,8 @@ pub enum TaskSemanticFact {
         step_index: u32,
         operation_label: String,
         action: InputAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_extent: Option<crate::CaptureExtent>,
     },
     EffectCompleted {
         step_index: u32,
@@ -4029,6 +4031,7 @@ impl TaskSemanticFact {
                 step_index,
                 operation_label,
                 action,
+                frame_extent: _,
             } => {
                 validate_task_step(*step_index)?;
                 validate_task_semantic_label(operation_label, "operation_label")?;

@@ -510,6 +510,26 @@ impl EventDraft {
                 "task_geometry",
             ));
         }
+        if let EventPayload::Task(super::TaskPayload::Semantic(semantic)) = &payload
+            && matches!(
+                semantic.fact(),
+                super::TaskSemanticFact::EffectIntent {
+                    frame_extent: Some(_),
+                    ..
+                }
+            )
+            && (self.links.frame_id().is_none()
+                || self.links.task_id().is_none()
+                || self.links.run_id().is_none()
+                || self.links.instance_id().is_none()
+                || self.links.correlation_id().is_none()
+                || self.links.action_id().is_none())
+        {
+            return Err(SanitizationError::new(
+                "task_effect_frame_identity_missing",
+                "frame_extent",
+            ));
+        }
         if let Some(timing) = payload.task_timing() {
             let admission_carrier = payload.event_type() == super::EventType::RuntimeFailed
                 && timing.admission_request_id.is_some()
