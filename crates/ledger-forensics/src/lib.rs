@@ -29,7 +29,10 @@ mod material;
 mod signatures;
 mod task_records;
 mod views;
-pub use material::{ForensicMaterialRequest, read_material_to};
+pub use material::{
+    ForensicMaterialCompleteResult, ForensicMaterialRequest, read_material_complete,
+    read_material_to,
+};
 pub use signatures::{
     ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,
 };
