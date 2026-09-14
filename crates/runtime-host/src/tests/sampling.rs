@@ -5,11 +5,12 @@ use super::*;
 #[test]
 fn direct_runtime_run_derives_sampling_seed_from_issued_run_identity() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_region_contained_task_package();
+    let package = neutral_region_contained_task_package(true);
     let package_path = root.path().join("direct-region-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
@@ -153,7 +154,7 @@ fn production_runtime_missing_sampling_seed_fails_before_input() {
         }
     }
 
-    let package = neutral_region_contained_task_package();
+    let package = neutral_region_contained_task_package(false);
     let expected = ExternalExpectedSha256::parse_hex(
         &actingcommand_pack_containment::Sha256Hash::digest(&package).to_string(),
     )
@@ -217,7 +218,7 @@ fn execution_kernel_no_seed_caller_retains_center_fallback() {
         }
     }
 
-    let package = neutral_region_contained_task_package();
+    let package = neutral_region_contained_task_package(false);
     let expected = ExternalExpectedSha256::parse_hex(
         &actingcommand_pack_containment::Sha256Hash::digest(&package).to_string(),
     )

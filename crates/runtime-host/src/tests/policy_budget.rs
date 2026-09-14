@@ -98,7 +98,7 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
     ] {
         let root = TempDir::new().expect("tempdir");
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 1_000));
-        let bytes = neutral_contained_task_package();
+        let bytes = neutral_contained_task_package(true);
         let package = root.path().join("neutral-step.zip");
         fs::write(&package, &bytes).unwrap();
         let task = ContainedTaskRequest::new(
@@ -107,6 +107,7 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
         )
         .unwrap();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         state
             .transition_capture_after_input
             .store(true, Ordering::Release);
