@@ -445,16 +445,23 @@ pub fn inspect_readonly_capture_capability(
     Ok(violations)
 }
 
-/// Enforces the sole public global-ledger append ingress.
+/// Checks Sanitized inputs, Ledger ownership and forwarding to the shared append request.
+/// This structure check does not establish write counts or persistence/error semantics.
+/// Observation adapter boundary: https://github.com/HS7097/ActingCommand-Workflow/issues/285#issuecomment-5654739712
 pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let aliases = local_type_aliases(&file.items);
     let mut append_methods = Vec::new();
+    let mut observation_methods = Vec::new();
+    let mut request_methods = Vec::new();
     let mut alternate_ingress_methods = Vec::new();
     for item in &file.items {
         let Item::Impl(item_impl) = item else {
             continue;
         };
-        if impl_self_ident(item_impl).is_none_or(|ident| ident != "GlobalLedger") {
+        if impl_self_ident(item_impl)
+            .is_none_or(|ident| resolve_alias(&ident.to_string(), &aliases) != "GlobalLedger")
+        {
             continue;
         }
         for item in &item_impl.items {
@@ -462,8 +469,14 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
                 continue;
             };
             if method.sig.ident == "append" && is_public(&method.vis) {
-                append_methods.push(method);
+                append_methods.push((item_impl, method));
                 continue;
+            }
+            if method.sig.ident == "append_with_observation" {
+                observation_methods.push((item_impl, method));
+            }
+            if method.sig.ident == "append_request" {
+                request_methods.push((item_impl, method));
             }
             if method.sig.ident == "append_transaction" && is_public(&method.vis) {
                 let typed = method
@@ -498,7 +511,21 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             }
             if is_public(&method.vis)
                 && (method.sig.ident.to_string().starts_with("append")
-                    || method_accepts_event_ingress(method))
+                    || method_accepts_event_ingress(method)
+                    || method.sig.inputs.iter().any(|input| {
+                        let FnArg::Typed(argument) = input else {
+                            return false;
+                        };
+                        [
+                            "EventDraft",
+                            "SanitizedEventDraft",
+                            "EventPayloadDraft",
+                            "ArtifactReference",
+                            "PersistedEvent",
+                        ]
+                        .iter()
+                        .any(|name| type_uses_resolved_ident(&argument.ty, name, &aliases))
+                    }))
             {
                 alternate_ingress_methods.push(method.sig.ident.to_string());
             }
@@ -512,7 +539,7 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             append_methods.len()
         ));
     } else {
-        let method = append_methods[0];
+        let method = append_methods[0].1;
         let typed = method
             .sig
             .inputs
@@ -523,15 +550,238 @@ pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<Str
             })
             .collect::<Vec<_>>();
         let exact = typed.len() == 1
-            && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
-            && type_last_ident(&typed[0].ty).is_some_and(|ident| ident == "SanitizedEventDraft");
+            && resolved_type_ident(&typed[0].ty, &aliases)
+                .is_some_and(|ident| ident == "SanitizedEventDraft");
         if !exact {
             violations.push(format!(
-                "{path}: GlobalLedger::append must accept exactly draft: SanitizedEventDraft"
+                "{path}: GlobalLedger::append must accept one SanitizedEventDraft input"
             ));
         }
     }
+    let mut observation_adapter_valid = false;
+    if !observation_methods.is_empty() {
+        let previous_violations = violations.len();
+        if observation_methods.len() != 1 {
+            violations.push(format!(
+                "{path}: expected one GlobalLedger::append_with_observation adapter, found {}",
+                observation_methods.len()
+            ));
+        }
+        if request_methods.len() != 1 {
+            violations.push(format!(
+                "{path}: expected one private GlobalLedger::append_request, found {}",
+                request_methods.len()
+            ));
+        }
+        for (item_impl, method) in observation_methods
+            .iter()
+            .chain(append_methods.iter())
+            .chain(request_methods.iter())
+        {
+            let request = method.sig.ident == "append_request";
+            let typed = method
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|input| match input {
+                    FnArg::Receiver(_) => None,
+                    FnArg::Typed(argument) => Some(argument),
+                })
+                .collect::<Vec<_>>();
+            let owned = item_impl.trait_.is_none()
+                && if request {
+                    matches!(method.vis, Visibility::Inherited)
+                } else {
+                    matches!(method.vis, Visibility::Public(_))
+                }
+                && matches!(method.sig.inputs.first(), Some(FnArg::Receiver(receiver))
+                    if matches!(receiver.ty.as_ref(), Type::Reference(reference)
+                        if type_last_ident(&reference.elem)
+                            .is_some_and(|ident| ident == "Self" || ident == "GlobalLedger")));
+            let inputs_known = typed.len() == if request { 2 } else { 1 }
+                && typed.first().is_some_and(|argument| {
+                    resolved_type_ident(&argument.ty, &aliases)
+                        .is_some_and(|ident| ident == "SanitizedEventDraft")
+                })
+                && (!request || typed.get(1).is_some_and(|argument| {
+                    resolved_type_ident(&argument.ty, &aliases)
+                        .is_some_and(|ident| ident == "bool")
+                }))
+                && typed.iter().all(|argument| {
+                    !item_impl.generics.params.iter().chain(method.sig.generics.params.iter())
+                        .any(|parameter| matches!(parameter, syn::GenericParam::Type(parameter)
+                            if type_last_ident(&argument.ty).is_some_and(|ident| *ident == parameter.ident)))
+                });
+            if !owned || !inputs_known {
+                violations.push(format!(
+                    "{path}: GlobalLedger::{} has unresolved Ledger ownership or Sanitized append inputs",
+                    method.sig.ident
+                ));
+                continue;
+            }
+            if request {
+                continue;
+            }
+            let Some(draft_name) = typed
+                .first()
+                .and_then(|argument| pattern_ident(&argument.pat))
+            else {
+                violations.push(format!(
+                    "{path}: GlobalLedger::{} Sanitized input binding is unresolved",
+                    method.sig.ident
+                ));
+                continue;
+            };
+            // Follow only returned values and their direct local bindings in these
+            // named adapters. Unsupported statements remain an explicit coverage gap.
+            let mut bindings = HashMap::new();
+            let mut blocks = vec![&method.block];
+            let mut expressions = Vec::new();
+            let mut forwarding_calls = 0;
+            let mut gap = None;
+            while gap.is_none() && (!blocks.is_empty() || !expressions.is_empty()) {
+                if let Some(block) = blocks.pop() {
+                    for (index, statement) in block.stmts.iter().enumerate() {
+                        match statement {
+                            Stmt::Local(local) => {
+                                let mut pattern = &local.pat;
+                                if let Pat::Type(typed) = pattern {
+                                    pattern = &typed.pat;
+                                }
+                                // Destructuring the original result from its observation
+                                // still forwards the same request. Result semantics are reviewed separately.
+                                if let Pat::Tuple(tuple) = pattern
+                                    && tuple.elems.len() == 2
+                                    && matches!(tuple.elems.last(), Some(Pat::Wild(_)))
+                                {
+                                    pattern = &tuple.elems[0];
+                                }
+                                let Some(name) = pattern_ident(pattern) else {
+                                    gap = Some("local binding pattern");
+                                    break;
+                                };
+                                let Some(initializer) = &local.init else {
+                                    gap = Some("local binding without an initializer");
+                                    break;
+                                };
+                                if initializer.diverge.is_some()
+                                    || name == draft_name
+                                    || bindings
+                                        .insert(name.to_string(), initializer.expr.as_ref())
+                                        .is_some()
+                                {
+                                    gap = Some("shadowed or conditional local binding");
+                                    break;
+                                }
+                            }
+                            Stmt::Expr(expression, semi)
+                                if index + 1 == block.stmts.len()
+                                    && (semi.is_none()
+                                        || matches!(expression, Expr::Return(_))) =>
+                            {
+                                expressions.push((expression, "returned value"));
+                            }
+                            _ => {
+                                gap = Some("statement outside direct forwarding");
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let Some((expression, role)) = expressions.pop() else {
+                    break;
+                };
+                match expression {
+                    Expr::Paren(value) => expressions.push((&value.expr, role)),
+                    Expr::Group(value) => expressions.push((&value.expr, role)),
+                    Expr::Return(value) if role == "returned value" => {
+                        if let Some(value) = &value.expr {
+                            expressions.push((value, role));
+                        } else {
+                            gap = Some("return without a forwarded value");
+                        }
+                    }
+                    Expr::Block(value) if role == "returned value" => blocks.push(&value.block),
+                    Expr::Field(value) if role == "returned value" => {
+                        expressions.push((&value.base, role))
+                    }
+                    Expr::Path(value) if value.qself.is_none() => {
+                        let Some(name) = value.path.get_ident() else {
+                            gap = Some(role);
+                            continue;
+                        };
+                        if let Some(initializer) = bindings.remove(&name.to_string()) {
+                            expressions.push((initializer, role));
+                        } else if !((role == "receiver" && name == "self")
+                            || (role == "Sanitized input" && name == draft_name))
+                        {
+                            gap = Some(role);
+                        }
+                    }
+                    Expr::Lit(value)
+                        if role == "observation flag" && matches!(value.lit, Lit::Bool(_)) => {}
+                    Expr::Unary(value)
+                        if role == "observation flag" && matches!(value.op, syn::UnOp::Not(_)) =>
+                    {
+                        expressions.push((&value.expr, role));
+                    }
+                    Expr::MethodCall(call)
+                        if role == "returned value"
+                            && call.method == "append_request"
+                            && call.args.len() == 2 =>
+                    {
+                        forwarding_calls += 1;
+                        expressions.push((&call.receiver, "receiver"));
+                        expressions.push((&call.args[0], "Sanitized input"));
+                        expressions.push((&call.args[1], "observation flag"));
+                    }
+                    Expr::Call(call) if role == "returned value" && call.args.len() == 3 => {
+                        let owner_known = matches!(call.func.as_ref(), Expr::Path(value)
+                            if value.qself.is_none()
+                                && value.path.segments.len() >= 2
+                                && value.path.segments.last().is_some_and(|segment| segment.ident == "append_request")
+                                && ((value.path.segments.len() == 2
+                                    && value.path.segments.first().is_some_and(|segment| segment.ident == "Self"))
+                                    || matches!(item_impl.self_ty.as_ref(), Type::Path(owner)
+                                        if owner.qself.is_none()
+                                            && owner.path.leading_colon.is_some() == value.path.leading_colon.is_some()
+                                            && owner.path.segments.len() + 1 == value.path.segments.len()
+                                            && owner.path.segments.iter().zip(value.path.segments.iter())
+                                                .all(|(left, right)| left.ident == right.ident))));
+                        if !owner_known {
+                            gap = Some("associated call owner");
+                        } else {
+                            forwarding_calls += 1;
+                            expressions.push((&call.args[0], "receiver"));
+                            expressions.push((&call.args[1], "Sanitized input"));
+                            expressions.push((&call.args[2], "observation flag"));
+                        }
+                    }
+                    _ => gap = Some(role),
+                }
+            }
+            if let Some(gap) = gap {
+                violations.push(format!(
+                    "{path}: GlobalLedger::{} forwarding is unresolved at {gap}",
+                    method.sig.ident
+                ));
+            } else if forwarding_calls != 1 || !bindings.is_empty() {
+                violations.push(format!(
+                    "{path}: GlobalLedger::{} must resolve to the shared append request without unaccounted local bindings",
+                    method.sig.ident
+                ));
+            }
+        }
+        observation_adapter_valid = observation_methods.len() == 1
+            && append_methods.len() == 1
+            && request_methods.len() == 1
+            && violations.len() == previous_violations;
+    }
     for method in alternate_ingress_methods {
+        if method == "append_with_observation" && observation_adapter_valid {
+            continue;
+        }
         violations.push(format!(
             "{path}: GlobalLedger exposes alternate public event ingress {method}"
         ));

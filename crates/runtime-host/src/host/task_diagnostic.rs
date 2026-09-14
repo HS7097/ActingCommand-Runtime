@@ -20,8 +20,8 @@ use actingcommand_recognition_pack::{
 use std::io::Write;
 
 pub(super) struct DiagnosticStep {
-    index: u32,
-    action_id: ActionId,
+    pub(super) index: u32,
+    pub(super) action_id: ActionId,
     started_ms: u64,
 }
 

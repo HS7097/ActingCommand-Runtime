@@ -61,28 +61,30 @@ use actingcommand_contract::{
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
-    OriginModule, OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PinnedFrameReason,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
-    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
-    ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
-    RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
-    RuntimeEvidenceScreenshotCounts, RuntimeForwardProjectionRequest, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
-    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
-    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, Sensitivity, StatePayload, StatePayloadDraft,
-    TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload,
-    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    ObservedMicroseconds, OriginModule, OwnerResourceDisposition, PackageDebugLayout,
+    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
+    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
+    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
+    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, ResourceQuiescence, RetentionClass,
+    RunId, RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryPageRequest,
+    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase,
+    RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
+    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimePolicyInputIdentity,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
+    SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
+    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
+    Sensitivity, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
+    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
+    TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
+    TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
@@ -149,8 +151,10 @@ mod device_diagnostic;
 mod frame_retention;
 mod governance;
 mod lab_operation;
+mod lease;
 mod monitor_control;
 mod online_observation;
+mod package_debug;
 mod performance;
 mod planning;
 mod read_events;
@@ -162,6 +166,7 @@ mod task_diagnostic;
 mod task_timing;
 
 use agent_control::append_agent_wake;
+use lease::{QueueTerminalStore, QueuedRequestContext};
 use monitor_control::monitor_probe_loop;
 use performance::{CapacityUse, performance_monitor_loop};
 use planning::planning_request_failure;
@@ -2118,26 +2123,6 @@ struct RegisteredInstance {
     provenance: ExecutionBackendProvenance,
 }
 
-#[derive(Clone)]
-struct QueuedRequestContext {
-    request: RuntimeRequest,
-    instance: RegisteredInstance,
-    connection_id: ConnectionId,
-}
-
-#[derive(Clone, Copy)]
-struct QueueTerminalRecord {
-    connection_id: ConnectionId,
-    terminal: TerminalEvent,
-    outcome: QueueTerminalOutcome,
-}
-
-#[derive(Clone, Copy)]
-enum QueueTerminalOutcome {
-    Expired,
-    Cancelled { instance_id: InstanceId },
-}
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueueOperationTestKind {
@@ -2342,13 +2327,6 @@ struct CompletedReadonlyObservation {
     artifact_links: ArtifactLinksDraft,
 }
 
-/// Bounded process-local replay cache; durable terminal history remains in the ledger.
-#[derive(Default)]
-struct QueueTerminalStore {
-    entries: BTreeMap<RequestId, QueueTerminalRecord>,
-    order: VecDeque<RequestId>,
-}
-
 #[derive(Clone)]
 struct TrustedPolicyDispatch {
     intent: DispatchIntent,
@@ -2360,19 +2338,6 @@ struct TrustedPolicyDispatch {
 struct TrustedPolicyDispatchStore {
     entries: BTreeMap<String, TrustedPolicyDispatch>,
     order: VecDeque<String>,
-}
-
-impl QueueTerminalStore {
-    fn insert(&mut self, request_id: RequestId, record: QueueTerminalRecord) {
-        if self.entries.insert(request_id, record).is_none() {
-            self.order.push_back(request_id);
-        }
-        while self.order.len() > MAX_REQUEST_CACHE_ENTRIES {
-            if let Some(expired) = self.order.pop_front() {
-                self.entries.remove(&expired);
-            }
-        }
-    }
 }
 
 impl TrustedPolicyDispatchStore {
@@ -6006,167 +5971,6 @@ impl HostShared {
         result
     }
 
-    fn debug_package(
-        &self,
-        validated: &ValidatedRuntimeRequest<'_>,
-        request: &PackageDebugRequest,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let links = validated.event_links(None, None, None);
-        self.append_event(
-            EventSeverity::Info,
-            EventSource::Lab,
-            OriginModule::Actinglab,
-            EventActor::Lab,
-            links.clone(),
-            CommandPayloadDraft::received(EventAction::RuntimeDebugPackage, AuditInput::new()),
-        )?;
-
-        let summary = match inspect_debug_package(request) {
-            Ok(summary) => summary,
-            Err(error) => {
-                let event = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    links,
-                    CommandPayloadDraft::rejected(
-                        EventAction::RuntimeDebugPackage,
-                        DiagnosticCode::CommandRejected,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
-                return Err(RequestFailure::request(
-                    error,
-                    RuntimeReceiptState::Failed,
-                    Some(terminal(&event)),
-                ));
-            }
-        };
-        let package_name = Path::new(request.package_path())
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| {
-                RequestFailure::request(
-                    debug_package_error("debug_package_name_invalid"),
-                    RuntimeReceiptState::Failed,
-                    None,
-                )
-            })?;
-        let package = EvidencePackage::new(
-            package_name,
-            summary.verified_sha256(),
-            PackageVerification::Passed,
-        )
-        .map_err(|error| {
-            RequestFailure::request(
-                debug_package_error(error.code()),
-                RuntimeReceiptState::Failed,
-                None,
-            )
-        })?;
-        let mut debug_runs = lock(&self.debug_runs, "lock_runtime_debug_runs")?;
-        let existing = debug_runs.get(&validated.correlation_id()).cloned();
-        let context = match existing {
-            Some(existing)
-                if existing.package == package && existing.package_summary == summary =>
-            {
-                existing
-            }
-            Some(_) => {
-                let event = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    links,
-                    CommandPayloadDraft::rejected(
-                        EventAction::RuntimeDebugPackage,
-                        DiagnosticCode::CommandRejected,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
-                return Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        "runtime_debug_context_conflict",
-                        "debug_package",
-                        RuntimeErrorCode::PackageInvalid,
-                    ),
-                    RuntimeReceiptState::Denied,
-                    Some(terminal(&event)),
-                ));
-            }
-            None => {
-                let run_id = self.events.issuer().mint_run_id().map_err(|_| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "run_id_issue_failed",
-                        "debug_package",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let task_id = self.events.issuer().mint_task_id().map_err(|_| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "task_id_issue_failed",
-                        "debug_package",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let task_links = validated.task_event_links(task_id, run_id);
-                self.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    task_links.clone(),
-                    TaskPayloadDraft::requested(
-                        EventAction::RuntimeDebugPackage,
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    task_links,
-                    TaskPayloadDraft::started(EventAction::RuntimeDebugPackage, AuditInput::new()),
-                )?;
-                let context = DebugRunContext {
-                    package,
-                    package_summary: summary.clone(),
-                    run_id,
-                    task_id,
-                    terminal_outcome: None,
-                    completed_export: None,
-                };
-                debug_runs.insert(validated.correlation_id(), context.clone());
-                context
-            }
-        };
-        drop(debug_runs);
-        let event = self.append_event(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links,
-            CommandPayloadDraft::validated(
-                EventAction::RuntimeDebugPackage,
-                EffectDisposition::NotPerformed,
-                AuditInput::new(),
-            ),
-        )?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: Some(terminal(&event)),
-            result: RuntimeResult::PackageDebugCompleted {
-                summary: context.package_summary,
-            },
-        })
-    }
-
     fn export_evidence(
         &self,
         validated: &ValidatedRuntimeRequest<'_>,
@@ -6924,162 +6728,6 @@ impl HostShared {
         })
     }
 
-    fn queue_lease(
-        &self,
-        original: &RuntimeRequest,
-        request: &ValidatedRuntimeRequest<'_>,
-        instance_alias: &str,
-        holder_id: actingcommand_contract::HolderId,
-        policy: LeaseQueuePolicy,
-        connection_id: ConnectionId,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let resolved = self.resolve_instance(instance_alias)?;
-        let instance_guard = self.instance_guard(resolved.instance_id())?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        self.expire_instance_if_due(resolved.instance_id())?;
-        let outcome = lock(&self.scheduler, "queue_lease")?.request_queued(
-            QueueLeaseRequest::new(
-                original.request_id(),
-                resolved.instance_id(),
-                holder_id,
-                connection_id,
-                policy.priority(),
-                policy.timeout_ms(),
-            ),
-            self.monotonic_ms()?,
-        );
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                self.append_lease_requested(request, &resolved)?;
-                return Err(self.scheduler_denied(request, &resolved, None, error)?);
-            }
-        };
-        let (decision, expired) = outcome.into_parts();
-        self.record_expired_queued(expired)?;
-        match decision {
-            QueueAdmissionDecision::Lease(preparation) if preparation.is_existing() => {
-                let token = preparation.token().clone();
-                let terminal =
-                    self.existing_queue_grant_terminal(original.request_id(), token.lease_id())?;
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Admitted,
-                    terminal: Some(terminal),
-                    result: RuntimeResult::LeaseGranted { token },
-                })
-            }
-            QueueAdmissionDecision::Lease(preparation) => self.grant_prepared_lease(
-                request,
-                original.request_id(),
-                &resolved,
-                preparation,
-                None,
-            ),
-            QueueAdmissionDecision::Queued(queued) => {
-                if let Some(existing) = lock(&self.queued_requests, "read_queued_request")?
-                    .get(&original.request_id())
-                    .cloned()
-                {
-                    if existing.request != *original
-                        || existing.instance != resolved
-                        || existing.connection_id != connection_id
-                    {
-                        return Err(RequestFailure::poison_without_terminal(
-                            RuntimeHostError::fatal(
-                                "queued_request_identity_mismatch",
-                                "queue_lease",
-                                RuntimeErrorCode::RuntimeFatal,
-                            ),
-                        ));
-                    }
-                    let terminal = self.existing_request_terminal(
-                        original.request_id(),
-                        EventType::SchedulerQueued,
-                    )?;
-                    return Ok(OperationSuccess {
-                        state: RuntimeReceiptState::Queued,
-                        terminal: Some(terminal),
-                        result: RuntimeResult::LeaseQueued {
-                            status: queued.status().map_err(|error| {
-                                RequestFailure::poison_without_terminal(
-                                    RuntimeHostError::scheduler("queue_lease_status", &error),
-                                )
-                            })?,
-                        },
-                    });
-                }
-                self.append_lease_requested(request, &resolved)?;
-                let mut terminal_event =
-                    self.append_scheduler_queued(request, &resolved, &queued)?;
-                if queued.preempt_requested() {
-                    terminal_event =
-                        self.append_scheduler_preempted(request, &resolved, &queued)?;
-                }
-                let context = QueuedRequestContext {
-                    request: original.clone(),
-                    instance: resolved,
-                    connection_id,
-                };
-                if lock(&self.queued_requests, "register_queued_request")?
-                    .insert(original.request_id(), context)
-                    .is_some()
-                {
-                    return Err(RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            "queued_request_collision",
-                            "queue_lease",
-                            RuntimeErrorCode::RuntimeFatal,
-                        ),
-                    ));
-                }
-                if let Some((token, transferred)) =
-                    self.promote_idle_preemption(&queued, &admission)?
-                {
-                    return Ok(OperationSuccess {
-                        state: RuntimeReceiptState::Admitted,
-                        terminal: Some(terminal(&transferred)),
-                        result: RuntimeResult::LeaseGranted { token },
-                    });
-                }
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Queued,
-                    terminal: Some(terminal(&terminal_event)),
-                    result: RuntimeResult::LeaseQueued {
-                        status: queued.status().map_err(|error| {
-                            RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                                "queue_lease_status",
-                                &error,
-                            ))
-                        })?,
-                    },
-                })
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn wait_queue_operation_test_hook(
-        &self,
-        operation: QueueOperationTestKind,
-        request_id: RequestId,
-    ) -> Result<(), RequestFailure> {
-        let hook = {
-            let mut slot = lock(
-                &self.queue_operation_test_hook,
-                "read_queue_operation_test_hook",
-            )?;
-            slot.as_ref()
-                .is_some_and(|hook| hook.operation == operation && hook.request_id == request_id)
-                .then(|| slot.take())
-                .flatten()
-        };
-        if let Some(hook) = hook {
-            hook.snapshot_reached.wait();
-            hook.resume.wait();
-        }
-        Ok(())
-    }
-
     #[cfg(test)]
     fn wait_policy_outcome_transition_test_hook(&self) -> RuntimeHostResult<()> {
         let hook = lock(
@@ -7173,230 +6821,6 @@ impl HostShared {
         (hook.action)(identity);
         hook.consumed.fetch_add(1, Ordering::AcqRel);
         Ok(())
-    }
-
-    fn existing_queue_terminal_result(
-        &self,
-        queued_request_id: RequestId,
-        connection_id: ConnectionId,
-        operation: &'static str,
-    ) -> Result<Option<OperationSuccess>, RequestFailure> {
-        let record = lock(&self.queue_terminals, "read_queue_terminal")?
-            .entries
-            .get(&queued_request_id)
-            .copied();
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        if record.connection_id != connection_id {
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "lease_queue_connection_mismatch",
-                    operation,
-                    RuntimeErrorCode::QueueConnectionMismatch,
-                ),
-                RuntimeReceiptState::Denied,
-                None,
-            ));
-        }
-        match record.outcome {
-            QueueTerminalOutcome::Expired => Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "lease_queue_expired",
-                    operation,
-                    RuntimeErrorCode::QueueExpired,
-                ),
-                RuntimeReceiptState::Denied,
-                Some(record.terminal),
-            )),
-            QueueTerminalOutcome::Cancelled { instance_id } => Ok(Some(OperationSuccess {
-                state: RuntimeReceiptState::Cancelled,
-                terminal: Some(record.terminal),
-                result: RuntimeResult::LeaseQueueCancelled {
-                    request_id: queued_request_id,
-                    instance_id,
-                },
-            })),
-        }
-    }
-
-    fn poll_queued_lease(
-        &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        queued_request_id: RequestId,
-        connection_id: ConnectionId,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let context = lock(&self.queued_requests, "read_queued_request")?
-            .get(&queued_request_id)
-            .cloned();
-        #[cfg(test)]
-        self.wait_queue_operation_test_hook(QueueOperationTestKind::Poll, queued_request_id)?;
-        if context.is_none()
-            && let Some(success) = self.existing_queue_terminal_result(
-                queued_request_id,
-                connection_id,
-                "poll_queued_lease",
-            )?
-        {
-            return Ok(success);
-        }
-        let instance_guard = context
-            .as_ref()
-            .map(|context| self.instance_guard(context.instance.instance_id()))
-            .transpose()?;
-        let _admission = instance_guard
-            .as_ref()
-            .map(|guard| lock(guard, "lock_instance_admission"))
-            .transpose()?;
-        let poll = lock(&self.scheduler, "poll_queued_lease")?.poll_queued(
-            queued_request_id,
-            connection_id,
-            self.monotonic_ms()?,
-        );
-        match poll {
-            Ok(QueuePoll::Granted(token)) => {
-                let terminal =
-                    self.existing_queue_grant_terminal(queued_request_id, token.lease_id())?;
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Admitted,
-                    terminal: Some(terminal),
-                    result: RuntimeResult::LeaseGranted { token },
-                })
-            }
-            Ok(QueuePoll::Pending(queued)) => Ok(OperationSuccess {
-                state: RuntimeReceiptState::Queued,
-                terminal: None,
-                result: RuntimeResult::LeasePending {
-                    status: queued.status().map_err(|error| {
-                        RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                            "poll_queued_lease",
-                            &error,
-                        ))
-                    })?,
-                },
-            }),
-            Err(SchedulerError::QueueExpired) => {
-                let context = context.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "expired_queue_context_missing",
-                        "poll_queued_lease",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let event = self.finish_queue_expiry(&context)?;
-                Err(RequestFailure::request(
-                    RuntimeHostError::scheduler("poll_queued_lease", &SchedulerError::QueueExpired),
-                    RuntimeReceiptState::Denied,
-                    Some(terminal(&event)),
-                ))
-            }
-            Err(SchedulerError::QueueMissing) => {
-                if let Some(success) = self.existing_queue_terminal_result(
-                    queued_request_id,
-                    connection_id,
-                    "poll_queued_lease",
-                )? {
-                    return Ok(success);
-                }
-                Err(self.scheduler_denied_error(
-                    request,
-                    context.as_ref().map(|value| value.instance.instance_id()),
-                    None,
-                    context
-                        .as_ref()
-                        .map_or("", |value| value.instance.audit_endpoint()),
-                    RuntimeHostError::scheduler("poll_queued_lease", &SchedulerError::QueueMissing),
-                )?)
-            }
-            Err(error) => Err(self.scheduler_denied_error(
-                request,
-                context.as_ref().map(|value| value.instance.instance_id()),
-                None,
-                context
-                    .as_ref()
-                    .map_or("", |value| value.instance.audit_endpoint()),
-                RuntimeHostError::scheduler("poll_queued_lease", &error),
-            )?),
-        }
-    }
-
-    fn cancel_queued_lease(
-        &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        queued_request_id: RequestId,
-        connection_id: ConnectionId,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let context = lock(&self.queued_requests, "read_queued_request")?
-            .get(&queued_request_id)
-            .cloned();
-        #[cfg(test)]
-        self.wait_queue_operation_test_hook(QueueOperationTestKind::Cancel, queued_request_id)?;
-        if context.is_none()
-            && let Some(success) = self.existing_queue_terminal_result(
-                queued_request_id,
-                connection_id,
-                "cancel_queued_lease",
-            )?
-        {
-            return Ok(success);
-        }
-        let instance_guard = context
-            .as_ref()
-            .map(|context| self.instance_guard(context.instance.instance_id()))
-            .transpose()?;
-        let _admission = instance_guard
-            .as_ref()
-            .map(|guard| lock(guard, "lock_instance_admission"))
-            .transpose()?;
-        let cancelled = lock(&self.scheduler, "cancel_queued_lease")?
-            .cancel_queued(queued_request_id, connection_id);
-        let cancelled = match cancelled {
-            Ok(cancelled) => cancelled,
-            Err(SchedulerError::QueueMissing) => {
-                if let Some(success) = self.existing_queue_terminal_result(
-                    queued_request_id,
-                    connection_id,
-                    "cancel_queued_lease",
-                )? {
-                    return Ok(success);
-                }
-                return Err(self.scheduler_denied_error(
-                    request,
-                    None,
-                    None,
-                    "",
-                    RuntimeHostError::scheduler(
-                        "cancel_queued_lease",
-                        &SchedulerError::QueueMissing,
-                    ),
-                )?);
-            }
-            Err(error) => {
-                return Err(self.scheduler_denied_error(
-                    request,
-                    None,
-                    None,
-                    "",
-                    RuntimeHostError::scheduler("cancel_queued_lease", &error),
-                )?);
-            }
-        };
-        let context = self.read_queued_context_for(cancelled.queued())?;
-        let event = self.finish_queue_terminal(
-            &context,
-            DiagnosticCode::LeaseQueueCancelled,
-            QueueTerminalOutcome::Cancelled {
-                instance_id: cancelled.queued().instance_id(),
-            },
-        )?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Cancelled,
-            terminal: Some(terminal(&event)),
-            result: RuntimeResult::LeaseQueueCancelled {
-                request_id: queued_request_id,
-                instance_id: cancelled.queued().instance_id(),
-            },
-        })
     }
 
     fn cancel_contained_task(
@@ -7631,26 +7055,6 @@ impl HostShared {
             })
     }
 
-    fn existing_queue_grant_terminal(
-        &self,
-        request_id: RequestId,
-        lease_id: LeaseId,
-    ) -> Result<TerminalEvent, RequestFailure> {
-        if let Some(terminal) =
-            self.query_single_terminal(request_id, Some(lease_id), EventType::LeaseTransferred)?
-        {
-            return Ok(terminal);
-        }
-        self.query_single_terminal(request_id, Some(lease_id), EventType::LeaseGranted)?
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "queue_grant_terminal_missing",
-                    "recover_queued_lease_grant",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })
-    }
-
     fn query_single_terminal(
         &self,
         request_id: RequestId,
@@ -7675,456 +7079,6 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     "request_terminal_event_duplicated",
                     "recover_idempotent_runtime_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            )),
-        }
-    }
-
-    fn append_scheduler_queued(
-        &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        resolved: &RegisteredInstance,
-        queued: &QueuedLease,
-    ) -> Result<PersistedEvent, RequestFailure> {
-        let links = self
-            .events
-            .request_links(request, Some(resolved.instance_id()), None, None);
-        self.append_event(
-            EventSeverity::Info,
-            EventSource::Scheduler,
-            OriginModule::Scheduler,
-            EventActor::Scheduler,
-            links,
-            SchedulerPayloadDraft::queued(
-                EventAction::ScheduleAdmit,
-                queued.priority(),
-                queued.position(),
-                queued.deadline_monotonic_ms(),
-                queued.preempt_requested(),
-                audit_endpoint(resolved.audit_endpoint()),
-            ),
-        )
-    }
-
-    fn append_scheduler_preempted(
-        &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        resolved: &RegisteredInstance,
-        queued: &QueuedLease,
-    ) -> Result<PersistedEvent, RequestFailure> {
-        let active = lock(&self.scheduler, "read_preemption_state")?
-            .active_lease(resolved.instance_id())
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "preemption_active_lease_missing",
-                    "record_scheduler_preemption",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
-        if !active.preempt_requested() {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "preemption_state_mismatch",
-                    "record_scheduler_preemption",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let links = self.events.request_links(
-            request,
-            Some(resolved.instance_id()),
-            Some(active.token().lease_id()),
-            None,
-        );
-        self.append_event(
-            EventSeverity::Warning,
-            EventSource::Scheduler,
-            OriginModule::Scheduler,
-            EventActor::Scheduler,
-            links,
-            SchedulerPayloadDraft::preempted(
-                EventAction::ScheduleAdmit,
-                active.token().holder_id(),
-                active.token().lease_id(),
-                queued.request_id(),
-                queued.priority(),
-                active.destructive_step_active(),
-                audit_endpoint(resolved.audit_endpoint()),
-            ),
-        )
-    }
-
-    fn record_expired_queued(&self, expired: Vec<QueuedLease>) -> Result<(), RequestFailure> {
-        for queued in expired {
-            let context = self.read_queued_context_for(&queued)?;
-            self.finish_queue_expiry(&context)?;
-        }
-        Ok(())
-    }
-
-    fn finish_queue_expiry(
-        &self,
-        context: &QueuedRequestContext,
-    ) -> Result<PersistedEvent, RequestFailure> {
-        self.finish_queue_terminal(
-            context,
-            DiagnosticCode::LeaseQueueExpired,
-            QueueTerminalOutcome::Expired,
-        )
-    }
-
-    /// Publishes the recoverable terminal before context removal, so a context miss cannot race
-    /// ahead of the authoritative queue result.
-    fn finish_queue_terminal(
-        &self,
-        context: &QueuedRequestContext,
-        diagnostic: DiagnosticCode,
-        outcome: QueueTerminalOutcome,
-    ) -> Result<PersistedEvent, RequestFailure> {
-        let event = self.append_queue_terminal(context, diagnostic)?;
-        self.remember_queue_terminal(context, &event, outcome)?;
-        self.remove_queued_context(context.request.request_id(), context.connection_id)?;
-        Ok(event)
-    }
-
-    fn remember_queue_terminal(
-        &self,
-        context: &QueuedRequestContext,
-        event: &PersistedEvent,
-        outcome: QueueTerminalOutcome,
-    ) -> Result<(), RequestFailure> {
-        lock(&self.queue_terminals, "record_queue_terminal")?.insert(
-            context.request.request_id(),
-            QueueTerminalRecord {
-                connection_id: context.connection_id,
-                terminal: terminal(event),
-                outcome,
-            },
-        );
-        Ok(())
-    }
-
-    fn cancel_instance_queue(
-        &self,
-        instance_id: InstanceId,
-        diagnostic: DiagnosticCode,
-    ) -> Result<(), RequestFailure> {
-        let removed = lock(&self.scheduler, "cancel_instance_queue")?
-            .remove_queued_for_instance(instance_id)
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "cancel_instance_queue",
-                    &error,
-                ))
-            })?;
-        for cancelled in removed {
-            let context = self.take_queued_context(&cancelled)?;
-            self.append_queue_terminal(&context, diagnostic)?;
-        }
-        Ok(())
-    }
-
-    fn take_queued_context(
-        &self,
-        cancelled: &CancelledQueuedLease,
-    ) -> Result<QueuedRequestContext, RequestFailure> {
-        self.take_queued_context_for(cancelled.queued())
-    }
-
-    fn read_queued_context_for(
-        &self,
-        queued: &QueuedLease,
-    ) -> Result<QueuedRequestContext, RequestFailure> {
-        let context = lock(&self.queued_requests, "read_queued_request")?
-            .get(&queued.request_id())
-            .cloned()
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "queued_request_context_missing",
-                    "read_queued_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
-        if context.connection_id != queued.connection_id() {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "queued_request_connection_mismatch",
-                    "read_queued_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        if context.instance.instance_id() != queued.instance_id() {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "queued_request_instance_mismatch",
-                    "read_queued_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        Ok(context)
-    }
-
-    fn take_queued_context_for(
-        &self,
-        queued: &QueuedLease,
-    ) -> Result<QueuedRequestContext, RequestFailure> {
-        let context = self.remove_queued_context(queued.request_id(), queued.connection_id())?;
-        if context.instance.instance_id() != queued.instance_id() {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "queued_request_instance_mismatch",
-                    "remove_queued_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        Ok(context)
-    }
-
-    fn remove_queued_context(
-        &self,
-        request_id: RequestId,
-        connection_id: ConnectionId,
-    ) -> Result<QueuedRequestContext, RequestFailure> {
-        let context = lock(&self.queued_requests, "remove_queued_request")?
-            .remove(&request_id)
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "queued_request_context_missing",
-                    "remove_queued_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
-        if context.connection_id != connection_id {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "queued_request_connection_mismatch",
-                    "remove_queued_request",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        Ok(context)
-    }
-
-    fn append_queue_terminal(
-        &self,
-        context: &QueuedRequestContext,
-        diagnostic: DiagnosticCode,
-    ) -> Result<PersistedEvent, RequestFailure> {
-        let validated = context.request.validate().map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "queued_request_context_invalid",
-                "record_queued_request_terminal",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
-        let links =
-            self.events
-                .request_links(&validated, Some(context.instance.instance_id()), None, None);
-        self.append_event(
-            EventSeverity::Warning,
-            EventSource::Scheduler,
-            OriginModule::Scheduler,
-            EventActor::Scheduler,
-            links,
-            SchedulerPayloadDraft::denied(
-                EventAction::ScheduleAdmit,
-                diagnostic,
-                audit_endpoint(context.instance.audit_endpoint()),
-            ),
-        )
-    }
-
-    fn expire_queued_for_instance(&self, instance_id: InstanceId) -> Result<(), RequestFailure> {
-        let expired = lock(&self.scheduler, "expire_queued_requests")?
-            .take_expired_for_instance(instance_id, self.monotonic_ms()?)
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "expire_queued_requests",
-                    &error,
-                ))
-            })?;
-        self.record_expired_queued(expired)
-    }
-
-    fn perform_transfer(
-        &self,
-        prepared: Box<PreparedLeaseTransfer>,
-    ) -> Result<PersistedEvent, RequestFailure> {
-        let from = prepared.from_token().clone();
-        let to = prepared.to_token().clone();
-        let queued_request_id = prepared.queued_request_id();
-        let to_connection_id = prepared.to_connection_id();
-        let priority = prepared.priority();
-        let action = match prepared.reason() {
-            LeaseTransferReason::Preempted => EventAction::LeaseAcquire,
-            LeaseTransferReason::Expired => EventAction::LeaseExpire,
-            LeaseTransferReason::ExplicitRelease
-            | LeaseTransferReason::Disconnect
-            | LeaseTransferReason::BackendFailure
-            | LeaseTransferReason::HostShutdown => EventAction::LeaseRelease,
-        };
-        let context = lock(&self.queued_requests, "read_transfer_request")?
-            .get(&queued_request_id)
-            .cloned()
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "lease_transfer_context_missing",
-                    "prepare_lease_transfer",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
-        if context.connection_id != to_connection_id
-            || context.instance.instance_id() != to.instance_id()
-        {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "lease_transfer_context_mismatch",
-                    "prepare_lease_transfer",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        }
-        let validated = context.request.validate().map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "lease_transfer_request_invalid",
-                "prepare_lease_transfer",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
-        let action_id = self
-            .events
-            .action_id()
-            .map_err(RequestFailure::poison_without_terminal)?;
-        let links = self.events.request_links(
-            &validated,
-            Some(to.instance_id()),
-            Some(to.lease_id()),
-            Some(action_id),
-        );
-        self.append_event(
-            EventSeverity::Info,
-            EventSource::Scheduler,
-            OriginModule::Scheduler,
-            EventActor::Scheduler,
-            links.clone(),
-            LeasePayloadDraft::transition_intent(
-                action,
-                audit_endpoint(context.instance.audit_endpoint()),
-            ),
-        )?;
-        self.close_instance_resources(
-            &from,
-            prepared.from_connection_id(),
-            EventLinksDraft::default(),
-        )?;
-        let transferred = self.append_event(
-            EventSeverity::Info,
-            EventSource::Scheduler,
-            OriginModule::Scheduler,
-            EventActor::Scheduler,
-            links,
-            LeasePayloadDraft::transferred(
-                action,
-                EffectDisposition::Performed,
-                from.holder_id(),
-                from.lease_id(),
-                to.holder_id(),
-                to.lease_id(),
-                queued_request_id,
-                priority,
-                audit_endpoint(context.instance.audit_endpoint()),
-            ),
-        )?;
-        let committed = lock(&self.scheduler, "commit_lease_transfer")?
-            .commit_transfer(prepared, self.monotonic_ms()?);
-        let committed = committed.map_err(|_| {
-            RequestFailure::poison(
-                RuntimeHostError::fatal(
-                    "lease_transfer_commit_failed_after_durable_fact",
-                    "commit_lease_transfer",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-                Some(terminal(&transferred)),
-            )
-        })?;
-        if committed != to {
-            return Err(RequestFailure::poison(
-                RuntimeHostError::fatal(
-                    "lease_transfer_token_mismatch_after_durable_fact",
-                    "commit_lease_transfer",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-                Some(terminal(&transferred)),
-            ));
-        }
-        self.remove_queued_context(queued_request_id, to_connection_id)?;
-        self.persist_active_instances()
-            .map_err(RequestFailure::poison_without_terminal)?;
-        Ok(transferred)
-    }
-
-    /// The caller holds the per-instance admission guard, so no lease mutation can invalidate the
-    /// prepared transfer before its durable authorization fact is committed.
-    fn promote_idle_preemption(
-        &self,
-        queued: &QueuedLease,
-        _admission: &MutexGuard<'_, ()>,
-    ) -> Result<Option<(LeaseToken, PersistedEvent)>, RequestFailure> {
-        if !queued.preempt_requested() {
-            return Ok(None);
-        }
-        let transfer = {
-            let mut scheduler = lock(&self.scheduler, "prepare_idle_preemption")?;
-            let active = scheduler
-                .active_lease(queued.instance_id())
-                .ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "idle_preemption_active_lease_missing",
-                        "prepare_idle_preemption",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-            scheduler
-                .prepare_transfer(
-                    active.token(),
-                    active.connection_id(),
-                    LeaseTransferReason::Preempted,
-                    None,
-                    self.monotonic_ms()?,
-                )
-                .map_err(|error| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        "prepare_idle_preemption",
-                        &error,
-                    ))
-                })?
-        };
-        match transfer {
-            TransferPreparation::Ready(prepared) => {
-                if !self.capacity_allows_transfer(prepared.from_token())? {
-                    self.cleanup_token_inner(
-                        prepared.from_token(),
-                        prepared.from_connection_id(),
-                        LeaseReleaseReason::Preempted,
-                        None,
-                        Some(_admission),
-                    )?;
-                    return Ok(None);
-                }
-                let token = prepared.to_token().clone();
-                self.perform_transfer(prepared)
-                    .map(|event| Some((token, event)))
-            }
-            TransferPreparation::Deferred => Ok(None),
-            TransferPreparation::NoCandidate => Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "idle_preemption_candidate_missing",
-                    "prepare_idle_preemption",
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             )),
@@ -9570,7 +8524,9 @@ impl HostShared {
             execution
         };
         if let Err(ContainedTaskRunError::Task(error)) = &execution {
-            runtime.task_timing.task_failure(error.timing());
+            runtime
+                .task_timing
+                .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.task_timing.begin_finalization();
         let post_admission_ocr_failure_diagnostic = match &execution {
@@ -10090,7 +9046,9 @@ impl HostShared {
             recovery.run_entry_recovery(&mut recovery_runtime)
         };
         if let Err(ContainedTaskRunError::Task(error)) = &recovery_execution {
-            runtime.task_timing.task_failure(error.timing());
+            runtime
+                .task_timing
+                .task_failure(error.timing(), error.timing_check_position());
         }
         runtime.task_timing.replace_context(previous_timing);
         let nonfatal_operation = matches!(
@@ -12710,25 +11668,6 @@ impl HostShared {
         Ok(())
     }
 
-    fn expire_all_queued_runtime(&self) -> RuntimeHostResult<()> {
-        let instance_ids = lock(&self.registered_instances, "read_instance_registry")?
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        for instance_id in instance_ids {
-            let instance_guard = self
-                .instance_guard(instance_id)
-                .map_err(|failure| *failure.error)?;
-            let _admission = lock(&instance_guard, "lock_instance_admission")?;
-            let expired = lock(&self.scheduler, "expire_queued_requests")?
-                .take_expired_for_instance(instance_id, self.monotonic_ms()?)
-                .map_err(|error| RuntimeHostError::scheduler("expire_queued_requests", &error))?;
-            self.record_expired_queued(expired)
-                .map_err(|failure| *failure.error)?;
-        }
-        Ok(())
-    }
-
     fn expire_instance_if_due(&self, instance_id: InstanceId) -> Result<(), RequestFailure> {
         let now = self
             .monotonic_ms()
@@ -13215,6 +12154,32 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)
     }
 
+    fn append_event_observed(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        payload: impl Into<actingcommand_contract::EventPayloadDraft>,
+    ) -> (
+        Result<PersistedEvent, RequestFailure>,
+        task_timing::AppendObservation,
+    ) {
+        let mut observation = task_timing::AppendObservation::default();
+        let result = self
+            .append_event_raw_with_observation(
+                severity,
+                source,
+                module,
+                actor,
+                links,
+                (payload, Some(&mut observation)),
+            )
+            .map_err(RequestFailure::poison_without_terminal);
+        (result, observation)
+    }
+
     fn append_lifecycle_observed(
         &self,
         phase: RuntimeLifecyclePhase,
@@ -13482,11 +12447,17 @@ impl HostShared {
                     "local_ipc",
                     error.operation(),
                     format!(
-                        "host_code={} fatal={} connection_id={} request_decoded={}",
+                        "host_code={} fatal={} connection_id={} request_decoded={} observation={}",
                         error.code(),
                         error.is_fatal(),
                         context.connection_serial,
                         context.request_decoded,
+                        serde_json::json!({
+                            "owner_epoch": self.owner_epoch,
+                            "runtime_pid": std::process::id(),
+                            "clock": "process_instant",
+                            "stages": &context.timing,
+                        }),
                     ),
                     Sensitivity::Internal,
                 ),
@@ -13506,12 +12477,62 @@ impl HostShared {
         links: EventLinksDraft,
         payload: impl Into<actingcommand_contract::EventPayloadDraft>,
     ) -> RuntimeHostResult<PersistedEvent> {
-        let gate = lock(&self.fact_write_gate, "append_runtime_event")?;
-        let event =
-            self.append_event_under_fact_gate(severity, source, module, actor, links, payload)?;
-        self.synchronize_fact_store_under_gate()?;
+        self.append_event_raw_with_observation(
+            severity,
+            source,
+            module,
+            actor,
+            links,
+            (payload, None),
+        )
+    }
+
+    fn append_event_raw_with_observation(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        input: (
+            impl Into<actingcommand_contract::EventPayloadDraft>,
+            Option<&mut task_timing::AppendObservation>,
+        ),
+    ) -> RuntimeHostResult<PersistedEvent> {
+        let (payload, mut observation) = input;
+        if let Some(value) = observation.as_mut() {
+            value.fact_gate.begin();
+        }
+        let gate = lock(&self.fact_write_gate, "append_runtime_event");
+        if let Some(value) = observation.as_mut() {
+            value.fact_gate.finish(gate.is_ok());
+        }
+        let gate = gate?;
+        let event = self.append_event_under_fact_gate_with_observation(
+            severity,
+            source,
+            module,
+            actor,
+            links,
+            (payload, observation.as_deref_mut()),
+        )?;
+        if let Some(value) = observation.as_mut() {
+            value.fact_sync.begin();
+        }
+        let synchronized = self.synchronize_fact_store_under_gate();
+        if let Some(value) = observation.as_mut() {
+            value.fact_sync.finish(synchronized.is_ok());
+        }
+        synchronized?;
         drop(gate);
-        self.observe_pipeline_event(&event)?;
+        if let Some(value) = observation.as_mut() {
+            value.pipeline.begin();
+        }
+        let pipeline = self.observe_pipeline_event(&event);
+        if let Some(value) = observation.as_mut() {
+            value.pipeline.finish(pipeline.is_ok());
+        }
+        pipeline?;
         Ok(event)
     }
 
@@ -13524,18 +12545,70 @@ impl HostShared {
         links: EventLinksDraft,
         payload: impl Into<actingcommand_contract::EventPayloadDraft>,
     ) -> RuntimeHostResult<PersistedEvent> {
+        self.append_event_under_fact_gate_with_observation(
+            severity,
+            source,
+            module,
+            actor,
+            links,
+            (payload, None),
+        )
+    }
+
+    fn append_event_under_fact_gate_with_observation(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        input: (
+            impl Into<actingcommand_contract::EventPayloadDraft>,
+            Option<&mut task_timing::AppendObservation>,
+        ),
+    ) -> RuntimeHostResult<PersistedEvent> {
+        let (payload, mut observation) = input;
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
             return Err(ledger_error("append_runtime_event"));
         }
-        let draft = self
-            .events
-            .draft(severity, source, module, actor, links.clone(), payload)?;
-        let draft = self.events.sanitize(draft)?;
-        let event = self.ledger.append(draft).map_err(|_| {
+        if let Some(value) = observation.as_mut() {
+            value.draft.begin();
+        }
+        let draft = (|| {
+            let draft =
+                self.events
+                    .draft(severity, source, module, actor, links.clone(), payload)?;
+            self.events.sanitize(draft)
+        })();
+        if let Some(value) = observation.as_mut() {
+            value.draft.finish(draft.is_ok());
+        }
+        let draft = draft?;
+        if let Some(value) = observation.as_mut() {
+            value.writer_response.begin();
+        }
+        let appended = if let Some(value) = observation.as_mut() {
+            let (result, ledger_observation) = self.ledger.append_with_observation(draft);
+            value.ledger = ledger_observation;
+            result
+        } else {
+            self.ledger.append(draft)
+        };
+        if let Some(value) = observation.as_mut() {
+            value.writer_response.finish(appended.is_ok());
+        }
+        let event = appended.map_err(|_| {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             ledger_error("append_runtime_event")
         })?;
-        if let Err(error) = self.observe_device_diagnostics_under_fact_gate(&event, &links) {
+        if let Some(value) = observation.as_mut() {
+            value.device_diagnostics.begin();
+        }
+        let diagnostic = self.observe_device_diagnostics_under_fact_gate(&event, &links);
+        if let Some(value) = observation.as_mut() {
+            value.device_diagnostics.finish(diagnostic.is_ok());
+        }
+        if let Err(error) = diagnostic {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
             return Err(error);
@@ -14071,6 +13144,20 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.task_timing.replace_context(Some(context));
     }
 
+    fn task_boundary_identity(
+        &self,
+        boundary: TaskTimingBoundary,
+    ) -> task_timing::BoundaryIdentity {
+        self.inner.timing_identity(boundary)
+    }
+
+    fn observe_task_boundary(
+        &mut self,
+        timing: actingcommand_execution_kernel::ContainedTaskBoundaryTiming,
+    ) {
+        self.inner.task_timing.kernel_boundary(timing);
+    }
+
     fn record_page_evaluations(
         &mut self,
         phase: &'static str,
@@ -14446,47 +13533,102 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         results: &actingcommand_page_detector::PageBatchResult,
     ) -> Result<(), RequestFailure> {
-        let Some(index) = self.capture_evidence.last_frame_index else {
-            return Ok(());
-        };
-        let state = match results {
-            Ok(outcomes) => {
-                if let Some(error) = outcomes
-                    .iter()
-                    .find_map(|outcome| outcome.result.as_ref().err())
-                {
-                    RecognitionState::Failed {
-                        reason: error.to_string().chars().take(256).collect(),
-                    }
-                } else {
-                    let mut matches = outcomes
+        let frame_id = self.last_frame_id.map(|id| *id.transport());
+        let recognition_id = self.current_recognition_id.map(|id| *id.transport());
+        let started = Instant::now();
+        let budget_before = self.task_timing.budget_at(started);
+        let result = (|| {
+            let Some(index) = self.capture_evidence.last_frame_index else {
+                return Ok(());
+            };
+            let state = match results {
+                Ok(outcomes) => {
+                    if let Some(error) = outcomes
                         .iter()
-                        .filter_map(|outcome| outcome.result.as_ref().ok())
-                        .filter(|evaluation| evaluation.matched);
-                    let first = matches.next();
-                    if matches.next().is_some() {
-                        // No unique page relation is available to the frame cache.
-                        return Ok(());
+                        .find_map(|outcome| outcome.result.as_ref().err())
+                    {
+                        RecognitionState::Failed {
+                            reason: error.to_string().chars().take(256).collect(),
+                        }
+                    } else {
+                        let mut matches = outcomes
+                            .iter()
+                            .filter_map(|outcome| outcome.result.as_ref().ok())
+                            .filter(|evaluation| evaluation.matched);
+                        let first = matches.next();
+                        if matches.next().is_some() {
+                            // No unique page relation is available to the frame cache.
+                            return Ok(());
+                        }
+                        RecognitionState::from_matched_page(
+                            first.map(|evaluation| evaluation.page_id.clone()),
+                        )
                     }
-                    RecognitionState::from_matched_page(
-                        first.map(|evaluation| evaluation.page_id.clone()),
-                    )
                 }
+                Err(error) => RecognitionState::Failed {
+                    reason: error.to_string().chars().take(256).collect(),
+                },
+            };
+            let mut sink = RuntimeArtifactEventSink {
+                ledger: &self.host.ledger,
+                events: &self.host.events,
+            };
+            if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
+                pipeline
+                    .record_recognition(index, state, &mut sink)
+                    .map_err(online_observation::observation_artifact_failure)?;
             }
-            Err(error) => RecognitionState::Failed {
-                reason: error.to_string().chars().take(256).collect(),
+            Ok(())
+        })();
+        let elapsed_us =
+            actingcommand_execution_kernel::observe_instant_span(started, Instant::now());
+        self.task_timing
+            .capture_recognition(actingcommand_contract::TaskTimingSample {
+                elapsed_us,
+                budget_before,
+                result: if result.is_ok() {
+                    actingcommand_contract::TaskTimingResult::Ok
+                } else {
+                    actingcommand_contract::TaskTimingResult::Err
+                },
+                record_index: None,
+                frame_id,
+                recognition_id,
+            });
+        result
+    }
+
+    fn timing_identity(
+        &self,
+        boundary: actingcommand_contract::TaskTimingBoundary,
+    ) -> task_timing::BoundaryIdentity {
+        use actingcommand_contract::TaskTimingBoundary as Boundary;
+        let before_capture = matches!(
+            boundary,
+            Boundary::Capture | Boundary::CapturePage | Boundary::CaptureActivePressure
+        );
+        let before_recognition = before_capture
+            || matches!(
+                boundary,
+                Boundary::CaptureBackend
+                    | Boundary::CaptureMaterial
+                    | Boundary::CaptureCompletedRecord
+                    | Boundary::RecognitionStartedRecord
+            );
+        task_timing::BoundaryIdentity {
+            frame_id: (!before_capture)
+                .then(|| self.last_frame_id.map(|id| *id.transport()))
+                .flatten(),
+            recognition_id: (!before_recognition)
+                .then(|| self.current_recognition_id.map(|id| *id.transport()))
+                .flatten(),
+            step_index: self.diagnostic_step.as_ref().map(|step| step.index),
+            action_id: if boundary == Boundary::Input {
+                self.input_step_action_id
+            } else {
+                self.diagnostic_step.as_ref().map(|step| step.action_id)
             },
-        };
-        let mut sink = RuntimeArtifactEventSink {
-            ledger: &self.host.ledger,
-            events: &self.host.events,
-        };
-        if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
-            pipeline
-                .record_recognition(index, state, &mut sink)
-                .map_err(online_observation::observation_artifact_failure)?;
         }
-        Ok(())
     }
 
     const fn capture_origin(&self) -> (EventSource, OriginModule) {
@@ -15230,6 +14372,20 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         self.task_timing.begin_execution(context);
     }
 
+    fn task_boundary_identity(
+        &self,
+        boundary: TaskTimingBoundary,
+    ) -> task_timing::BoundaryIdentity {
+        self.timing_identity(boundary)
+    }
+
+    fn observe_task_boundary(
+        &mut self,
+        timing: actingcommand_execution_kernel::ContainedTaskBoundaryTiming,
+    ) {
+        self.task_timing.kernel_boundary(timing);
+    }
+
     fn record_page_evaluations(
         &mut self,
         phase: &'static str,
@@ -15277,204 +14433,241 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn capture(&mut self) -> Result<Frame, Self::Error> {
-        self.ensure_active()?;
-        self.poll_capture_pressure()?;
-        let instance_guard = self.host.instance_guard(self.token.instance_id())?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        let frame_id = self
-            .host
-            .events
-            .issuer()
-            .mint_frame_id()
-            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        let input_action_id = self.post_input_action_id.take();
-        let links = RuntimeRunLinks::new(self.task_id, self.run_id)
-            .apply(self.host.events.request_links(
-                self.request,
-                Some(self.token.instance_id()),
-                Some(self.token.lease_id()),
-                input_action_id,
-            ))
-            .with_frame_id(frame_id);
-        let (source, module) = self.capture_origin();
-        let requested = self.host.append_event(
-            EventSeverity::Info,
-            source,
-            module,
-            EventActor::Runtime,
-            links.clone(),
-            CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
-        )?;
-        let registration = self.host.mark_resources_in_use()?;
-        match self
-            .host
-            .execution
-            .capture_retained_with_registration_guard(self.instance_alias, registration)
-        {
-            Ok(frame) => {
+        use actingcommand_contract::TaskTimingBoundary as Boundary;
+        let capture_started = self
+            .task_timing
+            .begin_boundary(Boundary::Capture, self.timing_identity(Boundary::Capture));
+        let result = (|| {
+            let active_started = self.task_timing.begin_boundary(
+                Boundary::CaptureActivePressure,
+                self.timing_identity(Boundary::CaptureActivePressure),
+            );
+            let active = (|| {
                 self.ensure_active()?;
-                let frame_index = self.capture_evidence.captured()?;
-                let write_context = ArtifactWriteContext::new(
-                    self.request
-                        .task_artifact_links(self.run_id)
-                        .with_frame_id(frame_id),
-                    links,
-                    unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
-                );
-                let mut sink = online_observation::ObservationArtifactSink {
-                    ledger: &self.host.ledger,
-                    events: &self.host.events,
-                    verified: None,
-                    frame_retention: Some((
-                        self.host.owner_epoch,
-                        frame_retention::capture_pin_reason(self.request),
-                    )),
-                };
-                let persistence = (|| {
-                    if self.capture_evidence.pipeline.is_none() {
-                        self.capture_evidence.pipeline = Some(CapturePipeline::open_with_store(
-                            Arc::clone(&self.host.artifacts),
-                            frame_retention::spill_root(
-                                self.host.artifacts.root(),
-                                self.run_id.transport(),
-                            )?,
-                            CapturePipelineConfig {
-                                frame_store: frame_retention::capture_frame_store_config(),
-                                retention_class: RetentionClass::DebugFull,
-                                redaction_state: ArtifactRedactionState::NotRequired,
-                                ..CapturePipelineConfig::default()
-                            },
-                            write_context.clone(),
-                            &mut sink,
-                        )?);
-                    }
-                    let pipeline = self
-                        .capture_evidence
-                        .pipeline
-                        .as_mut()
-                        .expect("capture pipeline initialized");
-                    let result = pipeline.record_frame(
-                        FrameStoreFrameInput {
-                            frame_index,
-                            file_name: format!("frame-{frame_index}.png"),
-                            label: if frame_index == 0 {
-                                "initial"
-                            } else if input_action_id.is_some() {
-                                "after-input"
-                            } else {
-                                "capture"
+                self.poll_capture_pressure()
+            })();
+            self.task_timing
+                .finish_boundary(active_started, active.is_ok());
+            active?;
+            let instance_guard = self.host.instance_guard(self.token.instance_id())?;
+            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let frame_id =
+                self.host.events.issuer().mint_frame_id().map_err(|_| {
+                    RequestFailure::poison_without_terminal(runtime_identifier_error())
+                })?;
+            let input_action_id = self.post_input_action_id.take();
+            let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+                .apply(self.host.events.request_links(
+                    self.request,
+                    Some(self.token.instance_id()),
+                    Some(self.token.lease_id()),
+                    input_action_id,
+                ))
+                .with_frame_id(frame_id);
+            let (source, module) = self.capture_origin();
+            let requested = self.host.append_event(
+                EventSeverity::Info,
+                source,
+                module,
+                EventActor::Runtime,
+                links.clone(),
+                CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
+            )?;
+            let registration = self.host.mark_resources_in_use()?;
+            let identity = task_timing::BoundaryIdentity {
+                frame_id: Some(*frame_id.transport()),
+                ..self.timing_identity(Boundary::CaptureBackend)
+            };
+            let backend_started = self
+                .task_timing
+                .begin_boundary(Boundary::CaptureBackend, identity);
+            let captured = self
+                .host
+                .execution
+                .capture_retained_with_registration_guard(self.instance_alias, registration);
+            self.task_timing
+                .finish_boundary(backend_started, captured.is_ok());
+            match captured {
+                Ok(frame) => {
+                    let material_started = self
+                        .task_timing
+                        .begin_boundary(Boundary::CaptureMaterial, identity);
+                    let material = (|| {
+                        self.ensure_active()?;
+                        let frame_index = self.capture_evidence.captured()?;
+                        let write_context = ArtifactWriteContext::new(
+                            self.request
+                                .task_artifact_links(self.run_id)
+                                .with_frame_id(frame_id),
+                            links,
+                            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+                        );
+                        let mut sink = online_observation::ObservationArtifactSink {
+                            ledger: &self.host.ledger,
+                            events: &self.host.events,
+                            verified: None,
+                            frame_retention: Some((
+                                self.host.owner_epoch,
+                                frame_retention::capture_pin_reason(self.request),
+                            )),
+                        };
+                        let persistence = (|| {
+                            if self.capture_evidence.pipeline.is_none() {
+                                self.capture_evidence.pipeline =
+                                    Some(CapturePipeline::open_with_store(
+                                        Arc::clone(&self.host.artifacts),
+                                        frame_retention::spill_root(
+                                            self.host.artifacts.root(),
+                                            self.run_id.transport(),
+                                        )?,
+                                        CapturePipelineConfig {
+                                            frame_store:
+                                                frame_retention::capture_frame_store_config(),
+                                            retention_class: RetentionClass::DebugFull,
+                                            redaction_state: ArtifactRedactionState::NotRequired,
+                                            ..CapturePipelineConfig::default()
+                                        },
+                                        write_context.clone(),
+                                        &mut sink,
+                                    )?);
                             }
-                            .to_owned(),
-                            recognition_state: RecognitionState::Pending,
-                            pinned_reason: self.finalizing.map(|_| PinnedFrameReason::Terminal),
-                            frame: frame.clone(),
-                        },
-                        write_context.clone(),
-                        &mut sink,
-                    )?;
-                    if !result.frame.warnings.is_empty() {
-                        return Err(ArtifactStoreError::fatal(
-                            "capture_spill_failed",
-                            "persist_contained_task_frame",
-                            result.frame.warnings.join("; "),
-                        ));
-                    }
-                    let reference = pipeline.persist_frame(frame_index, &mut sink)?;
-                    pipeline.poll_pressure(&write_context, &mut sink)?;
-                    Ok(reference)
-                })();
-                let reference = match persistence {
-                    Ok(reference) => reference,
-                    Err(error) => {
-                        self.capture_evidence
-                            .pipeline_failure
-                            .get_or_insert(error.clone());
-                        return Err(online_observation::observation_artifact_failure(error));
-                    }
-                };
-                self.capture_evidence.persisted(frame_index, &reference)?;
-                self.last_frame_id = Some(frame_id);
-                self.last_capture_input_action_id = input_action_id;
-                if self.configuration_records > 0 && !self.configuration_capture_recorded {
-                    let selection =
-                        frame
-                            .selection
-                            .as_ref()
-                            .map(|selection| EffectiveCaptureSelection {
-                                requested_backend: selection.requested.as_str().to_owned(),
-                                configured_adb: selection.configured_adb.clone(),
-                                configured_serial: selection.configured_serial.clone(),
-                                resolved_adb: selection.resolved_adb.clone(),
-                                selected_serial: selection.selected_serial.clone(),
-                                mumu: selection.mumu.as_ref().map(|mumu| {
-                                    EffectiveMumuInstallation {
-                                        root: mumu.root.clone(),
-                                        adb_path: mumu.adb_path.clone(),
-                                        capture_dll_path: mumu.capture_dll_path.clone(),
-                                        source: mumu.source.as_str().to_owned(),
+                            let pipeline = self
+                                .capture_evidence
+                                .pipeline
+                                .as_mut()
+                                .expect("capture pipeline initialized");
+                            let result = pipeline.record_frame(
+                                FrameStoreFrameInput {
+                                    frame_index,
+                                    file_name: format!("frame-{frame_index}.png"),
+                                    label: if frame_index == 0 {
+                                        "initial"
+                                    } else if input_action_id.is_some() {
+                                        "after-input"
+                                    } else {
+                                        "capture"
                                     }
-                                }),
+                                    .to_owned(),
+                                    recognition_state: RecognitionState::Pending,
+                                    pinned_reason: self
+                                        .finalizing
+                                        .map(|_| PinnedFrameReason::Terminal),
+                                    frame: frame.clone(),
+                                },
+                                write_context.clone(),
+                                &mut sink,
+                            )?;
+                            if !result.frame.warnings.is_empty() {
+                                return Err(ArtifactStoreError::fatal(
+                                    "capture_spill_failed",
+                                    "persist_contained_task_frame",
+                                    result.frame.warnings.join("; "),
+                                ));
+                            }
+                            let reference = pipeline.persist_frame(frame_index, &mut sink)?;
+                            pipeline.poll_pressure(&write_context, &mut sink)?;
+                            Ok(reference)
+                        })();
+                        let reference = match persistence {
+                            Ok(reference) => reference,
+                            Err(error) => {
+                                self.capture_evidence
+                                    .pipeline_failure
+                                    .get_or_insert(error.clone());
+                                return Err(online_observation::observation_artifact_failure(
+                                    error,
+                                ));
+                            }
+                        };
+                        self.capture_evidence.persisted(frame_index, &reference)?;
+                        self.last_frame_id = Some(frame_id);
+                        self.last_capture_input_action_id = input_action_id;
+                        if self.configuration_records > 0 && !self.configuration_capture_recorded {
+                            let selection = frame.selection.as_ref().map(|selection| {
+                                EffectiveCaptureSelection {
+                                    requested_backend: selection.requested.as_str().to_owned(),
+                                    configured_adb: selection.configured_adb.clone(),
+                                    configured_serial: selection.configured_serial.clone(),
+                                    resolved_adb: selection.resolved_adb.clone(),
+                                    selected_serial: selection.selected_serial.clone(),
+                                    mumu: selection.mumu.as_ref().map(|mumu| {
+                                        EffectiveMumuInstallation {
+                                            root: mumu.root.clone(),
+                                            adb_path: mumu.adb_path.clone(),
+                                            capture_dll_path: mumu.capture_dll_path.clone(),
+                                            source: mumu.source.as_str().to_owned(),
+                                        }
+                                    }),
+                                }
                             });
-                    self.record_configuration(
-                        EffectiveConfigurationFacts::Capture {
-                            backend: frame.backend_name.as_str().to_owned(),
-                            selection,
-                        },
-                        Some(frame_id),
-                        None,
-                        Some(requested.sequence()),
+                            self.record_configuration(
+                                EffectiveConfigurationFacts::Capture {
+                                    backend: frame.backend_name.as_str().to_owned(),
+                                    selection,
+                                },
+                                Some(frame_id),
+                                None,
+                                Some(requested.sequence()),
+                            )?;
+                            self.configuration_capture_recorded = true;
+                        }
+                        Ok(frame)
+                    })();
+                    self.task_timing
+                        .finish_boundary(material_started, material.is_ok());
+                    material
+                }
+                Err(error) => {
+                    let error = self
+                        .host
+                        .finish_capture_failure_while_guarded(error, links.clone(), &admission)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                    let runtime_error =
+                        RuntimeHostError::execution("run_contained_task_capture", &error);
+                    if self
+                        .host
+                        .retain_unconfirmed_resources(&runtime_error, links.clone())?
+                    {
+                        return Err(RequestFailure::poison_without_terminal(runtime_error));
+                    }
+                    let payload = CapturePayloadDraft::failed_with_causes(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        runtime_error.diagnostic_detail().cloned(),
+                        runtime_error.cleanup_cause().cloned(),
+                        AuditInput::new(),
+                    );
+                    let failed = self.host.append_event(
+                        EventSeverity::Error,
+                        source,
+                        module,
+                        EventActor::Runtime,
+                        links.clone(),
+                        payload,
                     )?;
-                    self.configuration_capture_recorded = true;
+                    self.host
+                        .record_required_failure(&runtime_error, &failed, links)?;
+                    Err(RequestFailure {
+                        state: RuntimeReceiptState::Failed,
+                        terminal: Some(terminal(&failed)),
+                        poison_runtime: runtime_error.is_fatal(),
+                        task_failure: Some(TaskFailureEvidence {
+                            code: runtime_error.code(),
+                            severity: if runtime_error.is_fatal() {
+                                EventSeverity::Fatal
+                            } else {
+                                EventSeverity::Warning
+                            },
+                        }),
+                        error: Box::new(runtime_error),
+                    })
                 }
-                Ok(frame)
             }
-            Err(error) => {
-                let error = self
-                    .host
-                    .finish_capture_failure_while_guarded(error, links.clone(), &admission)
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                let runtime_error =
-                    RuntimeHostError::execution("run_contained_task_capture", &error);
-                if self
-                    .host
-                    .retain_unconfirmed_resources(&runtime_error, links.clone())?
-                {
-                    return Err(RequestFailure::poison_without_terminal(runtime_error));
-                }
-                let payload = CapturePayloadDraft::failed_with_causes(
-                    EventAction::CaptureObserve,
-                    DiagnosticCode::CaptureFailed,
-                    EffectDisposition::NotPerformed,
-                    runtime_error.diagnostic_detail().cloned(),
-                    runtime_error.cleanup_cause().cloned(),
-                    AuditInput::new(),
-                );
-                let failed = self.host.append_event(
-                    EventSeverity::Error,
-                    source,
-                    module,
-                    EventActor::Runtime,
-                    links.clone(),
-                    payload,
-                )?;
-                self.host
-                    .record_required_failure(&runtime_error, &failed, links)?;
-                Err(RequestFailure {
-                    state: RuntimeReceiptState::Failed,
-                    terminal: Some(terminal(&failed)),
-                    poison_runtime: runtime_error.is_fatal(),
-                    task_failure: Some(TaskFailureEvidence {
-                        code: runtime_error.code(),
-                        severity: if runtime_error.is_fatal() {
-                            EventSeverity::Fatal
-                        } else {
-                            EventSeverity::Warning
-                        },
-                    }),
-                    error: Box::new(runtime_error),
-                })
-            }
-        }
+        })();
+        self.task_timing
+            .finish_boundary(capture_started, result.is_ok());
+        result
     }
 
     fn action_seed(
@@ -15507,47 +14700,56 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-        self.ensure_active()?;
-        let (success, selection) = self.host.input(
-            self.request,
-            self.token,
-            &action,
-            self.connection_id,
-            self.execution_provenance,
-            RuntimeInputContext {
-                run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
-                source_step_action_id: self.input_step_action_id.take(),
-                before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
-            },
-        )?;
-        self.ensure_active()?;
-        if let RuntimeResult::InputCommitted { action_id } = success.result {
-            self.post_input_action_id = Some(action_id);
-            self.diagnostic_physical = Some(action_id);
-            if self.configuration_records > 0 && !self.configuration_input_recorded {
-                self.record_configuration(
-                    EffectiveConfigurationFacts::Input {
-                        selection: selection.map(|selection| EffectiveInputSelection {
-                            backend: selection.backend.as_str().to_owned(),
-                            serial: selection.serial,
-                        }),
-                    },
-                    self.last_frame_id,
-                    Some(action_id),
-                    success.terminal.map(|terminal| terminal.sequence),
-                )?;
-                self.configuration_input_recorded = true;
+        let input_started = self.task_timing.begin_boundary(
+            actingcommand_contract::TaskTimingBoundary::Input,
+            self.timing_identity(actingcommand_contract::TaskTimingBoundary::Input),
+        );
+        let result = (|| {
+            self.ensure_active()?;
+            let (success, selection) = self.host.input(
+                self.request,
+                self.token,
+                &action,
+                self.connection_id,
+                self.execution_provenance,
+                RuntimeInputContext {
+                    run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+                    source_step_action_id: self.input_step_action_id.take(),
+                    before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
+                },
+            )?;
+            self.ensure_active()?;
+            if let RuntimeResult::InputCommitted { action_id } = success.result {
+                self.post_input_action_id = Some(action_id);
+                self.diagnostic_physical = Some(action_id);
+                if self.configuration_records > 0 && !self.configuration_input_recorded {
+                    self.record_configuration(
+                        EffectiveConfigurationFacts::Input {
+                            selection: selection.map(|selection| EffectiveInputSelection {
+                                backend: selection.backend.as_str().to_owned(),
+                                serial: selection.serial,
+                            }),
+                        },
+                        self.last_frame_id,
+                        Some(action_id),
+                        success.terminal.map(|terminal| terminal.sequence),
+                    )?;
+                    self.configuration_input_recorded = true;
+                }
+                Ok(())
+            } else {
+                Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "contained_task_input_result_invalid",
+                        "run_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ))
             }
-            Ok(())
-        } else {
-            Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "contained_task_input_result_invalid",
-                    "run_contained_task",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ))
-        }
+        })();
+        self.task_timing
+            .finish_boundary(input_started, result.is_ok());
+        result
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -15622,109 +14824,129 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 })
             }
             ContainedTaskTrace::CaptureCompleted { width, height } => {
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let input_action_id = self.last_capture_input_action_id.take();
-                let links = RuntimeRunLinks::new(self.task_id, self.run_id)
-                    .apply(self.host.events.request_links(
-                        self.request,
-                        Some(self.token.instance_id()),
-                        Some(self.token.lease_id()),
-                        input_action_id,
-                    ))
-                    .with_frame_id(frame_id);
-                let (source, module) = self.capture_origin();
-                self.host.append_event(
-                    EventSeverity::Info,
-                    source,
-                    module,
-                    EventActor::Runtime,
-                    links.clone(),
-                    CapturePayloadDraft::completed(
-                        EventAction::CaptureObserve,
-                        EffectDisposition::NotPerformed,
-                        width,
-                        height,
-                        AuditInput::new(),
+                let observed = self.task_timing.begin_boundary(
+                    actingcommand_contract::TaskTimingBoundary::CaptureCompletedRecord,
+                    self.timing_identity(
+                        actingcommand_contract::TaskTimingBoundary::CaptureCompletedRecord,
                     ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::EvidenceIndexed {
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )
+                );
+                let result = (|| {
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let input_action_id = self.last_capture_input_action_id.take();
+                    let links = RuntimeRunLinks::new(self.task_id, self.run_id)
+                        .apply(self.host.events.request_links(
+                            self.request,
+                            Some(self.token.instance_id()),
+                            Some(self.token.lease_id()),
+                            input_action_id,
+                        ))
+                        .with_frame_id(frame_id);
+                    let (source, module) = self.capture_origin();
+                    self.host.append_event(
+                        EventSeverity::Info,
+                        source,
+                        module,
+                        EventActor::Runtime,
+                        links.clone(),
+                        CapturePayloadDraft::completed(
+                            EventAction::CaptureObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            AuditInput::new(),
+                        ),
+                    )?;
+                    self.append_task(
+                        EventSeverity::Info,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::EvidenceIndexed {
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    )
+                })();
+                self.task_timing.finish_boundary(observed, result.is_ok());
+                result
             }
             ContainedTaskTrace::RecognitionStarted {
                 candidate_pages,
                 width,
                 height,
             } => {
-                if self.current_recognition_id.is_some() {
-                    return Err(RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
-                            "contained_task_recognition_state_invalid",
+                let observed = self.task_timing.begin_boundary(
+                    actingcommand_contract::TaskTimingBoundary::RecognitionStartedRecord,
+                    self.timing_identity(
+                        actingcommand_contract::TaskTimingBoundary::RecognitionStartedRecord,
+                    ),
+                );
+                let result = (|| {
+                    if self.current_recognition_id.is_some() {
+                        return Err(RequestFailure::poison_without_terminal(
+                            RuntimeHostError::fatal(
+                                "contained_task_recognition_state_invalid",
+                                "run_contained_task",
+                                RuntimeErrorCode::RuntimeFatal,
+                            ),
+                        ));
+                    }
+                    self.capture_evidence
+                        .pin_last(PinnedFrameReason::RecognitionEvidence)?;
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
                             "run_contained_task",
                             RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let recognition_id =
+                        self.host
+                            .events
+                            .issuer()
+                            .mint_recognition_id()
+                            .map_err(|_| {
+                                RequestFailure::poison_without_terminal(runtime_identifier_error())
+                            })?;
+                    let links = self
+                        .links()
+                        .with_frame_id(frame_id)
+                        .with_recognition_id(recognition_id);
+                    self.host.append_event(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links.clone(),
+                        RecognitionPayloadDraft::requested(
+                            EventAction::RecognitionObserve,
+                            AuditInput::new(),
                         ),
-                    ));
-                }
-                self.capture_evidence
-                    .pin_last(PinnedFrameReason::RecognitionEvidence)?;
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let recognition_id =
-                    self.host
-                        .events
-                        .issuer()
-                        .mint_recognition_id()
-                        .map_err(|_| {
-                            RequestFailure::poison_without_terminal(runtime_identifier_error())
-                        })?;
-                let links = self
-                    .links()
-                    .with_frame_id(frame_id)
-                    .with_recognition_id(recognition_id);
-                self.host.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::requested(
-                        EventAction::RecognitionObserve,
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::RecognitionStarted {
-                            candidate_pages,
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.current_recognition_id = Some(recognition_id);
-                Ok(())
+                    )?;
+                    self.append_task(
+                        EventSeverity::Info,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::RecognitionStarted {
+                                candidate_pages,
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    )?;
+                    self.current_recognition_id = Some(recognition_id);
+                    Ok(())
+                })();
+                self.task_timing.finish_boundary(observed, result.is_ok());
+                result
             }
             ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
@@ -15732,58 +14954,100 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 width,
                 height,
             } => {
-                let frame_id = self.last_frame_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_frame_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let recognition_id = self.current_recognition_id.ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "contained_task_recognition_identity_missing",
-                        "run_contained_task",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                })?;
-                let links = self
-                    .links()
-                    .with_frame_id(frame_id)
-                    .with_recognition_id(recognition_id);
-                self.host.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::completed(
-                        EventAction::RecognitionObserve,
-                        EffectDisposition::NotPerformed,
-                        width,
-                        height,
-                        if page_label.is_some() {
-                            RecognitionVerdict::PageMatched
+                let observed_frame_id = self.last_frame_id.map(|id| *id.transport());
+                let observed_recognition_id = self.current_recognition_id.map(|id| *id.transport());
+                let started = Instant::now();
+                let budget_before = self.task_timing.budget_at(started);
+                let result = (|| {
+                    let frame_id = self.last_frame_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_frame_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let recognition_id = self.current_recognition_id.ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "contained_task_recognition_identity_missing",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                    let links = self
+                        .links()
+                        .with_frame_id(frame_id)
+                        .with_recognition_id(recognition_id);
+                    let identity = self.timing_identity(
+                        actingcommand_contract::TaskTimingBoundary::RecognitionPayloadAppend,
+                    );
+                    let append_started = self
+                        .task_timing
+                        .begin_append(task_timing::TaskAppend::RecognitionPayload, identity);
+                    let (appended, observation) = self.host.append_event_observed(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links.clone(),
+                        RecognitionPayloadDraft::completed(
+                            EventAction::RecognitionObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            if page_label.is_some() {
+                                RecognitionVerdict::PageMatched
+                            } else {
+                                RecognitionVerdict::PageUnmatched
+                            },
+                            AuditInput::new(),
+                        ),
+                    );
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
+                    let append_started = self
+                        .task_timing
+                        .begin_append(task_timing::TaskAppend::RecognitionTask, identity);
+                    let (appended, observation) = self.host.append_event_observed(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                        links,
+                        TaskPayloadDraft::semantic(
+                            TaskSemanticFact::RecognitionCompleted {
+                                candidate_pages,
+                                matched_page: page_label,
+                                frame_width: width,
+                                frame_height: height,
+                            },
+                            AuditInput::new(),
+                        ),
+                    );
+                    let appended = appended.map(|_| ());
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
+                    self.current_recognition_id = None;
+                    Ok(())
+                })();
+                let elapsed_us =
+                    actingcommand_execution_kernel::observe_instant_span(started, Instant::now());
+                self.task_timing.recognition_completed_record(
+                    actingcommand_contract::TaskTimingSample {
+                        elapsed_us,
+                        budget_before,
+                        result: if result.is_ok() {
+                            actingcommand_contract::TaskTimingResult::Ok
                         } else {
-                            RecognitionVerdict::PageUnmatched
+                            actingcommand_contract::TaskTimingResult::Err
                         },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.append_task(
-                    EventSeverity::Info,
-                    links,
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::RecognitionCompleted {
-                            candidate_pages,
-                            matched_page: page_label,
-                            frame_width: width,
-                            frame_height: height,
-                        },
-                        AuditInput::new(),
-                    ),
-                )?;
-                self.current_recognition_id = None;
-                Ok(())
+                        record_index: None,
+                        frame_id: observed_frame_id,
+                        recognition_id: observed_recognition_id,
+                    },
+                );
+                result
             }
             ContainedTaskTrace::StepStarted {
                 step_index,
@@ -15869,8 +15133,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             } => {
                 let action_id =
                     contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
-                self.append_task(
+                let identity = task_timing::BoundaryIdentity {
+                    step_index: Some(step_index),
+                    action_id: Some(*action_id.transport()),
+                    ..self.timing_identity(TaskTimingBoundary::EffectCompletedAppend)
+                };
+                let append_started = self
+                    .task_timing
+                    .begin_append(task_timing::TaskAppend::EffectCompleted, identity);
+                let (appended, observation) = self.host.append_event_observed(
                     EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
                     self.links().with_action_id(action_id),
                     TaskPayloadDraft::semantic(
                         TaskSemanticFact::EffectCompleted {
@@ -15879,7 +15154,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )?;
+                );
+                let appended = appended.map(|_| ());
+                self.task_timing
+                    .finish_append(append_started, appended.is_ok(), observation);
+                appended?;
                 self.capture_evidence.effect_completed()
             }
             ContainedTaskTrace::StepFinished {
@@ -16370,6 +15649,63 @@ struct ConnectionFailureContext {
     stage: Option<ConnectionFailureStage>,
     request_decoded: bool,
     links: EventLinksDraft,
+    timing: ConnectionTiming,
+}
+
+#[derive(Default, serde::Serialize)]
+struct ConnectionTiming {
+    receive: ConnectionCallTiming,
+    validated_dispatch: ConnectionCallTiming,
+    policy_identity_projection: ConnectionCallTiming,
+    receipt_write: ConnectionCallTiming,
+}
+
+#[derive(serde::Serialize)]
+struct ConnectionCallTiming {
+    status: TaskTimingObservationState,
+    elapsed_us: Option<ObservedMicroseconds>,
+    result: Option<TaskTimingResult>,
+    #[serde(skip)]
+    started: Option<Instant>,
+}
+
+impl Default for ConnectionCallTiming {
+    fn default() -> Self {
+        Self {
+            status: TaskTimingObservationState::Unobserved,
+            elapsed_us: None,
+            result: None,
+            started: None,
+        }
+    }
+}
+
+impl ConnectionCallTiming {
+    fn begin(&mut self) {
+        self.started = Some(Instant::now());
+        self.status = TaskTimingObservationState::Incomplete {
+            reason: TimingObservationIssue::CallIncomplete,
+        };
+    }
+
+    fn finish(&mut self, succeeded: bool) {
+        let ended = Instant::now();
+        self.result = Some(if succeeded {
+            TaskTimingResult::Ok
+        } else {
+            TaskTimingResult::Err
+        });
+        if let Some(started) = self.started {
+            let elapsed = actingcommand_execution_kernel::observe_instant_span(started, ended);
+            self.status = match elapsed {
+                ObservedMicroseconds::Measured { .. } => TaskTimingObservationState::Observed,
+                ObservedMicroseconds::Unavailable { reason } => {
+                    TaskTimingObservationState::Incomplete { reason }
+                }
+            };
+            self.elapsed_us = Some(elapsed);
+        }
+    }
 }
 
 fn connection_boundary(
@@ -16385,6 +15721,7 @@ fn connection_boundary(
         stage: None,
         request_decoded: false,
         links: EventLinksDraft::default(),
+        timing: ConnectionTiming::default(),
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         connection_loop(
@@ -16504,7 +15841,11 @@ fn connection_loop(
         context.stage = Some(ConnectionFailureStage::RequestRead);
         context.request_decoded = false;
         context.links = EventLinksDraft::default();
-        let frame = match read_frame(stream, maximum_frame_bytes) {
+        context.timing = ConnectionTiming::default();
+        context.timing.receive.begin();
+        let received = read_frame(stream, maximum_frame_bytes);
+        context.timing.receive.finish(received.is_ok());
+        let frame = match received {
             Ok(FrameRead::Data(frame)) => frame,
             Ok(FrameRead::Idle) => continue,
             Ok(FrameRead::Closed) => {
@@ -16567,7 +15908,7 @@ fn connection_loop(
             Ok(None) => {
                 context.stage = Some(ConnectionFailureStage::Dispatch);
                 shared
-                    .process_request(&request, connection_id)
+                    .process_request_observed(&request, connection_id, Some(&mut context.timing))
                     .inspect(|receipt| {
                         cache.insert(request.clone(), receipt.clone());
                     })
@@ -16611,7 +15952,10 @@ fn connection_loop(
             &receipt,
         );
         context.stage = Some(ConnectionFailureStage::ReceiptWrite);
-        match write_frame(stream, &receipt, maximum_frame_bytes) {
+        context.timing.receipt_write.begin();
+        let written = write_frame(stream, &receipt, maximum_frame_bytes);
+        context.timing.receipt_write.finish(written.is_ok());
+        match written {
             Ok(()) => {
                 #[cfg(feature = "test-observation")]
                 crate::test_observation::emit_receipt(
@@ -16805,64 +16149,6 @@ fn remove_temporary_runtime_info(path: &Path) -> RuntimeHostResult<()> {
             RuntimeErrorCode::RuntimeFatal,
         )),
     }
-}
-
-fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<PackageDebugSummary> {
-    let path = Path::new(request.package_path());
-    if !path.is_absolute() {
-        return Err(debug_package_error("debug_package_path_not_absolute"));
-    }
-    let instance = ContainmentInstanceId::new("runtime-debug-package")
-        .map_err(|_| debug_package_error("debug_package_instance_invalid"))?;
-    let mut containment = Containment::new();
-    let bundle = if let Some(hash) = request.expected_sha256().legacy_sha256() {
-        let file =
-            fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
-        if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
-            return Err(debug_package_error("debug_package_file_invalid"));
-        }
-        let mut bytes = Vec::new();
-        file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| debug_package_error("debug_package_read_failed"))?;
-        if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-            return Err(debug_package_error("debug_package_file_too_large"));
-        }
-        let expected = Sha256Hash::parse_hex(hash)
-            .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
-        containment
-            .load(&instance, &bytes, &expected)
-            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
-    } else {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
-            ))
-            .ok_or_else(|| debug_package_error("debug_package_deadline_overflow"))?;
-        containment
-            .load_path(&instance, path, request.expected_sha256(), false, deadline)
-            .map_err(|_| debug_package_error("debug_package_containment_failed"))?
-    };
-    PackageDebugSummary::new(
-        bundle.task_id().as_str(),
-        bundle.package_ref().clone(),
-        match bundle.layout() {
-            PackageLayout::Lab => PackageDebugLayout::Lab,
-            PackageLayout::Module => PackageDebugLayout::Module,
-        },
-        u32::try_from(bundle.entry_count())
-            .map_err(|_| debug_package_error("debug_package_entry_count_overflow"))?,
-        bundle.resident_bytes(),
-        u32::try_from(bundle.task_count())
-            .map_err(|_| debug_package_error("debug_package_task_count_overflow"))?,
-        bundle.recognition_pack_path().is_some(),
-        bundle.pages_path().is_some(),
-        bundle.navigation_path().is_some(),
-    )
-    .map_err(|_| debug_package_error("debug_package_summary_invalid"))
 }
 
 fn prepare_contained_task(
@@ -17256,10 +16542,6 @@ fn evidence_request_error(code: &'static str) -> RuntimeHostError {
         "export_runtime_evidence",
         RuntimeErrorCode::EvidenceExportFailed,
     )
-}
-
-fn debug_package_error(code: &'static str) -> RuntimeHostError {
-    RuntimeHostError::request(code, "debug_package", RuntimeErrorCode::PackageInvalid)
 }
 
 fn runtime_error_receipt(

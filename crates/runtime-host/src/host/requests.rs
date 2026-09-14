@@ -3,10 +3,20 @@
 use super::*;
 
 impl HostShared {
+    #[cfg(test)]
     pub(super) fn process_request(
         &self,
         request: &RuntimeRequest,
         connection_id: ConnectionId,
+    ) -> RuntimeHostResult<RuntimeReceipt> {
+        self.process_request_observed(request, connection_id, None)
+    }
+
+    pub(super) fn process_request_observed(
+        &self,
+        request: &RuntimeRequest,
+        connection_id: ConnectionId,
+        mut timing: Option<&mut ConnectionTiming>,
     ) -> RuntimeHostResult<RuntimeReceipt> {
         if let Some(error) = self.fatal.current()? {
             return runtime_error_receipt(
@@ -45,7 +55,15 @@ impl HostShared {
                 }
             }
         };
-        match self.process_validated(request, &validated, connection_id) {
+        if let Some(timing) = timing.as_deref_mut() {
+            timing.validated_dispatch.begin();
+        }
+        let dispatched =
+            self.process_validated(request, &validated, connection_id, timing.as_deref_mut());
+        if let Some(timing) = timing {
+            timing.validated_dispatch.finish(dispatched.is_ok());
+        }
+        match dispatched {
             Ok(success) => success.into_receipt(request),
             Err(mut failure) => {
                 if failure.poison_runtime {
@@ -94,6 +112,7 @@ impl HostShared {
         request: &RuntimeRequest,
         validated: &ValidatedRuntimeRequest<'_>,
         connection_id: ConnectionId,
+        timing: Option<&mut ConnectionTiming>,
     ) -> Result<OperationSuccess, RequestFailure> {
         match request.operation() {
             RuntimeOperation::RequestShutdown { target } => {
@@ -112,7 +131,16 @@ impl HostShared {
             }
             RuntimeOperation::ProjectPolicyInputIdentity {
                 as_of_ledger_position,
-            } => self.project_policy_input_identity(*as_of_ledger_position),
+            } => {
+                if let Some(timing) = timing {
+                    timing.policy_identity_projection.begin();
+                    let projected = self.project_policy_input_identity(*as_of_ledger_position);
+                    timing.policy_identity_projection.finish(projected.is_ok());
+                    projected
+                } else {
+                    self.project_policy_input_identity(*as_of_ledger_position)
+                }
+            }
             RuntimeOperation::MonitorStatus => self.monitor_status(validated),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,

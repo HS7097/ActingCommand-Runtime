@@ -1,7 +1,8 @@
 # Task diagnostic stream
 
 The existing task terminal may carry `task_timing`, a bounded observation of
-`recognition_evaluate` and `diagnostic_record_write`. Each has separate preflight,
+`recognition_evaluate`, `diagnostic_record_write`, `capture_recognition` and
+`recognition_completed_record`. Each has separate preflight,
 execution and finalization counts, error counts, accumulated/maximum microseconds
 and a last sample with its actual frame/recognition or record index. The clock is
 the current process's `std::time::Instant`. These spans do not share the origin of
@@ -27,6 +28,176 @@ lifecycle record can carry the snapshot when diagnostics are aborted; the
 original deduplication and LedgerFailure prohibition are unchanged. Missing
 terminal/failure evidence, interrupted execution and older records do not supply
 timing observations. No extra event or artifact write is introduced.
+
+`capture_recognition` measures the original Host recognition-state handling and
+CapturePipeline recognition call through its returned Result, including early
+returns and errors. `recognition_completed_record` measures only the original
+RecognitionCompleted arm, including its ordered recognition and task Ledger
+commits; the preceding active check and trace offset are outside that span.
+Both freeze the original frame/recognition identities before the call, record
+the original Result with record_index absent, and update only the fixed in-memory
+Observer summaries. Identity clearing still follows both successful commits.
+Unentered summaries are omitted and decode as Unobserved; observed zero and
+Incomplete remain explicit. The existing snapshot and terminal carry the last
+completed calls without an extra event or query.
+
+The optional task_failure.check_position is postcondition_before_capture or
+postcondition_after_capture only for Task/Postcondition timing failures. It
+identifies the original await_postcondition deadline check that returned the
+error. A missing position is unobserved. The original scope, stage, elapsed/limit
+values, checks and sleeps are unchanged; entry recovery forwards the same error
+position while retaining its original observation phase and budget origin.
+
+Each phase may also carry a fixed `boundaries` object. `capture_page` covers the
+original kernel call from before capture through page/scene/OCR result handling,
+including returned errors. `capture` covers the complete Host capture call;
+`capture_active_pressure` covers its initial active and pressure checks,
+`capture_backend` the original retained backend call, and `capture_material` the
+successful backend arm through its returned frame or error (FrameStore, PNG,
+material persistence, pinning, pressure and configuration handling).
+`capture_completed_record` and `recognition_started_record` cover their original
+Host arms. `input` covers the complete original Host input call. `post_input_wait`,
+`retry_wait`, `page_recognition_wait` and `postcondition_wait` cover only their
+original wait calls, with the original duration expressions and results.
+
+`effect_completed_record` covers the complete original Kernel record call,
+including Host active/trace handling and the EffectCompleted arm. Its original
+Result and Task budgets are retained before error propagation. `input_to_effect_completed`
+starts at the existing input observation's end, before its aggregation, and ends
+at that record return. `effect_completed_to_post_input_wait` starts at the same
+record return and ends at the original post_input_wait start; it includes the
+original operation-state update and observation/entry preparation. The original
+input and wait endpoints are unchanged. Two fixed Observer markers require the
+same task, phase, timing context, step, action and known frame/recognition. They
+are consumed once and cleared on a new input, context or phase. An unmatched or
+unclosed marker is Incomplete in the existing snapshot; it never borrows a later
+action's endpoint. A returned record error completes the first bridge as Err;
+it does not start the second bridge.
+
+`recognition_payload_append` and `recognition_task_append` retain the two ordered
+RecognitionCompleted commits separately. `effect_completed_append` retains the
+single original TaskEffectCompleted commit, before the unchanged capture-evidence
+transition. Their fixed `recognition_payload_stages`, `recognition_task_stages`
+and `effect_completed_stages` contain `fact_gate` (original lock acquisition),
+`draft` (construction and sanitization), `writer_response` (the original Ledger
+call), `device_diagnostics`, `fact_sync` (including required invalidation), and
+`pipeline` (the original performance callback after dropping the Fact gate).
+An original error completes the entered observations before it propagates;
+later, unentered stages remain Unobserved.
+
+The same Ledger append reply transports process-local endpoints for `ledger_queue`
+(immediately before sending through writer receipt), `ledger_persistence` (writer
+receipt through backend persist return, including validation/preparation), and
+`ledger_publication` (successful backend return through retention/index/event/
+statistics publication and original reply preparation). `ledger_durable` directly
+covers only that backend persist call inside persistence. An earlier store error
+ends persistence at store return; publication remains unentered. Channel creation,
+sender setup, response send/wakeup tails and post-reply delivery are outside these
+inner spans. No cumulative statistics subtraction supplies a missing endpoint.
+Missing same-request reply observations stay absent; partial endpoints/results
+remain Incomplete, with unknown duration/result represented explicitly.
+
+`ledger_send` covers the same original send_command call, after command construction,
+with its own original Result. Queue retains its original endpoints. Each append
+stage family also retains one optional `writer` snapshot from that same reply,
+replaced on every append; a missing reply never reuses the previous append's data.
+It includes the send return and writer receipt relative to this send's start,
+and the writer's immediately preceding completed command kind, processing span,
+reply-send result and after-reply span. Previous processing starts when the original
+writer receive returns and ends after its original match arm, including reply,
+tail work and local drops. After-reply starts after the original send result and
+ends at that same arm end. Its Ok means the original tail returned, while the
+separate reply result describes response.send; neither proves subscriber delivery.
+Previous work has no current-task identifiers, budgets or aggregate attribution.
+
+Endpoint direction and checked microsecond distance are relative to the original
+same-append send start. Sub-microsecond distances may round to zero without losing
+their before/after direction. `receive_order` preserves receipt before, at or
+after send return; there is no fabricated negative or zero wait. The writer's
+`previous_work_relation` states completed by send start, overlapping send, or
+starting at/after send return. Unobserved/Incomplete remain explicit. These direct
+process intervals include thread scheduling. After-reply is nested in processing;
+send overlaps queue. A single predecessor cannot establish queue depth, complete
+waiting history, CPU/SQL cost or the cause of an uncovered gap. No query, extra
+command, event, diagnostic channel or timing-history buffer supplies these fields.
+
+The optional `writer.previous_project_view` carries the preceding SQLite
+ProjectViewPage command's own fixed internal observations. Older records and
+other preceding commands/backends omit it. These distinguish original database
+connection acquisition from work performed after acquiring its guard: Deferred
+transaction establishment, snapshot reading, record and fixed-prefix verification,
+sequence selection, page/context/profile projection, and original transaction
+close operations. Each stage uses its own original endpoints and Result; nested
+transaction and inner spans are not added or subtracted to derive another stage.
+An automatic transaction drop has no observed rollback return. Missing and
+incomplete stages retain their own state without replacing the original query
+Result or reusing an earlier command's stages.
+
+The fixed stages are `admission` (original bounds and initial budget check),
+`connection`, `with_connection`, `begin_transaction`, `read_snapshot`,
+`verify_snapshot`, `prepare_events`, `select_sequences`, `project_page`, `commit`
+and `rollback`. `with_connection` ends before the original connection guard drops.
+Verification includes the original prefix lookup and fixed boundary checks;
+preparation consumes metadata authenticated in this same read transaction and
+retains its original per-item budget checks and retention annotation; page projection
+includes index creation and its original final budget check. Only the original
+explicit transaction calls can complete commit/rollback observations.
+
+The same command's scale observations use already available snapshot byte and
+row counts, original bounds and returned sizes. Unknown or overflowing values
+remain explicit; observation performs no extra query, traversal, serialization
+or hash pass. Stages and scale belong to that preceding writer command, without
+current-append task/frame identity or query/record content. These remain in the
+existing TaskTiming snapshot/terminal or permitted lifecycle carrier, with no
+additional event, diagnostic channel or command history. The original complete
+snapshot, excluded-row integrity checks, physical read transaction, selection,
+projection, replies and all limits retain their original behavior.
+
+Scale fields retain request/selection and original event/byte/recovery-context
+limits; raw bytes and event/link/artifact row counts; verified/prepared/selected
+counts; and returned event/recovery-group counts. Prepared events may describe
+completed work before a failure. Returned counts are observed only after the
+whole SQLite query returns Ok. Raw bytes are snapshot input size, not encoded
+response size; no extra serialization supplies a return-byte count. Checked count
+conversion failure maps to Unavailable/CountOverflow. The optional `read_budget`
+retains the existing byte/event limits and its deadline through the same checked
+relative endpoint mapping. Null means that original optional budget is absent;
+it does not grant a new execution deadline or alter a query Result.
+
+Boundary samples have no record index. `last_call` adds the same call's budget
+after return and its already known logical step/action. Identity is frozen before
+the original clearing; a frame or recognition identity not yet issued is null.
+The two append samples retain their common original frame/recognition identity.
+All summaries use checked counters and microseconds in constant space. Parent
+and child spans overlap and must not be added together.
+
+`first_observed_expiry`, when present, retains the first completed interval
+observed with a nonexpired Task budget at entry and an expired Task budget at
+return. Completed inner append intervals are considered before their enclosing
+append; later outer observations do not replace the first recorded interval.
+This identifies a directly covered interval, not the first actual expiry instant
+or a cause inferred across unmeasured gaps. Already-expired entry, entry-recovery
+budgets, missing endpoints and incomplete aggregates cannot establish it. The
+original four summaries retain their original endpoints and meaning.
+
+An existing `runtime_connection` failure detail may contain fixed process-instant
+`receive`, `validated_dispatch`, `policy_identity_projection` and `receipt_write`
+observations, plus the current owner epoch and Runtime PID. These describe the
+original read-frame, validated operation, projection return and write-frame
+results; dispatch excludes receipt construction. They reset for each original
+read, including idle reads, and are emitted only at that existing legal failure
+point. A cached request has no observed dispatch/projection. Existing failure
+deduplication or a Ledger failure can prevent that carrier; successful requests
+and client timeouts alone create no new server fact. No server span proves that
+the client received a receipt.
+
+The existing Planning process failure output serializes only the original
+header-I/O request/correlation/expected-owner/PID and native I/O kind/code. Its
+already opened snapshot retains the original RuntimeFailed and lifecycle event
+selection, with per-event request/correlation/known-owner comparisons and counts.
+Null means unavailable, false means an observed mismatch. Zero matches within
+those selected kinds cannot establish server progress, shutdown or full-event
+coverage. No additional Runtime query, connection or request supplies evidence.
 
 The optional `diagnostic_record_write.subphases` contains exactly `encode`,
 `framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the

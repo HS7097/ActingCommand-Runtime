@@ -32,16 +32,34 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
       - name: Test
+        shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           cargo build --locked -p actingledger --bin actingledger
           if ($LASTEXITCODE -ne 0) {
             throw "actingledger build failed with exit code $LASTEXITCODE"
           }
           $env:CARGO_BIN_EXE_actingledger = (Resolve-Path -LiteralPath 'target/debug/actingledger.exe' -ErrorAction Stop).Path
-          cargo test --workspace --no-fail-fast
+
+          cargo test --workspace --exclude actingcommand-actingd --no-fail-fast
+          $workspaceExitCode = $LASTEXITCODE
+          Write-Host "Workspace excluding actingd exit code: $workspaceExitCode"
+
+          cargo test --workspace --bin actingcommand-actingd --no-fail-fast
+          $actingdExitCode = $LASTEXITCODE
+          Write-Host "actingd binary tests exit code: $actingdExitCode"
+
+          cargo --config 'profile.test.opt-level=3' --config 'profile.test.debug-assertions=true' --config 'profile.test.overflow-checks=true' --config 'profile.test.debug=2' test --workspace --test process --no-fail-fast -- --test-threads=1
+          $processExitCode = $LASTEXITCODE
+          Write-Host "process integration tests exit code: $processExitCode"
+
+          if ($workspaceExitCode -ne 0 -or $actingdExitCode -ne 0 -or $processExitCode -ne 0) {
+            exit 1
+          }
+          exit 0
       - name: Remove trybuild cache artifacts
         if: always()
         shell: pwsh
