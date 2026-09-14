@@ -262,6 +262,7 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
         "crates/policy",
         "crates/runtime-database",
         "crates/runtime-state",
+        "crates/selection-policy",
     ] {
         assert_eq!(
             roots.get(Path::new(required_root)),
@@ -1591,6 +1592,85 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
             assert!(
                 !source.contains(forbidden),
                 "{} contains forbidden control-plane token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn c3b_selection_policy_is_a_pure_decision_crate() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let selection_policy = packages
+        .iter()
+        .find(|package| package["name"] == "actingcommand-selection-policy")
+        .expect("selection-policy package");
+    let mut dependency_names = selection_policy["dependencies"]
+        .as_array()
+        .expect("selection-policy dependencies")
+        .iter()
+        .filter_map(|dependency| dependency["name"].as_str())
+        .collect::<Vec<_>>();
+    dependency_names.sort_unstable();
+    dependency_names.dedup();
+    assert_eq!(
+        dependency_names,
+        ["actingcommand-contract", "serde", "serde_json", "sha2"],
+        "selection-policy takes exactly the pure decision dependencies"
+    );
+
+    let mut sources = Vec::new();
+    collect_rust_files(&root.join("crates/selection-policy/src"), &mut sources);
+    assert!(
+        !sources.is_empty(),
+        "crates/selection-policy contains no Rust source files"
+    );
+    let bin_root = root.join("crates/selection-policy/src/bin");
+    for path in sources {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        // The crate's own purity test names these tokens, so only production source counts.
+        let source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source")
+            .to_owned();
+        for forbidden in [
+            "TcpStream",
+            "GlobalLedger",
+            "LeaseToken",
+            "SeedScheduler",
+            "RuntimeClient",
+            "actingcommand_device",
+            "actingcommand_lab",
+            "actingcommand_ledger",
+            "actingcommand_runtime_host",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden decision-crate token {forbidden}",
+                path.display()
+            );
+        }
+        // The offline debugging binary is the crate's declared IO shell; the library half
+        // reads no clock and no file, and the walk covers every module it gains later.
+        if path.starts_with(&bin_root) {
+            continue;
+        }
+        for forbidden in [
+            "std::fs",
+            "std::net",
+            "std::process",
+            "std::thread::sleep",
+            "SystemTime::now",
+            "Instant::now",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden decision-crate token {forbidden}",
                 path.display()
             );
         }

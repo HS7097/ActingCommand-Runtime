@@ -1,0 +1,88 @@
+{
+  "schema_version": "actingcommand.selection-policy.v1",
+  "policy_id": "policy-a",
+  "applies_to": {
+    "candidate_layout_id": "layout-a",
+    "outcome_keys": {
+      "selected": "outcome-selected",
+      "empty": "outcome-empty",
+      "insufficient": "outcome-insufficient",
+      "ambiguous": "outcome-ambiguous",
+      "unknown": "outcome-unknown"
+    }
+  },
+  "fields": [
+    { "name": "value_milli", "value_type": { "type": "integer" } },
+    { "name": "ready", "value_type": { "type": "boolean" } },
+    {
+      "name": "grade",
+      "value_type": {
+        "type": "enum_string",
+        "allowed": ["grade-low", "grade-mid", "grade-high"]
+      }
+    }
+  ],
+  "facts": [
+    {
+      "fact_key": "activity-a.slots_free",
+      "value_type": { "type": "integer" },
+      "max_age_ms": 3600000,
+      "minimum_confidence_milli": 500
+    }
+  ],
+  "gates": [
+    {
+      "gate_id": "gate-ready",
+      "predicate": {
+        "kind": "boolean_equals",
+        "value": { "source": "field", "field": "ready" },
+        "expected": true
+      },
+      "on_unknown": { "kind": "drop_candidate" }
+    }
+  ],
+  "scoring": [
+    {
+      "term_id": "term-value",
+      "value": { "source": "field", "field": "value_milli" },
+      "transform": { "kind": "identity" },
+      "weight_milli": 1000,
+      "on_unknown": { "kind": "drop_candidate" }
+    },
+    {
+      "term_id": "term-grade",
+      "value": { "source": "field", "field": "grade" },
+      "transform": {
+        "kind": "lookup",
+        "entries": [
+          { "key": { "type": "string", "value": "grade-low" }, "value_milli": 0 },
+          { "key": { "type": "string", "value": "grade-mid" }, "value_milli": 500 },
+          { "key": { "type": "string", "value": "grade-high" }, "value_milli": 1500 }
+        ]
+      },
+      "weight_milli": 2000,
+      "on_unknown": { "kind": "substitute_milli", "value_milli": 0 }
+    },
+    {
+      "term_id": "term-capacity",
+      "value": { "source": "fact", "fact_key": "activity-a.slots_free" },
+      "transform": {
+        "kind": "threshold",
+        "at_least": 2,
+        "then_milli": 1000,
+        "otherwise_milli": -500
+      },
+      "weight_milli": 1000,
+      "on_unknown": { "kind": "drop_candidate" }
+    }
+  ],
+  "selection": { "mode": "top_k", "required_count": 2 },
+  "tie_break": [
+    {
+      "kind": "value",
+      "value": { "source": "field", "field": "value_milli" },
+      "direction": "highest_first"
+    },
+    { "kind": "candidate_id", "direction": "lowest_first" }
+  ]
+}

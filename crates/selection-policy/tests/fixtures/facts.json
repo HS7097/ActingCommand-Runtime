@@ -1,0 +1,13 @@
+{
+  "snapshot_id": "snapshot-a",
+  "snapshot_at_unix_ms": 1000500,
+  "facts": {
+    "activity-a.slots_free": {
+      "state": "published",
+      "value": { "type": "integer", "value": 3 },
+      "published_at_unix_ms": 1000000,
+      "expires_at_unix_ms": 4600000,
+      "confidence_milli": 900
+    }
+  }
+}

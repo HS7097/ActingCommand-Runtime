@@ -29,6 +29,7 @@ members = [
     "crates/runtime-host",
     "crates/runtime-state",
     "crates/scheduler",
+    "crates/selection-policy",
     "crates/vision-ffi",
     "providers/onnxruntime-json",
     "providers/ppocr-onnx-json",
@@ -62,6 +63,7 @@ actingcommand-runtime-database = { path = "crates/runtime-database" }
 actingcommand-runtime-host = { path = "crates/runtime-host" }
 actingcommand-runtime-state = { path = "crates/runtime-state" }
 actingcommand-scheduler = { path = "crates/scheduler" }
+actingcommand-selection-policy = { path = "crates/selection-policy" }
 actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
