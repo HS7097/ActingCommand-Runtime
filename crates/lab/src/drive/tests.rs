@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::ports::DisabledLedger;
+
 use crate::{
     CaptureBackendFactory, ConfigSource, InputBackendAttemptReport, InputBackendFactory,
     InputBackendReport, InputBackendRequest, SemanticInputExecutor, SemanticRequestContext,
@@ -204,7 +204,6 @@ impl Fixture {
                     actions: self.actions.clone(),
                 },
                 capture: DisabledCaptureFactory,
-                ledger: DisabledLedger,
                 clock: FixedClock,
                 config: DisabledConfig,
             },
@@ -362,7 +361,6 @@ struct TestPorts {
     input: DisabledInputFactory,
     semantic_input: RecordingSemanticInput,
     capture: DisabledCaptureFactory,
-    ledger: DisabledLedger,
     clock: FixedClock,
     config: DisabledConfig,
 }
@@ -371,7 +369,6 @@ impl LabPorts for TestPorts {
     type InputFactory = DisabledInputFactory;
     type SemanticInput = RecordingSemanticInput;
     type CaptureFactory = DisabledCaptureFactory;
-    type Ledger = DisabledLedger;
     type Time = FixedClock;
     type Config = DisabledConfig;
 
@@ -385,10 +382,6 @@ impl LabPorts for TestPorts {
 
     fn capture_factory(&self) -> &Self::CaptureFactory {
         &self.capture
-    }
-
-    fn ledger(&mut self) -> &mut Self::Ledger {
-        &mut self.ledger
     }
 
     fn clock(&self) -> &Self::Time {
