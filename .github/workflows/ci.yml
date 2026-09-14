@@ -46,7 +46,7 @@ jobs:
           $actingdExitCode = $LASTEXITCODE
           Write-Host "actingd binary tests exit code: $actingdExitCode"
 
-          cargo test --workspace --test process --no-fail-fast -- --test-threads=1
+          cargo --config 'profile.test.opt-level=3' --config 'profile.test.debug-assertions=true' --config 'profile.test.overflow-checks=true' --config 'profile.test.debug=2' test --workspace --test process --no-fail-fast -- --test-threads=1
           $processExitCode = $LASTEXITCODE
           Write-Host "process integration tests exit code: $processExitCode"
 
