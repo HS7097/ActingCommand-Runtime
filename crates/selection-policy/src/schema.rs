@@ -662,3 +662,141 @@ fn check_transform(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(crate) fn fixture() -> SelectionPolicy {
+        serde_json::from_str(include_str!("../tests/fixtures/policy.json"))
+            .expect("fixture policy decodes")
+    }
+
+    #[test]
+    fn the_fixture_document_validates() {
+        fixture().validate().expect("fixture policy validates");
+    }
+
+    #[test]
+    fn a_foreign_schema_version_is_refused() {
+        let mut policy = fixture();
+        policy.schema_version = "actingcommand.selection-policy.v2".to_owned();
+        let error = policy.validate().expect_err("foreign schema version");
+        assert_eq!(error.code(), SelectionErrorCode::UnsupportedSchemaVersion);
+    }
+
+    #[test]
+    fn an_undeclared_reference_is_a_dangling_reference() {
+        let mut policy = fixture();
+        policy.scoring[0].value = ValueRef::Field {
+            field: "absent".to_owned(),
+        };
+        let error = policy.validate().expect_err("undeclared field");
+        assert_eq!(error.code(), SelectionErrorCode::DanglingReference);
+
+        let mut policy = fixture();
+        policy.scoring[2].value = ValueRef::Fact {
+            fact_key: "absent".to_owned(),
+        };
+        let error = policy.validate().expect_err("undeclared fact");
+        assert_eq!(error.code(), SelectionErrorCode::DanglingReference);
+    }
+
+    #[test]
+    fn a_non_integer_value_needs_a_lookup() {
+        let mut policy = fixture();
+        policy.scoring[1].transform = Transform::Identity;
+        let error = policy.validate().expect_err("identity over a string");
+        assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
+    }
+
+    #[test]
+    fn a_lookup_key_outside_the_value_type_is_refused() {
+        let mut policy = fixture();
+        policy.scoring[1].transform = Transform::Lookup {
+            entries: vec![LookupEntry {
+                key: LookupKey::String("grade-absent".to_owned()),
+                value_milli: 1,
+            }],
+            default_milli: None,
+        };
+        let error = policy.validate().expect_err("key outside the enum");
+        assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
+    }
+
+    #[test]
+    fn repeated_identifiers_are_refused() {
+        let mut policy = fixture();
+        policy.scoring[1].term_id = policy.scoring[0].term_id.clone();
+        let error = policy.validate().expect_err("repeated term_id");
+        assert_eq!(error.code(), SelectionErrorCode::DuplicateId);
+
+        let mut policy = fixture();
+        policy.fields[1].name = policy.fields[0].name.clone();
+        let error = policy.validate().expect_err("repeated field name");
+        assert_eq!(error.code(), SelectionErrorCode::DuplicateId);
+    }
+
+    #[test]
+    fn exactly_one_pins_its_required_count_and_top_k_needs_one() {
+        let mut policy = fixture();
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::ExactlyOne,
+            required_count: 2,
+        };
+        let error = policy.validate().expect_err("exactly_one with two");
+        assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
+
+        let mut policy = fixture();
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::TopK,
+            required_count: 0,
+        };
+        let error = policy.validate().expect_err("top_k with zero");
+        assert_eq!(error.code(), SelectionErrorCode::MissingRequiredField);
+    }
+
+    #[test]
+    fn declared_limits_are_enforced() {
+        let mut policy = fixture();
+        let term = policy.scoring[0].clone();
+        policy.scoring = (0..=MAX_SCORING_TERMS)
+            .map(|index| {
+                let mut term = term.clone();
+                term.term_id = format!("term-{index}");
+                term
+            })
+            .collect();
+        let error = policy.validate().expect_err("too many terms");
+        assert_eq!(error.code(), SelectionErrorCode::LimitExceeded);
+
+        let mut policy = fixture();
+        let mut nested = policy.gates[0].predicate.clone();
+        for _ in 0..MAX_PREDICATE_DEPTH {
+            nested = Predicate::Not {
+                of: Box::new(nested),
+            };
+        }
+        policy.gates[0].predicate = nested;
+        let error = policy.validate().expect_err("predicate too deep");
+        assert_eq!(error.code(), SelectionErrorCode::LimitExceeded);
+    }
+
+    #[test]
+    fn a_zero_freshness_bound_is_refused() {
+        let mut policy = fixture();
+        policy.facts[0].max_age_ms = 0;
+        let error = policy.validate().expect_err("zero max_age_ms");
+        assert_eq!(error.code(), SelectionErrorCode::MissingRequiredField);
+    }
+
+    #[test]
+    fn an_unknown_document_field_is_refused_on_decode() {
+        let source = include_str!("../tests/fixtures/policy.json").replacen(
+            "\"policy_id\"",
+            "\"unexpected\": 1,\n  \"policy_id\"",
+            1,
+        );
+        serde_json::from_str::<SelectionPolicy>(&source).expect_err("unknown field");
+    }
+}

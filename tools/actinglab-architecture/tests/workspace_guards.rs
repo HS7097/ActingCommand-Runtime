@@ -1631,6 +1631,12 @@ fn c3b_selection_policy_is_a_pure_decision_crate() {
     for path in sources {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        // The crate's own purity test names these tokens, so only production source counts.
+        let source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source")
+            .to_owned();
         for forbidden in [
             "TcpStream",
             "GlobalLedger",

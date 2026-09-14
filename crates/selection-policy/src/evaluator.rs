@@ -797,3 +797,482 @@ fn compare_keys(left: &Ranked, right: &Ranked) -> Ordering {
 fn tied(left: &Ranked, right: &Ranked) -> bool {
     left.score_milli == right.score_milli && compare_keys(left, right) == Ordering::Equal
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::facts::SelectionFactEntry;
+    use crate::schema::{
+        FieldDeclaration, LookupEntry, Predicate, SelectionRequirement, TermUnknownHandling,
+    };
+
+    const NOW: u64 = 1_000_500;
+    const FACT_KEY: &str = "activity-a.slots_free";
+
+    fn policy() -> SelectionPolicy {
+        serde_json::from_str(include_str!("../tests/fixtures/policy.json"))
+            .expect("fixture policy decodes")
+    }
+
+    fn candidates() -> Vec<Candidate> {
+        #[derive(serde::Deserialize)]
+        struct Set {
+            candidates: Vec<Candidate>,
+        }
+        serde_json::from_str::<Set>(include_str!("../tests/fixtures/candidates.json"))
+            .expect("fixture candidates decode")
+            .candidates
+    }
+
+    fn facts() -> SelectionFactSnapshot {
+        serde_json::from_str(include_str!("../tests/fixtures/facts.json"))
+            .expect("fixture facts decode")
+    }
+
+    fn verdict<'a>(decision: &'a SelectionDecision, candidate_id: &str) -> &'a CandidateVerdict {
+        decision
+            .candidates
+            .iter()
+            .find(|verdict| verdict.candidate_id == candidate_id)
+            .expect("candidate verdict")
+    }
+
+    #[test]
+    fn the_golden_fixture_selects_the_declared_top_two_with_a_full_breakdown() {
+        let decision = evaluate(&policy(), &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(decision.outcome, SelectionOutcome::Selected { count: 2 });
+        assert_eq!(decision.outcome_key, "outcome-selected");
+        assert_eq!(decision.selected, ["slot-1", "slot-2"]);
+        assert_eq!(decision.candidate_layout_id, "layout-a");
+        assert_eq!(decision.fact_snapshot_id, "snapshot-a");
+
+        let first = verdict(&decision, "slot-1");
+        assert_eq!(first.status, CandidateStatus::Ranked);
+        assert_eq!(first.score_milli, Some(5_200));
+        assert_eq!(first.rank, Some(1));
+        assert_eq!(
+            first
+                .terms
+                .iter()
+                .map(|term| term.contribution_milli)
+                .collect::<Vec<_>>(),
+            [1_200, 3_000, 1_000]
+        );
+
+        let rejected = verdict(&decision, "slot-3");
+        assert_eq!(rejected.status, CandidateStatus::GateRejected);
+        assert_eq!(rejected.score_milli, None);
+        assert_eq!(rejected.rank, None);
+        assert!(rejected.terms.is_empty());
+        assert_eq!(
+            rejected.gates,
+            [GateResult {
+                gate_id: "gate-ready".to_owned(),
+                outcome: GateOutcome::Failed,
+            }]
+        );
+        assert!(
+            rejected
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "gate.rejected")
+        );
+
+        // The fourth candidate ties the second on score and on the first tie-break key; the
+        // declared identifier key is what separates them.
+        assert_eq!(verdict(&decision, "slot-4").rank, Some(3));
+    }
+
+    #[test]
+    fn the_same_input_yields_the_same_decision_and_the_same_identity() {
+        let first = evaluate(&policy(), &candidates(), &facts(), NOW).expect("decision");
+        let second = evaluate(&policy(), &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(first, second);
+        assert_eq!(
+            crate::canonical_sha256(&first).expect("identity"),
+            crate::canonical_sha256(&second).expect("identity")
+        );
+        assert_eq!(
+            first.policy_sha256,
+            crate::canonical_sha256(&policy()).expect("identity")
+        );
+    }
+
+    #[test]
+    fn reordering_the_candidate_set_keeps_the_same_selection() {
+        let mut reordered = candidates();
+        reordered.reverse();
+        let ordered = evaluate(&policy(), &candidates(), &facts(), NOW).expect("decision");
+        let shuffled = evaluate(&policy(), &reordered, &facts(), NOW).expect("decision");
+        assert_eq!(ordered.selected, shuffled.selected);
+        assert_ne!(ordered.input_sha256, shuffled.input_sha256);
+    }
+
+    #[test]
+    fn an_unknown_fact_drops_candidates_instead_of_scoring_it_as_zero() {
+        let mut snapshot = facts();
+        snapshot.facts.clear();
+        let decision = evaluate(&policy(), &candidates(), &snapshot, NOW).expect("decision");
+        assert_eq!(
+            decision.outcome,
+            SelectionOutcome::Insufficient {
+                surviving: 0,
+                required: 2,
+            }
+        );
+        assert!(decision.selected.is_empty());
+        let dropped = verdict(&decision, "slot-1");
+        assert_eq!(dropped.status, CandidateStatus::UnknownDropped);
+        assert_eq!(
+            dropped.terms.last().expect("capacity term").outcome,
+            TermOutcome::UnknownDropped {
+                reason: UnknownReason::FactMissing,
+            }
+        );
+        // A zero-valued fact would have scored the low side of the threshold for the same
+        // term; an unknown one does not score at all.
+        let mut zeroed = facts();
+        if let Some(SelectionFactEntry::Published { value, .. }) = zeroed.facts.get_mut(FACT_KEY) {
+            *value = ScalarValue::Integer(0);
+        }
+        let zeroed = evaluate(&policy(), &candidates(), &zeroed, NOW).expect("decision");
+        assert_eq!(verdict(&zeroed, "slot-1").score_milli, Some(3_700));
+    }
+
+    #[test]
+    fn an_expired_fact_is_unknown_rather_than_stale_data() {
+        let snapshot = facts();
+        let decision = evaluate(&policy(), &candidates(), &snapshot, 4_600_000).expect("decision");
+        assert_eq!(
+            verdict(&decision, "slot-1")
+                .terms
+                .last()
+                .expect("capacity term")
+                .outcome,
+            TermOutcome::UnknownDropped {
+                reason: UnknownReason::FactExpired,
+            }
+        );
+    }
+
+    #[test]
+    fn a_declared_substitution_is_used_and_recorded() {
+        let mut policy = policy();
+        policy.scoring[2].on_unknown = TermUnknownHandling::SubstituteMilli { value_milli: 250 };
+        let mut snapshot = facts();
+        snapshot.facts.clear();
+        let decision = evaluate(&policy, &candidates(), &snapshot, NOW).expect("decision");
+        let first = verdict(&decision, "slot-1");
+        assert_eq!(
+            first.terms.last().expect("capacity term").outcome,
+            TermOutcome::UnknownSubstituted {
+                reason: UnknownReason::FactMissing,
+                transformed_milli: 250,
+            }
+        );
+        assert_eq!(first.score_milli, Some(1_200 + 3_000 + 250));
+        assert!(
+            first
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "term.unknown_substituted")
+        );
+    }
+
+    #[test]
+    fn an_aborting_rule_ends_the_evaluation_with_an_unknown_outcome() {
+        let mut policy = policy();
+        policy.scoring[2].on_unknown = TermUnknownHandling::AbortEvaluation;
+        let mut snapshot = facts();
+        snapshot.facts.clear();
+        let decision = evaluate(&policy, &candidates(), &snapshot, NOW).expect("decision");
+        assert_eq!(
+            decision.outcome,
+            SelectionOutcome::Unknown {
+                reason: UnknownReason::FactMissing,
+                detail: "candidate `slot-1` term `term-capacity`: FactMissing".to_owned(),
+            }
+        );
+        assert_eq!(decision.outcome_key, "outcome-unknown");
+        assert!(decision.selected.is_empty());
+        assert_eq!(decision.candidates.len(), 1);
+    }
+
+    #[test]
+    fn a_gate_that_cannot_be_decided_follows_its_declared_handling() {
+        let mut policy = policy();
+        policy.facts[0].value_type = ValueType::Boolean;
+        policy.gates.push(crate::HardGate {
+            gate_id: "gate-capacity".to_owned(),
+            predicate: Predicate::BooleanEquals {
+                value: ValueRef::Fact {
+                    fact_key: FACT_KEY.to_owned(),
+                },
+                expected: true,
+            },
+            on_unknown: GateUnknownHandling::SubstituteVerdict { passes: false },
+        });
+        policy.scoring.remove(2);
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        let first = verdict(&decision, "slot-1");
+        // The substituted verdict is a real verdict, so the candidate is gate-rejected, and
+        // the gate result still carries the reason the substitution was needed.
+        assert_eq!(first.status, CandidateStatus::GateRejected);
+        assert_eq!(
+            first.gates.last().expect("capacity gate").outcome,
+            GateOutcome::UnknownSubstituted {
+                reason: UnknownReason::TypeMismatch,
+                passes: false,
+            }
+        );
+        assert!(
+            first
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "gate.unknown_substituted")
+        );
+
+        policy.gates[1].on_unknown = GateUnknownHandling::DropCandidate;
+        let dropped = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(
+            verdict(&dropped, "slot-1").status,
+            CandidateStatus::UnknownDropped
+        );
+        assert_eq!(
+            decision.outcome,
+            SelectionOutcome::Insufficient {
+                surviving: 0,
+                required: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_member_leaves_a_conjunction_undecided_but_a_false_member_decides_it() {
+        let mut policy = policy();
+        policy.fields.push(FieldDeclaration {
+            name: "absent".to_owned(),
+            value_type: ValueType::Integer,
+        });
+        let unknown_member = Predicate::IntegerAtLeast {
+            value: ValueRef::Field {
+                field: "absent".to_owned(),
+            },
+            threshold: 1,
+        };
+        let false_member = Predicate::BooleanEquals {
+            value: ValueRef::Field {
+                field: "ready".to_owned(),
+            },
+            expected: false,
+        };
+        policy.gates[0].predicate = Predicate::All {
+            of: vec![unknown_member.clone(), false_member],
+        };
+        policy.gates[0].on_unknown = GateUnknownHandling::DropCandidate;
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        // The false member settles the conjunction even though another member is unknown.
+        assert_eq!(
+            verdict(&decision, "slot-1").status,
+            CandidateStatus::GateRejected
+        );
+
+        policy.gates[0].predicate = Predicate::Any {
+            of: vec![unknown_member],
+        };
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(
+            verdict(&decision, "slot-1").gates[0].outcome,
+            GateOutcome::UnknownDropped {
+                reason: UnknownReason::FieldMissing,
+            }
+        );
+    }
+
+    #[test]
+    fn an_unbroken_tie_at_the_cut_is_ambiguous_rather_than_arbitrary() {
+        let mut policy = policy();
+        policy.tie_break.pop();
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(
+            decision.outcome,
+            SelectionOutcome::Ambiguous {
+                candidate_ids: vec!["slot-2".to_owned(), "slot-4".to_owned()],
+            }
+        );
+        assert_eq!(decision.outcome_key, "outcome-ambiguous");
+        assert!(decision.selected.is_empty());
+        // The listing stays fully ordered even when the cut is ambiguous.
+        assert_eq!(verdict(&decision, "slot-2").rank, Some(2));
+        assert_eq!(verdict(&decision, "slot-4").rank, Some(3));
+    }
+
+    #[test]
+    fn reversing_a_tie_break_direction_reverses_the_choice() {
+        let mut policy = policy();
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::ExactlyOne,
+            required_count: 1,
+        };
+        policy.tie_break = vec![TieBreakKey::CandidateId {
+            direction: SortDirection::HighestFirst,
+        }];
+        policy.scoring.clear();
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(decision.selected, ["slot-4"]);
+
+        policy.tie_break = vec![TieBreakKey::CandidateId {
+            direction: SortDirection::LowestFirst,
+        }];
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(decision.selected, ["slot-1"]);
+    }
+
+    #[test]
+    fn exactly_one_takes_the_single_highest_survivor() {
+        let mut policy = policy();
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::ExactlyOne,
+            required_count: 1,
+        };
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(decision.outcome, SelectionOutcome::Selected { count: 1 });
+        assert_eq!(decision.selected, ["slot-1"]);
+    }
+
+    #[test]
+    fn top_k_reports_insufficient_instead_of_selecting_fewer() {
+        let mut policy = policy();
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::TopK,
+            required_count: 4,
+        };
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(
+            decision.outcome,
+            SelectionOutcome::Insufficient {
+                surviving: 3,
+                required: 4,
+            }
+        );
+        assert_eq!(decision.outcome_key, "outcome-insufficient");
+        assert!(decision.selected.is_empty());
+    }
+
+    #[test]
+    fn none_allowed_accepts_an_empty_answer_and_takes_what_it_can() {
+        let mut policy = policy();
+        policy.selection = SelectionRequirement {
+            mode: SelectionMode::NoneAllowed,
+            required_count: 0,
+        };
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(decision.outcome, SelectionOutcome::Empty);
+        assert_eq!(decision.outcome_key, "outcome-empty");
+        assert!(decision.selected.is_empty());
+
+        policy.selection.required_count = 9;
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(decision.outcome, SelectionOutcome::Selected { count: 3 });
+        assert_eq!(decision.selected, ["slot-1", "slot-2", "slot-4"]);
+    }
+
+    #[test]
+    fn a_lookup_that_covers_nothing_is_unknown_and_a_default_answers_it() {
+        let mut policy = policy();
+        policy.scoring[1].transform = Transform::Lookup {
+            entries: vec![LookupEntry {
+                key: LookupKey::String("grade-low".to_owned()),
+                value_milli: 10,
+            }],
+            default_milli: None,
+        };
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(
+            verdict(&decision, "slot-1").terms[1].outcome,
+            TermOutcome::UnknownSubstituted {
+                reason: UnknownReason::LookupMiss,
+                transformed_milli: 0,
+            }
+        );
+
+        policy.scoring[1].transform = Transform::Lookup {
+            entries: vec![LookupEntry {
+                key: LookupKey::String("grade-low".to_owned()),
+                value_milli: 10,
+            }],
+            default_milli: Some(20),
+        };
+        let decision = evaluate(&policy, &candidates(), &facts(), NOW).expect("decision");
+        assert_eq!(
+            verdict(&decision, "slot-1").terms[1].outcome,
+            TermOutcome::Scored {
+                transformed_milli: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn a_repeated_or_empty_candidate_identifier_is_an_error() {
+        let mut repeated = candidates();
+        repeated[1].candidate_id = repeated[0].candidate_id.clone();
+        let error = evaluate(&policy(), &repeated, &facts(), NOW).expect_err("repeated id");
+        assert_eq!(error.code(), SelectionErrorCode::DuplicateId);
+
+        let mut empty = candidates();
+        empty[0].candidate_id.clear();
+        let error = evaluate(&policy(), &empty, &facts(), NOW).expect_err("empty id");
+        assert_eq!(error.code(), SelectionErrorCode::MissingRequiredField);
+    }
+
+    #[test]
+    fn an_overflowing_weight_is_an_error_rather_than_a_wrapped_score() {
+        const SAFE_MAX: i64 = 9_007_199_254_740_991;
+        let mut policy = policy();
+        policy.scoring[0].weight_milli = SAFE_MAX;
+        let mut candidates = candidates();
+        candidates[0]
+            .fields
+            .insert("value_milli".to_owned(), ScalarValue::Integer(SAFE_MAX));
+        let error = evaluate(&policy, &candidates, &facts(), NOW).expect_err("overflow");
+        assert_eq!(error.code(), SelectionErrorCode::ArithmeticOverflow);
+
+        // A weight outside the canonical integer range never reaches the arithmetic.
+        policy.scoring[0].weight_milli = i64::MAX;
+        let error = evaluate(&policy, &candidates, &facts(), NOW).expect_err("unsafe integer");
+        assert_eq!(error.code(), SelectionErrorCode::IntegerOutOfRange);
+    }
+
+    #[test]
+    fn pure_evaluator_source_has_no_runtime_side_effect_authority() {
+        const SOURCES: &[(&str, &str)] = &[
+            ("lib.rs", include_str!("lib.rs")),
+            ("canonical.rs", include_str!("canonical.rs")),
+            ("evaluator.rs", include_str!("evaluator.rs")),
+            ("facts.rs", include_str!("facts.rs")),
+            ("schema.rs", include_str!("schema.rs")),
+        ];
+        for (name, source) in SOURCES {
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production source");
+            for forbidden in [
+                "std::thread::sleep",
+                "std::fs",
+                "std::net",
+                "std::process",
+                "SystemTime::now",
+                "Instant::now",
+                "actingcommand_device",
+                "actingcommand_ledger",
+                "LeaseToken",
+            ] {
+                assert!(
+                    !production.contains(forbidden),
+                    "{name} holds forbidden source token {forbidden}"
+                );
+            }
+        }
+    }
+}

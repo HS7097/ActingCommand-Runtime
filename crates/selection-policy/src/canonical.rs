@@ -259,3 +259,79 @@ impl<'de> Visitor<'de> for CanonicalValueVisitor {
         Ok(CanonicalValue::Object(entries))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_form_sorts_object_keys_and_keeps_array_order() {
+        let value = parse_canonical_json(br#"{"z":[2,1],"a":{"b":true,"a":null}}"#)
+            .expect("canonical parse");
+        let mut output = Vec::new();
+        value.write(&mut output).expect("canonical write");
+        assert_eq!(output, br#"{"a":{"a":null,"b":true},"z":[2,1]}"#);
+    }
+
+    #[test]
+    fn canonical_parse_rejects_every_floating_point_spelling() {
+        for source in [
+            br#"{"value":1.5}"#.as_slice(),
+            br#"{"value":1.0}"#.as_slice(),
+            br#"{"value":1e3}"#.as_slice(),
+        ] {
+            let error = parse_canonical_json(source).expect_err("floating point must fail");
+            assert_eq!(error.code(), SelectionErrorCode::FloatRejected, "{error}");
+        }
+    }
+
+    #[test]
+    fn canonical_parse_rejects_duplicate_and_non_string_keys() {
+        let duplicate = parse_canonical_json(br#"{"a":1,"a":2}"#).expect_err("duplicate key");
+        assert_eq!(duplicate.code(), SelectionErrorCode::DuplicateKey);
+        let non_string = parse_canonical_json(br#"{1:2}"#).expect_err("non-string key");
+        assert_eq!(non_string.code(), SelectionErrorCode::InvalidJson);
+    }
+
+    #[test]
+    fn canonical_parse_enforces_the_safe_integer_boundaries() {
+        for accepted in [
+            br#"-9007199254740991"#.as_slice(),
+            br#"9007199254740991"#.as_slice(),
+        ] {
+            parse_canonical_json(accepted).expect("safe integer");
+        }
+        for rejected in [
+            br#"-9007199254740992"#.as_slice(),
+            br#"9007199254740992"#.as_slice(),
+        ] {
+            let error = parse_canonical_json(rejected).expect_err("unsafe integer");
+            assert_eq!(error.code(), SelectionErrorCode::IntegerOutOfRange);
+        }
+    }
+
+    #[test]
+    fn canonical_rendering_rejects_a_serialized_float() {
+        #[derive(serde::Serialize)]
+        struct Holder {
+            value: f64,
+        }
+        let error = canonical_bytes(&Holder { value: 0.5 }).expect_err("floating point must fail");
+        assert_eq!(error.code(), SelectionErrorCode::FloatRejected);
+    }
+
+    #[test]
+    fn canonical_identity_is_stable_across_key_order() {
+        let left = canonical_sha256(&serde_json::json!({"a": 1, "z": 2})).expect("identity");
+        let right = canonical_sha256(&serde_json::json!({"z": 2, "a": 1})).expect("identity");
+        assert_eq!(left, right);
+        assert!(left.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn canonical_parse_rejects_an_oversized_document() {
+        let oversized = vec![b' '; MAX_DOCUMENT_BYTES + 1];
+        let error = parse_canonical_json(&oversized).expect_err("oversized document");
+        assert_eq!(error.code(), SelectionErrorCode::DocumentTooLarge);
+    }
+}

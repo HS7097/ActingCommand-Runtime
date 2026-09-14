@@ -226,3 +226,197 @@ fn entry_for(record: &FactRecord) -> SelectionFactEntry {
         confidence_milli: record.confidence_milli,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use actingcommand_contract::InstanceFactContext;
+
+    use super::*;
+
+    const KEY: &str = "activity-a.slots_free";
+    const NOW: u64 = 1_000_500;
+
+    fn declaration() -> FactDeclaration {
+        FactDeclaration {
+            fact_key: KEY.to_owned(),
+            value_type: ValueType::Integer,
+            max_age_ms: 3_600_000,
+            minimum_confidence_milli: 500,
+        }
+    }
+
+    fn record(scope: FactScope, content: FactContent) -> FactRecord {
+        FactRecord {
+            scope,
+            key: KEY.to_owned(),
+            content,
+            observed_at_unix_ms: 1_000_000,
+            expires_at_unix_ms: Some(4_600_000),
+            ttl_policy: None,
+            confidence_milli: 900,
+            source_detector: "detector-a".to_owned(),
+            source_snapshot_id: "snapshot-a".to_owned(),
+            schema_version: "v1".to_owned(),
+            resource_bundle_hash: "0".repeat(64),
+            invalidate_on: Vec::new(),
+        }
+    }
+
+    fn inline(value: i64) -> FactContent {
+        FactContent::Inline {
+            value: FactValue::Integer(value),
+        }
+    }
+
+    #[test]
+    fn the_most_specific_scope_wins_for_one_key() {
+        let snapshot = SelectionFactSnapshot::from_fact_records(
+            "snapshot-a",
+            NOW,
+            &[
+                record(
+                    FactScope::Game {
+                        game_id: "game-a".to_owned(),
+                    },
+                    inline(1),
+                ),
+                record(
+                    FactScope::Instance {
+                        instance_id: "instance-a".to_owned(),
+                    },
+                    inline(3),
+                ),
+                record(
+                    FactScope::Server {
+                        server_id: "server-a".to_owned(),
+                    },
+                    inline(2),
+                ),
+            ],
+        );
+        assert_eq!(
+            snapshot.resolve(&declaration(), NOW),
+            Ok(&ScalarValue::Integer(3))
+        );
+    }
+
+    #[test]
+    fn a_contract_snapshot_keeps_only_records_in_its_context() {
+        let snapshot = ContractFactSnapshot {
+            snapshot_id: "snapshot-a".to_owned(),
+            ledger_position: 1,
+            context: InstanceFactContext {
+                instance_id: "instance-a".to_owned(),
+                server_id: "server-a".to_owned(),
+                game_id: "game-a".to_owned(),
+            },
+            records: vec![record(
+                FactScope::Instance {
+                    instance_id: "instance-other".to_owned(),
+                },
+                inline(3),
+            )],
+        };
+        let snapshot = SelectionFactSnapshot::from_instance_snapshot(&snapshot, NOW);
+        assert_eq!(
+            snapshot.resolve(&declaration(), NOW),
+            Err(UnknownReason::FactMissing)
+        );
+    }
+
+    #[test]
+    fn an_absent_expired_or_stale_fact_is_unknown_and_never_zero() {
+        let empty = SelectionFactSnapshot {
+            snapshot_id: "snapshot-a".to_owned(),
+            snapshot_at_unix_ms: NOW,
+            facts: BTreeMap::new(),
+        };
+        assert_eq!(
+            empty.resolve(&declaration(), NOW),
+            Err(UnknownReason::FactMissing)
+        );
+
+        let snapshot = SelectionFactSnapshot::from_fact_records(
+            "snapshot-a",
+            NOW,
+            &[record(
+                FactScope::Instance {
+                    instance_id: "instance-a".to_owned(),
+                },
+                inline(3),
+            )],
+        );
+        assert_eq!(
+            snapshot.resolve(&declaration(), 4_600_000),
+            Err(UnknownReason::FactExpired)
+        );
+        let tight = FactDeclaration {
+            max_age_ms: 1_000,
+            ..declaration()
+        };
+        assert_eq!(
+            snapshot.resolve(&tight, 1_001_000),
+            Ok(&ScalarValue::Integer(3))
+        );
+        assert_eq!(
+            snapshot.resolve(&tight, 1_001_001),
+            Err(UnknownReason::FactStale)
+        );
+    }
+
+    #[test]
+    fn confidence_below_the_declared_floor_is_unknown() {
+        let mut low = record(
+            FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            inline(3),
+        );
+        low.confidence_milli = 499;
+        let snapshot = SelectionFactSnapshot::from_fact_records("snapshot-a", NOW, &[low]);
+        assert_eq!(
+            snapshot.resolve(&declaration(), NOW),
+            Err(UnknownReason::FactLowConfidence)
+        );
+    }
+
+    #[test]
+    fn a_non_scalar_record_is_kept_as_an_unusable_reason() {
+        let listed = record(
+            FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            FactContent::Inline {
+                value: FactValue::RecordList(Vec::new()),
+            },
+        );
+        let snapshot = SelectionFactSnapshot::from_fact_records("snapshot-a", NOW, &[listed]);
+        assert_eq!(
+            snapshot.facts.get(KEY),
+            Some(&SelectionFactEntry::Unusable {
+                reason: UnknownReason::FactNotScalar,
+            })
+        );
+        assert_eq!(
+            snapshot.resolve(&declaration(), NOW),
+            Err(UnknownReason::FactNotScalar)
+        );
+    }
+
+    #[test]
+    fn a_value_of_another_type_is_a_type_mismatch() {
+        let text = record(
+            FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            FactContent::Inline {
+                value: FactValue::String("three".to_owned()),
+            },
+        );
+        let snapshot = SelectionFactSnapshot::from_fact_records("snapshot-a", NOW, &[text]);
+        assert_eq!(
+            snapshot.resolve(&declaration(), NOW),
+            Err(UnknownReason::TypeMismatch)
+        );
+    }
+}
