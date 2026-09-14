@@ -26,6 +26,8 @@ pub struct PageDetectorError {
     pub failed_target: Option<Box<PageTargetFailure>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
+    #[serde(skip)]
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -45,6 +47,7 @@ impl PageDetectorError {
             completed_targets: Vec::new(),
             failed_target: None,
             declaration_issue: None,
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -54,6 +57,22 @@ impl PageDetectorError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn ppocr_diagnostics(&self) -> actingcommand_contract::PpocrDiagnostics {
+        self.completed_targets
+            .iter()
+            .flat_map(|target| target.evaluation.ppocr_diagnostics().iter().cloned())
+            .chain(self.ppocr_diagnostics.iter().cloned())
+            .collect()
+    }
+
+    pub fn with_ppocr_diagnostics(
+        mut self,
+        diagnostics: actingcommand_contract::PpocrDiagnostics,
+    ) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
@@ -120,6 +139,15 @@ pub struct PageEvaluation {
     pub message: String,
 }
 
+impl PageEvaluation {
+    pub fn ppocr_diagnostics(&self) -> actingcommand_contract::PpocrDiagnostics {
+        self.target_results
+            .iter()
+            .flat_map(|target| target.evaluation.ppocr_diagnostics().iter().cloned())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TimedPageEvaluation {
     pub evaluation: PageEvaluation,
@@ -160,6 +188,29 @@ pub struct BatchLevelError {
     pub cause: PageDetectorError,
     pub completed: Vec<PageOutcome>,
     pub unexecuted: Vec<UnexecutedPage>,
+}
+
+impl BatchLevelError {
+    pub fn ppocr_diagnostics(&self) -> actingcommand_contract::PpocrDiagnostics {
+        let mut diagnostics: actingcommand_contract::PpocrDiagnostics = self
+            .completed
+            .iter()
+            .flat_map(|outcome| match &outcome.result {
+                Ok(page) => page.ppocr_diagnostics(),
+                Err(error) => error.ppocr_diagnostics(),
+            })
+            .collect();
+        // The batch can store the same terminal cause both in completed and as cause.
+        for report in self.cause.ppocr_diagnostics() {
+            if !diagnostics
+                .iter()
+                .any(|existing| std::sync::Arc::ptr_eq(existing, &report))
+            {
+                diagnostics.push(report);
+            }
+        }
+        diagnostics
+    }
 }
 
 impl fmt::Display for BatchLevelError {
@@ -262,8 +313,13 @@ pub fn require_all_page_evaluations(
 ) -> PageDetectorResult<Vec<PageEvaluation>> {
     let mut evaluations = Vec::with_capacity(outcomes.len());
     let mut failures = Vec::new();
+    let mut diagnostics = Vec::new();
 
     for outcome in outcomes {
+        diagnostics.extend(match &outcome.result {
+            Ok(page) => page.ppocr_diagnostics(),
+            Err(error) => error.ppocr_diagnostics(),
+        });
         match outcome.result {
             Ok(evaluation) => evaluations.push(evaluation),
             Err(error) => failures.push(format!(
@@ -281,7 +337,8 @@ pub fn require_all_page_evaluations(
             evaluations.len(),
             failures.len(),
             failures.join("; ")
-        )))
+        ))
+        .with_ppocr_diagnostics(diagnostics))
     }
 }
 
@@ -354,7 +411,10 @@ impl PageDetector {
     ) -> PageDetectorResult<Vec<PageEvaluation>> {
         let outcomes = self
             .evaluate_all_outcomes(evaluator, scene)
-            .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
+            .map_err(|error| {
+                PageDetectorError::fatal(error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            })?;
         require_all_page_evaluations(outcomes)
     }
 
@@ -387,14 +447,23 @@ impl PageDetector {
                 durations.push(elapsed(started));
                 result
             })
-            .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
+            .map_err(|error| {
+                PageDetectorError::fatal(error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            })?;
         let evaluations = require_all_page_evaluations(outcomes)?;
         if evaluations.len() != durations.len() {
             return Err(PageDetectorError::fatal(format!(
                 "page duration invariant failed: {} evaluation(s), {} duration(s)",
                 evaluations.len(),
                 durations.len()
-            )));
+            ))
+            .with_ppocr_diagnostics(
+                evaluations
+                    .iter()
+                    .flat_map(PageEvaluation::ppocr_diagnostics)
+                    .collect(),
+            ));
         }
         Ok(evaluations
             .into_iter()
@@ -420,7 +489,10 @@ impl PageDetector {
     ) -> PageDetectorResult<Vec<PageEvaluation>> {
         let outcomes = self
             .evaluate_all_outcomes_in_context(context)
-            .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
+            .map_err(|error| {
+                PageDetectorError::fatal(error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            })?;
         require_all_page_evaluations(outcomes)
     }
 
@@ -460,7 +532,7 @@ impl PageDetector {
                     let cause = PageDetectorError::fatal(format!(
                         "page evaluation invariant failed at index {index}: expected page_id '{}', got '{}'",
                         page.id, evaluation.page_id
-                    ));
+                    )).with_ppocr_diagnostics(evaluation.ppocr_diagnostics());
                     completed.push(PageOutcome {
                         index,
                         page_id: page.id.clone(),
@@ -831,6 +903,7 @@ fn role_name(role: PageTargetRole) -> &'static str {
 
 fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> PageDetectorError {
     PageDetectorError::fatal(err.to_string())
+        .with_ppocr_diagnostics(err.ppocr_diagnostics().clone())
 }
 
 #[cfg(test)]
@@ -1925,6 +1998,7 @@ mod tests {
             _request: OcrProviderRequest<'_>,
         ) -> Result<OcrProviderResult, VisionProviderError> {
             Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "home".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(0.99),

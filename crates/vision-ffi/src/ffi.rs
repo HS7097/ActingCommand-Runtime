@@ -73,6 +73,15 @@ pub struct VisionFfiOwnedBuffer {
 }
 
 impl VisionFfiOwnedBuffer {
+    /// PPOCR's response length is bounded separately from spare Vec allocation capacity.
+    pub fn has_ppocr_releasable_metadata(&self) -> bool {
+        !self.data.is_null()
+            && self.capacity > 0
+            && self.len <= self.capacity
+            && self.len <= crate::PPOCR_MAX_RESPONSE_BYTES
+            && self.capacity <= isize::MAX as usize
+    }
+
     /// Reports whether this metadata can be passed to the paired provider deallocator.
     ///
     /// This validates ownership metadata only. Pointer provenance remains an ABI
@@ -851,18 +860,18 @@ impl OcrEngine for FastDeployPpocrBackend {
         request.validate()?;
         let validation_request = request.clone();
         let Some(artifacts) = &self.artifacts else {
-            let result: OcrInferenceResult = invoke_json(
-                "fastdeploy-ppocr",
-                self.read_text_json,
-                self.free_buffer,
-                &request,
-            )?;
-            result.validate(&validation_request)?;
+            let (mut result, diagnostics): (OcrInferenceResult, _) =
+                invoke_ppocr_json(self.read_text_json, self.free_buffer, &request)?;
+            result.ppocr_diagnostics = diagnostics;
+            result
+                .validate(&validation_request)
+                .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidResponse,
                 "fastdeploy-ppocr",
                 "OCR provider returned a result without a session-bound execution attestation",
-            ));
+            )
+            .with_ppocr_diagnostics(result.ppocr_diagnostics));
         };
         let session = self.session.as_ref().map(Arc::clone).ok_or_else(|| {
             VisionFfiError::fatal_with_code(
@@ -879,14 +888,20 @@ impl OcrEngine for FastDeployPpocrBackend {
             artifacts.clone(),
         );
         envelope.validate()?;
-        let response: FastDeployPpocrInvokeResponse = invoke_json(
-            "fastdeploy-ppocr",
-            self.read_text_json,
-            self.free_buffer,
-            &envelope,
-        )?;
-        response.validate_against(&invocation_id, &session)?;
-        response.result.validate(&validation_request)?;
+        let (mut response, diagnostics): (FastDeployPpocrInvokeResponse, _) =
+            invoke_ppocr_json(self.read_text_json, self.free_buffer, &envelope)?;
+        response.result.ppocr_diagnostics = diagnostics;
+        response
+            .validate_against(&invocation_id, &session)
+            .map_err(|error| {
+                error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
+            })?;
+        response
+            .result
+            .validate(&validation_request)
+            .map_err(|error| {
+                error.with_ppocr_diagnostics(response.result.ppocr_diagnostics.clone())
+            })?;
         Ok(OcrInferenceOutput {
             result: response.result,
             execution_attestation: Some(response.attestation),
@@ -1035,6 +1050,60 @@ where
         VisionFfiError::fatal(module, format!("failed to load FFI symbol: {err}"))
     })?;
     Ok(*symbol)
+}
+
+struct PpocrOwnedResponse {
+    buffer: VisionFfiOwnedBuffer,
+    free_buffer: VisionFfiFreeBuffer,
+}
+
+impl Drop for PpocrOwnedResponse {
+    fn drop(&mut self) {
+        if self.buffer.capacity > 0 {
+            // SAFETY: metadata was validated and ownership belongs to the paired provider.
+            unsafe { (self.free_buffer)(self.buffer) };
+        }
+    }
+}
+
+fn invoke_ppocr_json<I: Serialize, O: DeserializeOwned>(
+    invoke: VisionFfiInvokeJson,
+    free_buffer: VisionFfiFreeBuffer,
+    request: &I,
+) -> VisionFfiResult<(O, crate::PpocrDiagnostics)> {
+    let request_json = serde_json::to_vec(request).map_err(|error| {
+        VisionFfiError::fatal(
+            "fastdeploy-ppocr",
+            format!("failed to serialize FFI request: {error}"),
+        )
+    })?;
+    let mut buffer = VisionFfiOwnedBuffer::default();
+    // SAFETY: one invocation borrows the live request and writes caller-owned ABI storage.
+    let status = unsafe { invoke(request_json.as_ptr(), request_json.len(), &mut buffer) };
+    if !((buffer.len == 0 && buffer.capacity == 0) || buffer.has_ppocr_releasable_metadata()) {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "fastdeploy-ppocr",
+            format!(
+                "FFI backend returned invalid owned buffer metadata: data_is_null={}; len={}; capacity={}; limit={}; action=not_read_not_released",
+                buffer.data.is_null(),
+                buffer.len,
+                buffer.capacity,
+                crate::PPOCR_MAX_RESPONSE_BYTES,
+            ),
+        ));
+    }
+    let owned = PpocrOwnedResponse {
+        buffer,
+        free_buffer,
+    };
+    let bytes = if owned.buffer.len == 0 {
+        &[]
+    } else {
+        // SAFETY: validated metadata and the provider-owned guard keep this slice live.
+        unsafe { slice::from_raw_parts(owned.buffer.data, owned.buffer.len) }
+    };
+    crate::ppocr_result::decode_ppocr_response(status, bytes)
 }
 
 fn invoke_json<I, O>(

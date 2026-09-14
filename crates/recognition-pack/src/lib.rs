@@ -55,6 +55,8 @@ pub struct RecognitionPackError {
     timing: Option<actingcommand_contract::TemplateMatchTimingObservation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
+    #[serde(skip)]
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 impl RecognitionPackError {
@@ -70,6 +72,7 @@ impl RecognitionPackError {
             region: None,
             timing: None,
             declaration_issue: None,
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -83,6 +86,18 @@ impl RecognitionPackError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &actingcommand_contract::PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(
+        mut self,
+        diagnostics: actingcommand_contract::PpocrDiagnostics,
+    ) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 
     pub fn region(&self) -> Option<&OcrRegionEvidence> {
@@ -407,6 +422,7 @@ pub struct OcrProviderTextBlock {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OcrProviderResult {
+    pub ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     pub text: String,
     pub blocks: Vec<OcrProviderTextBlock>,
     pub confidence: Option<f32>,
@@ -482,6 +498,7 @@ pub enum VisionProviderErrorCode {
 pub struct VisionProviderError {
     code: VisionProviderErrorCode,
     message: String,
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 impl VisionProviderError {
@@ -489,6 +506,7 @@ impl VisionProviderError {
         Self {
             code,
             message: message.into(),
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -498,6 +516,18 @@ impl VisionProviderError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &actingcommand_contract::PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(
+        mut self,
+        diagnostics: actingcommand_contract::PpocrDiagnostics,
+    ) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 }
 
@@ -605,6 +635,16 @@ pub struct TargetEvaluation {
     pub message: String,
 }
 
+impl TargetEvaluation {
+    pub fn ppocr_diagnostics(
+        &self,
+    ) -> &[std::sync::Arc<actingcommand_contract::PpocrNodePlacementDiagnostic>] {
+        self.ocr
+            .as_ref()
+            .map_or(&[], |ocr| ocr.ppocr_diagnostics.as_slice())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct TemplateEvaluation {
     pub x: i32,
@@ -655,6 +695,8 @@ pub struct ColorEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OcrEvaluation {
+    #[serde(skip)]
+    pub ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     pub region: Box<OcrRegionEvidence>,
     pub raw_text: String,
     pub block_source_order: Vec<usize>,
@@ -674,6 +716,8 @@ pub struct OcrTextEvidence {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OcrObservationEvaluation {
+    #[serde(skip)]
+    pub ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     pub region: OcrRegionEvidence,
     pub target_id: String,
     pub raw_text: String,
@@ -843,6 +887,7 @@ impl SceneEvaluation<'_> {
                 region: Some(Box::new(region)),
                 timing: None,
                 declaration_issue: None,
+                ppocr_diagnostics: Vec::new(),
             }
         };
         if !evaluated.passed {
@@ -1181,6 +1226,7 @@ impl RecognitionEvaluator {
         if timeout_ms == 0 {
             return Err(RecognitionPackError::fatal("OCR request budget exhausted"));
         }
+        let mut diagnostics = Vec::new();
         (|| {
             let provider = self.vision_provider.as_ref().ok_or_else(|| {
                 RecognitionPackError::fatal_with_code(
@@ -1201,6 +1247,7 @@ impl RecognitionEvaluator {
                     model_sha256: &target.model_sha256,
                 })
                 .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
+            diagnostics = observation.result.ppocr_diagnostics.clone();
             let execution = observation.execution.ok_or_else(|| {
                 RecognitionPackError::fatal_with_code(
                     RecognitionPackErrorCode::VisionProviderInvalidResponse,
@@ -1227,6 +1274,7 @@ impl RecognitionEvaluator {
             }
             let ocr = validate_ocr_result(observation.result, region)?;
             Ok(OcrObservationEvaluation {
+                ppocr_diagnostics: ocr.ppocr_diagnostics,
                 raw_text: ocr.raw_text,
                 block_source_order: ocr.block_source_order,
                 region: region_evidence.clone(),
@@ -1237,7 +1285,14 @@ impl RecognitionEvaluator {
                 execution,
             })
         })()
-        .map_err(|error: RecognitionPackError| error.with_region(&region_evidence))
+        .map_err(|error: RecognitionPackError| {
+            let error = if error.ppocr_diagnostics().is_empty() {
+                error.with_ppocr_diagnostics(diagnostics)
+            } else {
+                error
+            };
+            error.with_region(&region_evidence)
+        })
     }
 
     pub fn get_click_target(&self, target_id: &str) -> RecognitionPackResult<PackRect> {
@@ -1561,6 +1616,7 @@ impl RecognitionEvaluator {
                 template: None,
                 color: None,
                 ocr: Some(Box::new(OcrEvaluation {
+                    ppocr_diagnostics: ocr.ppocr_diagnostics,
                     raw_text: ocr.raw_text,
                     block_source_order: ocr.block_source_order,
                     region: Box::new(region_evidence.clone()),
@@ -2514,6 +2570,7 @@ fn provider_error(
             err.message()
         ),
     )
+    .with_ppocr_diagnostics(err.ppocr_diagnostics().clone())
 }
 
 fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvidence) -> bool {
@@ -2540,6 +2597,7 @@ fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvide
 
 #[derive(Debug)]
 struct ValidatedOcrResult {
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     raw_text: String,
     block_source_order: Vec<usize>,
     text: String,
@@ -2551,85 +2609,90 @@ fn validate_ocr_result(
     result: OcrProviderResult,
     requested_region: PackRect,
 ) -> RecognitionPackResult<ValidatedOcrResult> {
-    if result.text.len() > MAX_OCR_TEXT_BYTES {
-        return Err(invalid_provider_response(format!(
-            "OCR aggregate text exceeds {MAX_OCR_TEXT_BYTES} bytes"
-        )));
-    }
-    validate_optional_provider_score(result.confidence, "OCR aggregate confidence")?;
-    if result.blocks.len() > MAX_OCR_BLOCKS {
-        return Err(invalid_provider_response(format!(
-            "OCR returned {} blocks, limit is {MAX_OCR_BLOCKS}",
-            result.blocks.len()
-        )));
-    }
+    let diagnostics = result.ppocr_diagnostics.clone();
+    (|| {
+        if result.text.len() > MAX_OCR_TEXT_BYTES {
+            return Err(invalid_provider_response(format!(
+                "OCR aggregate text exceeds {MAX_OCR_TEXT_BYTES} bytes"
+            )));
+        }
+        validate_optional_provider_score(result.confidence, "OCR aggregate confidence")?;
+        if result.blocks.len() > MAX_OCR_BLOCKS {
+            return Err(invalid_provider_response(format!(
+                "OCR returned {} blocks, limit is {MAX_OCR_BLOCKS}",
+                result.blocks.len()
+            )));
+        }
 
-    let mut blocks = Vec::with_capacity(result.blocks.len());
-    for (index, block) in result.blocks.into_iter().enumerate() {
-        if block.text.len() > MAX_VISION_STRING_BYTES {
-            return Err(invalid_provider_response(format!(
-                "OCR block[{index}] text exceeds {MAX_VISION_STRING_BYTES} bytes"
-            )));
+        let mut blocks = Vec::with_capacity(result.blocks.len());
+        for (index, block) in result.blocks.into_iter().enumerate() {
+            if block.text.len() > MAX_VISION_STRING_BYTES {
+                return Err(invalid_provider_response(format!(
+                    "OCR block[{index}] text exceeds {MAX_VISION_STRING_BYTES} bytes"
+                )));
+            }
+            validate_optional_provider_score(
+                block.confidence,
+                &format!("OCR block[{index}] confidence"),
+            )?;
+            if !rect_is_within(block.rect, requested_region) {
+                return Err(invalid_provider_response(format!(
+                    "OCR block[{index}] rect is outside the requested ROI"
+                )));
+            }
+            blocks.push((
+                index,
+                OcrTextEvidence {
+                    text: block.text,
+                    rect: block.rect,
+                    confidence: block.confidence,
+                },
+            ));
         }
-        validate_optional_provider_score(
-            block.confidence,
-            &format!("OCR block[{index}] confidence"),
-        )?;
-        if !rect_is_within(block.rect, requested_region) {
-            return Err(invalid_provider_response(format!(
-                "OCR block[{index}] rect is outside the requested ROI"
-            )));
-        }
-        blocks.push((
-            index,
-            OcrTextEvidence {
-                text: block.text,
-                rect: block.rect,
-                confidence: block.confidence,
-            },
-        ));
-    }
-    blocks.sort_by(|left, right| {
-        let (left, right) = (&left.1, &right.1);
-        (
-            left.rect.y,
-            left.rect.x,
-            left.rect.height,
-            left.rect.width,
-            &left.text,
-        )
-            .cmp(&(
-                right.rect.y,
-                right.rect.x,
-                right.rect.height,
-                right.rect.width,
-                &right.text,
-            ))
-    });
-    let (block_source_order, blocks): (Vec<_>, Vec<_>) = blocks.into_iter().unzip();
-    let raw_text = result.text;
-    let text = if blocks.is_empty() {
-        raw_text.clone()
-    } else {
-        let text = blocks
-            .iter()
-            .map(|block| block.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if text.len() > MAX_OCR_TEXT_BYTES {
-            return Err(invalid_provider_response(format!(
-                "sorted OCR block text exceeds {MAX_OCR_TEXT_BYTES} bytes"
-            )));
-        }
-        text
-    };
-    Ok(ValidatedOcrResult {
-        raw_text,
-        block_source_order,
-        text,
-        confidence: result.confidence,
-        blocks,
-    })
+        blocks.sort_by(|left, right| {
+            let (left, right) = (&left.1, &right.1);
+            (
+                left.rect.y,
+                left.rect.x,
+                left.rect.height,
+                left.rect.width,
+                &left.text,
+            )
+                .cmp(&(
+                    right.rect.y,
+                    right.rect.x,
+                    right.rect.height,
+                    right.rect.width,
+                    &right.text,
+                ))
+        });
+        let (block_source_order, blocks): (Vec<_>, Vec<_>) = blocks.into_iter().unzip();
+        let raw_text = result.text;
+        let text = if blocks.is_empty() {
+            raw_text.clone()
+        } else {
+            let text = blocks
+                .iter()
+                .map(|block| block.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.len() > MAX_OCR_TEXT_BYTES {
+                return Err(invalid_provider_response(format!(
+                    "sorted OCR block text exceeds {MAX_OCR_TEXT_BYTES} bytes"
+                )));
+            }
+            text
+        };
+        Ok(ValidatedOcrResult {
+            ppocr_diagnostics: result.ppocr_diagnostics,
+            raw_text,
+            block_source_order,
+            text,
+            confidence: result.confidence,
+            blocks,
+        })
+    })()
+    .map_err(|error: RecognitionPackError| error.with_ppocr_diagnostics(diagnostics))
 }
 
 fn validate_nn_result(
@@ -3081,6 +3144,7 @@ mod tests {
         let provider = Arc::new(TestVisionProvider {
             execution: None,
             ocr: Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "provider aggregate is not authoritative".to_string(),
                 blocks: vec![OcrProviderTextBlock {
                     text: "Hello Runtime".to_string(),
@@ -3120,6 +3184,7 @@ mod tests {
         let provider = Arc::new(TestVisionProvider {
             execution: None,
             ocr: Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "hello".to_string(),
                 blocks: vec![OcrProviderTextBlock {
                     text: "hello".to_string(),
@@ -3329,11 +3394,13 @@ mod tests {
     fn ocr_invalid_confidence_and_out_of_roi_blocks_fail_closed() {
         for result in [
             OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "hello".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(f32::NAN),
             },
             OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "hello".to_string(),
                 blocks: vec![OcrProviderTextBlock {
                     text: "hello".to_string(),
@@ -3381,6 +3448,7 @@ mod tests {
         let provider = Arc::new(TestVisionProvider {
             execution: Some(execution_evidence(OcrExecutionProviderKind::Cpu)),
             ocr: Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "hello".into(),
                 blocks: vec![],
                 confidence: Some(1.0),
@@ -4634,6 +4702,7 @@ mod tests {
         ) -> Result<OcrProviderResult, VisionProviderError> {
             self.ocr_inferences.fetch_add(1, Ordering::SeqCst);
             Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "hello".to_string(),
                 blocks: vec![OcrProviderTextBlock {
                     text: "hello".to_string(),
@@ -4699,6 +4768,7 @@ mod tests {
             Arc::new(TestVisionProvider {
                 execution: Some(execution),
                 ocr: Ok(OcrProviderResult {
+                    ppocr_diagnostics: Vec::new(),
                     text: "hello".to_string(),
                     blocks: vec![OcrProviderTextBlock {
                         text: "hello".to_string(),

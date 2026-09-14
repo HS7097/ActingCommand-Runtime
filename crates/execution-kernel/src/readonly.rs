@@ -48,13 +48,14 @@ pub fn evaluate_saved_artifact_ocr(
     .map_err(|error| ReadonlyRecognitionError::new(error.to_string()))?;
     evaluator
         .evaluate_ocr_observation_with_timeout(&scene, target, timeout_ms)
-        .map_err(|error| ReadonlyRecognitionError::new(error.to_string()))
+        .map_err(pack_error)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadonlyRecognitionError {
     message: String,
     conflicting_pages: Option<Vec<String>>,
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 impl ReadonlyRecognitionError {
@@ -62,6 +63,7 @@ impl ReadonlyRecognitionError {
         Self {
             message: message.into(),
             conflicting_pages: None,
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -69,11 +71,24 @@ impl ReadonlyRecognitionError {
         Self {
             message: format!("multiple pages matched: {}", conflicting_pages.join(", ")),
             conflicting_pages: Some(conflicting_pages),
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &actingcommand_contract::PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(
+        mut self,
+        diagnostics: actingcommand_contract::PpocrDiagnostics,
+    ) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 
     pub fn conflicting_pages(&self) -> Option<&[String]> {
@@ -247,13 +262,18 @@ pub fn detect_current_page(
     let evaluations = detector
         .evaluate_all_timed(evaluator, scene)
         .map_err(page_error)?;
+    let diagnostics: actingcommand_contract::PpocrDiagnostics = evaluations
+        .iter()
+        .flat_map(|page| page.evaluation.ppocr_diagnostics())
+        .collect();
     let conflicting_pages = evaluations
         .iter()
         .filter(|evaluation| evaluation.evaluation.matched)
         .map(|evaluation| evaluation.evaluation.page_id.clone())
         .collect::<Vec<_>>();
     if conflicting_pages.len() > 1 {
-        return Err(ReadonlyRecognitionError::page_conflict(conflicting_pages));
+        return Err(ReadonlyRecognitionError::page_conflict(conflicting_pages)
+            .with_ppocr_diagnostics(diagnostics));
     }
     let matched = evaluations
         .iter()
@@ -269,7 +289,8 @@ pub fn detect_current_page(
         evaluations: evaluations
             .iter()
             .map(page_evaluation_response)
-            .collect::<ReadonlyRecognitionResult<Vec<_>>>()?,
+            .collect::<ReadonlyRecognitionResult<Vec<_>>>()
+            .map_err(|error| error.with_ppocr_diagnostics(diagnostics.clone()))?,
         recovery_hint: standby.then(|| RecoveryHintResponse {
             action: "wake_safe_point".to_string(),
             point: PointResponse { x: 300, y: 2 },
@@ -401,14 +422,16 @@ fn match_metric_name(metric: MatchMetric) -> &'static str {
     }
 }
 
-fn page_error(error: impl fmt::Display) -> ReadonlyRecognitionError {
+fn page_error(error: actingcommand_page_detector::PageDetectorError) -> ReadonlyRecognitionError {
     ReadonlyRecognitionError::new(error.to_string())
+        .with_ppocr_diagnostics(error.ppocr_diagnostics())
 }
 
 fn pack_error(
     error: actingcommand_recognition_pack::RecognitionPackError,
 ) -> ReadonlyRecognitionError {
     ReadonlyRecognitionError::new(error.to_string())
+        .with_ppocr_diagnostics(error.ppocr_diagnostics().clone())
 }
 
 #[derive(Debug, Clone, Serialize)]

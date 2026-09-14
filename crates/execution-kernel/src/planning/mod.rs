@@ -25,6 +25,7 @@ pub enum TaskLoopErrorSeverity {
 pub struct TaskLoopError {
     severity: TaskLoopErrorSeverity,
     message: String,
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 impl TaskLoopError {
@@ -32,6 +33,7 @@ impl TaskLoopError {
         Self {
             severity: TaskLoopErrorSeverity::Fatal,
             message: message.into(),
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -41,6 +43,18 @@ impl TaskLoopError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &actingcommand_contract::PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(
+        mut self,
+        diagnostics: actingcommand_contract::PpocrDiagnostics,
+    ) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 }
 
@@ -250,11 +264,11 @@ fn validate_task_plan_structure(task_plan: &TaskPlan) -> TaskLoopResult<()> {
 }
 
 fn page_error(err: actingcommand_page_detector::PageDetectorError) -> TaskLoopError {
-    TaskLoopError::fatal(err.to_string())
+    TaskLoopError::fatal(err.to_string()).with_ppocr_diagnostics(err.ppocr_diagnostics())
 }
 
 fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> TaskLoopError {
-    TaskLoopError::fatal(err.to_string())
+    TaskLoopError::fatal(err.to_string()).with_ppocr_diagnostics(err.ppocr_diagnostics().clone())
 }
 
 #[cfg(test)]

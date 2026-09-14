@@ -14,6 +14,11 @@ use actingcommand_vision_ffi::{
     OnnxExecutionProvider, VisionBackendKind, VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
     VisionRect, enumerate_cuda_devices, onnxruntime_version_string,
 };
+use actingcommand_vision_ffi::{
+    PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
+    PpocrDiagnostics, PpocrNodePlacementDiagnostic as NodePlacementDiagnostic,
+    serialize_ppocr_response,
+};
 use ort::logging::LogLevel;
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
@@ -34,8 +39,6 @@ const DETECTION_MIN_AREA: usize = 4;
 const DETECTION_BOX_PADDING: i32 = 16;
 const MAX_DETECTED_TEXT_BOXES: usize = 64;
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
-const NODE_PLACEMENT_DIAGNOSTIC_PREFIX: &str =
-    "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC_JSON=";
 const MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES: usize = 4_096;
 const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
 const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
@@ -103,25 +106,6 @@ impl PpocrModelRole {
             Self::Detector => "detector",
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-struct CpuAssignedNodeDiagnostic {
-    node_name: String,
-    operator_type: String,
-    domain: &'static str,
-    placement_reason: &'static str,
-    assigned_execution_provider: &'static str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-struct NodePlacementDiagnostic {
-    record_type: &'static str,
-    model_role: &'static str,
-    diagnostic_scope: &'static str,
-    inference_executed: bool,
-    cpu_assigned_node_count: usize,
-    nodes: Vec<CpuAssignedNodeDiagnostic>,
 }
 
 #[derive(Debug, Default)]
@@ -245,9 +229,9 @@ impl NodePlacementLogCapture {
                 .then_with(|| left.operator_type.cmp(&right.operator_type))
         });
         Ok(NodePlacementDiagnostic {
-            record_type: "actingcommand.ppocr_node_placement_diagnostic.v1",
-            model_role: role.as_str(),
-            diagnostic_scope: "session_initialization_only",
+            record_type: "actingcommand.ppocr_node_placement_diagnostic.v1".to_string(),
+            model_role: role.as_str().to_string(),
+            diagnostic_scope: "session_initialization_only".to_string(),
             inference_executed: false,
             cpu_assigned_node_count: expected,
             nodes,
@@ -293,9 +277,9 @@ fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, Stri
     Ok(CpuAssignedNodeDiagnostic {
         node_name: node_name.to_string(),
         operator_type: operator_type.to_string(),
-        domain: "unavailable",
-        placement_reason: "unavailable",
-        assigned_execution_provider: CPU_EXECUTION_PROVIDER,
+        domain: "unavailable".to_string(),
+        placement_reason: "unavailable".to_string(),
+        assigned_execution_provider: CPU_EXECUTION_PROVIDER.to_string(),
     })
 }
 
@@ -338,10 +322,10 @@ pub unsafe extern "C" fn ac_fastdeploy_ppocr_read_text_json(
     request_len: usize,
     response_out: *mut VisionFfiOwnedBuffer,
 ) -> i32 {
-    invoke_provider(response_out, || {
+    invoke_provider(response_out, |diagnostics| {
         #[cfg(test)]
         panic_on_next_read_text_for_test();
-        read_text_json(request_ptr, request_len)
+        read_text_json(request_ptr, request_len, diagnostics)
     })
 }
 
@@ -356,14 +340,27 @@ fn panic_on_next_read_text_for_test() {
 
 fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
 where
-    F: FnOnce() -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError>
-        + std::panic::UnwindSafe,
+    F: FnOnce(&mut PpocrDiagnostics) -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError>,
 {
-    let result = std::panic::catch_unwind(invoke);
+    let mut diagnostics = Vec::new();
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&mut diagnostics)));
     match result {
-        Ok(Ok(response)) => write_response(response_out, 0, &response),
-        Ok(Err(err)) => write_error(response_out, err.status(), err.message()),
-        Err(_) => write_error(response_out, 2, "provider panicked while reading OCR text"),
+        Ok(Ok(response)) => write_response(response_out, 0, &response, &diagnostics, None),
+        Ok(Err(err)) => write_response(
+            response_out,
+            err.status(),
+            &err.message(),
+            &diagnostics,
+            Some(err.message()),
+        ),
+        Err(_) => write_response(
+            response_out,
+            2,
+            &"provider panicked while reading OCR text",
+            &diagnostics,
+            Some("provider panicked while reading OCR text"),
+        ),
     }
 }
 
@@ -376,7 +373,7 @@ where
 /// is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
-    if !buffer.has_releasable_metadata() {
+    if !buffer.has_ppocr_releasable_metadata() {
         return;
     }
     // SAFETY: every buffer returned by this provider is allocated from a Vec
@@ -393,6 +390,7 @@ pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
 fn read_text_json(
     request_ptr: *const u8,
     request_len: usize,
+    diagnostics: &mut PpocrDiagnostics,
 ) -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError> {
     let envelope = read_request(request_ptr, request_len)?;
     envelope.validate().map_err(provider_error)?;
@@ -425,6 +423,7 @@ fn read_text_json(
             &envelope.artifacts.recognizer_model_path,
             expected_key.clone(),
             PpocrModelRole::Recognizer,
+            diagnostics,
         )
     })?;
     let inference_deadline = Instant::now()
@@ -439,6 +438,7 @@ fn read_text_json(
                 &envelope.artifacts.detector_model_path,
                 expected_key.clone(),
                 PpocrModelRole::Detector,
+                diagnostics,
             )
         })?;
         let detected = {
@@ -481,6 +481,7 @@ fn read_text_json(
             .join("\n");
         let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
         OcrInferenceResult {
+            ppocr_diagnostics: Vec::new(),
             text,
             blocks,
             confidence,
@@ -547,6 +548,7 @@ fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenc
     };
 
     OcrInferenceResult {
+        ppocr_diagnostics: Vec::new(),
         text: decoded.text,
         confidence: decoded.confidence,
         blocks,
@@ -605,9 +607,10 @@ fn load_bound_ort_session(
     path: &Path,
     key: OcrSessionKey,
     role: PpocrModelRole,
+    diagnostics: &mut PpocrDiagnostics,
 ) -> Result<BoundOrtSession, String> {
     let plan = ProviderSessionPlan::from_key(&key)?;
-    let session = load_ort_session(path, &plan, role)?;
+    let session = load_ort_session(path, &plan, role, diagnostics)?;
     Ok(BoundOrtSession { key, plan, session })
 }
 
@@ -626,6 +629,7 @@ fn load_ort_session(
     path: &Path,
     plan: &ProviderSessionPlan,
     role: PpocrModelRole,
+    diagnostics: &mut PpocrDiagnostics,
 ) -> Result<Session, String> {
     let diagnostic_requested = node_placement_diagnostic_requested(
         plan,
@@ -648,7 +652,7 @@ fn load_ort_session(
                 "CUDA OCR session plan is missing the resolved device ordinal".to_string()
             })?;
             if diagnostic_requested {
-                capture_cuda_node_placement(path, ordinal, role)?;
+                capture_cuda_node_placement(path, ordinal, role, diagnostics)?;
             }
             Session::builder()
                 .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
@@ -682,7 +686,14 @@ fn capture_cuda_node_placement(
     path: &Path,
     ordinal: i32,
     role: PpocrModelRole,
+    diagnostics: &mut PpocrDiagnostics,
 ) -> Result<(), String> {
+    if diagnostics.len() >= PPOCR_MAX_DIAGNOSTIC_REPORTS {
+        return Err("PPOCR invocation diagnostic report bound exceeded".to_string());
+    }
+    diagnostics
+        .try_reserve(1)
+        .map_err(|error| format!("PPOCR diagnostic result allocation failed: {error}"))?;
     let capture = Arc::new(Mutex::new(NodePlacementLogCapture::default()));
     let logger_capture = Arc::clone(&capture);
     let shadow_session = Session::builder()
@@ -730,9 +741,8 @@ fn capture_cuda_node_placement(
             state.diagnostic(role)
         }
     }?;
-    let json = serde_json::to_string(&diagnostic)
-        .map_err(|err| format!("failed to serialize PPOCR node-placement diagnostic: {err}"))?;
-    eprintln!("{NODE_PLACEMENT_DIAGNOSTIC_PREFIX}{json}");
+    diagnostic.validate()?;
+    diagnostics.push(Arc::new(diagnostic));
     drop(shadow_session);
     Ok(())
 }
@@ -1585,19 +1595,41 @@ fn write_response<T: serde::Serialize>(
     response_out: *mut VisionFfiOwnedBuffer,
     status: i32,
     value: &T,
+    diagnostics: &PpocrDiagnostics,
+    original_error: Option<&str>,
 ) -> i32 {
-    match serde_json::to_vec(value) {
+    match serialize_ppocr_response(value, diagnostics) {
         Ok(bytes) => write_bytes(response_out, status, bytes),
-        Err(err) => write_error(
-            response_out,
-            2,
-            &format!("failed to serialize provider response JSON: {err}"),
-        ),
+        Err(err) => {
+            let message = format!(
+                "failed to serialize provider response JSON: {err}; original status {status}; diagnostic reports {}; original error: {}",
+                diagnostics.len(),
+                original_error.unwrap_or("none")
+            );
+            match serialize_ppocr_response(&message, diagnostics) {
+                Ok(bytes) => write_bytes(response_out, 2, bytes),
+                Err(failure) => write_error(
+                    response_out,
+                    2,
+                    &format!("{message}; diagnostic response unavailable: {failure}"),
+                ),
+            }
+        }
     }
 }
 
 fn write_error(response_out: *mut VisionFfiOwnedBuffer, status: i32, message: &str) -> i32 {
-    write_bytes(response_out, status, message.as_bytes().to_vec())
+    let mut bytes = Vec::new();
+    if bytes.try_reserve_exact(message.len()).is_err() {
+        // The failed allocation cannot carry a response; the ABI still fails explicitly.
+        if !response_out.is_null() {
+            // SAFETY: non-null response_out is writable caller-owned ABI storage.
+            unsafe { *response_out = VisionFfiOwnedBuffer::default() };
+        }
+        return 2;
+    }
+    bytes.extend_from_slice(message.as_bytes());
+    write_bytes(response_out, status, bytes)
 }
 
 fn write_bytes(response_out: *mut VisionFfiOwnedBuffer, status: i32, bytes: Vec<u8>) -> i32 {
@@ -2119,7 +2151,7 @@ mod tests {
     fn exported_provider_timeout_uses_stable_status() {
         let mut response = VisionFfiOwnedBuffer::default();
 
-        let status = invoke_provider(&mut response, || {
+        let status = invoke_provider(&mut response, |_diagnostics| {
             Err(ProviderInvokeError::timeout(
                 "injected deterministic timeout",
             ))
