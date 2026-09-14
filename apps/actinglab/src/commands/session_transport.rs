@@ -16,6 +16,8 @@ fn session_transport_contract() -> Value {
         "channels": {
             "local_cli": {
                 "status": "available",
+                "available": true,
+                "reason_code": "offline_handler_ready",
                 "transport": "process_stdio",
                 "command": "actinglab",
                 "encryption_required": false,
@@ -23,18 +25,22 @@ fn session_transport_contract() -> Value {
                 "intended_clients": ["local_operator", "local_agent"]
             },
             "daemon_file_ipc": {
-                "status": "available",
+                "status": "retired",
+                "available": false,
+                "reason_code": "legacy_session_authority_retired",
                 "transport": "session_state_directory_file_queue",
                 "submit_command": "session request <command>",
                 "request_dir": "requests/",
                 "response_dir": "responses/",
                 "journal": "request-journal.jsonl",
-                "serialized_by_daemon": true,
+                "serialized_by_daemon": false,
                 "read_only_requests_require_lease": false,
                 "control_requests_require_matching_lease": true
             },
             "trusted_remote": {
                 "status": "reserved",
+                "available": false,
+                "reason_code": "trusted_remote_transport_reserved",
                 "network_listener_implemented": false,
                 "plan_command": "session transport plan [--endpoint <url>]",
                 "plan_gate_field": "trusted_remote_gate",
@@ -52,13 +58,17 @@ fn session_transport_contract() -> Value {
                 "blocked_without_encryption_code": "trusted_remote_transport_blocked"
             },
             "interactive_stream": {
-                "status": "partial",
+                "status": "unverified",
+                "available": false,
+                "reason_code": "runtime_dependency_unverified",
                 "preflight_command": "stream check",
                 "daemon_preflight_command": "session request stream check",
                 "preflight_schema_version": "session.stream_check.v0.1",
                 "implemented_surfaces": {
                     "bounded_local_cli_stream": {
-                        "status": "available",
+                        "status": "unverified",
+                        "available": false,
+                        "reason_code": "runtime_dependency_unverified",
                         "command": "stream --max-frames <N>",
                         "schema_version": "session.stream.v0.1",
                         "frame_delivery": "json_array",
@@ -66,13 +76,17 @@ fn session_transport_contract() -> Value {
                         "max_frames_per_request": 60
                     },
                     "daemon_bounded_stream_request": {
-                        "status": "available",
+                        "status": "retired",
+                        "available": false,
+                        "reason_code": "legacy_session_authority_retired",
                         "command": "session request stream",
                         "read_only_without_input_relay_requires_lease": false,
                         "input_relay_requires_matching_lease": true
                     },
                     "per_request_input_relay": {
-                        "status": "available",
+                        "status": "unverified",
+                        "available": false,
+                        "reason_code": "runtime_dependency_unverified",
                         "actions": ["tap", "swipe", "long-tap", "key", "text"],
                         "max_events_per_request": 16,
                         "long_lived_session": false
@@ -88,14 +102,16 @@ fn session_transport_contract() -> Value {
             }
         },
         "safety": {
+            "strict_session_throat_status": "retired",
             "strict_session_throat_flag": "--require-session",
             "strict_session_throat_env": REQUIRE_SESSION_DAEMON_ENV,
-            "strict_session_throat_failure_code": "session_daemon_required",
+            "strict_session_throat_failure_code": "validation_failed",
             "clients_must_not_directly_touch_adb_or_devices": true,
             "remote_transport_must_not_start_without_authentication": true,
             "remote_transport_must_not_start_without_encryption": true,
             "control_requests_are_lease_gated": true,
-            "requests_are_serialized_by_resident_daemon": true
+            "requests_are_serialized_by_resident_daemon": false,
+            "execution_authority": "runtime"
         },
         "out_of_scope": [
             "network listener",

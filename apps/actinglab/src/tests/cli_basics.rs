@@ -316,14 +316,14 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
     }
 
     #[test]
-    fn run_summary_capability_is_read_only_and_available() {
+    fn run_summary_capability_is_read_only_and_unverified() {
         let command = command_capabilities()
             .into_iter()
             .find(|command| command.get("command").and_then(Value::as_str) == Some("run summary"))
             .expect("run summary capability");
         assert_eq!(
             command.get("status").and_then(Value::as_str),
-            Some("available")
+            Some("unverified")
         );
         assert_eq!(
             command.get("needs").and_then(Value::as_array),
