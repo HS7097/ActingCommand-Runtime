@@ -1,21 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#[cfg(test)]
+use super::GlobalLedgerConfig;
 use super::{
-    CommitStatistics, GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult,
-    LedgerAppendObservation, LedgerProjectViewObservation, Sha256SecretFingerprinter,
-    is_identifier, projection::EventIndexes,
+    CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerAppendObservation,
+    LedgerProjectViewObservation, Sha256SecretFingerprinter, is_identifier,
+    projection::EventIndexes,
 };
 use crate::PersistedEvent;
-use crate::fact::{LedgerEventRead, StoredEventRecord};
+#[cfg(test)]
+use crate::fact::LedgerEventRead;
+use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
     EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
-    EventType, GLOBAL_EVENT_SCHEMA_VERSION, IdentifierIssuer, IssuedActionId, LeasePayload,
-    LedgerPayload, LedgerPayloadDraft, OriginModule, PolicyDispatchEventData,
-    PolicyDispatchPayload, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, PolicyPayloadDraft, ProjectedArtifactReference,
-    RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation, Sensitivity,
-    TaskOutcome, TaskPayload, TaskSemanticFact, VerifiedArtifactReference,
+    EventType, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload, LedgerPayloadDraft,
+    OriginModule, PolicyDispatchEventData, PolicyDispatchPayload, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation,
+    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
+};
+#[cfg(test)]
+use actingcommand_contract::{
+    GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference, VerifiedArtifactReference,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -34,6 +41,7 @@ const REPAIR_SCHEMA_VERSION: &str = "actingcommand.ledger-repair.v1";
 const REPAIR_JOURNAL_FILE: &str = "repair-journal.jsonl";
 pub(super) const LINE_TYPE: &str = "event";
 
+#[cfg(test)]
 type ArtifactVerifier<'a> =
     dyn FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + 'a;
 
@@ -188,8 +196,10 @@ pub(super) struct EventStore<B> {
     pub(super) recovering_retention: bool,
 }
 
+#[cfg(test)]
 pub(super) type SegmentStore = EventStore<SegmentStorage>;
 
+#[cfg(test)]
 pub(super) struct SegmentStorage {
     root: PathBuf,
     segments_dir: PathBuf,
@@ -200,6 +210,7 @@ pub(super) struct SegmentStorage {
     active_file: File,
 }
 
+#[cfg(test)]
 impl SegmentStore {
     pub(super) fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
         Self::open_inner(config, None)
@@ -1418,6 +1429,7 @@ impl<B: DurableStorage> EventStore<B> {
     }
 }
 
+#[cfg(test)]
 impl DurableStorage for SegmentStorage {
     fn material_root(&self) -> &Path {
         &self.root
@@ -1459,6 +1471,7 @@ impl DurableStorage for SegmentStorage {
     }
 }
 
+#[cfg(test)]
 impl SegmentStorage {
     fn rotate(&mut self) -> GlobalLedgerResult<()> {
         self.active_file
@@ -1712,6 +1725,7 @@ pub(super) struct StoredLine {
     pub(super) event: StoredEventRecord,
 }
 
+#[cfg(test)]
 struct RecoveryState {
     next_sequence: u64,
     events: Vec<PersistedEvent>,
@@ -1740,6 +1754,7 @@ struct TailRepairRecord {
 }
 
 impl TailRepairRecord {
+    #[cfg(test)]
     fn prepared(
         segment_index: u64,
         original_len: u64,
@@ -1766,6 +1781,7 @@ impl TailRepairRecord {
         })
     }
 
+    #[cfg(test)]
     fn completed(&self) -> Self {
         let mut completed = self.clone();
         completed.state = RepairJournalState::Completed;
@@ -1968,6 +1984,7 @@ impl RepairJournal {
         Ok(())
     }
 
+    #[cfg(test)]
     fn unresolved(&self) -> Vec<TailRepairRecord> {
         self.repairs
             .values()
@@ -1976,15 +1993,18 @@ impl RepairJournal {
             .collect()
     }
 
+    #[cfg(test)]
     fn contains(&self, repair_id: &str) -> bool {
         self.repairs.contains_key(repair_id)
     }
 
+    #[cfg(test)]
     fn prepare(&mut self, root: &Path, record: TailRepairRecord) -> GlobalLedgerResult<()> {
         append_repair_record(root, &record)?;
         self.apply(record)
     }
 
+    #[cfg(test)]
     fn complete(&mut self, root: &Path, record: &TailRepairRecord) -> GlobalLedgerResult<()> {
         let completed = record.completed();
         append_repair_record(root, &completed)?;
@@ -1992,6 +2012,7 @@ impl RepairJournal {
     }
 }
 
+#[cfg(test)]
 struct SegmentSnapshot {
     index: u64,
     path: PathBuf,
@@ -2000,6 +2021,7 @@ struct SegmentSnapshot {
     is_last: bool,
 }
 
+#[cfg(test)]
 fn recover_segments(
     root: &Path,
     segments_dir: &Path,
@@ -2062,6 +2084,7 @@ fn recover_segments(
     })
 }
 
+#[cfg(test)]
 fn read_segment_snapshots(segments: &[(u64, PathBuf)]) -> GlobalLedgerResult<Vec<SegmentSnapshot>> {
     let mut snapshots = Vec::with_capacity(segments.len());
     for (position, (index, path)) in segments.iter().enumerate() {
@@ -2092,6 +2115,7 @@ fn read_segment_snapshots(segments: &[(u64, PathBuf)]) -> GlobalLedgerResult<Vec
     Ok(snapshots)
 }
 
+#[cfg(test)]
 fn parse_segment_records(
     snapshot: &SegmentSnapshot,
     next_sequence: &mut u64,
@@ -2163,6 +2187,7 @@ fn parse_segment_records(
     Ok(())
 }
 
+#[cfg(test)]
 fn resume_prepared_repair(
     root: &Path,
     snapshots: &[SegmentSnapshot],
@@ -2232,6 +2257,7 @@ fn resume_prepared_repair(
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_quarantine(
     root: &Path,
     repair: &TailRepairRecord,
@@ -2331,6 +2357,7 @@ fn verify_recovery_event(
     Ok(())
 }
 
+#[cfg(test)]
 fn append_repair_record(root: &Path, record: &TailRepairRecord) -> GlobalLedgerResult<()> {
     record.validate()?;
     let mut bytes = serde_json::to_vec(record).map_err(|error| {
@@ -2439,11 +2466,6 @@ pub(super) fn repair_test_barrier(stage: &str) -> GlobalLedgerResult<()> {
     }
 }
 
-#[cfg(not(test))]
-fn repair_test_barrier(_stage: &str) -> GlobalLedgerResult<()> {
-    Ok(())
-}
-
 pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64, PathBuf)>> {
     let mut segments = Vec::new();
     for entry in fs::read_dir(segments_dir)
@@ -2476,6 +2498,7 @@ pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64,
     Ok(segments)
 }
 
+#[cfg(test)]
 fn segment_path(segments_dir: &Path, index: u64) -> PathBuf {
     segments_dir.join(format!("segment-{index:06}.jsonl"))
 }

@@ -12,11 +12,21 @@ fn signatures_are_lab_owned_explicit_idempotent_operations_without_device_effect
     };
     use actingcommand_ledger::Sha256SecretFingerprinter;
     let input_root = TempDir::new().unwrap();
-    let input = GlobalLedger::open(GlobalLedgerConfig::new(
-        input_root.path().join("ledger"),
-        "signature-source",
-    ))
+    let database = Arc::new(
+        RuntimeStateStore::open_database(input_root.path(), b"host-signature-spec").unwrap(),
+    );
+    let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+    let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+        input_root.path(),
+        true,
+        limits,
+        limits.deadline().unwrap(),
+    )
     .unwrap();
+    maintenance.initialize_empty(&database).unwrap();
+    let input = maintenance
+        .open_writer(database, "signature-source".into(), |_| None)
+        .unwrap();
     let ids = IdentifierIssuer::new().unwrap();
     input
         .append(

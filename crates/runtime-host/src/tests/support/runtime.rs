@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capability";
 
 struct ManualRuntimeClock {
     unix_ms: AtomicU64,
@@ -240,14 +239,6 @@ impl TestClient {
     }
 }
 
-fn instance_id() -> InstanceId {
-    *IdentifierIssuer::new()
-        .expect("identifier issuer")
-        .mint_instance_id()
-        .expect("instance id")
-        .transport()
-}
-
 fn runtime_request(ids: &IdentifierIssuer, operation: RuntimeOperation) -> RuntimeRequest {
     RuntimeRequest::new(
         ids.mint_request_id().expect("request id"),
@@ -363,28 +354,6 @@ fn projected_task_semantic_fact(
         },
         _ => None,
     }
-}
-
-fn config(root: &TempDir) -> RuntimeHostConfig {
-    RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
-        .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
-        .with_procedure_manifest(procedure_manifest())
-        .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
-        .with_io_timeout(Duration::from_millis(500))
-        .with_scheduler(SchedulerConfig {
-            maximum_client_heartbeat_interval_ms: 20,
-            takeover_cooldown_ms: 40,
-            lease_ttl_ms: 5_000,
-            ..SchedulerConfig::default()
-        })
-}
-
-fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> RuntimeHost {
-    RuntimeHost::start(
-        config(root),
-        Arc::new(FakeProvider::one(alias, instance_id(), state)),
-    )
-    .expect("runtime host")
 }
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {

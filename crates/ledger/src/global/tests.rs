@@ -2657,5 +2657,14 @@ fn duplicate_event_id_is_fatal() {
 
 mod store_contract;
 
+#[path = "tests/forensics_cli.rs"]
+mod forensics_cli;
+#[path = "tests/forensics_read_only.rs"]
+mod forensics_read_only;
+#[path = "tests/process.rs"]
+mod process;
+#[path = "tests/sealed_global_ledger.rs"]
+mod sealed_global_ledger;
+
 #[path = "tests/sqlite_contract.rs"]
 pub(super) mod sqlite_contract;
