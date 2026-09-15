@@ -6,8 +6,9 @@
 //! I/O. The host owns the single instance, appends every accepted record to the
 //! `GlobalLedger` before calling [`RuntimeFactStore::record`], seals the store
 //! with [`RuntimeFactStore::snapshot`] on a fixed period, and rebuilds it after
-//! a restart with [`RuntimeFactStore::replay`]. Anything not sealed or
-//! appended is gone with the process, by design (iron rule 13).
+//! a restart with [`RuntimeFactStore::replay`] followed by the records appended
+//! after that snapshot. Anything not appended is gone with the process, by
+//! design (iron rule 13).
 
 use actingcommand_contract::{
     InstanceId, MAX_RUNTIME_FACTS, RUNTIME_FACT_SCHEMA_VERSION, RuntimeFactInvalidation,
@@ -66,8 +67,6 @@ impl Error for RuntimeFactError {}
 #[derive(Debug, Default, Clone)]
 pub struct RuntimeFactStore {
     active: BTreeMap<(RuntimeFactScope, String), RuntimeFactRecord>,
-    pending: Vec<RuntimeFactRecord>,
-    revision: u64,
 }
 
 impl RuntimeFactStore {
@@ -76,9 +75,10 @@ impl RuntimeFactStore {
         Self::default()
     }
 
-    /// Accepts one record. A newer observation replaces the stored one; the
-    /// identical record is idempotent; an older observation is rejected so a
-    /// late writer can never roll a value back.
+    /// Accepts one record. A strictly newer observation replaces the stored
+    /// one; the identical record is idempotent; an observation at the same or
+    /// an older millisecond is rejected, so a late writer can never roll a
+    /// value back and two producers cannot race within one millisecond.
     pub fn record(
         &mut self,
         record: RuntimeFactRecord,
@@ -89,15 +89,13 @@ impl RuntimeFactStore {
         let key = (record.scope.clone(), record.key.clone());
         match self.active.get(&key) {
             Some(existing) if *existing == record => Ok(RuntimeFactChange::Unchanged),
-            Some(existing) if existing.observed_at_unix_ms > record.observed_at_unix_ms => {
+            Some(existing) if existing.observed_at_unix_ms >= record.observed_at_unix_ms => {
                 Err(RuntimeFactError::Stale {
                     existing_observed_at_unix_ms: existing.observed_at_unix_ms,
                 })
             }
             Some(_) => {
-                self.active.insert(key, record.clone());
-                self.pending.push(record);
-                self.revision += 1;
+                self.active.insert(key, record);
                 Ok(RuntimeFactChange::Updated)
             }
             None => {
@@ -106,9 +104,7 @@ impl RuntimeFactStore {
                         limit: MAX_RUNTIME_FACTS,
                     });
                 }
-                self.active.insert(key, record.clone());
-                self.pending.push(record);
-                self.revision += 1;
+                self.active.insert(key, record);
                 Ok(RuntimeFactChange::Inserted)
             }
         }
@@ -126,7 +122,6 @@ impl RuntimeFactStore {
             .active
             .remove(&(scope.clone(), key.to_owned()))
             .ok_or(RuntimeFactError::Missing)?;
-        self.revision += 1;
         Ok(RuntimeFactInvalidation {
             scope: removed.scope,
             key: removed.key,
@@ -154,7 +149,15 @@ impl RuntimeFactStore {
             .map(|((_, key), _)| key.clone())
             .collect::<Vec<_>>();
         keys.into_iter()
-            .filter_map(|key| self.invalidate(&scope, &key, reason, at_unix_ms).ok())
+            .map(|key| {
+                self.active.remove(&(scope.clone(), key.clone()));
+                RuntimeFactInvalidation {
+                    scope: scope.clone(),
+                    key,
+                    reason,
+                    at_unix_ms,
+                }
+            })
             .collect()
     }
 
@@ -178,11 +181,6 @@ impl RuntimeFactStore {
         self.active.is_empty()
     }
 
-    /// Monotonic count of accepted mutations since construction or replay.
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
     /// Sealed image of every live record, bound to the ledger position the host
     /// observed when sealing. Expired records are included; expiry is a read
     /// predicate evaluated by consumers.
@@ -195,24 +193,16 @@ impl RuntimeFactStore {
         }
     }
 
-    /// Replaces the whole store with a sealed image. Pending records are
-    /// discarded because the snapshot already covers them.
+    /// Replaces the whole store with a sealed image.
     pub fn replay(&mut self, snapshot: &RuntimeFactSnapshot) -> Result<usize, RuntimeFactError> {
         snapshot
             .validate()
             .map_err(|error| RuntimeFactError::Invalid { code: error.code() })?;
         self.active.clear();
-        self.pending.clear();
         for record in &snapshot.records {
             self.active
                 .insert((record.scope.clone(), record.key.clone()), record.clone());
         }
-        self.revision += 1;
         Ok(self.active.len())
-    }
-
-    /// Records accepted since the last snapshot or drain, in acceptance order.
-    pub fn drain_pending(&mut self) -> Vec<RuntimeFactRecord> {
-        std::mem::take(&mut self.pending)
     }
 }
