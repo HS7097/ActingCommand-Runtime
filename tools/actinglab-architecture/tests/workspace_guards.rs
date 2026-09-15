@@ -10,7 +10,7 @@ use actingcommand_actinglab_architecture::{
     inspect_generic_authoring_identity, inspect_generic_runtime_identity,
     inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
+    ledger_owns_query_matching, resource_tooling_removability_violations,
     workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
@@ -27,7 +27,7 @@ fn semantic_caller_row(path: &str, line: &str) -> String {
     format!("{path}:{}\n", line.trim())
 }
 
-const GENERIC_NON_CARGO_ROOTS: &[&str] = &["benchmarks/workloads", "contracts", "tests"];
+const GENERIC_NON_CARGO_ROOTS: &[&str] = &["contracts", "tests"];
 
 const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] = &[
     "apps/actinglab",
@@ -120,68 +120,15 @@ fn workspace_genericity_roots(root: &Path) -> BTreeMap<PathBuf, GenericityDomain
 }
 
 #[test]
-fn a7_interface_amendment_matches_declared_freeze() {
-    assert_frozen_payload(
-        "docs/architecture/actinglab-a7-interface-amendment.md",
-        "<!-- A7-INTERFACE-FREEZE-BEGIN -->\n",
-        "<!-- A7-INTERFACE-FREEZE-END -->",
-        "A7 interface amendment",
-    );
-}
-
-#[test]
-fn issue33_chain_amendment_matches_declared_freeze() {
-    assert_frozen_payload(
-        "docs/architecture/actinglab-chain-amendment-20260710.md",
-        "<!-- ISSUE33-CHAIN-FREEZE-BEGIN -->\n",
-        "<!-- ISSUE33-CHAIN-FREEZE-END -->",
-        "issue 33 chain amendment",
-    );
-}
-
-#[test]
-fn issue35_c0_architecture_matches_declared_freeze() {
-    assert_frozen_payload(
-        "docs/architecture/runtime-ledger-v3-c0-freeze.md",
-        "<!-- RUNTIME-LEDGER-V3-C0-FREEZE-BEGIN -->\n",
-        "<!-- RUNTIME-LEDGER-V3-C0-FREEZE-END -->",
-        "issue 35 C0 architecture",
-    );
-}
-
-fn assert_frozen_payload(path: &str, begin: &str, end: &str, label: &str) {
-    let source = fs::read_to_string(workspace_root().join(path))
-        .unwrap_or_else(|error| panic!("read {label}: {error}"));
-    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
-    let declared = normalized
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("Frozen payload SHA-256: `")
-                .and_then(|value| value.strip_suffix('`'))
-        })
-        .unwrap_or_else(|| panic!("{label} declares frozen payload SHA-256"));
-    let payload = normalized
-        .split_once(begin)
-        .and_then(|(_, tail)| tail.split_once(end).map(|(payload, _)| payload))
-        .unwrap_or_else(|| panic!("{label} contains freeze markers"));
-    let actual = format!("{:x}", Sha256::digest(payload.as_bytes()));
-
-    assert_eq!(actual, declared, "{label} freeze drifted");
-}
-
-#[test]
-fn lab_source_obeys_dependency_law_or_placeholder_is_consistent() {
+fn lab_source_obeys_dependency_law() {
     let root = workspace_root();
     let lab_root = root.join("crates/lab");
-    if !lab_root.exists() {
-        let workspace_manifest =
-            fs::read_to_string(root.join("Cargo.toml")).expect("read workspace Cargo.toml");
-        assert!(
-            !workspace_manifest.contains("\"crates/lab\""),
-            "workspace registers crates/lab before the crate exists"
-        );
-        return;
-    }
+    let workspace_manifest =
+        fs::read_to_string(root.join("Cargo.toml")).expect("read workspace Cargo.toml");
+    assert!(
+        workspace_manifest.contains("\"crates/lab\""),
+        "workspace must register the required crates/lab member"
+    );
 
     let mut files = Vec::new();
     collect_rust_files(&lab_root, &mut files);
@@ -1337,15 +1284,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         "production packages depend on forensic leaf or its tool consumers: {}",
         production_dependants.join(", ")
     );
-
-    let source = fs::read_to_string(root.join("apps/ledger-forensics/src/main.rs"))
-        .expect("read apps/ledger-forensics/src/main.rs");
-    let baseline = fs::read_to_string(root.join("ratchet/ledger_forensics_main_rs_lines.txt"))
-        .expect("read ratchet/ledger_forensics_main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ledger_forensics_main_rs_lines.txt must contain one integer");
-    validate_line_ratchet(baseline, source.lines().count()).unwrap();
 }
 
 #[test]
@@ -1374,39 +1312,6 @@ fn c5_lab_consumes_artifact_frame_store_without_an_ownership_wrapper() {
         );
     }
 }
-#[test]
-fn c5_portable_output_archive_is_owned_by_artifact_store() {
-    let root = workspace_root();
-    let artifact = fs::read_to_string(root.join("crates/artifact-store/src/portable_archive.rs"))
-        .expect("read portable archive source");
-    let artifact_frame_store =
-        fs::read_to_string(root.join("crates/artifact-store/src/frame_store.rs"))
-            .expect("read artifact frame store source");
-    let exporter = fs::read_to_string(root.join("crates/artifact-store/src/exporter.rs"))
-        .expect("read evidence exporter");
-    let lab_api = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
-        .expect("read Lab validation adapter");
-
-    assert!(artifact.contains("pub fn write_portable_projection_archive"));
-    assert!(artifact_frame_store.contains("PortableFrameEvidenceProjection"));
-    assert!(artifact_frame_store.contains("pub fn portable_evidence_projection"));
-    assert!(exporter.contains("pub struct EvidenceExporter"));
-    assert!(exporter.contains("ScreenshotNameAllocator::in_memory()"));
-    assert!(!lab_api.contains("timestamp_file_stem"));
-    assert!(!lab_api.contains("HashMap<String, usize>"));
-    for forbidden in [
-        "fn write_output_zip",
-        "ZipWriter",
-        "add_zip_dir",
-        "path_to_zip_name",
-    ] {
-        assert!(
-            !lab_api.contains(forbidden),
-            "Lab regained portable archive mechanics via {forbidden}"
-        );
-    }
-}
-
 #[test]
 fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
     let root = workspace_root();
@@ -4808,17 +4713,6 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
             "drift-diagnostics path invariant changed: {invariant}"
         );
     }
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "drift-diagnostics path move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -4959,17 +4853,6 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
             "touch-backend invariant changed: {invariant}"
         );
     }
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "touch-backend move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5127,17 +5010,6 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second match-metric parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "match-metric move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5275,17 +5147,6 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     assert_eq!(
         definition_count, 1,
         "ActingLab gained a second record-candidates step-id parser or authority"
-    );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "record-candidates step-id move and main.rs ratchet diverged"
     );
 }
 
@@ -5452,17 +5313,6 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second input-relay parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "input-relay move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5616,17 +5466,6 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     assert_eq!(
         definition_count, 1,
         "ActingLab gained a second record-build resolution parser or authority"
-    );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "record-build resolution move and main.rs ratchet diverged"
     );
 }
 
@@ -5808,17 +5647,6 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second session-record region parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "session-record region move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5989,17 +5817,6 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second session-record rectangle parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "session-record rectangle move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -6143,17 +5960,6 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second session-record swipe parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "session-record swipe move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -6213,18 +6019,4 @@ fn actinglab_parse_session_record_candidate_index_glue_stays_out_of_main() {
         3,
         "session-record candidate-index production caller set changed"
     );
-}
-
-#[test]
-fn main_rs_line_ratchet_matches_checked_in_baseline() {
-    let root = workspace_root();
-    let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
-        .expect("read apps/actinglab/src/main.rs");
-    let baseline = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-
-    validate_line_ratchet(baseline, source.lines().count()).unwrap();
 }

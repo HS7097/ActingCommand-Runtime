@@ -1,6 +1,6 @@
 # ActingLab CLI Exit-Code Baseline
 
-Source baseline: `bfb46a7ffa177916a36e8c27c9c32fb01f3d55e2`.
+Source baseline: `f0a5b8536ac19f3df43dcae823c13466ad4d3a13`.
 
 The current CLI adapter maps semantic error classes to process exit codes as follows:
 

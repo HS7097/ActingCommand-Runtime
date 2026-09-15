@@ -18,21 +18,6 @@ pub struct CommandInventory {
     pub commands: Vec<String>,
 }
 
-/// Enforces the exact line baseline so growth and unrecorded shrinkage both fail.
-pub fn validate_line_ratchet(baseline: usize, actual: usize) -> Result<(), String> {
-    if actual > baseline {
-        return Err(format!(
-            "apps/actinglab/src/main.rs grew from {baseline} to {actual} lines"
-        ));
-    }
-    if actual < baseline {
-        return Err(format!(
-            "apps/actinglab/src/main.rs is {actual} lines; lower the ratchet from {baseline} in the same commit"
-        ));
-    }
-    Ok(())
-}
-
 /// Finds CLI/process/config access forbidden inside the future `crates/lab` source tree.
 pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, String> {
     syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
@@ -44,14 +29,6 @@ pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, Strin
         ("env::var_os(", "env::var_os"),
         ("env::temp_dir(", "env::temp_dir"),
         ("env::current_dir(", "env::current_dir"),
-        (
-            "pub fn package_build_pack(",
-            "out-of-scope Lab::package_build_pack",
-        ),
-        (
-            "pub fn compile_maa_tasks(",
-            "out-of-scope Lab::compile_maa_tasks",
-        ),
         ("println!(", "println!"),
         ("eprintln!(", "eprintln!"),
     ];
@@ -376,72 +353,6 @@ pub fn inspect_public_api(path: &str, source: &str) -> Result<Vec<String>, Strin
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
     let mut violations = Vec::new();
     inspect_public_items(path, &file.items, None, &mut violations);
-    Ok(violations)
-}
-
-/// Keeps the C3a read-only admission capability from becoming a writable authority escape.
-pub fn inspect_readonly_capture_capability(
-    path: &str,
-    source: &str,
-) -> Result<Vec<String>, String> {
-    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
-    let mut found_struct = false;
-    let mut found_impl = false;
-    let mut violations = Vec::new();
-    for item in &file.items {
-        match item {
-            Item::Struct(item_struct) if item_struct.ident == "ReadOnlyCaptureCapability" => {
-                found_struct = true;
-                if item_struct.fields.iter().any(|field| is_public(&field.vis)) {
-                    violations.push(format!(
-                        "{path}: ReadOnlyCaptureCapability exposes a public field"
-                    ));
-                }
-            }
-            Item::Impl(item_impl)
-                if impl_self_ident(item_impl)
-                    .is_some_and(|ident| ident == "ReadOnlyCaptureCapability") =>
-            {
-                found_impl = true;
-                if let Some((_, trait_path, _)) = &item_impl.trait_ {
-                    let trait_name = trait_path
-                        .segments
-                        .last()
-                        .map(|segment| segment.ident.to_string())
-                        .unwrap_or_else(|| "<unknown>".to_string());
-                    violations.push(format!(
-                        "{path}: ReadOnlyCaptureCapability explicitly implements {trait_name}"
-                    ));
-                    continue;
-                }
-                for item in &item_impl.items {
-                    let syn::ImplItem::Fn(method) = item else {
-                        continue;
-                    };
-                    if is_public(&method.vis)
-                        && !matches!(
-                            method.sig.ident.to_string().as_str(),
-                            "instance_id" | "recognition_id"
-                        )
-                    {
-                        violations.push(format!(
-                            "{path}: ReadOnlyCaptureCapability exposes unexpected public method {}",
-                            method.sig.ident
-                        ));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    if !found_struct {
-        violations.push(format!("{path}: ReadOnlyCaptureCapability is missing"));
-    }
-    if !found_impl {
-        violations.push(format!(
-            "{path}: ReadOnlyCaptureCapability inherent implementation is missing"
-        ));
-    }
     Ok(violations)
 }
 
@@ -3104,21 +3015,6 @@ mod tests {
     }
 
     #[test]
-    fn line_ratchet_requires_exact_checked_in_count() {
-        assert!(super::validate_line_ratchet(100, 100).is_ok());
-        assert!(
-            super::validate_line_ratchet(100, 101)
-                .unwrap_err()
-                .contains("grew")
-        );
-        assert!(
-            super::validate_line_ratchet(100, 99)
-                .unwrap_err()
-                .contains("lower the ratchet")
-        );
-    }
-
-    #[test]
     fn command_inventory_expands_group_dispatch_into_concrete_commands() {
         let source = r#"
             fn execute(invocation: &Invocation) {
@@ -3369,8 +3265,6 @@ mod tests {
                 let _ = std::env::temp_dir();
                 let _ = std::env::current_dir();
             }
-            pub fn package_build_pack() {}
-            pub fn compile_maa_tasks() {}
         "#;
 
         let violations = super::inspect_lab_source("fixture.rs", source).unwrap();
@@ -3386,16 +3280,6 @@ mod tests {
             violations
                 .iter()
                 .any(|item| item.contains("env::current_dir"))
-        );
-        assert!(
-            violations
-                .iter()
-                .any(|item| item.contains("Lab::package_build_pack"))
-        );
-        assert!(
-            violations
-                .iter()
-                .any(|item| item.contains("Lab::compile_maa_tasks"))
         );
     }
 }

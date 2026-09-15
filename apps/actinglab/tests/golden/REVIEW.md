@@ -2,7 +2,7 @@
 
 ## Source
 
-- Runtime behavior baseline: `bfb46a7ffa177916a36e8c27c9c32fb01f3d55e2`
+- Runtime behavior baseline: `f0a5b8536ac19f3df43dcae823c13466ad4d3a13`
 - Frozen task specification SHA-256: `efb9e37f10807ce2a615205e3924021ad91eb073a54e4c65cd178e14b0aeab3b`
 - Expectations are recorded from the production `actinglab` binary by an explicit maintainer command and checked in as static JSON.
 - Normal test execution never regenerates expectations.

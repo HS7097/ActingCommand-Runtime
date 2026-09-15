@@ -251,7 +251,6 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
- "tempfile",
  "trybuild",
  "zip",
 ]
@@ -321,13 +320,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "zip",
-]
-
-[[package]]
-name = "actingcommand-runtime-bench"
-version = "0.1.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]

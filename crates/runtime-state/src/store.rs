@@ -497,7 +497,7 @@ impl RuntimeStateStore {
         RuntimeDatabase::open(
             root,
             integrity_key,
-            include_str!("schema.sql"),
+            include_str!("../../../contracts/sqlite/schema.sql"),
             RUNTIME_STATE_SCHEMA_VERSION,
             |root| prepare_release_blob_store(root).map(|_| ()),
         )
@@ -3200,7 +3200,7 @@ mod tests {
             .join("sqlite")
             .join("schema.sql");
         assert_eq!(
-            include_bytes!("schema.sql").as_slice(),
+            include_bytes!("../../../contracts/sqlite/schema.sql").as_slice(),
             fs::read(published).expect("published schema")
         );
     }
