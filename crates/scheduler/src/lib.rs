@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod facts;
+
 use actingcommand_contract::{
     ContainedTaskRequest, HolderId, IdentifierIssuer, InstanceId, LeaseId, LeasePriority,
     LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch, RequestId,
