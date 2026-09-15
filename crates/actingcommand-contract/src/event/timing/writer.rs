@@ -26,6 +26,7 @@ pub enum TaskTimingWriterCommand {
     Query,
     QueryPage,
     ProjectViewPage,
+    ResolveArtifact,
     ProjectSchedulingOutcomes,
     LatestSequence,
     Subscribe,

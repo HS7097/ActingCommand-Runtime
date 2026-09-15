@@ -1060,6 +1060,7 @@ impl ArtifactReader {
                 "read_projected_artifact",
                 error.to_string(),
             )
+            .with_io_error(&error)
         })?;
         self.material.update(&buffer[..count]).map_err(|error| {
             ArtifactStoreError::fatal(
@@ -1112,6 +1113,147 @@ impl ArtifactReader {
             )
         })
     }
+
+    /// Returns all bytes only after verified EOF, within the caller's allocation and time bounds.
+    /// The deadline is cooperative around synchronous reads; it does not cancel system I/O.
+    pub fn read_verified_complete(
+        mut self,
+        max_material_bytes: usize,
+        deadline: Instant,
+    ) -> ArtifactStoreResult<(VerifiedArtifactReference, Vec<u8>)> {
+        material_read_deadline(deadline)?;
+        let limit_error = ArtifactStoreError::read_material_limit_exceeded;
+        let expected_length = usize::try_from(self.reference.byte_count)
+            .ok()
+            .filter(|length| {
+                max_material_bytes > 0
+                    && max_material_bytes <= isize::MAX as usize
+                    && *length <= max_material_bytes
+            })
+            .ok_or_else(limit_error)?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 65_536];
+        loop {
+            material_read_deadline(deadline)?;
+            let count = self.read_chunk(&mut buffer)?;
+            material_read_deadline(deadline)?;
+            if count == 0 {
+                break;
+            }
+            let next_length = bytes
+                .len()
+                .checked_add(count)
+                .filter(|length| *length <= expected_length)
+                .ok_or_else(limit_error)?;
+            if next_length > bytes.capacity() {
+                let capacity = bytes
+                    .capacity()
+                    .checked_mul(2)
+                    .unwrap_or(max_material_bytes)
+                    .clamp(next_length, max_material_bytes);
+                bytes
+                    .try_reserve_exact(capacity - bytes.len())
+                    .map_err(|error| {
+                        ArtifactStoreError::fatal(
+                            "artifact_read_allocation_failed",
+                            "read_projected_artifact_complete",
+                            error.to_string(),
+                        )
+                    })?;
+                if bytes.capacity() > max_material_bytes {
+                    return Err(limit_error());
+                }
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let verified = self.finish()?;
+        material_read_deadline(deadline)?;
+        if bytes.len() != expected_length {
+            return Err(ArtifactStoreError::fatal(
+                "artifact_verify_failed",
+                "read_projected_artifact_complete",
+                "complete material length differs from its verified reference",
+            ));
+        }
+        Ok((verified, bytes))
+    }
+
+    /// Retains only the selected range. No byte leaves this reader before verified EOF.
+    pub fn read_verified_range(
+        mut self,
+        offset: u64,
+        requested_length: u32,
+        deadline: Instant,
+    ) -> ArtifactStoreResult<VerifiedArtifactRange> {
+        let end = offset
+            .checked_add(u64::from(requested_length))
+            .filter(|_| {
+                offset < self.reference.byte_count
+                    && (1..=actingcommand_contract::MAX_RUNTIME_MATERIAL_CHUNK_BYTES)
+                        .contains(&requested_length)
+            })
+            .ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "artifact_read_range_invalid",
+                    "read_projected_artifact_range",
+                    "range exceeds its committed material identity",
+                )
+            })?
+            .min(self.reference.byte_count);
+        let mut bytes = Vec::with_capacity((end - offset) as usize);
+        let mut buffer = [0_u8; 65_536];
+        let mut position = 0_u64;
+        loop {
+            material_read_deadline(deadline)?;
+            let count = self.read_chunk(&mut buffer)?;
+            material_read_deadline(deadline)?;
+            if count == 0 {
+                break;
+            }
+            let next = position.checked_add(count as u64).ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "artifact_read_range_invalid",
+                    "read_projected_artifact_range",
+                    "read position overflow",
+                )
+            })?;
+            let selected_start = offset.max(position);
+            let selected_end = end.min(next);
+            if selected_start < selected_end {
+                bytes.extend_from_slice(
+                    &buffer
+                        [(selected_start - position) as usize..(selected_end - position) as usize],
+                );
+            }
+            position = next;
+        }
+        let verified = self.finish()?;
+        material_read_deadline(deadline)?;
+        Ok(VerifiedArtifactRange {
+            verified,
+            offset,
+            bytes,
+        })
+    }
+}
+
+pub struct VerifiedArtifactRange {
+    verified: VerifiedArtifactReference,
+    offset: u64,
+    bytes: Vec<u8>,
+}
+
+impl VerifiedArtifactRange {
+    pub fn into_parts(self) -> (VerifiedArtifactReference, u64, Vec<u8>) {
+        (self.verified, self.offset, self.bytes)
+    }
+}
+
+fn material_read_deadline(deadline: Instant) -> ArtifactStoreResult<()> {
+    if Instant::now() >= deadline {
+        return Err(ArtifactStoreError::read_budget_exceeded());
+    }
+    Ok(())
 }
 
 impl Read for ArtifactReader {
@@ -1146,6 +1288,7 @@ pub fn open_projected_stream(
             "read_projected_artifact",
             error.to_string(),
         )
+        .with_io_error(&error)
     })?;
     let path = safe_object_path(&root, object_key)?;
     let file = File::open(path).map_err(|error| {
@@ -1154,6 +1297,7 @@ pub fn open_projected_stream(
             "read_projected_artifact",
             error.to_string(),
         )
+        .with_io_error(&error)
     })?;
     let use_guard = crate::usage::reader_guard(&root, reference, &file)?;
     Ok(ArtifactReader {

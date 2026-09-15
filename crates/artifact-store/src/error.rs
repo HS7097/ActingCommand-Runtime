@@ -18,6 +18,7 @@ pub struct ArtifactStoreError {
     omitted_secondary_count: u64,
     fatal: bool,
     raw_os_error: Option<i32>,
+    io_error_kind: Option<std::io::ErrorKind>,
     capacity: Option<Box<actingcommand_contract::CapacityDecision>>,
 }
 
@@ -31,6 +32,7 @@ impl ArtifactStoreError {
             omitted_secondary_count: 0,
             fatal: true,
             raw_os_error: None,
+            io_error_kind: None,
             capacity: None,
         }
     }
@@ -65,6 +67,36 @@ impl ArtifactStoreError {
     pub fn with_raw_os_error(mut self, code: Option<i32>) -> Self {
         self.raw_os_error = code;
         self
+    }
+
+    pub(crate) fn with_io_error(mut self, error: &std::io::Error) -> Self {
+        self.raw_os_error = error.raw_os_error();
+        self.io_error_kind = Some(error.kind());
+        self
+    }
+
+    pub const fn io_error_kind(&self) -> Option<std::io::ErrorKind> {
+        self.io_error_kind
+    }
+
+    pub(crate) fn read_budget_exceeded() -> Self {
+        let mut error = Self::fatal(
+            "artifact_read_budget_exceeded",
+            "read_projected_artifact_range",
+            "cooperative material read budget expired",
+        );
+        error.fatal = false;
+        error
+    }
+
+    pub(crate) fn read_material_limit_exceeded() -> Self {
+        let mut error = Self::fatal(
+            "artifact_read_material_limit",
+            "read_projected_artifact_complete",
+            "complete material exceeds its explicit owned-buffer bound",
+        );
+        error.fatal = false;
+        error
     }
 
     pub fn with_capacity(

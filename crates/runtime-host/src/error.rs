@@ -137,6 +137,13 @@ impl RuntimeHostError {
         self.lifecycle.diagnostic_detail.as_deref()
     }
 
+    pub(crate) fn with_diagnostic_detail(mut self, detail: DiagnosticDetailDraft) -> Self {
+        if self.lifecycle.diagnostic_detail.is_none() {
+            self.lifecycle.diagnostic_detail = Some(Box::new(detail));
+        }
+        self
+    }
+
     pub(crate) fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
         self.lifecycle.cleanup_cause.as_deref()
     }

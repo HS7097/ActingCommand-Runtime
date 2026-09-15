@@ -161,6 +161,14 @@ fn b3_commit_statistics_follow_successful_write_sync_and_preserve_failure() {
 pub(super) trait DurableStorage: Send + 'static {
     fn material_root(&self) -> &Path;
 
+    fn resolve_artifact(
+        &self,
+        _selection: &super::LedgerArtifactSelection,
+        _deadline: Instant,
+    ) -> Option<GlobalLedgerResult<super::ResolvedLedgerArtifact>> {
+        None
+    }
+
     fn project_view_page(
         &self,
         _query: &actingcommand_contract::EventQuery,
@@ -1315,6 +1323,24 @@ impl<B: DurableStorage> EventStore<B> {
 
     pub(super) fn latest_sequence(&self) -> u64 {
         self.events.last().map_or(0, PersistedEvent::sequence)
+    }
+
+    pub(super) fn resolve_artifact(
+        &self,
+        selection: &super::LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+        if let Some(resolved) = self.backend.resolve_artifact(selection, deadline) {
+            return resolved;
+        }
+        super::evidence::resolve_artifact_from_events(
+            &self.events,
+            selection,
+            self.latest_sequence(),
+            true,
+            deadline,
+            Some(&self.retention),
+        )
     }
 
     pub(super) fn project_view_page(
