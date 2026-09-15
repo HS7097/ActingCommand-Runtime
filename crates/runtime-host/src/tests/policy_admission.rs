@@ -499,6 +499,288 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
 }
 
 #[test]
+fn capacity_pressure_refuses_policy_admission_before_lease_and_recovers_in_place() {
+    // Specification criterion: Workflow #287, issuecomment-5664237218.
+    use actingcommand_contract::{
+        CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityPurpose, CapacityState,
+        CapacityThresholds, PerformancePayload,
+    };
+    use actingcommand_host_metrics::{
+        CapacitySample, CapacityTarget, HostSample, HostSampler, ProcessLoadThresholds,
+    };
+
+    struct AdmissionCapacitySampler {
+        available_bytes: Arc<AtomicU64>,
+    }
+
+    impl HostSampler for AdmissionCapacitySampler {
+        fn sample_capacity(&mut self, targets: &[CapacityTarget]) -> Vec<CapacitySample> {
+            let available_bytes = self.available_bytes.load(Ordering::Acquire);
+            actingcommand_host_metrics::sample_capacity(targets)
+                .into_iter()
+                .map(|mut sample| {
+                    if sample.available_bytes.is_ok() {
+                        sample.available_bytes = Ok(available_bytes);
+                    }
+                    sample
+                })
+                .collect()
+        }
+
+        fn sample(
+            &mut self,
+            _observed_at_unix_ms: u64,
+            _owned_processes: &BTreeMap<u32, String>,
+            _top_process_count: usize,
+            _thresholds: ProcessLoadThresholds,
+        ) -> Result<HostSample, &'static str> {
+            panic!("capacity-only specification does not enable performance counters")
+        }
+    }
+
+    for scheduled in [false, true] {
+        let root = TempDir::new().expect("capacity admission tempdir");
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let state = Arc::new(FakeState::default());
+        let thresholds = CapacityThresholds::default();
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_runtime_clock(clock.clone())
+                .with_capacity_thresholds(thresholds),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .expect("capacity admission host");
+        host.activate_policy_catalog(&policy_sources(1))
+            .expect("activate capacity admission catalog");
+        let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+        record_policy_approval(&host, &intent);
+        let admission_context = policy_context(&host, &intent);
+        let task_request = ContainedTaskRequest::new(
+            root.path()
+                .join("capacity-admission.zip")
+                .to_string_lossy()
+                .into_owned(),
+            intent
+                .package_digest
+                .clone()
+                .expect("evaluated package reference"),
+        )
+        .expect("declared scheduled request");
+        let available_bytes = Arc::new(AtomicU64::new(0));
+        host.replace_capacity_sampler_for_test(Box::new(AdmissionCapacitySampler {
+            available_bytes: Arc::clone(&available_bytes),
+        }))
+        .expect("commit hard-pressure capacity through the original owner");
+
+        let failure = if scheduled {
+            host.admit_scheduled_policy_dispatch(
+                &intent,
+                &reasons,
+                &admission_context,
+                &task_request,
+            )
+        } else {
+            host.admit_policy_dispatch(&intent, &reasons, &admission_context)
+        }
+        .expect_err("hard pressure must refuse before lease request");
+        assert_eq!(failure.code(), "capacity_admission_refused");
+        assert!(!failure.is_fatal());
+        let decision = failure
+            .lifecycle
+            .capacity
+            .as_ref()
+            .expect("capacity decision");
+        decision.validate().expect("valid refusal decision");
+        assert_eq!(decision.outcome, CapacityAdmissionOutcome::HardPressure);
+        assert_eq!(decision.reason, CapacityAdmissionReason::HardThreshold);
+        assert_eq!(decision.owner_epoch, host.runtime_info().owner_epoch());
+        assert_eq!(decision.requested_bytes, 0);
+        assert!(decision.target_volume.is_none());
+        let reference = decision
+            .fact
+            .as_ref()
+            .expect("committed capacity reference");
+        let samples = host
+            .query_persisted_events_for_test(EventQuery {
+                from_sequence: Some(reference.sequence),
+                to_sequence: Some(reference.sequence),
+                event_type: Some(EventType::PerformanceSummary),
+                ..EventQuery::default()
+            })
+            .expect("read the decision's actual committed sample");
+        assert_eq!(samples.len(), 1);
+        let sample_event = &samples[0];
+        assert_eq!(sample_event.event_id(), &reference.event_id);
+        assert_eq!(sample_event.sequence(), reference.sequence);
+        let EventPayload::Performance(PerformancePayload::Summary(payload)) =
+            sample_event.payload()
+        else {
+            panic!("capacity summary payload")
+        };
+        let sample = payload.capacity().expect("capacity sample");
+        sample.validate().expect("valid committed sample");
+        assert_eq!(sample.owner_epoch, decision.owner_epoch);
+        assert_eq!(reference.owner_epoch, sample.owner_epoch);
+        assert_eq!(sample.thresholds, thresholds);
+        assert_eq!(reference.observed_at_unix_ms, sample.observed_at_unix_ms);
+        assert_eq!(
+            reference.observed_at_monotonic_ms,
+            sample.observed_at_monotonic_ms
+        );
+        assert_eq!(decision.decided_at_unix_ms, POLICY_NOW_UNIX_MS);
+        assert_eq!(decision.decided_at_monotonic_ms, 0);
+        assert!(
+            decision
+                .decided_at_unix_ms
+                .checked_sub(sample.observed_at_unix_ms)
+                .is_some_and(|age| age <= sample.freshness_ms)
+        );
+        assert!(
+            decision
+                .decided_at_monotonic_ms
+                .checked_sub(sample.observed_at_monotonic_ms)
+                .is_some_and(|age| age <= sample.freshness_ms)
+        );
+        let state_volume = actingcommand_host_metrics::capacity_volume(root.path())
+            .expect("actual temporary state volume");
+        assert!(sample.volumes.iter().any(|volume| {
+            volume.purposes.contains(&CapacityPurpose::State)
+                && volume.volume_id.as_ref() == Some(&state_volume)
+        }));
+        assert!(sample.volumes.iter().all(|volume| {
+            volume.available_bytes == Some(0)
+                && volume.state == CapacityState::HardPressure
+                && volume.cause.is_none()
+        }));
+
+        let rejected = host
+            .query_persisted_events_for_test(EventQuery {
+                event_type: Some(EventType::PolicyDispatchRejected),
+                ..EventQuery::default()
+            })
+            .expect("capacity refusal fact");
+        assert_eq!(rejected.len(), 1);
+        let rejected = &rejected[0];
+        let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = rejected.payload()
+        else {
+            panic!("policy refusal payload")
+        };
+        assert_eq!(payload.decision_id(), intent.decision_id);
+        assert_eq!(payload.rejection(), Some(&failure.policy_rejection()));
+        assert_eq!(
+            rejected.payload().effect_disposition(),
+            Some(EffectDisposition::NotPerformed)
+        );
+        let rejected_request_id = *rejected
+            .links()
+            .request_id()
+            .expect("refused request identity");
+        let request_events = host
+            .query_persisted_events_for_test(EventQuery {
+                request_id: Some(rejected_request_id),
+                ..EventQuery::default()
+            })
+            .expect("all facts for the refused request");
+        for forbidden in [
+            EventType::PolicyDispatchAdmitted,
+            EventType::LeaseRequested,
+            EventType::LeaseGranted,
+        ] {
+            assert!(
+                request_events
+                    .iter()
+                    .all(|event| event.event_type() != forbidden),
+                "scheduled={scheduled}: capacity refusal must precede {forbidden:?}"
+            );
+        }
+        assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+
+        available_bytes.store(thresholds.soft_bytes, Ordering::Release);
+        clock.advance(60_000);
+        host.capacity_sampler_for_test()
+            .expect("existing capacity sampling entry")()
+        .expect("commit sufficient capacity in the same host");
+        let recovery_time = POLICY_NOW_UNIX_MS + 60_000;
+        let recovery_samples = host
+            .query_persisted_events_for_test(EventQuery {
+                from_sequence: Some(reference.sequence),
+                event_type: Some(EventType::PerformanceSummary),
+                ..EventQuery::default()
+            })
+            .expect("read committed recovery samples");
+        let recovered = recovery_samples
+            .iter()
+            .find(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Performance(PerformancePayload::Summary(payload))
+                        if payload.capacity().is_some_and(|sample| {
+                            sample.owner_epoch == decision.owner_epoch
+                                && sample.observed_at_unix_ms == recovery_time
+                                && sample.observed_at_monotonic_ms == 60_000
+                                && sample.thresholds == thresholds
+                                && sample.volumes.iter().all(|volume| {
+                                    volume.available_bytes == Some(thresholds.soft_bytes)
+                                        && volume.state == CapacityState::Sufficient
+                                        && volume.cause.is_none()
+                                })
+                        })
+                )
+            })
+            .expect("same owner committed a sufficient recovery fact");
+        assert!(recovered.sequence() > reference.sequence);
+        assert_ne!(recovered.event_id(), &reference.event_id);
+        let (_, restored_intent, restored_reasons) =
+            evaluated_policy_dispatch_at(&host, PolicyTrigger::Reconciliation, recovery_time, 8);
+        assert_ne!(restored_intent.decision_id, intent.decision_id);
+        let restored_context = policy_context(&host, &restored_intent);
+        let restored_task_request = ContainedTaskRequest::new(
+            task_request.package_path(),
+            restored_intent
+                .package_digest
+                .clone()
+                .expect("recovery package reference"),
+        )
+        .expect("declared recovery request");
+        let admission = if scheduled {
+            host.admit_scheduled_policy_dispatch(
+                &restored_intent,
+                &restored_reasons,
+                &restored_context,
+                &restored_task_request,
+            )
+        } else {
+            host.admit_policy_dispatch(&restored_intent, &restored_reasons, &restored_context)
+        }
+        .expect("fresh sufficient fact must restore admission");
+        let PolicyDispatchAdmission::Granted { context } = admission else {
+            panic!("expected a newly granted recovery admission")
+        };
+        assert_ne!(context.request().request_id(), rejected_request_id);
+        let granted = host
+            .query_persisted_events_for_test(EventQuery {
+                event_type: Some(EventType::PolicyDispatchAdmitted),
+                request_id: Some(context.request().request_id()),
+                ..EventQuery::default()
+            })
+            .expect("recovery admission fact");
+        assert_eq!(granted.len(), 1);
+        assert!(granted[0].sequence() > recovered.sequence());
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        host.close()
+            .expect("original shutdown releases the granted lease and closes the host");
+    }
+}
+
+#[test]
 fn policy_final_admission_records_the_actual_control_rejection() {
     // Workflow #269 B11 first red: issuecomment-5587376490.
     let root = TempDir::new().expect("tempdir");

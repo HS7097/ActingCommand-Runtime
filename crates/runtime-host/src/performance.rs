@@ -398,6 +398,11 @@ pub(crate) struct PerformanceMonitor {
 }
 
 impl PerformanceMonitor {
+    #[cfg(test)]
+    pub(crate) fn replace_capacity_sampler_for_test(&mut self, sampler: Box<dyn HostSampler>) {
+        self.sampler = Some(sampler);
+    }
+
     pub(crate) fn disabled() -> Self {
         Self {
             capacity: None,
