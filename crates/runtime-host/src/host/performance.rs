@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::planning::collect_maintenance_evidence;
+use actingcommand_policy::assess_predictive_maintenance;
 
 pub(super) enum CapacityUse {
     Business,
@@ -8,6 +10,59 @@ pub(super) enum CapacityUse {
 }
 
 impl HostShared {
+    pub(super) fn assess_and_publish_predictive_maintenance(
+        &self,
+        query: &MaintenanceLedgerQuery,
+    ) -> RuntimeHostResult<MaintenanceAssessment> {
+        let result: RuntimeHostResult<MaintenanceAssessment> = (|| {
+            let evidence = collect_maintenance_evidence(&self.ledger, query)?;
+            let assessment = assess_predictive_maintenance(&evidence, query.trend_policy())
+                .map_err(|error| {
+                    RuntimeHostError::request(
+                        error.code(),
+                        "assess_predictive_maintenance",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                })?;
+            if assessment.recheck_suggested() {
+                let observed_at_unix_ms = evidence
+                    .durations
+                    .iter()
+                    .map(|sample| sample.observed_at_unix_ms)
+                    .chain(
+                        evidence
+                            .confidences
+                            .iter()
+                            .map(|sample| sample.observed_at_unix_ms),
+                    )
+                    .max()
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            "maintenance_evidence_timestamp_missing",
+                            "assess_predictive_maintenance",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+                self.record_policy_planning_signal(PolicyPlanningSignalEventData {
+                    signal_id: format!("signal:{}", assessment.assessment_id),
+                    instance_id: query.instance_id().to_owned(),
+                    task_id: Some(query.task_id().to_owned()),
+                    kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
+                    fact_code: "maintenance_recheck_suggested".to_owned(),
+                    observed_at_unix_ms,
+                    detection_budget: None,
+                })?;
+            }
+            Ok(assessment)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;

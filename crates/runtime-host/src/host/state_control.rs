@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::{StatePayload, StatePayloadDraft};
 use actingcommand_ledger::{
     GlobalLedgerError, LedgerTransactionWork, TransactionStateObservation, TransactionWorkError,
 };
@@ -221,6 +222,73 @@ impl LedgerTransactionWork for ReleaseTransaction {
             })
             .map_err(release_work_error)
     }
+}
+
+pub(super) fn reconcile_runtime_state(
+    state: &Arc<RuntimeStateStore>,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+) -> RuntimeHostResult<()> {
+    let migrated = ledger
+        .query(EventQuery {
+            event_type: Some(EventType::StateMigrated),
+            ..EventQuery::default()
+        })
+        .map_err(|_| ledger_error("query_state_migrations"))?
+        .into_iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::State(StatePayload::Migrated(payload)) => {
+                Some(payload.migration().migration_id().to_owned())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for migration in state
+        .migrations()
+        .map_err(|error| RuntimeHostError::state(&error))?
+    {
+        if migration.state_key() == actingcommand_runtime_state::RELEASE_BASELINE_STATE_KEY {
+            continue;
+        }
+        if migration.state_key() == actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY {
+            if !migrated.contains(migration.migration_id()) {
+                return Err(RuntimeHostError::fatal(
+                    "catalog_migration_source_missing",
+                    "reconcile_runtime_state",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            continue;
+        }
+        if !migrated.contains(migration.migration_id()) {
+            append_runtime_state_event(
+                ledger,
+                events,
+                StatePayloadDraft::migrated(migration, AuditInput::new()),
+            )?;
+        }
+    }
+
+    state_control::reconcile_release_state(state, ledger, events)
+}
+
+fn append_runtime_state_event(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    payload: impl Into<actingcommand_contract::EventPayloadDraft>,
+) -> RuntimeHostResult<PersistedEvent> {
+    let draft = events.draft(
+        EventSeverity::Info,
+        EventSource::Runtime,
+        OriginModule::Runtime,
+        EventActor::Runtime,
+        events.system_links()?,
+        payload,
+    )?;
+    let draft = events.sanitize(draft)?;
+    ledger
+        .append(draft)
+        .map_err(|_| ledger_error("append_runtime_state_event"))
 }
 
 pub(super) fn reconcile_release_state(
