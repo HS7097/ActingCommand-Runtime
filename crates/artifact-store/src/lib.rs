@@ -19,8 +19,6 @@ mod frame_store;
 mod naming;
 #[cfg(feature = "capture")]
 mod pipeline;
-#[cfg(feature = "capture")]
-mod portable_archive;
 mod store;
 mod usage;
 
@@ -35,7 +33,5 @@ pub use frame_store::*;
 pub use naming::*;
 #[cfg(feature = "capture")]
 pub use pipeline::*;
-#[cfg(feature = "capture")]
-pub use portable_archive::*;
 pub use store::*;
 pub use usage::*;
