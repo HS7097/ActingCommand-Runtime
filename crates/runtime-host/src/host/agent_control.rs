@@ -217,6 +217,58 @@ impl HostShared {
     }
 }
 
+pub(super) fn reconcile_agent_wakes(
+    state: &mut AgentDispatcherState,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    instances: &BTreeMap<InstanceId, RegisteredInstance>,
+    config: &AgentDispatcherConfig,
+) -> RuntimeHostResult<()> {
+    let sources = ledger
+        .query(EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        })
+        .map_err(|_| ledger_error("query_agent_wake_sources"))?;
+    for source in sources {
+        if state.has_wake_for_trigger(source.event_id()) {
+            continue;
+        }
+        let EventPayload::Policy(actingcommand_contract::PolicyPayload::PlanningSignalObserved(
+            signal,
+        )) = source.payload()
+        else {
+            return Err(RuntimeHostError::fatal(
+                "agent_wake_source_invalid",
+                "reconcile_agent_wakes",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        };
+        let kind = match signal.kind() {
+            actingcommand_contract::PolicyPlanningSignalKind::TimelineReached => {
+                AgentWakeKind::TimelineReached
+            }
+            actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted => {
+                AgentWakeKind::DriftPredicted
+            }
+            _ => continue,
+        };
+        let instance_id = instances
+            .values()
+            .find(|instance| instance.instance_alias == signal.instance_id())
+            .map(|instance| instance.instance_id)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "agent_wake_instance_unknown",
+                    "reconcile_agent_wakes",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        append_agent_wake(state, ledger, events, config, &source, instance_id, kind)?;
+    }
+    Ok(())
+}
+
 pub(super) fn append_agent_wake(
     state: &mut AgentDispatcherState,
     ledger: &GlobalLedger,
