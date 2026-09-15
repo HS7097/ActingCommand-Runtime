@@ -632,8 +632,8 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         .expect("read execution bundle source");
     let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
         .expect("read contained task source");
-    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
-        .expect("read Runtime host source");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host/contained_task.rs"))
+        .expect("read Runtime contained-task adapter");
     let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run CLI source");
 
@@ -1786,8 +1786,8 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
     let root = workspace_root();
     let contract = fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
         .expect("read Runtime contract");
-    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
-        .expect("read Runtime host");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host/observation.rs"))
+        .expect("read Runtime observation adapter");
     let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
         .expect("read Runtime client");
 
@@ -1817,9 +1817,9 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
     assert!(contract.contains("Self::Input { token, action }"));
 
     let host_sequence = host
-        .split_once("    fn capture_sequence(")
+        .split_once("    pub(super) fn capture_sequence(")
         .and_then(|(_, tail)| {
-            tail.split_once("    fn capture_readonly_observation(")
+            tail.split_once("    pub(super) fn capture_readonly_observation(")
                 .map(|(value, _)| value)
         })
         .expect("Runtime capture sequence implementation");
@@ -2060,8 +2060,8 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
             .expect("read Runtime capture adapter");
     let runtime_input = fs::read_to_string(root.join("crates/runtime-client/src/input.rs"))
         .expect("read Runtime input proxy");
-    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
-        .expect("read Runtime host");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host/contained_task.rs"))
+        .expect("read Runtime contained-task adapter");
     let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
         .expect("read contained task engine");
 
@@ -2587,8 +2587,9 @@ fn c7_lab_has_no_production_ledger_writer_authority() {
     let runtime_contract =
         fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
             .expect("read Runtime contract");
-    let runtime_host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
-        .expect("read Runtime host");
+    let runtime_host =
+        fs::read_to_string(root.join("crates/runtime-host/src/host/contained_task.rs"))
+            .expect("read Runtime contained-task adapter");
     assert!(
         main.contains("local_ledger_retired"),
         "legacy local ledger command must remain a fail-loud tombstone"
@@ -2658,8 +2659,17 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
             "contained task client contract embeds application identity via {forbidden}"
         );
     }
-    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
-        .expect("read Runtime host");
+    let host = [
+        fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+            .expect("read Runtime host"),
+        fs::read_to_string(root.join("crates/runtime-host/src/host/observation.rs"))
+            .expect("read Runtime observation adapter"),
+        fs::read_to_string(root.join("crates/runtime-host/src/host/contained_task.rs"))
+            .expect("read Runtime contained-task adapter"),
+        fs::read_to_string(root.join("crates/runtime-host/src/host/input.rs"))
+            .expect("read Runtime input adapter"),
+    ]
+    .join("\n");
     let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
         .expect("read contained task engine");
     for forbidden in ["arknights", "azurlane", "bluearchive", "com.YoStar"] {
