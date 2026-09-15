@@ -823,6 +823,23 @@ impl DurableStorage for SqliteStorage {
         self.database.root()
     }
 
+    fn resolve_artifact(
+        &self,
+        selection: &super::LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> Option<GlobalLedgerResult<super::ResolvedLedgerArtifact>> {
+        Some(
+            SqliteViewSnapshot {
+                database: Arc::clone(&self.database),
+                through_sequence: self.head,
+                head_hash: self.head_hash.clone(),
+                budget: None,
+                source: LedgerReadSource::Runtime,
+            }
+            .resolve_artifact(selection, deadline),
+        )
+    }
+
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -915,6 +932,50 @@ pub(super) struct SqliteViewSnapshot {
 }
 
 impl SqliteViewSnapshot {
+    fn resolve_artifact(
+        &self,
+        selection: &super::LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+        selection.validate()?;
+        let budget = Some(super::evidence::artifact_read_budget(self.budget, deadline));
+        let raw = read_snapshot(&self.database, budget)?;
+        let bytes = raw.bytes;
+        let prefix_hash = raw
+            .events
+            .iter()
+            .find(|row| row.first() == Some(&SqlValue::Integer(encode(self.through_sequence))))
+            .and_then(|row| row.get(11))
+            .cloned();
+        let VerifiedSnapshotRecords {
+            records, metadata, ..
+        } = verify_snapshot_records(&self.database, raw)?;
+        let through_sequence = records.last().map_or(0, StoredEventRecord::sequence);
+        if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
+            || through_sequence < self.through_sequence
+        {
+            return Err(failure(
+                "ledger_snapshot_boundary_mismatch",
+                "resolve_ledger_artifact",
+            ));
+        }
+        drop(records);
+        let retention =
+            super::retention::RetentionIndex::from_events_checked(&metadata, &mut |count| {
+                check_read_budget(budget, bytes, count)
+            })?;
+        let resolved = super::evidence::resolve_artifact_from_events(
+            &metadata,
+            selection,
+            through_sequence,
+            true,
+            deadline,
+            Some(&retention),
+        )?;
+        check_read_budget(budget, bytes, metadata.len())?;
+        Ok(resolved)
+    }
+
     pub(super) fn project_view_page(
         &self,
         query: &EventQuery,

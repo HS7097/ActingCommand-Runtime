@@ -41,6 +41,8 @@ mod lab_operation_evidence;
 pub use lab_operation_evidence::*;
 mod saved_artifact_ocr;
 pub use saved_artifact_ocr::*;
+mod material_read;
+pub use material_read::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
@@ -2549,6 +2551,9 @@ pub enum RuntimeOperation {
         profile: ProjectionProfile,
         page: RuntimeEventQueryPageRequest,
     },
+    ReadMaterial {
+        request: Box<RuntimeMaterialReadRequest>,
+    },
     SubscribeEvents {
         request: RuntimeSubscriptionRequest,
     },
@@ -2677,6 +2682,7 @@ impl RuntimeOperation {
                     .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
                 page.validate()
             }
+            Self::ReadMaterial { request } => request.validate(),
             Self::ProjectInterface { request } => request
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
@@ -2868,6 +2874,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
             Self::PublishFacts { .. } => "RuntimeOperation::PublishFacts(<typed-observation>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
+            Self::ReadMaterial { .. } => "RuntimeOperation::ReadMaterial(<committed-reference>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
             Self::RegisterDiagnosticSignature { .. } => {
                 "RuntimeOperation::RegisterDiagnosticSignature(<typed-definition>)"
@@ -3493,6 +3500,9 @@ pub enum RuntimeResult {
     EventPage {
         page: RuntimeEventQueryPage,
     },
+    MaterialRead {
+        result: Box<RuntimeMaterialReadResult>,
+    },
     EventBatch {
         batch: RuntimeEventBatch,
     },
@@ -3569,6 +3579,53 @@ pub struct RuntimeReceipt {
 }
 
 impl RuntimeReceipt {
+    pub fn fail_material_read(
+        &mut self,
+        state: RuntimeMaterialReadState,
+        limit: Option<RuntimeMaterialReadLimit>,
+        failure: RuntimeMaterialReadFailure,
+    ) -> RuntimeContractResult<()> {
+        let Some(RuntimeResult::MaterialRead { result }) = &mut self.result else {
+            return Err(RuntimeContractError::new("material_read_result_missing"));
+        };
+        if result.failure.is_some() {
+            return Err(RuntimeContractError::new(
+                "material_read_failure_already_recorded",
+            ));
+        }
+        result.chunk = None;
+        result.state = state;
+        result.limit = limit;
+        result.failure = Some(failure.clone());
+        self.state = result.receipt_state();
+        self.error = Some(failure.error);
+        self.validate()
+    }
+
+    pub fn material_read(
+        request: &RuntimeRequest,
+        terminal: Option<TerminalEvent>,
+        result: Box<RuntimeMaterialReadResult>,
+    ) -> RuntimeContractResult<Self> {
+        if !matches!(request.operation(), RuntimeOperation::ReadMaterial { request } if request.as_ref() == &result.request)
+        {
+            return Err(RuntimeContractError::new("material_read_request_mismatch"));
+        }
+        let receipt = Self {
+            schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
+            request_id: request.request_id,
+            correlation_id: request.correlation_id,
+            state: result.receipt_state(),
+            terminal,
+            error: result.failure.as_ref().map(|failure| failure.error.clone()),
+            result: Some(RuntimeResult::MaterialRead { result }),
+            resource_declaration: None,
+            resource_declaration_event: None,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
     pub fn contained_lab_operation(
         request: &RuntimeRequest,
         terminal: TerminalEvent,
@@ -3675,11 +3732,19 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ContainedLabOperation { operation })
                 if self.state == RuntimeReceiptState::Failed
                     && operation.record.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
-        if !recorded_lab_failure && success_state != (self.result.is_some() && self.error.is_none())
+        let recorded_material_failure = matches!(&self.result,
+            Some(RuntimeResult::MaterialRead { result })
+                if matches!(self.state, RuntimeReceiptState::Denied | RuntimeReceiptState::Failed)
+                    && self.state == result.receipt_state()
+                    && result.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
+        if !recorded_lab_failure
+            && !recorded_material_failure
+            && success_state != (self.result.is_some() && self.error.is_none())
         {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));
         }
         if !recorded_lab_failure
+            && !recorded_material_failure
             && !success_state
             && (self.error.is_none() || self.result.is_some())
         {
@@ -3730,6 +3795,14 @@ impl RuntimeReceipt {
             token.validate()?;
         }
         match &self.result {
+            Some(RuntimeResult::MaterialRead { result }) => {
+                result.validate()?;
+                if self.state != result.receipt_state()
+                    || result.failure.as_ref().map(|failure| &failure.error) != self.error.as_ref()
+                {
+                    return Err(RuntimeContractError::new("invalid_material_read_receipt"));
+                }
+            }
             Some(
                 RuntimeResult::SignatureRegistered { registration }
                 | RuntimeResult::SignatureRetired { registration },
