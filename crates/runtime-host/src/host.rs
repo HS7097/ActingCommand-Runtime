@@ -13,7 +13,6 @@ use crate::performance::{
     PerformanceMonitor, PerformanceSemanticEvent, PerformanceTick, PipelineEventObservation,
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
-use crate::planning::collect_maintenance_evidence;
 use crate::policy_host::{
     CompletedPolicyRunIdentity, LoadedCatalog, PolicyEvaluationContext, PolicyExecutionPreparation,
     PolicyHost, PolicyOutcomeKeySnapshot,
@@ -81,10 +80,10 @@ use actingcommand_contract::{
     RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
     SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
     SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    Sensitivity, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
-    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
-    TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
+    Sensitivity, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome,
+    TaskPayload, TaskPayloadDraft, TaskSemanticFact, TaskTimingBoundary,
+    TaskTimingObservationState, TaskTimingResult, TerminalEvent, TimingObservationIssue,
+    ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
@@ -110,8 +109,8 @@ use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
     EvaluationTime, FactValue as PolicyFactValue, ForwardProjection, ForwardProjectionConfig,
     MaintenanceAssessment, MaintenanceTrendPolicy, ObservedOutcome, StrategicBand,
-    StrategicEvidencePointer, StrategicProjection, StrategicReport, assess_predictive_maintenance,
-    project_forward, project_strategic_report,
+    StrategicEvidencePointer, StrategicProjection, StrategicReport, project_forward,
+    project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::{
@@ -168,11 +167,12 @@ mod state_control;
 mod task_diagnostic;
 mod task_timing;
 
-use agent_control::append_agent_wake;
+use agent_control::reconcile_agent_wakes;
 use lease::{QueueTerminalStore, QueuedRequestContext};
 use monitor_control::monitor_probe_loop;
 use performance::{CapacityUse, performance_monitor_loop};
 use planning::planning_request_failure;
+use state_control::reconcile_runtime_state;
 
 #[derive(Clone, Copy)]
 pub enum RuntimeLifecycleFailureStage {
@@ -2482,54 +2482,6 @@ fn initial_registered_instances(
     Ok(instances)
 }
 
-fn reconcile_runtime_state(
-    state: &Arc<RuntimeStateStore>,
-    ledger: &GlobalLedger,
-    events: &RuntimeEvents,
-) -> RuntimeHostResult<()> {
-    let migrated = ledger
-        .query(EventQuery {
-            event_type: Some(EventType::StateMigrated),
-            ..EventQuery::default()
-        })
-        .map_err(|_| ledger_error("query_state_migrations"))?
-        .into_iter()
-        .filter_map(|event| match event.payload() {
-            EventPayload::State(StatePayload::Migrated(payload)) => {
-                Some(payload.migration().migration_id().to_owned())
-            }
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    for migration in state
-        .migrations()
-        .map_err(|error| RuntimeHostError::state(&error))?
-    {
-        if migration.state_key() == actingcommand_runtime_state::RELEASE_BASELINE_STATE_KEY {
-            continue;
-        }
-        if migration.state_key() == actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY {
-            if !migrated.contains(migration.migration_id()) {
-                return Err(RuntimeHostError::fatal(
-                    "catalog_migration_source_missing",
-                    "reconcile_runtime_state",
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
-            continue;
-        }
-        if !migrated.contains(migration.migration_id()) {
-            append_runtime_state_event(
-                ledger,
-                events,
-                StatePayloadDraft::migrated(migration, AuditInput::new()),
-            )?;
-        }
-    }
-
-    state_control::reconcile_release_state(state, ledger, events)
-}
-
 fn reconcile_policy_dispatches(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
@@ -3090,77 +3042,6 @@ fn policy_recovery_outcome_matches(
         }
         _ => false,
     }
-}
-
-fn append_runtime_state_event(
-    ledger: &GlobalLedger,
-    events: &RuntimeEvents,
-    payload: impl Into<actingcommand_contract::EventPayloadDraft>,
-) -> RuntimeHostResult<PersistedEvent> {
-    let draft = events.draft(
-        EventSeverity::Info,
-        EventSource::Runtime,
-        OriginModule::Runtime,
-        EventActor::Runtime,
-        events.system_links()?,
-        payload,
-    )?;
-    let draft = events.sanitize(draft)?;
-    ledger
-        .append(draft)
-        .map_err(|_| ledger_error("append_runtime_state_event"))
-}
-
-fn reconcile_agent_wakes(
-    state: &mut AgentDispatcherState,
-    ledger: &GlobalLedger,
-    events: &RuntimeEvents,
-    instances: &BTreeMap<InstanceId, RegisteredInstance>,
-    config: &AgentDispatcherConfig,
-) -> RuntimeHostResult<()> {
-    let sources = ledger
-        .query(EventQuery {
-            event_type: Some(EventType::PolicyPlanningSignalObserved),
-            ..EventQuery::default()
-        })
-        .map_err(|_| ledger_error("query_agent_wake_sources"))?;
-    for source in sources {
-        if state.has_wake_for_trigger(source.event_id()) {
-            continue;
-        }
-        let EventPayload::Policy(actingcommand_contract::PolicyPayload::PlanningSignalObserved(
-            signal,
-        )) = source.payload()
-        else {
-            return Err(RuntimeHostError::fatal(
-                "agent_wake_source_invalid",
-                "reconcile_agent_wakes",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        };
-        let kind = match signal.kind() {
-            actingcommand_contract::PolicyPlanningSignalKind::TimelineReached => {
-                AgentWakeKind::TimelineReached
-            }
-            actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted => {
-                AgentWakeKind::DriftPredicted
-            }
-            _ => continue,
-        };
-        let instance_id = instances
-            .values()
-            .find(|instance| instance.instance_alias == signal.instance_id())
-            .map(|instance| instance.instance_id)
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "agent_wake_instance_unknown",
-                    "reconcile_agent_wakes",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-        append_agent_wake(state, ledger, events, config, &source, instance_id, kind)?;
-    }
-    Ok(())
 }
 
 /// A scoped Runtime-owned policy admission; dropping it does not stop or close the host.
@@ -4141,59 +4022,6 @@ impl HostShared {
                 )
             },
         )
-    }
-
-    fn assess_and_publish_predictive_maintenance(
-        &self,
-        query: &MaintenanceLedgerQuery,
-    ) -> RuntimeHostResult<MaintenanceAssessment> {
-        let result: RuntimeHostResult<MaintenanceAssessment> = (|| {
-            let evidence = collect_maintenance_evidence(&self.ledger, query)?;
-            let assessment = assess_predictive_maintenance(&evidence, query.trend_policy())
-                .map_err(|error| {
-                    RuntimeHostError::request(
-                        error.code(),
-                        "assess_predictive_maintenance",
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                })?;
-            if assessment.recheck_suggested() {
-                let observed_at_unix_ms = evidence
-                    .durations
-                    .iter()
-                    .map(|sample| sample.observed_at_unix_ms)
-                    .chain(
-                        evidence
-                            .confidences
-                            .iter()
-                            .map(|sample| sample.observed_at_unix_ms),
-                    )
-                    .max()
-                    .ok_or_else(|| {
-                        RuntimeHostError::fatal(
-                            "maintenance_evidence_timestamp_missing",
-                            "assess_predictive_maintenance",
-                            RuntimeErrorCode::RuntimeFatal,
-                        )
-                    })?;
-                self.record_policy_planning_signal(PolicyPlanningSignalEventData {
-                    signal_id: format!("signal:{}", assessment.assessment_id),
-                    instance_id: query.instance_id().to_owned(),
-                    task_id: Some(query.task_id().to_owned()),
-                    kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
-                    fact_code: "maintenance_recheck_suggested".to_owned(),
-                    observed_at_unix_ms,
-                    detection_budget: None,
-                })?;
-            }
-            Ok(assessment)
-        })();
-        if let Err(error) = &result
-            && error.is_fatal()
-        {
-            self.fatal.mark(error.clone())?;
-        }
-        result
     }
 
     fn admit_policy_dispatch(
@@ -5461,128 +5289,6 @@ impl HostShared {
                 ),
             ),
         )
-    }
-
-    fn record_policy_planning_signal(
-        &self,
-        signal: PolicyPlanningSignalEventData,
-    ) -> RuntimeHostResult<()> {
-        let mut committed_signal = None;
-        let result: RuntimeHostResult<()> = (|| {
-            let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
-            policy.validate_planning_signal(&signal)?;
-            if let Some(existing) = policy.planning_signal(&signal.signal_id)? {
-                return if existing == signal {
-                    Ok(())
-                } else {
-                    Err(RuntimeHostError::fatal(
-                        "policy_planning_signal_identity_conflict",
-                        "record_policy_planning_signal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ))
-                };
-            }
-            let (work, staged_quota) = policy.prepare_planning_signal(&signal)?;
-            let fact_gate = lock(&self.fact_write_gate, "append_planning_transaction")?;
-            if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                return Err(ledger_error("append_planning_transaction"));
-            }
-            let links = self.events.system_links()?;
-            let draft = self.events.draft(
-                EventSeverity::Info,
-                EventSource::Scheduler,
-                OriginModule::Policy,
-                EventActor::Scheduler,
-                links.clone(),
-                PolicyPayloadDraft::planning_signal_observed(signal.clone(), AuditInput::new()),
-            )?;
-            let draft = self.events.sanitize(draft)?;
-            let attempt_event_id = *draft.event_id();
-            let persisted = self
-                .ledger
-                .append_transaction(draft, Box::new(work))
-                .map_err(|error| {
-                    let error = crate::policy_host::planning_transaction_error(error);
-                    if error.is_fatal() {
-                        self.lifecycle_append_failed.store(true, Ordering::Release);
-                    }
-                    let context = error.clone().with_native_detail(format!(
-                        "event_id={attempt_event_id:?}; attempted_sequence={:?}",
-                        staged_quota.attempted_sequence()
-                    ));
-                    error.with_related_failure("planning_attempt", &context)
-                })?;
-            committed_signal = Some((*persisted.event_id(), persisted.sequence()));
-            policy.publish_planning_signal(staged_quota);
-            drop(policy);
-            let observed = self
-                .observe_device_diagnostics_under_fact_gate(&persisted, &links)
-                .and_then(|()| self.synchronize_fact_store_under_gate());
-            drop(fact_gate);
-            observed.and_then(|()| self.observe_pipeline_event(&persisted))?;
-            let Some(config) = &self.agent_dispatcher_config else {
-                return Ok(());
-            };
-            let kind = match signal.kind {
-                actingcommand_contract::PolicyPlanningSignalKind::TimelineReached => {
-                    AgentWakeKind::TimelineReached
-                }
-                actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted => {
-                    AgentWakeKind::DriftPredicted
-                }
-                _ => return Ok(()),
-            };
-            let instance_id = lock(&self.registered_instances, "resolve_agent_wake_instance")?
-                .values()
-                .find(|instance| instance.instance_alias == signal.instance_id)
-                .map(|instance| instance.instance_id)
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        "agent_wake_instance_unknown",
-                        "record_policy_planning_signal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?;
-            let _gate = lock(&self.agent_write_gate, "record_agent_wake")?;
-            let mut agent = lock(&self.agent_dispatcher, "record_agent_wake")?;
-            if !agent.has_wake_for_trigger(persisted.event_id()) {
-                append_agent_wake(
-                    &mut agent,
-                    &self.ledger,
-                    &self.events,
-                    config,
-                    &persisted,
-                    instance_id,
-                    kind,
-                )?;
-            }
-            Ok(())
-        })()
-        .map_err(|error| {
-            if let Some((event_id, sequence)) = committed_signal {
-                self.lifecycle_append_failed.store(true, Ordering::Release);
-                let context = error.clone().with_native_detail(format!(
-                    "planning_fact_committed=true; event_id={event_id:?}; sequence={sequence}"
-                ));
-                let error = error
-                    .into_fatal()
-                    .with_related_failure("committed_planning_fact", &context);
-                let _ = error.lifecycle.recorded_event.set(event_id);
-                error
-            } else {
-                error
-            }
-        });
-        if let Err(error) = &result
-            && error.is_fatal()
-        {
-            self.fatal.mark(error.clone()).map_err(|secondary| {
-                let mut combined = error.clone().with_related_failure("fatal_mark", &secondary);
-                combined.lifecycle.recorded_event = Arc::clone(&error.lifecycle.recorded_event);
-                combined
-            })?;
-        }
-        result
     }
 
     fn project_policy_input_identity(
