@@ -151,6 +151,7 @@ mod input;
 mod lab_operation;
 mod lease;
 mod lifecycle;
+mod material_read;
 mod monitor_control;
 mod observation;
 mod online_observation;
@@ -164,6 +165,7 @@ mod read_events;
 mod requests;
 mod resource_close;
 mod saved_artifact_ocr;
+use material_read::MaterialReadContext;
 mod signatures;
 mod state_control;
 mod task_diagnostic;
@@ -2457,6 +2459,9 @@ struct OperationSuccess {
 impl OperationSuccess {
     fn into_receipt(self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
         match self.result {
+            RuntimeResult::MaterialRead { result } => {
+                RuntimeReceipt::material_read(request, self.terminal, result)
+            }
             RuntimeResult::ContainedLabOperation { operation } => {
                 RuntimeReceipt::contained_lab_operation(
                     request,
@@ -3513,6 +3518,7 @@ fn connection_loop(
             }
         };
         context.request_decoded = true;
+        let material_context = MaterialReadContext::for_request(&request, maximum_frame_bytes)?;
         // Idle sockets hold no admission. A decoded request remains in flight through its reply.
         let _work = if matches!(
             request.operation(),
@@ -3539,11 +3545,25 @@ fn connection_loop(
         );
         context.stage = Some(ConnectionFailureStage::RequestCache);
         let receipt = match cache.get(&request) {
+            Ok(_) if material_context.is_some() => {
+                context.stage = Some(ConnectionFailureStage::Dispatch);
+                shared.process_request_observed(
+                    &request,
+                    connection_id,
+                    Some(&mut context.timing),
+                    material_context,
+                )
+            }
             Ok(Some(receipt)) => Ok(receipt),
             Ok(None) => {
                 context.stage = Some(ConnectionFailureStage::Dispatch);
                 shared
-                    .process_request_observed(&request, connection_id, Some(&mut context.timing))
+                    .process_request_observed(
+                        &request,
+                        connection_id,
+                        Some(&mut context.timing),
+                        None,
+                    )
                     .inspect(|receipt| {
                         cache.insert(request.clone(), receipt.clone());
                     })
@@ -3579,6 +3599,12 @@ fn connection_loop(
                 return Err(error);
             }
         };
+        let (receipt, material_body) = if let Some(material) = material_context {
+            let (receipt, body) = shared.prepare_material_reply(&request, receipt, material)?;
+            (receipt, Some(body))
+        } else {
+            (receipt, None)
+        };
         #[cfg(feature = "test-observation")]
         crate::test_observation::emit_receipt(
             crate::test_observation::HostTestObservationPoint::ReceiptWriteStart,
@@ -3588,7 +3614,12 @@ fn connection_loop(
         );
         context.stage = Some(ConnectionFailureStage::ReceiptWrite);
         context.timing.receipt_write.begin();
-        let written = write_frame(stream, &receipt, maximum_frame_bytes);
+        let written = match (&material_body, material_context) {
+            (Some(body), Some(material)) => {
+                crate::ipc::write_encoded_frame(stream, body, material.max_reply_bytes)
+            }
+            _ => write_frame(stream, &receipt, maximum_frame_bytes),
+        };
         context.timing.receipt_write.finish(written.is_ok());
         match written {
             Ok(()) => {
