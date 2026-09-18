@@ -146,6 +146,7 @@ mod agent_control;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;
+mod emulator_instance;
 mod evidence_export;
 mod facts;
 mod frame_retention;

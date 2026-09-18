@@ -722,6 +722,26 @@ impl ApplicationLifecycleAction {
     }
 }
 
+/// One lifecycle action on the emulator instance itself (the provider's `control` surface),
+/// distinct from the application lifecycle inside a running instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmulatorInstanceAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl EmulatorInstanceAction {
+    pub const fn event_action(self) -> crate::EventAction {
+        match self {
+            Self::Start => crate::EventAction::EmulatorInstanceStart,
+            Self::Stop => crate::EventAction::EmulatorInstanceStop,
+            Self::Restart => crate::EventAction::EmulatorInstanceRestart,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeaseToken {
@@ -2546,6 +2566,13 @@ pub enum RuntimeOperation {
         holder_id: HolderId,
         action: ApplicationLifecycleAction,
     },
+    /// Start, stop or restart the emulator instance through its discovered provider. Only an
+    /// explicit User+Ui or Cli+Cli request may issue it; no lease is held, the per-instance
+    /// fence is checked and the device session is closed before the provider is driven.
+    ControlEmulatorInstance {
+        instance_alias: String,
+        action: EmulatorInstanceAction,
+    },
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -2761,6 +2788,7 @@ impl RuntimeOperation {
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
+            | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => validate_instance_alias(instance_alias),
             Self::ConfigureMonitor {
                 instance_alias,
@@ -2828,6 +2856,7 @@ impl RuntimeOperation {
             | Self::RunContainedLabOperation { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
+            | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
@@ -2885,6 +2914,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::ApplicationLifecycle { .. } => {
                 "RuntimeOperation::ApplicationLifecycle(<redacted>)"
+            }
+            Self::ControlEmulatorInstance { .. } => {
+                "RuntimeOperation::ControlEmulatorInstance(<redacted>)"
             }
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
@@ -3038,6 +3070,17 @@ impl RuntimeRequest {
         ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
         {
             return Err(RuntimeContractError::new("invalid_governance_origin"));
+        }
+        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator;
+        // Adapter/Agent origins are excluded so no scheduler or agent path can restart it.
+        if matches!(
+            self.operation,
+            RuntimeOperation::ControlEmulatorInstance { .. }
+        ) && !matches!(
+            (self.actor, self.source),
+            (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+        ) {
+            return Err(RuntimeContractError::new("invalid_emulator_control_origin"));
         }
         if matches!(
             self.operation,
@@ -3486,6 +3529,16 @@ pub enum RuntimeResult {
     ApplicationLifecycleCompleted {
         action_id: ActionId,
         action: ApplicationLifecycleAction,
+    },
+    /// The provider `control` dispatch completed and the readiness wait met its criterion.
+    EmulatorInstanceControlled {
+        instance_alias: String,
+        action: EmulatorInstanceAction,
+        instance_index: u16,
+        running: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adb_port: Option<u16>,
+        elapsed_ms: u64,
     },
     ContainedTaskCompleted {
         run_id: RunId,

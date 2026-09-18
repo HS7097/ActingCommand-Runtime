@@ -213,7 +213,7 @@ fn render_discovered_instances(instances: &[&DiscoveredMumuInstance]) -> String 
         .iter()
         .map(|instance| {
             format!(
-                "{{index={} name={:?} adb_host={} adb_port={} running={} player_state={:?}}}",
+                "{{index={} name={:?} adb_host={:?} adb_port={:?} running={} player_state={:?}}}",
                 instance.instance_index,
                 instance.instance_name,
                 instance.adb_host,
@@ -283,13 +283,28 @@ fn resolve_deferred_instance(
         }
     };
     let discovered = format!(
-        "discovered index={} name={:?} adb_host={} adb_port={} adb_path={}",
+        "discovered index={} name={:?} running={} adb_host={:?} adb_port={:?} adb_path={}",
         instance.instance_index,
         instance.instance_name,
+        instance.running,
         instance.adb_host,
         instance.adb_port,
         instance.adb_path.display()
     );
+    // A stopped instance reports no ADB endpoint (observed on MuMuManager 6.5.7.0). It is
+    // refused, never bound with a guessed port; starting it from a cold daemon is the next
+    // slice.
+    let (Some(adb_host), Some(adb_port)) = (instance.adb_host.as_deref(), instance.adb_port) else {
+        return Err((
+            "instance_discovered_stopped",
+            failure(
+                "instance_discovered_stopped",
+                format!(
+                    "{facts}; {discovered}; the configured instance is stopped and reports no ADB endpoint; start it, then start the daemon"
+                ),
+            ),
+        ));
+    };
     if let Some(declared) = config.adb_path.as_deref()
         && !fs::canonicalize(declared).is_ok_and(|path| path == instance.adb_path)
     {
@@ -302,7 +317,7 @@ fn resolve_deferred_instance(
         ));
     }
     if let Some(declared) = config.host.as_deref()
-        && declared.trim() != instance.adb_host
+        && declared.trim() != adb_host
     {
         return Err((
             "instance_discovery_conflict",
@@ -313,7 +328,7 @@ fn resolve_deferred_instance(
         ));
     }
     if let Some(declared) = config.port
-        && declared != instance.adb_port
+        && declared != adb_port
     {
         return Err((
             "instance_discovery_conflict",
@@ -336,13 +351,10 @@ fn resolve_deferred_instance(
         instance.instance_index,
         instance.instance_name.clone(),
         report.version.to_string(),
+        instance.mumu_manager_path.clone(),
     );
     let device = config
-        .device_registration(
-            adb_path.to_owned(),
-            instance.adb_host.clone(),
-            instance.adb_port,
-        )
+        .device_registration(adb_path.to_owned(), adb_host.to_owned(), adb_port)
         .map_err(|code| (code, failure(code, format!("{facts}; {discovered}"))))?;
     let ConfiguredInstanceBackend::Device {
         alias,
