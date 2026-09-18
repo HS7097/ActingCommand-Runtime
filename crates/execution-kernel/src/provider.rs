@@ -2,8 +2,16 @@
 
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
-use actingcommand_contract::{ApplicationLifecycleAction, InstanceId, MonitorObservation};
-use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, EmulatorInstanceAction, InstanceId, MonitorObservation,
+};
+use actingcommand_device::{
+    CaptureBackend, DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, Frame,
+    InputBackend,
+};
+pub use actingcommand_device::{
+    EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+};
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
 use actingcommand_recognition_pack::{
     NnProviderLabel, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
@@ -19,6 +27,7 @@ use actingcommand_vision_ffi::{
 };
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const MAX_MODEL_REF_BYTES: usize = 4_096;
@@ -559,6 +568,7 @@ pub struct DiscoveredInstanceBinding {
     instance_index: u16,
     instance_name: String,
     provider_version: String,
+    mumu_manager_path: PathBuf,
 }
 
 impl DiscoveredInstanceBinding {
@@ -566,11 +576,13 @@ impl DiscoveredInstanceBinding {
         instance_index: u16,
         instance_name: impl Into<String>,
         provider_version: impl Into<String>,
+        mumu_manager_path: impl Into<PathBuf>,
     ) -> Self {
         Self {
             instance_index,
             instance_name: instance_name.into(),
             provider_version: provider_version.into(),
+            mumu_manager_path: mumu_manager_path.into(),
         }
     }
 
@@ -584,6 +596,12 @@ impl DiscoveredInstanceBinding {
 
     pub fn provider_version(&self) -> &str {
         &self.provider_version
+    }
+
+    /// The `MuMuManager.exe` the instance was discovered through; the emulator control
+    /// operation dispatches `control` against exactly this executable.
+    pub fn mumu_manager_path(&self) -> &Path {
+        &self.mumu_manager_path
     }
 }
 
@@ -756,6 +774,28 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()>;
+
+    /// Starts, stops or restarts the emulator instance itself through its provider. Opens no
+    /// device session. Providers without an instance-control surface keep this typed refusal.
+    fn control_instance(
+        &self,
+        _instance_alias: &str,
+        _action: EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        Err(EmulatorControlFailure::without_output(
+            DeviceError::fatal("emulator control unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "emulator_control.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "control_instance",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+            0,
+        ))
+    }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
         None

@@ -404,6 +404,9 @@ pub(crate) struct CommandProgram {
     pub(crate) stderr_reader: &'static str,
     /// Windows process creation flags (0 keeps the default console behaviour).
     pub(crate) windows_creation_flags: u32,
+    /// Diagnostic stage attached to the bound-expiry error so a caller can tell an expired
+    /// bound from a spawn or poll failure; `None` leaves that error untyped (the `adb` default).
+    pub(crate) timeout_stage: Option<&'static str>,
 }
 
 pub(crate) const ADB_PROGRAM: CommandProgram = CommandProgram {
@@ -411,6 +414,7 @@ pub(crate) const ADB_PROGRAM: CommandProgram = CommandProgram {
     stdout_reader: "adb_stdout",
     stderr_reader: "adb_stderr",
     windows_creation_flags: 0,
+    timeout_stage: None,
 };
 
 pub fn run_text_with_timeout(
@@ -528,10 +532,16 @@ pub(crate) fn run_raw_with_timeout(
                 }
             }
             if started.elapsed() >= timeout {
-                return Err(DeviceError::fatal(format!(
+                let expired = DeviceError::fatal(format!(
                     "{name} {} timed out after {timeout:?}",
                     args.join(" ")
-                )));
+                ));
+                return Err(match program.timeout_stage {
+                    Some(stage) => {
+                        expired.with_diagnostic(DeviceErrorCategory::BackendLaunch, stage)
+                    }
+                    None => expired,
+                });
             }
             thread::sleep(Duration::from_millis(25));
         }

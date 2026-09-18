@@ -44,8 +44,12 @@ pub struct ProviderNativeFailure {
 pub struct DiscoveredInstanceObservation {
     pub instance_index: u16,
     pub instance_name: String,
-    pub adb_host: String,
-    pub adb_port: u16,
+    /// Omitted, like `adb_port`, when the provider reported no ADB endpoint (a stopped
+    /// instance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb_port: Option<u16>,
     pub running: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bound_alias: Option<String>,
@@ -148,8 +152,8 @@ impl ProviderStartupRecord {
                     .all(|value| valid(value))
                     && instances.iter().all(|instance| {
                         valid(&instance.instance_name)
-                            && valid(&instance.adb_host)
-                            && instance.adb_port != 0
+                            && instance.adb_host.as_deref().is_none_or(&valid)
+                            && instance.adb_port != Some(0)
                             && instance.bound_alias.as_deref().is_none_or(&valid)
                     })
             }
