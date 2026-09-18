@@ -4,7 +4,7 @@ use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
     Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close,
-    create_capture_backend, create_touch_backend, resolve_adb_path,
+    create_capture_backend, create_touch_backend, discover_mumu_instances, resolve_adb_path,
 };
 use actingcommand_execution_kernel::{
     DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
@@ -167,7 +167,83 @@ fn run_with_args(
     if args.first().is_some_and(|command| command == "ledger") {
         return ledger::run(&args[1..], output);
     }
+    if args
+        .first()
+        .is_some_and(|command| command == "mumu-discover")
+    {
+        return run_mumu_discover(&args[1..], output);
+    }
     run_device(args)?;
+    Ok(())
+}
+
+const MUMU_DISCOVER_HELP: &str = "mumu-discover [--root <mumu-install-root>]";
+
+/// Read-only probe: runs `MuMuManager version` and `info -v all` through the same discoverer
+/// as actingd and prints one JSON line. No instance is started, stopped or configured.
+fn run_mumu_discover(tokens: &[String], output: &mut impl std::io::Write) -> CliResult<()> {
+    if matches!(tokens, [flag] if flag == "--help" || flag == "-h") {
+        writeln!(output, "{MUMU_DISCOVER_HELP}")?;
+        return Ok(());
+    }
+    let mut root = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--root" if root.is_none() => {
+                root = Some(PathBuf::from(next_token(tokens, &mut index, "--root")?));
+            }
+            option => {
+                return Err(
+                    format!("duplicate or unsupported mumu-discover option: {option}").into(),
+                );
+            }
+        }
+    }
+    let report = match discover_mumu_instances(root.as_deref()) {
+        Ok(report) => serde_json::json!({
+            "status": "ok",
+            "source": report.source.as_str(),
+            "mumu_manager_path": report.mumu_manager_path.to_string_lossy(),
+            "version": report.version.to_string(),
+            "registry_display_version": report.registry_display_version,
+            "instances": report.instances.iter().map(|instance| serde_json::json!({
+                "instance_index": instance.instance_index,
+                "instance_name": instance.instance_name,
+                "adb_host": instance.adb_host,
+                "adb_port": instance.adb_port,
+                "running": instance.running,
+                "player_state": instance.player_state,
+                "adb_path": instance.adb_path.to_string_lossy(),
+                "install_root": instance.install_root.to_string_lossy(),
+            })).collect::<Vec<_>>(),
+        }),
+        Err(error) => {
+            let report = serde_json::json!({
+                "status": "failed",
+                "error": {
+                    "severity": format!("{:?}", error.severity()).to_ascii_lowercase(),
+                    "category": error.diagnostic().map(|diagnostic| diagnostic.category().as_str()),
+                    "stage": error.diagnostic().map(|diagnostic| diagnostic.stage()),
+                    "diagnostic": error.diagnostic_message(),
+                    "message": error.message(),
+                },
+            });
+            serde_json::to_writer(&mut *output, &report)?;
+            output.write_all(
+                b"
+",
+            )?;
+            output.flush()?;
+            return Err(Box::new(error));
+        }
+    };
+    serde_json::to_writer(&mut *output, &report)?;
+    output.write_all(
+        b"
+",
+    )?;
+    output.flush()?;
     Ok(())
 }
 
@@ -1835,6 +1911,7 @@ fn print_help() {
         "Runtime ledger (independent read-only command): {}",
         ledger::HELP
     );
+    println!("MuMu discovery probe (independent read-only command): {MUMU_DISCOVER_HELP}");
     println!(
         "Usage:\n\
          cargo run -p actingcommand-device-test -- [options] reset\n\
