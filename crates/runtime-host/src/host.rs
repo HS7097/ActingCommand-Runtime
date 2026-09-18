@@ -89,10 +89,11 @@ use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
-    ContainedTaskTrace, ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel,
-    ExternalExpectedSha256, PostAdmissionOcrObservation, PreparedContainedTask,
-    PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint, StabilityComparisonResult,
-    StabilityTerminalReason, StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
+    ContainedTaskTrace, DiscoveredInstanceBinding, ExecutionBackendProvenance,
+    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
+    PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint,
+    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
+    decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,

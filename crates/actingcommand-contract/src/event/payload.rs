@@ -1744,6 +1744,10 @@ pub enum InstanceBindingSource {
     Discovered,
 }
 
+pub const MAX_DISCOVERED_INSTANCE_NAME_BYTES: usize = 256;
+/// Same bound as `EmulatorVersionEvidence` provider versions.
+pub const MAX_PROVIDER_VERSION_BYTES: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeInstanceBindingPayload {
@@ -1756,6 +1760,12 @@ pub struct RuntimeInstanceBindingPayload {
     adb_port: Option<u16>,
     serial_configured: bool,
     binding_source: InstanceBindingSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovered_instance_index: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovered_instance_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_version: Option<String>,
     audit: SanitizedAudit,
 }
 
@@ -1782,6 +1792,18 @@ impl RuntimeInstanceBindingPayload {
 
     pub const fn binding_source(&self) -> InstanceBindingSource {
         self.binding_source
+    }
+
+    pub const fn discovered_instance_index(&self) -> Option<u16> {
+        self.discovered_instance_index
+    }
+
+    pub fn discovered_instance_name(&self) -> Option<&str> {
+        self.discovered_instance_name.as_deref()
+    }
+
+    pub fn provider_version(&self) -> Option<&str> {
+        self.provider_version.as_deref()
     }
 }
 
@@ -5897,6 +5919,34 @@ fn validate_runtime_instance_binding(
     {
         return Err(SanitizationError::new("invalid_adb_host", "adb_host"));
     }
+    let bounded = |value: &Option<String>, max_bytes: usize| {
+        value.as_ref().is_none_or(|text| {
+            !text.is_empty() && text.len() <= max_bytes && !text.chars().any(char::is_control)
+        })
+    };
+    let discovery_consistent = match payload.binding_source {
+        InstanceBindingSource::Explicit => {
+            payload.discovered_instance_index.is_none()
+                && payload.discovered_instance_name.is_none()
+                && payload.provider_version.is_none()
+        }
+        InstanceBindingSource::Discovered => {
+            payload.discovered_instance_index.is_some()
+                && payload.discovered_instance_name.is_some()
+        }
+    };
+    if !discovery_consistent
+        || !bounded(
+            &payload.discovered_instance_name,
+            MAX_DISCOVERED_INSTANCE_NAME_BYTES,
+        )
+        || !bounded(&payload.provider_version, MAX_PROVIDER_VERSION_BYTES)
+    {
+        return Err(SanitizationError::new(
+            "invalid_instance_binding_discovery",
+            "binding_source",
+        ));
+    }
     Ok(())
 }
 
@@ -7008,6 +7058,9 @@ struct RuntimeInstanceBindingDraft {
     adb_port: Option<u16>,
     serial_configured: bool,
     binding_source: InstanceBindingSource,
+    discovered_instance_index: Option<u16>,
+    discovered_instance_name: Option<String>,
+    provider_version: Option<String>,
     audit: AuditInput,
 }
 
@@ -7024,6 +7077,9 @@ impl RuntimeInstanceBindingDraft {
             adb_port: self.adb_port,
             serial_configured: self.serial_configured,
             binding_source: self.binding_source,
+            discovered_instance_index: self.discovered_instance_index,
+            discovered_instance_name: self.discovered_instance_name,
+            provider_version: self.provider_version,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7142,6 +7198,7 @@ impl RuntimePayloadDraft {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn instance_bound(
         instance_alias: impl Into<String>,
         provenance: crate::ExecutionBackendProvenance,
@@ -7149,6 +7206,9 @@ impl RuntimePayloadDraft {
         adb_port: Option<u16>,
         serial_configured: bool,
         binding_source: InstanceBindingSource,
+        discovered_instance_index: Option<u16>,
+        discovered_instance_name: Option<String>,
+        provider_version: Option<String>,
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::InstanceBound(
@@ -7159,6 +7219,9 @@ impl RuntimePayloadDraft {
                 adb_port,
                 serial_configured,
                 binding_source,
+                discovered_instance_index,
+                discovered_instance_name,
+                provider_version,
                 audit,
             },
         ))

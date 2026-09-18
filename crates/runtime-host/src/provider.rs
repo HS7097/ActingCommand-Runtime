@@ -12,10 +12,10 @@ use actingcommand_device::{
     create_capture_backend, create_touch_backend_for_fenced_input,
 };
 pub use actingcommand_execution_kernel::{
-    ExecutionBackendProvider, RecognitionVisionProvider, ResolvedAdbEndpoint,
-    ResolvedExecutionInstance, VisionFfiProvider, VisionModelIdentity,
+    DiscoveredInstanceBinding, ExecutionBackendProvider, RecognitionVisionProvider,
+    ResolvedAdbEndpoint, ResolvedExecutionInstance, VisionFfiProvider, VisionModelIdentity,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::thread;
@@ -28,6 +28,7 @@ pub struct ExecutionBackendRegistration {
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
+    discovered: Option<DiscoveredInstanceBinding>,
 }
 
 impl ExecutionBackendRegistration {
@@ -91,7 +92,14 @@ impl ExecutionBackendRegistration {
             input,
             capture,
             configuration,
+            discovered: None,
         })
+    }
+
+    /// Marks the registration as bound through MuMu instance discovery.
+    pub fn with_discovered_binding(mut self, discovered: DiscoveredInstanceBinding) -> Self {
+        self.discovered = Some(discovered);
+        self
     }
 }
 
@@ -118,60 +126,74 @@ impl ExecutionBackendRegistry {
     pub fn new(
         registrations: impl IntoIterator<Item = ExecutionBackendRegistration>,
     ) -> RuntimeHostResult<Self> {
-        let mut entries = BTreeMap::new();
-        let mut instance_ids = BTreeSet::new();
+        let mut registry = Self {
+            entries: BTreeMap::new(),
+            vision_provider: None,
+        };
         for registration in registrations {
-            if entries.contains_key(&registration.instance_alias) {
-                return Err(RuntimeHostError::fatal(
-                    "duplicate_instance_alias",
-                    "build_execution_backend_registry",
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
-            if !instance_ids.insert(registration.instance_id) {
-                return Err(RuntimeHostError::fatal(
-                    "duplicate_instance_id",
-                    "build_execution_backend_registry",
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
-            let audit_endpoint = registration.input.target.resolved_serial();
-            let adb_endpoint = ResolvedAdbEndpoint::new(
-                registration.input.target.host.clone(),
-                registration.input.target.port,
-                registration.input.target.serial.is_some(),
-            );
-            let application_adb = registration.input.adb_config.clone();
-            let application_target = registration.input.target.clone();
-            let capabilities =
-                Self::capability_profile(&registration.input, &registration.capture)?;
-            entries.insert(
-                registration.instance_alias,
-                ExecutionBackendEntry {
-                    instance_id: registration.instance_id,
-                    audit_endpoint,
-                    adb_endpoint,
-                    application_id: registration.application_id,
-                    application_adb,
-                    application_target,
-                    input: registration.input,
-                    capture: registration.capture,
-                    configuration: registration.configuration,
-                    capabilities,
-                },
-            );
+            registry.register(registration)?;
         }
-        if entries.is_empty() {
+        if registry.entries.is_empty() {
             return Err(RuntimeHostError::fatal(
                 "empty_execution_backend_registry",
                 "build_execution_backend_registry",
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        Ok(Self {
-            entries,
-            vision_provider: None,
-        })
+        Ok(registry)
+    }
+
+    /// Adds one registration under the same duplicate-alias and duplicate-id rules as `new`.
+    pub fn register(
+        &mut self,
+        registration: ExecutionBackendRegistration,
+    ) -> RuntimeHostResult<()> {
+        if self.entries.contains_key(&registration.instance_alias) {
+            return Err(RuntimeHostError::fatal(
+                "duplicate_instance_alias",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        if self
+            .entries
+            .values()
+            .any(|entry| entry.instance_id == registration.instance_id)
+        {
+            return Err(RuntimeHostError::fatal(
+                "duplicate_instance_id",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        let audit_endpoint = registration.input.target.resolved_serial();
+        let mut adb_endpoint = ResolvedAdbEndpoint::new(
+            registration.input.target.host.clone(),
+            registration.input.target.port,
+            registration.input.target.serial.is_some(),
+        );
+        if let Some(discovered) = registration.discovered {
+            adb_endpoint = adb_endpoint.with_discovered_binding(discovered);
+        }
+        let application_adb = registration.input.adb_config.clone();
+        let application_target = registration.input.target.clone();
+        let capabilities = Self::capability_profile(&registration.input, &registration.capture)?;
+        self.entries.insert(
+            registration.instance_alias,
+            ExecutionBackendEntry {
+                instance_id: registration.instance_id,
+                audit_endpoint,
+                adb_endpoint,
+                application_id: registration.application_id,
+                application_adb,
+                application_target,
+                input: registration.input,
+                capture: registration.capture,
+                configuration: registration.configuration,
+                capabilities,
+            },
+        );
+        Ok(())
     }
 
     pub fn with_vision_provider(
