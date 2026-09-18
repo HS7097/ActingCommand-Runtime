@@ -50,7 +50,10 @@ event carries no audit endpoint of its own. `serial_configured` states that
 an explicit serial was configured, so the recorded host and port are the
 configured target rather than the resolved transport serial; the resolved serial
 is never parsed. An instance with no ADB target, including a fixture simulation,
-omits host and port. A failed append is fatal, as for `runtime.started`.
+omits host and port. A serial-configured instance, like one without a port, is
+excluded from port grouping: its port never identifies it in the ledger port map
+or in the `status` `adb_port` field. A failed append is fatal, as for
+`runtime.started`.
 
 `actingcommand-vision-provider-check --state-root <runtime-state>` reads the
 specified Runtime ledger through B's `ForensicRequest::events` and the shared

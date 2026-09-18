@@ -34,9 +34,7 @@ pub(in crate::global) fn page_bounds(
     latest: u64,
 ) -> Result<(u64, u64), GlobalLedgerError> {
     let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
-    query
-        .validate()
-        .map_err(|_| invalid("invalid_event_query_bounds"))?;
+    query.validate().map_err(|error| invalid(error.code()))?;
     request.validate().map_err(|error| invalid(error.code()))?;
     let (snapshot, after) = match request.cursor() {
         Some(cursor) => {

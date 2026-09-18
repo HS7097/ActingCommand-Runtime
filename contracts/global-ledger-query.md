@@ -105,6 +105,21 @@ fingerprint includes view, time and both severity bounds. Changing conditions
 starts a new first page at the chosen snapshot. Changing a Runtime connection or
 offline root starts a new query. A cursor carries no cross-source content identity.
 
+`EventQuery.instance_ids` is a set condition on the event's `instance_id` link:
+OR within the set, AND with every other condition. An empty set is no constraint
+and leaves the serialized query, and therefore an existing cursor fingerprint,
+unchanged; a non-empty set enters the fingerprint. Giving both `instance_id` and
+a non-empty `instance_ids` is rejected with `invalid_event_query_instance_filter`.
+The in-memory selector takes the union of the instance index positions and the
+SQLite selector pushes down `l.instance_id IN (...)` with one binding per id;
+both paths apply the same membership test. An ADB port is the identity of an
+emulator instance, so every `instance_id` ever bound to the same port through
+`runtime.instance_bound` is one instance and is queried together as this set:
+`ledger-forensics::instance_bindings` derives, at a snapshot, the latest binding
+per instance id and the port map (port to every instance id ever bound as
+HOST:PORT, in first-binding order); serial-configured instances and instances
+without a port stay out of the port map and are listed separately.
+
 `RuntimeEventQueryPage.read_scope` separates source completeness from `has_more`.
 It gives the formal Runtime/offline source, material read state, actual
 `scanned_through_position` and event-count, response-byte or incomplete-source
@@ -150,7 +165,12 @@ The executable delegates typed parsing and reading to `ledger-forensics`:
 - `--profile <profile>` uses the existing projection profiles and defaults to `ui`;
 - `--snapshot <position>` selects a first-page position or agrees with the cursor;
 - `--cursor <next_cursor JSON>` continues the same query, profile and snapshot;
-- `--limit <count>` uses the existing page default and maximum.
+- `--limit <count>` uses the existing page default and maximum;
+- `--instance-port <port>` resolves the ADB port at the page's snapshot (the
+  cursor's, `--snapshot`, or the latest position) to every instance id ever bound
+  to it and runs the page with that set as `instance_ids`. No bound instance is
+  `instance_port_unknown`; a `--query` that already carries `instance_id` or
+  `instance_ids` other than exactly that set is `instance_port_conflict`.
 
 For example, the query object for exact Error events in one time interval is:
 

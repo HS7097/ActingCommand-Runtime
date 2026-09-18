@@ -1285,9 +1285,9 @@ impl GlobalLedger {
     }
 
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "query_events")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "query_events"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1308,9 +1308,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "query_event_page")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "query_event_page"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1336,8 +1336,8 @@ impl GlobalLedger {
         profile: ProjectionProfile,
         request: RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "project_ledger_view_page")
+        query.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
         })?;
         request.validate().map_err(|error| {
             GlobalLedgerError::request(error.code(), "project_ledger_view_page")
@@ -1433,9 +1433,9 @@ impl GlobalLedger {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "project_events")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "project_events"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1461,9 +1461,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "project_event_page")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "project_event_page"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender

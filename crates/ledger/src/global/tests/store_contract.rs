@@ -340,6 +340,7 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
         origin_module: Some(OriginModule::Runtime),
         diagnostic_code: Some(DiagnosticCode::CommandRejected),
         instance_id: links.instance_id().copied(),
+        instance_ids: Vec::new(),
         request_id: links.request_id().copied(),
         correlation_id: links.correlation_id().copied(),
         causation_id: links.causation_id().copied(),

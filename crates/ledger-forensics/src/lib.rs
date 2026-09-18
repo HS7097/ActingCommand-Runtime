@@ -25,10 +25,12 @@ use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
+mod bindings;
 mod material;
 mod signatures;
 mod task_records;
 mod views;
+pub use bindings::{InstanceBinding, InstanceBindings, instance_bindings};
 pub use material::{ForensicMaterialRequest, read_material_to};
 pub use signatures::{
     ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,
