@@ -336,6 +336,7 @@ fn resolve_deferred_instance(
         instance.instance_index,
         instance.instance_name.clone(),
         report.version.to_string(),
+        instance.mumu_manager_path.clone(),
     );
     let device = config
         .device_registration(
