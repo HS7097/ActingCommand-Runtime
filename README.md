@@ -1,4 +1,4 @@
-**🌐 Language / 语言:** English · [简体中文](./README.zh-CN.md)
+<p align="right">🌐 <b>English</b> · <a href="./README.zh-CN.md">简体中文</a></p>
 
 <div align="center">
 
