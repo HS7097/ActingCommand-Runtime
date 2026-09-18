@@ -204,6 +204,12 @@ pub enum EventType {
     RuntimeLifecycleObserved,
     #[serde(rename = "runtime.instance_bound")]
     RuntimeInstanceBound,
+    #[serde(rename = "runtime.fact_recorded")]
+    RuntimeFactRecorded,
+    #[serde(rename = "runtime.fact_invalidated")]
+    RuntimeFactInvalidated,
+    #[serde(rename = "runtime.fact_snapshot")]
+    RuntimeFactSnapshot,
     #[serde(rename = "monitor.probe_requested")]
     MonitorProbeRequested,
     #[serde(rename = "monitor.probe_started")]
@@ -434,7 +440,10 @@ impl EventType {
             | Self::RuntimeTakeover
             | Self::RuntimeFailed
             | Self::RuntimeLifecycleObserved
-            | Self::RuntimeInstanceBound => EventFamily::Runtime,
+            | Self::RuntimeInstanceBound
+            | Self::RuntimeFactRecorded
+            | Self::RuntimeFactInvalidated
+            | Self::RuntimeFactSnapshot => EventFamily::Runtime,
             Self::MonitorProbeRequested
             | Self::MonitorProbeStarted
             | Self::MonitorProbeCompleted

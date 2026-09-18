@@ -1785,6 +1785,51 @@ impl RuntimeInstanceBindingPayload {
     }
 }
 
+/// One runtime fact accepted into the Runtime's own fact store (Workflow #313).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFactRecordedPayload {
+    action: EventAction,
+    record: crate::RuntimeFactRecord,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeFactRecordedPayload {
+    pub const fn record(&self) -> &crate::RuntimeFactRecord {
+        &self.record
+    }
+}
+
+/// One runtime fact dropped from the Runtime's own fact store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFactInvalidatedPayload {
+    action: EventAction,
+    invalidation: crate::RuntimeFactInvalidation,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeFactInvalidatedPayload {
+    pub const fn invalidation(&self) -> &crate::RuntimeFactInvalidation {
+        &self.invalidation
+    }
+}
+
+/// The sealed image of the Runtime's own fact store at one ledger position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFactSnapshotPayload {
+    action: EventAction,
+    snapshot: Box<crate::RuntimeFactSnapshot>,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeFactSnapshotPayload {
+    pub fn snapshot(&self) -> &crate::RuntimeFactSnapshot {
+        &self.snapshot
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MonitorOutcomePayload {
@@ -3958,6 +4003,9 @@ common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(RuntimeLifecyclePayload);
 common_detail_accessors!(RuntimeInstanceBindingPayload);
+common_detail_accessors!(RuntimeFactRecordedPayload);
+common_detail_accessors!(RuntimeFactInvalidatedPayload);
+common_detail_accessors!(RuntimeFactSnapshotPayload);
 common_detail_accessors!(MonitorOutcomePayload);
 common_detail_accessors!(MonitorRecoveryCoordinationPayload);
 common_detail_accessors!(PerformancePressurePayload);
@@ -4007,6 +4055,9 @@ macro_rules! plain_payload_detail {
 plain_payload_detail!(
     RuntimeLifecyclePayload,
     RuntimeInstanceBindingPayload,
+    RuntimeFactRecordedPayload,
+    RuntimeFactInvalidatedPayload,
+    RuntimeFactSnapshotPayload,
     PerformancePressurePayload,
     PerformanceStutterPayload,
     PerformanceSummaryPayload,
@@ -5849,6 +5900,42 @@ fn validate_runtime_instance_binding(
     Ok(())
 }
 
+fn validate_runtime_fact_recorded(
+    payload: &RuntimeFactRecordedPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::FactPublish {
+        return Err(SanitizationError::new(
+            "invalid_runtime_fact_recorded_action",
+            "runtime_payload",
+        ));
+    }
+    payload.record.validate()
+}
+
+fn validate_runtime_fact_invalidated(
+    payload: &RuntimeFactInvalidatedPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::FactInvalidate {
+        return Err(SanitizationError::new(
+            "invalid_runtime_fact_invalidated_action",
+            "runtime_payload",
+        ));
+    }
+    payload.invalidation.validate()
+}
+
+fn validate_runtime_fact_snapshot(
+    payload: &RuntimeFactSnapshotPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::FactSnapshot {
+        return Err(SanitizationError::new(
+            "invalid_runtime_fact_snapshot_action",
+            "runtime_payload",
+        ));
+    }
+    payload.snapshot.validate()
+}
+
 fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), SanitizationError> {
     match payload {
         PerformancePayload::PressureStarted(value)
@@ -6855,6 +6942,63 @@ enum RuntimeDraftKind {
     Failed(DiagnosticOutcomeDraft),
     LifecycleObserved(RuntimeLifecycleDraft),
     InstanceBound(RuntimeInstanceBindingDraft),
+    FactRecorded(RuntimeFactRecordedDraft),
+    FactInvalidated(RuntimeFactInvalidatedDraft),
+    FactSnapshot(RuntimeFactSnapshotDraft),
+}
+
+struct RuntimeFactRecordedDraft {
+    record: crate::RuntimeFactRecord,
+    audit: AuditInput,
+}
+
+impl RuntimeFactRecordedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeFactRecordedPayload, SanitizationError> {
+        Ok(RuntimeFactRecordedPayload {
+            action: EventAction::FactPublish,
+            record: self.record,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+struct RuntimeFactInvalidatedDraft {
+    invalidation: crate::RuntimeFactInvalidation,
+    audit: AuditInput,
+}
+
+impl RuntimeFactInvalidatedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeFactInvalidatedPayload, SanitizationError> {
+        Ok(RuntimeFactInvalidatedPayload {
+            action: EventAction::FactInvalidate,
+            invalidation: self.invalidation,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+struct RuntimeFactSnapshotDraft {
+    snapshot: Box<crate::RuntimeFactSnapshot>,
+    audit: AuditInput,
+}
+
+impl RuntimeFactSnapshotDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeFactSnapshotPayload, SanitizationError> {
+        Ok(RuntimeFactSnapshotPayload {
+            action: EventAction::FactSnapshot,
+            snapshot: self.snapshot,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
 }
 
 struct RuntimeInstanceBindingDraft {
@@ -7018,6 +7162,32 @@ impl RuntimePayloadDraft {
                 audit,
             },
         ))
+    }
+
+    pub fn fact_recorded(record: crate::RuntimeFactRecord, audit: AuditInput) -> Self {
+        Self(RuntimeDraftKind::FactRecorded(RuntimeFactRecordedDraft {
+            record,
+            audit,
+        }))
+    }
+
+    pub fn fact_invalidated(
+        invalidation: crate::RuntimeFactInvalidation,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::FactInvalidated(
+            RuntimeFactInvalidatedDraft {
+                invalidation,
+                audit,
+            },
+        ))
+    }
+
+    pub fn fact_snapshot(snapshot: crate::RuntimeFactSnapshot, audit: AuditInput) -> Self {
+        Self(RuntimeDraftKind::FactSnapshot(RuntimeFactSnapshotDraft {
+            snapshot: Box::new(snapshot),
+            audit,
+        }))
     }
 
     pub fn started(action: EventAction, audit: AuditInput) -> Self {
@@ -8514,6 +8684,9 @@ pub enum RuntimePayload {
     Failed(DiagnosticOutcomePayload),
     LifecycleObserved(RuntimeLifecyclePayload),
     InstanceBound(RuntimeInstanceBindingPayload),
+    FactRecorded(RuntimeFactRecordedPayload),
+    FactInvalidated(RuntimeFactInvalidatedPayload),
+    FactSnapshot(RuntimeFactSnapshotPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -8847,6 +9020,9 @@ family_payload!(RuntimePayload, {
     Failed => EventType::RuntimeFailed,
     LifecycleObserved => EventType::RuntimeLifecycleObserved,
     InstanceBound => EventType::RuntimeInstanceBound,
+    FactRecorded => EventType::RuntimeFactRecorded,
+    FactInvalidated => EventType::RuntimeFactInvalidated,
+    FactSnapshot => EventType::RuntimeFactSnapshot,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -9086,6 +9262,15 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::InstanceBound(detail) => {
                     RuntimePayload::InstanceBound(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::FactRecorded(detail) => {
+                    RuntimePayload::FactRecorded(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::FactInvalidated(detail) => {
+                    RuntimePayload::FactInvalidated(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::FactSnapshot(detail) => {
+                    RuntimePayload::FactSnapshot(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {
@@ -9518,7 +9703,11 @@ impl EventPayload {
             self,
             Self::Performance(_)
                 | Self::Runtime(
-                    RuntimePayload::LifecycleObserved(_) | RuntimePayload::InstanceBound(_)
+                    RuntimePayload::LifecycleObserved(_)
+                        | RuntimePayload::InstanceBound(_)
+                        | RuntimePayload::FactRecorded(_)
+                        | RuntimePayload::FactInvalidated(_)
+                        | RuntimePayload::FactSnapshot(_)
                 )
                 | Self::Ledger(LedgerPayload::Signature(_))
         ) {
@@ -9751,6 +9940,15 @@ impl EventPayload {
         }
         if let Self::Runtime(RuntimePayload::InstanceBound(value)) = self {
             validate_runtime_instance_binding(value)?;
+        }
+        if let Self::Runtime(RuntimePayload::FactRecorded(value)) = self {
+            validate_runtime_fact_recorded(value)?;
+        }
+        if let Self::Runtime(RuntimePayload::FactInvalidated(value)) = self {
+            validate_runtime_fact_invalidated(value)?;
+        }
+        if let Self::Runtime(RuntimePayload::FactSnapshot(value)) = self {
+            validate_runtime_fact_snapshot(value)?;
         }
         if let Self::ResourceAuthoring(value) = self {
             validate_resource_authoring_fields(

@@ -28,6 +28,12 @@ pub const MAX_RUNTIME_FACT_KEY_BYTES: usize = 128;
 pub const MAX_RUNTIME_FACT_RECORD_ROWS: usize = 256;
 /// Upper bound on fields per record-list row.
 pub const MAX_RUNTIME_FACT_RECORD_FIELDS: usize = 64;
+/// Upper bound on the serialized snapshot carried by one `runtime.fact_snapshot`
+/// event: the same single-event payload bound the ledger applies to a
+/// `fact.observed` event. A larger store is rejected, never truncated.
+pub const MAX_RUNTIME_FACT_SNAPSHOT_BYTES: usize = crate::fact::MAX_FACT_OBSERVATION_BYTES;
+/// Shortest period between two periodic `runtime.fact_snapshot` events.
+pub const RUNTIME_FACT_SNAPSHOT_INTERVAL_MS: u64 = 60_000;
 /// Key families accepted for runtime facts. None of them overlaps the
 /// instance-fact families validated by `crate::fact`.
 pub const RUNTIME_FACT_FAMILIES: [&str; 8] = [
@@ -147,6 +153,13 @@ pub struct RuntimeFactInvalidation {
     pub at_unix_ms: u64,
 }
 
+impl RuntimeFactInvalidation {
+    /// Checks the dropped key; the reason and time are closed types.
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        validate_runtime_fact_key(&self.key)
+    }
+}
+
 /// Sealed image of the whole store at one ledger position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,12 +171,19 @@ pub struct RuntimeFactSnapshot {
 }
 
 impl RuntimeFactSnapshot {
-    /// Checks the schema identity, the record bound, and every record.
+    /// Checks the schema identity, the ledger position, the record bound,
+    /// every record, and the serialized size one ledger event may carry.
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.schema_version != RUNTIME_FACT_SCHEMA_VERSION {
             return Err(SanitizationError::new(
                 "runtime_fact_schema_version_mismatch",
                 "schema_version",
+            ));
+        }
+        if self.ledger_position == 0 {
+            return Err(SanitizationError::new(
+                "runtime_fact_ledger_position_invalid",
+                "ledger_position",
             ));
         }
         if self.records.len() > MAX_RUNTIME_FACTS {
@@ -174,6 +194,17 @@ impl RuntimeFactSnapshot {
         }
         self.records
             .iter()
-            .try_for_each(RuntimeFactRecord::validate)
+            .try_for_each(RuntimeFactRecord::validate)?;
+        if serde_json::to_vec(self)
+            .map_err(|_| SanitizationError::new("invalid_runtime_fact_snapshot", "records"))?
+            .len()
+            > MAX_RUNTIME_FACT_SNAPSHOT_BYTES
+        {
+            return Err(SanitizationError::new(
+                "runtime_fact_snapshot_payload_too_large",
+                "records",
+            ));
+        }
+        Ok(())
     }
 }
