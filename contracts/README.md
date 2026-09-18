@@ -16,6 +16,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `sqlite/schema.sql` — authoritative versioned Runtime state, migration, and release-set schema.
 - `runtime-project-interface.md` — versioned read-only project projection and compatibility matrix.
 - `ledger-performance-export.md` — read-only, raw-event-paginated stutter and clock-jump export.
+- `performance-timing-signals.md` — microsecond `touch_response_us` / `capture_acquire_us` payload fields, their context maxima and the host-level summary fold.
 - `page-projection.md` — package annotations and the shared bounded single-frame page projection.
 - `runtime-fact-store.md` — the Runtime's own fact records (disjoint from instance facts), the memory-only store, and ledger-only persistence.
 - `selection-policy.md` — the declared selection document, its canonical identity, and the pure evaluator's semantics.

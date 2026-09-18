@@ -332,7 +332,12 @@ impl TaskTimingObserver {
         }
     }
 
-    pub(super) fn finish_boundary(&mut self, start: BoundaryStart, succeeded: bool) {
+    /// Returns the boundary's own span so a caller can carry it without a second clock read.
+    pub(super) fn finish_boundary(
+        &mut self,
+        start: BoundaryStart,
+        succeeded: bool,
+    ) -> ObservedMicroseconds {
         let ended = Instant::now();
         if start.boundary == TaskTimingBoundary::Input {
             self.incomplete_effect_bridges();
@@ -358,6 +363,7 @@ impl TaskTimingObserver {
                 ..start
             });
         }
+        actingcommand_execution_kernel::observe_instant_span(start.started, ended)
     }
 
     pub(super) fn finish_append(

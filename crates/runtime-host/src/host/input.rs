@@ -148,13 +148,23 @@ impl HostShared {
                         };
                     }
                 };
-                match self
+                // Host-side span until the kernel-level backend span lands: it includes the
+                // host→kernel channel round-trip on top of the backend write itself.
+                let backend_started = Instant::now();
+                let backend_result = self
                     .execution
                     .input_prepared_retained_with_registration_guard(
                         &instance_alias,
                         action_for_worker,
                         registration,
-                    ) {
+                    );
+                let touch_response_us = performance::measured_microseconds(
+                    actingcommand_execution_kernel::observe_instant_span(
+                        backend_started,
+                        Instant::now(),
+                    ),
+                );
+                match backend_result {
                     Ok(outcome) => {
                         if let Some(recovery) = outcome.recovery
                             && let Err(error) = self.append_event_raw(
@@ -175,7 +185,7 @@ impl HostShared {
                             };
                         }
                         CriticalActionReport::Succeeded {
-                            value: outcome.selection,
+                            value: (outcome.selection, touch_response_us),
                             effect: success_effect,
                         }
                     }
@@ -222,7 +232,7 @@ impl HostShared {
                     }
                 }
             },
-            |_, effect| {
+            |(_, touch_response_us), effect| {
                 self.events
                     .draft(
                         EventSeverity::Info,
@@ -230,9 +240,10 @@ impl HostShared {
                         module,
                         EventActor::Runtime,
                         outcome_links,
-                        InputPayloadDraft::committed(
+                        InputPayloadDraft::committed_with_touch_response(
                             event_action,
                             effect.into(),
+                            *touch_response_us,
                             execution_audit(execution_provenance, &endpoint),
                         ),
                     )
@@ -264,7 +275,9 @@ impl HostShared {
             Ok(receipt) => {
                 self.finish_destructive_input(token, connection_id)?;
                 self.transfer_preempted_if_ready(token, connection_id)?;
-                let selection = receipt.value().clone();
+                self.observe_pipeline_event(receipt.outcome())
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                let (selection, _) = receipt.value().clone();
                 Ok((
                     OperationSuccess {
                         state: RuntimeReceiptState::Completed,

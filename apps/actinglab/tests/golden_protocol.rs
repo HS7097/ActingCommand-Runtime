@@ -667,6 +667,9 @@ fn normalize_value(
                 );
             }
             object.remove("evaluation_duration_ms");
+            // Host-measured backend spans vary per run like evaluation_duration_ms.
+            object.remove("capture_acquire_us");
+            object.remove("touch_response_us");
             for (field, child) in object {
                 normalize_value(child, root, Some(field), configuration_artifacts);
             }

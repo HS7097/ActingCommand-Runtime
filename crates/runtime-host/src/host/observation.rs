@@ -176,10 +176,14 @@ impl HostShared {
         let registration = self
             .mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let frame = match self
+        let capture_started = Instant::now();
+        let captured = self
             .execution
-            .capture_retained_with_registration_guard(instance_alias, registration)
-        {
+            .capture_retained_with_registration_guard(instance_alias, registration);
+        let capture_acquire_us = performance::measured_microseconds(
+            actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
+        );
+        let frame = match captured {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
@@ -355,7 +359,12 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        self.append_capture_completed(links.clone(), observation.width(), observation.height())?;
+        self.append_capture_completed(
+            links.clone(),
+            observation.width(),
+            observation.height(),
+            capture_acquire_us,
+        )?;
         let event = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -405,6 +414,7 @@ impl HostShared {
         links: EventLinksDraft,
         width: u32,
         height: u32,
+        capture_acquire_us: Option<u64>,
     ) -> Result<PersistedEvent, RequestFailure> {
         self.append_event(
             EventSeverity::Info,
@@ -412,11 +422,12 @@ impl HostShared {
             OriginModule::Capture,
             EventActor::Runtime,
             links,
-            CapturePayloadDraft::completed(
+            CapturePayloadDraft::completed_with_capture_acquire(
                 EventAction::CaptureObserve,
                 EffectDisposition::Performed,
                 width,
                 height,
+                capture_acquire_us,
                 AuditInput::new(),
             ),
         )
