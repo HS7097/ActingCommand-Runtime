@@ -18,12 +18,13 @@ use actingcommand_contract::{
     ProjectionPayload, ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE,
     RequestId, ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus,
     RuntimeDebugEvent, RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
-    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
-    RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
-    TaskPayload, TaskSemanticFact, TerminalEvent,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeFactSnapshot,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeMaintenanceQuery,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome, TaskPayload,
+    TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -777,6 +778,17 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    /// Reads the sealed image of the Runtime's own fact store at the ledger's latest sequence.
+    pub fn runtime_fact_snapshot(&self) -> RuntimeClientResult<RuntimeFactSnapshot> {
+        match self.execute(
+            "runtime_fact_snapshot",
+            RuntimeOperation::RuntimeFactSnapshot,
+        )? {
+            RuntimeResult::RuntimeFactSnapshot { snapshot } => Ok(snapshot),
+            _ => Err(self.unexpected_result("runtime_fact_snapshot")),
         }
     }
 

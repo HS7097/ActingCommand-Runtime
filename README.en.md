@@ -156,6 +156,7 @@ actingcommand-actingd --config runtime.json
 
 # Clients (the subcommand must be the first argument, flags come after it; every command needs --state-root)
 actingctl status --state-root <state-root>
+actingctl facts --program --state-root <state-root>
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>
 actingctl reset --state-root <state-root> --instance <alias>

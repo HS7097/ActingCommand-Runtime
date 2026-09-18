@@ -90,6 +90,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .map_err(ActingctlError::runtime)?,
         ),
         Command::Status => serde_json::to_value(client.status().map_err(ActingctlError::runtime)?),
+        Command::ProgramFacts => serde_json::to_value(
+            client
+                .runtime_fact_snapshot()
+                .map_err(ActingctlError::runtime)?,
+        ),
         Command::MonitorStatus => {
             serde_json::to_value(client.monitor_status().map_err(ActingctlError::runtime)?)
         }
@@ -183,6 +188,7 @@ enum Command {
     Observe,
     Reset,
     Status,
+    ProgramFacts,
     MonitorStatus,
     MonitorSet {
         policy: RuntimeMonitorPolicy,
@@ -214,6 +220,7 @@ impl Invocation {
         let mut recovery_package = None;
         let mut recovery_expected_sha256 = None;
         let mut recovery_enabled = false;
+        let mut program = false;
         let mut record_file = None;
         let mut index = 1;
         while index < arguments.len() {
@@ -256,6 +263,7 @@ impl Invocation {
                     recovery_expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
+                "--program" => program = true,
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -283,6 +291,13 @@ impl Invocation {
             "reset" => Command::Reset,
             "observe" => Command::Observe,
             "status" => Command::Status,
+            "facts" => {
+                // The per-instance read is not built; only the program store is readable.
+                if !program {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::ProgramFacts
+            }
             "monitor-status" => Command::MonitorStatus,
             "monitor-set" => Command::MonitorSet {
                 policy: RuntimeMonitorPolicy::new(
@@ -337,6 +352,7 @@ impl Command {
         !matches!(
             self,
             Self::Status
+                | Self::ProgramFacts
                 | Self::MonitorStatus
                 | Self::RequestShutdown
                 | Self::AgentPublishFacts { .. }
@@ -386,7 +402,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--program] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),

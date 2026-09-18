@@ -7,9 +7,12 @@ under automation. A runtime fact never describes game state, and a game
 observation never enters the runtime fact store; the two key families are
 disjoint by construction.
 
-Workflow #313 owns the design; this document freezes the contract half and the
-pure store. Host wiring (producers, sealing, policy input construction) lands
-after the host split in Workflow #161.
+Workflow #313 owns the design. This document freezes the contract half, the
+pure store, and the host wiring that makes the store ledger-backed: the three
+ledger events, the append-first rule, startup replay, takeover invalidation,
+the periodic snapshot, and the read operation. Producers (the modules that
+write `device.`, `task.`, `host.`, … facts), policy-input rewiring, and the
+per-instance read operation land in later slices.
 
 ## Records
 
@@ -28,9 +31,17 @@ after the host split in Workflow #161.
   invalidated, and consumers decide what an expired value means.
 
 `RuntimeFactInvalidation` records a drop with a reason (`runtime_takeover`,
-`device_closed`, `expired`, `operator`). `RuntimeFactSnapshot` is the sealed
-image of every live record bound to one ledger position and carries schema
-version `actingcommand.runtime-fact.v1`.
+`device_closed`, `expired`, `operator`); its `validate` checks the key.
+`RuntimeFactSnapshot` is the sealed image of every live record bound to one
+ledger position and carries schema version `actingcommand.runtime-fact.v1`.
+Its `validate` rejects a foreign schema version
+(`runtime_fact_schema_version_mismatch`), a zero ledger position
+(`runtime_fact_ledger_position_invalid`), more than 4 096 records
+(`runtime_fact_snapshot_too_large`), any invalid record, and a serialized
+image larger than `MAX_RUNTIME_FACT_SNAPSHOT_BYTES` — the same 512 KiB bound
+one `fact.observed` event may carry — with
+`runtime_fact_snapshot_payload_too_large`. A too-large store is rejected,
+never truncated.
 
 ## Store
 
@@ -51,11 +62,125 @@ key.
 - `snapshot(ledger_position, now)` returns the sealed image; `replay(snapshot)`
   replaces the store from one.
 
-## Persistence
+## Ledger events
 
-Iron rule 13 applies: the store never writes a file. The host appends every
-accepted record to the `GlobalLedger` before calling `record`, seals the store
-on a fixed period as a snapshot event, and rebuilds it after a restart from the
-latest snapshot plus the records appended after it. The store keeps no pending
-queue: the per-record append is the durability step, and the snapshot only
-shortens replay. Anything not appended is gone with the process.
+Three events in the existing `Runtime` family carry the store. Family
+membership is derived, so they appear in the `events` and `changes` views
+without any view definition change. All three are appended by the host with
+origin source `runtime`, origin module `runtime-facts`, actor `runtime`,
+severity `info`, and derived sensitivity `internal`.
+
+| Event | Action | Payload | Links |
+| --- | --- | --- | --- |
+| `runtime.fact_recorded` | `fact.publish` | one `RuntimeFactRecord` | system links, plus `instance_id` for an instance scope |
+| `runtime.fact_invalidated` | `fact.invalidate` | one `RuntimeFactInvalidation` | system links, plus `instance_id` for an instance scope |
+| `runtime.fact_snapshot` | `fact.snapshot` | one `RuntimeFactSnapshot` | system links |
+
+Payload validation delegates to the record, invalidation, and snapshot
+validators above; a wrong action is `invalid_runtime_fact_recorded_action`,
+`invalid_runtime_fact_invalidated_action`, or
+`invalid_runtime_fact_snapshot_action`. The instance link is issued for a
+registered instance only; a record whose instance scope is not registered is
+refused with `runtime_fact_instance_unknown` before anything is appended.
+`EventQuery` selects all three with `origin_module` `runtime-facts`.
+
+## Append-first rule
+
+Every change is ledger-first, under the same `fact_write_gate` as the instance
+fact store:
+
+1. **Pre-check without mutating the store.** `record` runs the record's
+   validation and the store's own acceptance rules against the live store: an
+   identical record returns `Unchanged` and appends nothing; an older or
+   equal observation is refused with `runtime_fact_stale`; a new key on a full
+   store is refused with `runtime_fact_capacity_exceeded`; an invalid record
+   is refused with its validation code. `invalidate` refuses an absent key with
+   `runtime_fact_missing`. These are request-class errors; the ledger is
+   untouched.
+2. **Append.** `runtime.fact_recorded` or `runtime.fact_invalidated` is
+   appended through the host's gated append path. An append failure returns
+   the ledger error and touches nothing in memory.
+3. **Apply.** The store is updated and marked dirty. If the store still refuses
+   a change the ledger already holds, memory and ledger disagree: the host
+   marks itself fatal with `runtime_fact_store_desync` and returns it.
+
+The store keeps no pending queue: the per-record append is the durability
+step. Anything not appended is gone with the process (iron rule 13).
+
+## Startup replay
+
+`recover_runtime_fact_store` runs during `start_with_provider`, after
+`runtime.started` / `runtime.takeover` and the `runtime.instance_bound`
+events, next to the instance fact store's recovery:
+
+1. The newest `runtime.fact_snapshot` is read (`EventQuery` on that event
+   type; the ledger's `query` is unpaged). If one exists the store is
+   replaced from it with `replay`.
+2. Every `runtime.fact_recorded` / `runtime.fact_invalidated` with a sequence
+   greater than that snapshot's — or every one of them when no snapshot exists
+   — is applied in ledger order through `record` / `invalidate`, selected with
+   `origin_module` `runtime-facts`.
+3. Any rejection while replaying our own ledger (stale, invalid, capacity,
+   missing, an unexpected payload under that module) is fatal:
+   `runtime_fact_replay_failed`, with the offending sequence in the native
+   detail. Nothing is skipped.
+
+Replay marks nothing dirty; the ledger already holds everything the store
+holds.
+
+## Takeover invalidation
+
+When the owner guard reports a takeover (a new owner epoch over an existing
+state root), device-bound facts of the previous epoch are stale until the
+post-connect self-check writes them again. After replay, every instance-scoped
+record whose key starts with `device.` or `backend.` is dropped, ledger first:
+one `runtime.fact_invalidated` with reason `runtime_takeover` per record
+(`at_unix_ms` = the host clock now, instance link from the record's scope),
+then `invalidate_instance` per distinct instance with the same time. The
+dropped keys must equal the appended keys, otherwise
+`runtime_fact_store_desync` is fatal. The store is then dirty. Zero matching
+records append nothing, so a fresh ledger and the startup event order are
+unchanged.
+
+## Periodic snapshot
+
+`append_runtime_fact_snapshot_if_dirty` seals the store only when it is dirty:
+it reads the ledger's latest sequence and the clock, builds the snapshot,
+validates it (the size and position codes above surface here as fatal host
+errors), appends `runtime.fact_snapshot`, and clears the dirty flag. A store
+that never changed appends nothing, so there is no ledger noise before
+producers exist.
+
+The performance monitor thread calls it with its own elapsed accumulator, so a
+seal is attempted at most once every `RUNTIME_FACT_SNAPSHOT_INTERVAL_MS`
+(60 000 ms) regardless of the performance sample interval. When that thread
+is not spawned (no performance sample interval and frame retention disabled)
+or has exited (sampling stopped with retention disabled), periodic snapshots
+stop; durability then rests entirely on the per-record events, which is the
+rule anyway. The snapshot only shortens replay.
+
+## Read operation
+
+`RuntimeOperation::RuntimeFactSnapshot` (no fields, no source gate beyond a
+valid client origin, like `Status`) returns
+`RuntimeResult::RuntimeFactSnapshot { snapshot }`: the live store sealed under
+the write gate at the ledger's latest sequence, with `taken_at_unix_ms` from
+the host clock. `ledger_position` therefore names the last event the reader
+can rely on having been applied; every accepted record and invalidation at or
+below it is reflected. The read appends nothing and does not mark the store
+dirty. `RuntimeHost::runtime_fact_snapshot` and
+`RuntimeClient::runtime_fact_snapshot` expose the same read.
+
+`actingctl facts --program --state-root <state-root>` prints the snapshot as
+JSON. `facts` without `--program` (the per-instance read) is not built and is a
+usage error; the command takes no `--instance`.
+
+## Typed codes
+
+Contract: `runtime_fact_ledger_position_invalid`,
+`runtime_fact_snapshot_payload_too_large`, `invalid_runtime_fact_snapshot`,
+`invalid_runtime_fact_recorded_action`, `invalid_runtime_fact_invalidated_action`,
+`invalid_runtime_fact_snapshot_action`. Host: `runtime_fact_stale`,
+`runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
+`runtime_fact_instance_unknown` (request class);
+`runtime_fact_store_desync`, `runtime_fact_replay_failed` (fatal).

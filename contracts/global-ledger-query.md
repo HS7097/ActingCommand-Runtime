@@ -16,6 +16,9 @@ An equal pair of time bounds selects no events. Inverted time or severity bounds
 are rejected by the typed request. Source, module,
 diagnostic code, event type and typed association IDs use exact equality.
 `origin_module` and `diagnostic_code` use the existing schema-owned enums.
+The Runtime's own fact events (`runtime.fact_recorded`, `runtime.fact_invalidated`,
+`runtime.fact_snapshot`; see [runtime-fact-store.md](runtime-fact-store.md)) are
+selected with `origin_module` `runtime-facts`.
 Omitted new fields retain unfiltered behavior and are omitted from the wire
 encoding, preserving query cursor identity for requests without new conditions.
 Changing a selected condition changes the query-bound pagination cursor.

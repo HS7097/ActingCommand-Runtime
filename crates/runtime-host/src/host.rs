@@ -55,7 +55,7 @@ use actingcommand_contract::{
     InstanceBindingSource, InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId,
     IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId,
     IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES,
+    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_RUNTIME_FACTS,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     ObservedMicroseconds, OriginModule, OwnerResourceDisposition, PackageDebugLayout,
     PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
@@ -63,15 +63,17 @@ use actingcommand_contract::{
     PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
     PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
     ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
-    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, ResourceQuiescence, RetentionClass,
-    RunId, RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryPageRequest,
-    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase,
-    RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
+    RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
+    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
+    ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
+    RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
+    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
+    RuntimeEvidenceScreenshotCounts, RuntimeFactInvalidation, RuntimeFactInvalidationReason,
+    RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayload, RuntimePayloadDraft,
     RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimePolicyInputIdentity,
     RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
     RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
@@ -110,6 +112,7 @@ use actingcommand_policy::{
     project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
+use actingcommand_scheduler::facts::{RuntimeFactChange, RuntimeFactError, RuntimeFactStore};
 use actingcommand_scheduler::{
     CancelledQueuedLease, ConnectionId, LeasePreparation, LeaseReleaseReason, LeaseTransferReason,
     PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
@@ -163,6 +166,7 @@ mod policy_outcome;
 mod read_events;
 mod requests;
 mod resource_close;
+mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
 mod signatures;
@@ -903,6 +907,12 @@ impl RuntimeHost {
                     return Err(original);
                 }
             };
+        let (runtime_facts, runtime_facts_dirty) = runtime_facts::recover_runtime_fact_store(
+            &ledger,
+            &events,
+            takeover,
+            config.clock.sample()?.unix_ms,
+        )?;
         let fatal = FatalState::default();
         let shared = Arc::new(HostShared {
             owner_epoch,
@@ -932,6 +942,8 @@ impl RuntimeHost {
             agent_write_gate: Mutex::new(()),
             proposal_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
+            runtime_facts: Mutex::new(runtime_facts),
+            runtime_facts_dirty: AtomicBool::new(runtime_facts_dirty),
             policy_inputs: Mutex::new(config.policy_inputs),
             authoritative_policy_outcomes: Mutex::new(authoritative_policy_outcomes),
             procedure_manifest: Mutex::new(config.procedure_manifest),
@@ -1269,6 +1281,12 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<InstanceFactSnapshot> {
         self.shared_ref("read_instance_fact_snapshot")?
             .instance_fact_snapshot(context)
+    }
+
+    /// Returns the sealed image of the Runtime's own fact store at the ledger's latest sequence.
+    pub fn runtime_fact_snapshot(&self) -> RuntimeHostResult<RuntimeFactSnapshot> {
+        self.shared_ref("read_runtime_fact_snapshot")?
+            .runtime_fact_snapshot()
     }
 
     pub fn admit_policy_dispatch(
@@ -2359,6 +2377,9 @@ struct HostShared {
     // Proposal recompilation, approval checks, and catalog activation form one ordered gate.
     proposal_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
+    // The Runtime's own facts: ledger-first, memory-only, sealed periodically while dirty.
+    runtime_facts: Mutex<RuntimeFactStore>,
+    runtime_facts_dirty: AtomicBool,
     policy_inputs: Mutex<Option<PolicyInputSnapshot>>,
     // A bounded cache of exact GlobalLedger projections; it never computes or owns outcomes.
     authoritative_policy_outcomes:

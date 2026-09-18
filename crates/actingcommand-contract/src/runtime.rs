@@ -2486,6 +2486,7 @@ pub enum RuntimeOperation {
         as_of_ledger_position: u64,
     },
     MonitorStatus,
+    RuntimeFactSnapshot,
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -2687,6 +2688,7 @@ impl RuntimeOperation {
             Self::Health
             | Self::Status
             | Self::MonitorStatus
+            | Self::RuntimeFactSnapshot
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::CancelContainedTask { .. } => Ok(()),
@@ -2857,6 +2859,7 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::ProjectPolicyInputIdentity(<ledger-position>)"
             }
             Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
+            Self::RuntimeFactSnapshot => "RuntimeOperation::RuntimeFactSnapshot",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -3432,6 +3435,9 @@ pub enum RuntimeResult {
     },
     MonitorStatus {
         status: RuntimeMonitorRegistryStatus,
+    },
+    RuntimeFactSnapshot {
+        snapshot: crate::RuntimeFactSnapshot,
     },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
