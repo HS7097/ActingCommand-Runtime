@@ -6,9 +6,13 @@ use actingcommand_contract::{
     ProviderStartupObservation as Observation, ProviderStartupStage as Stage,
 };
 use actingcommand_device::{
-    DiscoveredMumuInstance, MumuDiscoveryReport, NemuResolutionReason, discover_mumu_instances,
+    DiscoveredMumuInstance, EmulatorCapability, EmulatorCapabilityAvailability,
+    EmulatorCapabilityProfile, MUMU_CAPABILITY_PROVIDER_ID, MumuDiscoveryReport,
+    MumuEmulatorCapabilityBackend, NemuResolutionReason, discover_mumu_instances,
 };
-use actingcommand_runtime_host::{DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult};
+use actingcommand_runtime_host::{
+    DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
+};
 use actingcommand_vision_ffi::{FastDeployPpocrBackend, OnnxRuntimeBackend, VisionFfiError};
 use std::io;
 
@@ -87,12 +91,13 @@ impl ConfiguredExecutionBackendRegistry {
                 },
             )
         })?;
+        let profile = admit_capability_profile(startup, &report, &mumu_root)?;
         let mut bound = BTreeMap::new();
         let mut resolved = Vec::new();
         let mut refusal = None;
         for entry in std::mem::take(&mut self.deferred) {
             let alias = entry.alias.clone();
-            match resolve_deferred_instance(entry, &report) {
+            match resolve_deferred_instance(entry, &report, &profile) {
                 Ok((instance_index, device)) => {
                     bound.insert(instance_index, alias);
                     resolved.push(device);
@@ -146,6 +151,63 @@ impl ConfiguredExecutionBackendRegistry {
     }
 }
 
+/// Admits the capability profile derived from the discovery report (pure, nothing is
+/// dispatched) and records it as one `capability_profile` observation inside a
+/// `capability_admission` bracket. A refusal is recorded before startup fails.
+fn admit_capability_profile(
+    startup: &mut ProviderStartup<'_>,
+    report: &MumuDiscoveryReport,
+    mumu_root: &str,
+) -> RuntimeHostResult<EmulatorCapabilityProfile> {
+    let backend = ProviderBackend::MumuManager;
+    let stage = Stage::CapabilityAdmission;
+    startup.record(backend, Observation::Started { stage })?;
+    let mut capability_backend = MumuEmulatorCapabilityBackend::new(report.clone());
+    let profile = admit_emulator_capabilities(
+        &mut capability_backend,
+        &[
+            EmulatorCapability::InventoryRead.as_str(),
+            EmulatorCapability::InstanceStatusRead.as_str(),
+        ],
+    )
+    .map_err(|error| {
+        startup.failed(
+            backend,
+            stage,
+            "emulator_capability_admission_refused",
+            ProviderNativeFailure {
+                module: "actingcommand_runtime_host::emulator_control".into(),
+                code: error.code().into(),
+                severity: "fatal".into(),
+                message: format!(
+                    "mumu_root={mumu_root}; provider_id={MUMU_CAPABILITY_PROVIDER_ID}; version={}; {error}",
+                    report.version
+                ),
+            },
+        )
+    })?;
+    let ids = |availability| {
+        profile
+            .capability_ids_with(availability)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    };
+    startup.record(
+        backend,
+        Observation::CapabilityProfile {
+            provider_id: profile.provider_id().to_owned(),
+            // The pure builder records exactly this discovered version as the profile version.
+            version: report.version.to_string(),
+            available: ids(EmulatorCapabilityAvailability::Available),
+            unverified: ids(EmulatorCapabilityAvailability::Unverified),
+            unavailable: ids(EmulatorCapabilityAvailability::Unavailable),
+        },
+    )?;
+    startup.record(backend, Observation::Completed { stage })?;
+    Ok(profile)
+}
+
 fn render_discovered_instances(instances: &[&DiscoveredMumuInstance]) -> String {
     let rendered = instances
         .iter()
@@ -167,10 +229,12 @@ fn render_discovered_instances(instances: &[&DiscoveredMumuInstance]) -> String 
 type DeferredRefusal = (&'static str, ProviderNativeFailure);
 
 /// Matches one deferred instance by index or exact name, cross-checks declared ADB values
-/// against the discovered ones and builds its device registration.
+/// against the discovered ones and builds its device registration carrying the admitted
+/// provider capability profile.
 fn resolve_deferred_instance(
     entry: DeferredInstance,
     report: &MumuDiscoveryReport,
+    profile: &EmulatorCapabilityProfile,
 ) -> Result<(u16, ConfiguredInstanceBackend), DeferredRefusal> {
     let DeferredInstance { alias, key, config } = entry;
     let facts = format!(
@@ -300,7 +364,11 @@ fn resolve_deferred_instance(
             instance_id,
             input_backend,
             capture_backend,
-            registration: Box::new(registration.with_discovered_binding(binding)),
+            registration: Box::new(
+                registration
+                    .with_discovered_binding(binding)
+                    .with_capability_profile(profile.clone()),
+            ),
         },
     ))
 }
