@@ -69,7 +69,12 @@ The observation records `started`/`completed` with stage `instance_discovery`
 around one `instance_discovery` record that names the resolved source, the
 `MuMuManager.exe` path, the reported version and every reported instance
 (`instance_index`, `instance_name`, `adb_host`, `adb_port`, `running` and the
-`bound_alias` it was matched to, if any). Every refusal is recorded as a
+`bound_alias` it was matched to, if any; `adb_host` and `adb_port` are omitted
+for a stopped instance, which `info -v all` reports as a flat object without
+`adb_host_ip`, `adb_port` or `player_state`, observed on MuMuManager 6.5.7.0).
+A stopped instance anywhere in the inventory no longer breaks discovery: a
+non-running entry is parsed with those three fields optional, while a running
+entry still requires a non-zero `adb_port`. Every refusal is recorded as a
 `failed` observation with stage `instance_discovery` whose failure message
 carries the discovery facts (source, path, version, index, name, port and the
 declared values) before Host startup fails with the same classification:
@@ -77,7 +82,12 @@ declared values) before Host startup fails with the same classification:
 including a missing install), `mumu_manager_version_unsupported` (below the
 policy floor or unparseable), `instance_discovery_no_match` (no reported
 instance has the index or exact name), `instance_discovery_ambiguous` (more
-than one instance carries the name) and `instance_discovery_conflict` (a
+than one instance carries the name), `instance_discovered_stopped` (the
+matched instance reports no ADB endpoint because it is stopped; the failure
+message names the alias, the binding key and the discovered index; it is never
+bound with a guessed port, so today the daemon must be started while the
+configured instance is running, and starting a stopped instance from a cold
+daemon lands in the next slice) and `instance_discovery_conflict` (a
 declared `adb_path`, `host` or `port` differs from the discovered value; the
 failure message carries both values). A resolved instance is then registered
 exactly like an explicit one, with the discovered ADB path, host and port and
