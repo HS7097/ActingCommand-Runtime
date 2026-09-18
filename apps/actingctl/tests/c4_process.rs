@@ -642,7 +642,7 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 "execution_mode":"navigable_route",
                 "game":"neutral",
                 "server":"test",
-                "resolution":{"width":2,"height":1},
+                "resolution":{"width":16,"height":9},
                 "entry_task_id":"task",
                 "capture_interval_ms":1,
                 "step_timeout_ms":50,
@@ -661,7 +661,7 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 "task_id":"task",
                 "game":"neutral",
                 "server_scope":["test"],
-                "coordinate_space":{"width":2,"height":1},
+                "coordinate_space":{"width":16,"height":9},
                 "entry_page":"home",
                 "target_page":"terminal",
                 "operations":[{
@@ -679,7 +679,7 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 "schema_version":"0.3",
                 "game":"neutral",
                 "server":"test",
-                "coordinate_space":{"width":2,"height":1},
+                "coordinate_space":{"width":16,"height":9},
                 "defaults":{"color_max_distance":0.0},
                 "targets":[
                     {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},

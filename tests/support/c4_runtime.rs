@@ -53,6 +53,34 @@ impl CaptureBackend for FileCaptureBackend {
         Frame::from_png(png, CaptureBackendName::AdbScreencap)
     }
 
+    fn observe_geometry(
+        &mut self,
+        _deadline: std::time::Instant,
+    ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
+        use actingcommand_contract::{
+            CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
+            CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+        };
+        // The same 16x9 extent of the sealed frame file; no device is queried
+        // and no backend event is recorded.
+        let extent = CaptureExtent::new(16, 9).expect("positive sealed extent");
+        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::AdbScreencap,
+            source: CaptureGeometrySource::AdbDefaultDisplay {
+                serial: "<sealed-c4-process>".to_string(),
+                wm_extent: extent,
+                wm_size_kind: CaptureWmSizeKind::Physical,
+            },
+            logical_display_extent: extent,
+            rotation: CaptureRotationObservation::Observed {
+                rotation: CaptureRotation::R0,
+                source: CaptureRotationSource::DumpsysDisplayOrientation,
+            },
+            sampled_at: std::time::SystemTime::now(),
+            frame_transform: None,
+        }))
+    }
+
     fn close_once(
         &mut self,
         _authority: DeviceCloseAuthority,
@@ -382,10 +410,13 @@ pub fn write_sealed_frame(path: &Path) {
 }
 
 fn write_frame(path: &Path, first_pixel: [u8; 3]) -> DeviceResult<()> {
+    // Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
+    let mut pixels = vec![first_pixel[0], first_pixel[1], first_pixel[2], 0, 255, 0];
+    pixels.resize(16 * 9 * 3, 0);
     let frame = Frame::from_pixels(
-        2,
-        1,
-        vec![first_pixel[0], first_pixel[1], first_pixel[2], 0, 255, 0],
+        16,
+        9,
+        pixels,
         PixelFormat::Rgb8,
         CaptureBackendName::AdbScreencap,
     )?;
