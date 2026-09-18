@@ -51,6 +51,22 @@ per-instance sample queue. The host responsiveness score gains two entries,
 250 ms target (the capture acquisition alone sits under the existing 500 ms
 event-to-event capture latency target).
 
+## Pipeline observation
+
+Every event the host persists through `append_event` / `append_event_raw` is
+handed to the pipeline monitor by the append hook itself (after the fact write
+gate is released), so the read-only observation, capture sequence, online
+observation, lab operation frame and monitor probe paths all feed the monitor
+without a call of their own; only paths that append under the fact write gate
+or straight to the ledger (contained task, input receipt, lifecycle,
+governance, planning, release control, policy catalog) observe explicitly once
+the gate is dropped. The pipeline maxima therefore appear only
+in the 60 s counters `perf.summary` (context `sample_count` > 0), never in the
+2 s capacity fact `perf.summary` (`capacity` present, context
+`PerformanceContext::unavailable`, all fourteen metrics listed as unavailable),
+which is the ledger commit of the capacity admission fact and not a monitor
+reading.
+
 ## Summary instance semantics
 
 The periodic (60 s) `perf.summary` context previously queried the pipeline

@@ -6,9 +6,11 @@ use crate::{
     ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, InputAction, InstanceId, MonitorObservation,
+    ApplicationLifecycleAction, EmulatorInstanceAction, InputAction, InstanceId, MonitorObservation,
 };
-use actingcommand_device::{DeviceCloseAuthority, Frame};
+use actingcommand_device::{
+    DeviceCloseAuthority, EmulatorControlOutcome, EmulatorControlResult, Frame,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -153,6 +155,17 @@ impl ExecutionKernel {
         drop(registration_guard);
         let result = session.control_application(action);
         self.finish_session_operation(&session, result)
+    }
+
+    /// Drives the provider's instance control surface directly: no session is opened, touched
+    /// or closed here. The host closes the instance's device session first and does not
+    /// reopen it afterwards (it opens lazily on the next lease).
+    pub fn control_instance(
+        &self,
+        instance_alias: &str,
+        action: EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        self.provider.control_instance(instance_alias, action)
     }
 
     pub fn observe_monitor(

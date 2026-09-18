@@ -12,13 +12,14 @@ enum MonitorFailureStage {
     Recognition,
 }
 
-struct MonitorRecoveryAdmission {
-    reason: MonitorRecoveryCoordinationReason,
+/// Per-instance fence classification shared with emulator instance control.
+pub(super) struct MonitorRecoveryAdmission {
+    pub(super) reason: MonitorRecoveryCoordinationReason,
     lease_id: Option<LeaseId>,
 }
 
 impl MonitorRecoveryAdmission {
-    fn admitted(&self) -> bool {
+    pub(super) fn admitted(&self) -> bool {
         self.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable
     }
 }
@@ -467,7 +468,7 @@ impl HostShared {
         Ok(())
     }
 
-    fn monitor_recovery_admission(
+    pub(super) fn monitor_recovery_admission(
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<MonitorRecoveryAdmission> {
