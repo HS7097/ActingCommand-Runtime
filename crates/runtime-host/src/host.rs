@@ -433,7 +433,11 @@ impl RuntimeHostConfig {
         &self.state_root
     }
 
-    fn validate(&self) -> RuntimeHostResult<()> {
+    pub const fn bind_address(&self) -> SocketAddr {
+        self.bind_address
+    }
+
+    pub fn validate(&self) -> RuntimeHostResult<()> {
         self.scheduler
             .validate()
             .map_err(|error| RuntimeHostError::scheduler("validate_runtime_config", &error))?;
@@ -2261,13 +2265,6 @@ fn initial_registered_instances(
     provider: &dyn ExecutionBackendProvider,
 ) -> RuntimeHostResult<BTreeMap<InstanceId, RegisteredInstance>> {
     let aliases = provider.instance_aliases();
-    if aliases.is_empty() {
-        return Err(RuntimeHostError::fatal(
-            "empty_execution_backend_registry",
-            "initialize_runtime_instance_registry",
-            RuntimeErrorCode::RuntimeFatal,
-        ));
-    }
     let mut seen_aliases = BTreeSet::new();
     let mut instances = BTreeMap::new();
     for instance_alias in aliases {

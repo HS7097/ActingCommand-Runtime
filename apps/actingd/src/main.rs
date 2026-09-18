@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod check_config;
 mod config;
 mod ledger_maintenance;
 
@@ -53,6 +54,12 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         .is_some_and(|argument| argument == "ledger-maintenance")
     {
         return ledger_maintenance::run(arguments);
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "check-config")
+    {
+        return check_config::run(arguments);
     }
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {

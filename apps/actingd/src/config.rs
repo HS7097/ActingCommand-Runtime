@@ -754,9 +754,6 @@ impl ConfiguredExecutionBackendRegistry {
         backends: Vec<ConfiguredInstanceBackend>,
         vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     ) -> Result<Self, &'static str> {
-        if backends.is_empty() {
-            return Err("execution_registry_invalid");
-        }
         let mut devices = Vec::new();
         let mut device_input_backends = BTreeMap::new();
         let mut device_capture_backends = BTreeMap::new();
