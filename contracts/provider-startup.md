@@ -42,10 +42,16 @@ by construction. Lazy initialization and inference remain unobserved.
 When at least one configured instance carries a discovery binding key
 (`instance_index` or `instance_name`), the same assembly closure runs one
 `MuMuManager.exe` discovery before the vision provider is assembled and before
-any instance is bound. Only the vendor-documented read-only subcommands
-`version` and `info -v all` are dispatched, with a 10 s timeout and no console
-window; no mutating subcommand and no hidden subcommand is ever used, and no
-vendor-private file is read. `MuMuManager.exe` is resolved in this priority:
+any instance is bound. At startup only the vendor-documented read-only
+subcommands `version` and `info -v all` are dispatched, with a 10 s timeout and
+no console window, and no vendor-private file is read. The documented
+`control -v <index> launch|shutdown|restart` IS dispatched later, but only by an
+explicit User+Ui or Cli `ControlEmulatorInstance` request, only after the
+per-instance lease fence and the device-session close, once per request, with
+every dispatch recorded intent -> result (`emulator-control.md`); the hidden
+`api` subcommand stays banned, and the resolved `MuMuManager.exe` path is
+carried on each discovered binding for that purpose. `MuMuManager.exe` is
+resolved in this priority:
 the configured `mumu_root`, `ACTINGCOMMAND_NEMU_FOLDER`, the install root of a
 running MuMu process, the Windows uninstall entry, then vendor folder
 enumeration. The registry tier enumerates `MuMuPlayer*` subkeys under
