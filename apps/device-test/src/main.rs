@@ -2,9 +2,10 @@
 
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
-    Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close,
-    create_capture_backend, create_touch_backend, discover_mumu_instances, resolve_adb_path,
+    EmulatorCapabilityAvailability, Frame, InputBackend, MaaTouchValidationConfig, PixelFormat,
+    TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName,
+    combine_operation_and_close, create_capture_backend, create_touch_backend,
+    discover_mumu_instances, mumu_capability_profile, resolve_adb_path,
 };
 use actingcommand_execution_kernel::{
     DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
@@ -180,7 +181,8 @@ fn run_with_args(
 const MUMU_DISCOVER_HELP: &str = "mumu-discover [--root <mumu-install-root>]";
 
 /// Read-only probe: runs `MuMuManager version` and `info -v all` through the same discoverer
-/// as actingd and prints one JSON line. No instance is started, stopped or configured.
+/// as actingd, derives the capability profile from that report with the same pure builder,
+/// and prints one JSON line. No instance is started, stopped or configured.
 fn run_mumu_discover(tokens: &[String], output: &mut impl std::io::Write) -> CliResult<()> {
     if matches!(tokens, [flag] if flag == "--help" || flag == "-h") {
         writeln!(output, "{MUMU_DISCOVER_HELP}")?;
@@ -200,8 +202,10 @@ fn run_mumu_discover(tokens: &[String], output: &mut impl std::io::Write) -> Cli
             }
         }
     }
-    let report = match discover_mumu_instances(root.as_deref()) {
-        Ok(report) => serde_json::json!({
+    let report = match discover_mumu_instances(root.as_deref())
+        .and_then(|report| mumu_capability_profile(&report).map(|profile| (report, profile)))
+    {
+        Ok((report, profile)) => serde_json::json!({
             "status": "ok",
             "source": report.source.as_str(),
             "mumu_manager_path": report.mumu_manager_path.to_string_lossy(),
@@ -217,6 +221,13 @@ fn run_mumu_discover(tokens: &[String], output: &mut impl std::io::Write) -> Cli
                 "adb_path": instance.adb_path.to_string_lossy(),
                 "install_root": instance.install_root.to_string_lossy(),
             })).collect::<Vec<_>>(),
+            "capabilities": {
+                "provider_id": profile.provider_id(),
+                "version": report.version.to_string(),
+                "available": profile.capability_ids_with(EmulatorCapabilityAvailability::Available),
+                "unverified": profile.capability_ids_with(EmulatorCapabilityAvailability::Unverified),
+                "unavailable": profile.capability_ids_with(EmulatorCapabilityAvailability::Unavailable),
+            },
         }),
         Err(error) => {
             let report = serde_json::json!({

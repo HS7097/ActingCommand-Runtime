@@ -6,9 +6,10 @@ matrix.
 ## Runtime boundary
 
 `actingcommand-device` exposes `EmulatorCapabilityBackend` only as a read-only probe contract.
-The checked-in backend is an in-memory fake for deterministic Runtime rehearsals. It cannot open a
-process, socket, ADB channel, emulator, or device. A real adapter must be approved separately and
-must remain behind the execution-kernel device ownership boundary.
+The checked-in backends are an in-memory fake for deterministic Runtime rehearsals and, since
+Runtime slice #316-A, a MuMu backend over an already obtained discovery report (see below). Neither
+probe opens a process, socket, ADB channel, emulator, or device. A real control adapter must be
+approved separately and must remain behind the execution-kernel device ownership boundary.
 
 The contract vocabulary is closed:
 
@@ -95,6 +96,49 @@ Observed on the owner's machine with the read-only subcommands only; this is the
 - `6.3.2.0` is a Runtime policy floor with no vendor basis; the vendor documents only
   `V4.0.0.3179` as the `MuMuManager` baseline. Windows registry `DisplayVersion` is advisory;
   `MuMuManager version` is authoritative.
+
+## MuMu provider profile (Runtime slice #316-A)
+
+`actingcommand-device::mumu_manager::mumu_capability_profile` derives one
+`EmulatorCapabilityProfile` from a `MumuDiscoveryReport`. It is a pure function: it dispatches
+nothing and reads nothing; every row states what `MuMuManager version` and `info -v all` already
+answered. `MumuEmulatorCapabilityBackend` holds one report and implements
+`EmulatorCapabilityBackend` by calling that builder; its `from_discovery` constructor runs the
+read-only discoverer once. This slice dispatches no `control` subcommand.
+
+- `provider_id` is `mumu.manager`; the version evidence is `exact` with the `MuMuManager version`
+  value, kept as an opaque bounded string and never compared semantically in the profile.
+- Available (supported): `inventory.read` and `instance.status.read`, evidence
+  `mumu_manager.info`: `info -v all` answered with exit 0 and a parseable instance map at
+  discovery. A refusal surfaces as a fatal typed device error (`mumu_manager.run`, `.exit`,
+  `.decode`, `.json`, `.errcode`, `.shape`, `.output_bound`), never as an empty inventory.
+- Unverified (supported): `instance.start`, `instance.stop` and `instance.restart`, evidence the
+  vendor command reference (https://mumu.163.com/help/20240807/40912_1170006.html), which documents
+  `control -v <index> launch|shutdown|restart`. The Runtime has not exercised it, so
+  `capability()` still refuses these rows; the emulator control slice flips them.
+- Unavailable (unsupported), evidence `mumu.manager`: `instance.create`, `instance.clone`,
+  `instance.delete`, `instance.configure` and `snapshot.manage` are not driven by this Runtime;
+  `application.control` and `adb.bridge` are not driven through `MuMuManager` (the instance is
+  reached through its discovered ADB target, not through this provider claim); every `input.*`,
+  `capture.frame`, `application.launch`, `application.stop` and `application.restart` belong to
+  the touch/capture backend registry and the ADB application lifecycle path.
+
+At provider startup `actingd` admits the profile through `admit_emulator_capabilities` with the
+required ids `inventory.read` and `instance.status.read`, records it in the ledger (stage
+`capability_admission`, see `contracts/provider-startup.md`) and attaches it to every discovered
+registration. `ExecutionBackendRegistry::register` then merges it with the registry-derived
+profile: `provider_id`, the version and the rows `inventory.read`, `instance.status.read`,
+`instance.start`, `instance.stop`, `instance.restart`, `instance.create`, `instance.clone`,
+`instance.delete`, `instance.configure`, `snapshot.manage` and `adb.bridge` come from the
+provider profile; `application.control`, every `input.*`, `capture.frame` and
+`application.launch|stop|restart` keep the registry-derived evidence. The merged profile is
+rebuilt through `EmulatorCapabilityProfile::new`, so the completeness and duplicate rules run
+again, and a merge that fails validation refuses the registration with
+`execution_capability_profile_merge_invalid`. Explicit (non-discovered) entries, fixtures and
+tests keep the registry-only placeholder profile (`runtime.execution_backend_registry`, version
+unavailable) unchanged. The `mumu-discover` probe prints the same profile as a `capabilities`
+object (`provider_id`, `version` and the sorted `available`, `unverified` and `unavailable` id
+lists) without starting the daemon.
 
 ## Offline workstation observation
 
