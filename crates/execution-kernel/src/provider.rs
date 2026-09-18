@@ -553,11 +553,43 @@ fn invalid_region() -> VisionProviderError {
     )
 }
 
+/// The structured ADB target a registered instance was configured with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedAdbEndpoint {
+    host: String,
+    port: u16,
+    serial_configured: bool,
+}
+
+impl ResolvedAdbEndpoint {
+    pub fn new(host: impl Into<String>, port: u16, serial_configured: bool) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            serial_configured,
+        }
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub const fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// True when the registration carried an explicit serial instead of HOST:PORT.
+    pub const fn serial_configured(&self) -> bool {
+        self.serial_configured
+    }
+}
+
 #[derive(Clone)]
 pub struct ResolvedExecutionInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
+    adb_endpoint: Option<ResolvedAdbEndpoint>,
     configuration: Option<actingcommand_contract::EffectiveDeviceConfiguration>,
     capabilities: Option<actingcommand_contract::EmulatorCapabilityProfile>,
 }
@@ -578,6 +610,7 @@ impl ResolvedExecutionInstance {
             instance_id,
             audit_endpoint: audit_endpoint.into(),
             provenance: ExecutionBackendProvenance::PhysicalDevice,
+            adb_endpoint: None,
             configuration: None,
             capabilities: None,
         }
@@ -588,6 +621,7 @@ impl ResolvedExecutionInstance {
             instance_id,
             audit_endpoint: "fixture-simulation".to_owned(),
             provenance: ExecutionBackendProvenance::FixtureSimulation,
+            adb_endpoint: None,
             configuration: None,
             capabilities: None,
         }
@@ -603,6 +637,15 @@ impl ResolvedExecutionInstance {
 
     pub const fn provenance(&self) -> ExecutionBackendProvenance {
         self.provenance
+    }
+
+    pub fn with_adb_endpoint(mut self, adb_endpoint: ResolvedAdbEndpoint) -> Self {
+        self.adb_endpoint = Some(adb_endpoint);
+        self
+    }
+
+    pub const fn adb_endpoint(&self) -> Option<&ResolvedAdbEndpoint> {
+        self.adb_endpoint.as_ref()
     }
 
     pub fn with_configuration(

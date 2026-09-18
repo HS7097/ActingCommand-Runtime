@@ -34,6 +34,24 @@ Lab and verbose projections withhold the raw startup record; forensic reads
 retain it. A construction-ready observation covers only work actually performed
 by construction. Lazy initialization and inference remain unobserved.
 
+## Instance binding
+
+Immediately after `runtime.started` or `runtime.takeover`, the Host records one
+`runtime.instance_bound` event per registered instance, ordered by instance id.
+The event is family Runtime with severity Info; its sensitivity is derived as
+Internal rather than declared. Its links carry the registered `instance_id`, and
+its payload carries the registered `instance_alias`, the backend `provenance`,
+the configured `adb_host` and `adb_port`, `serial_configured` and
+`binding_source`. `binding_source` is `explicit` for a configured registry entry;
+`discovered` is reserved for later discovery. The port is a plain payload field,
+because an instance is recognised in the ledger by its ADB port; the audit
+`device_endpoint` keeps its existing redaction wherever it is carried, and this
+event carries no audit endpoint of its own. `serial_configured` states that
+an explicit serial was configured, so the recorded host and port are the
+configured target rather than the resolved transport serial; the resolved serial
+is never parsed. An instance with no ADB target, including a fixture simulation,
+omits host and port. A failed append is fatal, as for `runtime.started`.
+
 `actingcommand-vision-provider-check --state-root <runtime-state>` reads the
 specified Runtime ledger through B's `ForensicRequest::events` and the shared
 `origin_module=provider` filter. It uses `--after` (exclusive), `--through`

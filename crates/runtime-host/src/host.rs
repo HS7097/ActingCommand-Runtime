@@ -52,9 +52,9 @@ use actingcommand_contract::{
     EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
     EventSource, EventType, FactPayloadDraft, FactRecord, FrameId, InputAction,
     InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload, InputPayloadDraft,
-    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
-    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
-    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
+    InstanceBindingSource, InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId,
+    IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId,
+    IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     ObservedMicroseconds, OriginModule, OwnerResourceDisposition, PackageDebugLayout,
@@ -89,7 +89,7 @@ use actingcommand_execution_kernel::{
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
     ContainedTaskTrace, ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel,
     ExternalExpectedSha256, PostAdmissionOcrObservation, PreparedContainedTask,
-    PreparedInputAction, RecognitionVisionProvider, StabilityComparisonResult,
+    PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint, StabilityComparisonResult,
     StabilityTerminalReason, StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
@@ -186,7 +186,7 @@ use input::RuntimeInputContext;
 #[cfg(test)]
 use lease::{LeaseExpiryTestCheckpoint, lease_token_identity_match_count};
 use lease::{QueueTerminalStore, QueuedRequestContext, RuntimeLeaseAcquisition};
-use lifecycle::{append_runtime_start_event, record_failure};
+use lifecycle::{append_instance_binding_events, append_runtime_start_event, record_failure};
 use monitor_control::monitor_probe_loop;
 use observation::CompletedReadonlyObservation;
 use performance::{CapacityUse, performance_monitor_loop};
@@ -841,6 +841,7 @@ impl RuntimeHost {
             takeover,
             config.device_diagnostic_mode,
         )?;
+        append_instance_binding_events(&ledger, &events, &registered_instances)?;
         let prepared = (|| {
             let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
             let performance_interval = performance.sample_interval().or_else(|| {
@@ -2118,6 +2119,7 @@ struct RegisteredInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
+    adb_endpoint: Option<ResolvedAdbEndpoint>,
 }
 
 #[cfg(test)]
@@ -2297,6 +2299,7 @@ fn initial_registered_instances(
             instance_id: resolved.instance_id(),
             audit_endpoint: resolved.audit_endpoint().to_string(),
             provenance: resolved.provenance(),
+            adb_endpoint: resolved.adb_endpoint().cloned(),
         };
         if instances
             .insert(registration.instance_id, registration)

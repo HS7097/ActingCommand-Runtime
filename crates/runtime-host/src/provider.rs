@@ -12,8 +12,8 @@ use actingcommand_device::{
     create_capture_backend, create_touch_backend_for_fenced_input,
 };
 pub use actingcommand_execution_kernel::{
-    ExecutionBackendProvider, RecognitionVisionProvider, ResolvedExecutionInstance,
-    VisionFfiProvider, VisionModelIdentity,
+    ExecutionBackendProvider, RecognitionVisionProvider, ResolvedAdbEndpoint,
+    ResolvedExecutionInstance, VisionFfiProvider, VisionModelIdentity,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -99,6 +99,7 @@ impl ExecutionBackendRegistration {
 struct ExecutionBackendEntry {
     instance_id: InstanceId,
     audit_endpoint: String,
+    adb_endpoint: ResolvedAdbEndpoint,
     application_id: String,
     application_adb: AdbConfig,
     application_target: DeviceTarget,
@@ -135,6 +136,11 @@ impl ExecutionBackendRegistry {
                 ));
             }
             let audit_endpoint = registration.input.target.resolved_serial();
+            let adb_endpoint = ResolvedAdbEndpoint::new(
+                registration.input.target.host.clone(),
+                registration.input.target.port,
+                registration.input.target.serial.is_some(),
+            );
             let application_adb = registration.input.adb_config.clone();
             let application_target = registration.input.target.clone();
             let capabilities =
@@ -144,6 +150,7 @@ impl ExecutionBackendRegistry {
                 ExecutionBackendEntry {
                     instance_id: registration.instance_id,
                     audit_endpoint,
+                    adb_endpoint,
                     application_id: registration.application_id,
                     application_adb,
                     application_target,
@@ -250,6 +257,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         let entry = self.entries.get(instance_alias)?;
         Some(
             ResolvedExecutionInstance::new(entry.instance_id, &entry.audit_endpoint)
+                .with_adb_endpoint(entry.adb_endpoint.clone())
                 .with_configuration(entry.configuration.clone())
                 .with_capabilities(entry.capabilities.clone()),
         )

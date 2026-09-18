@@ -1736,6 +1736,55 @@ impl RuntimeLifecyclePayload {
     }
 }
 
+/// How the Runtime obtained the recorded instance binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceBindingSource {
+    Explicit,
+    Discovered,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInstanceBindingPayload {
+    action: EventAction,
+    instance_alias: String,
+    provenance: crate::ExecutionBackendProvenance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adb_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adb_port: Option<u16>,
+    serial_configured: bool,
+    binding_source: InstanceBindingSource,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeInstanceBindingPayload {
+    pub fn instance_alias(&self) -> &str {
+        &self.instance_alias
+    }
+
+    pub const fn provenance(&self) -> crate::ExecutionBackendProvenance {
+        self.provenance
+    }
+
+    pub fn adb_host(&self) -> Option<&str> {
+        self.adb_host.as_deref()
+    }
+
+    pub const fn adb_port(&self) -> Option<u16> {
+        self.adb_port
+    }
+
+    pub const fn serial_configured(&self) -> bool {
+        self.serial_configured
+    }
+
+    pub const fn binding_source(&self) -> InstanceBindingSource {
+        self.binding_source
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MonitorOutcomePayload {
@@ -3908,6 +3957,7 @@ common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(RuntimeLifecyclePayload);
+common_detail_accessors!(RuntimeInstanceBindingPayload);
 common_detail_accessors!(MonitorOutcomePayload);
 common_detail_accessors!(MonitorRecoveryCoordinationPayload);
 common_detail_accessors!(PerformancePressurePayload);
@@ -3956,6 +4006,7 @@ macro_rules! plain_payload_detail {
 
 plain_payload_detail!(
     RuntimeLifecyclePayload,
+    RuntimeInstanceBindingPayload,
     PerformancePressurePayload,
     PerformanceStutterPayload,
     PerformanceSummaryPayload,
@@ -5773,6 +5824,31 @@ fn validate_policy_planning_signal_data(
     Ok(())
 }
 
+fn validate_runtime_instance_binding(
+    payload: &RuntimeInstanceBindingPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::RuntimeAction {
+        return Err(SanitizationError::new(
+            "invalid_runtime_instance_binding_action",
+            "runtime_payload",
+        ));
+    }
+    crate::validate_instance_alias(&payload.instance_alias)
+        .map_err(|_| SanitizationError::new("invalid_instance_alias", "instance_alias"))?;
+    if payload.adb_port == Some(0) {
+        return Err(SanitizationError::new("invalid_adb_port", "adb_port"));
+    }
+    if payload.adb_port.is_some()
+        && !payload
+            .adb_host
+            .as_ref()
+            .is_some_and(|host| !host.trim().is_empty())
+    {
+        return Err(SanitizationError::new("invalid_adb_host", "adb_host"));
+    }
+    Ok(())
+}
+
 fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), SanitizationError> {
     match payload {
         PerformancePayload::PressureStarted(value)
@@ -6778,6 +6854,35 @@ enum RuntimeDraftKind {
     Takeover(ObservationDraft),
     Failed(DiagnosticOutcomeDraft),
     LifecycleObserved(RuntimeLifecycleDraft),
+    InstanceBound(RuntimeInstanceBindingDraft),
+}
+
+struct RuntimeInstanceBindingDraft {
+    instance_alias: String,
+    provenance: crate::ExecutionBackendProvenance,
+    adb_host: Option<String>,
+    adb_port: Option<u16>,
+    serial_configured: bool,
+    binding_source: InstanceBindingSource,
+    audit: AuditInput,
+}
+
+impl RuntimeInstanceBindingDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeInstanceBindingPayload, SanitizationError> {
+        Ok(RuntimeInstanceBindingPayload {
+            action: EventAction::RuntimeAction,
+            instance_alias: self.instance_alias,
+            provenance: self.provenance,
+            adb_host: self.adb_host,
+            adb_port: self.adb_port,
+            serial_configured: self.serial_configured,
+            binding_source: self.binding_source,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
 }
 
 struct RuntimeLifecycleDraft {
@@ -6891,6 +6996,28 @@ impl RuntimePayloadDraft {
             device_diagnostics: None,
             audit,
         }))
+    }
+
+    pub fn instance_bound(
+        instance_alias: impl Into<String>,
+        provenance: crate::ExecutionBackendProvenance,
+        adb_host: Option<String>,
+        adb_port: Option<u16>,
+        serial_configured: bool,
+        binding_source: InstanceBindingSource,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::InstanceBound(
+            RuntimeInstanceBindingDraft {
+                instance_alias: instance_alias.into(),
+                provenance,
+                adb_host,
+                adb_port,
+                serial_configured,
+                binding_source,
+                audit,
+            },
+        ))
     }
 
     pub fn started(action: EventAction, audit: AuditInput) -> Self {
@@ -8386,6 +8513,7 @@ pub enum RuntimePayload {
     Takeover(ObservationPayload),
     Failed(DiagnosticOutcomePayload),
     LifecycleObserved(RuntimeLifecyclePayload),
+    InstanceBound(RuntimeInstanceBindingPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -8718,6 +8846,7 @@ family_payload!(RuntimePayload, {
     Takeover => EventType::RuntimeTakeover,
     Failed => EventType::RuntimeFailed,
     LifecycleObserved => EventType::RuntimeLifecycleObserved,
+    InstanceBound => EventType::RuntimeInstanceBound,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -8954,6 +9083,9 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::LifecycleObserved(detail) => {
                     RuntimePayload::LifecycleObserved(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::InstanceBound(detail) => {
+                    RuntimePayload::InstanceBound(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {
@@ -9385,7 +9517,9 @@ impl EventPayload {
         if matches!(
             self,
             Self::Performance(_)
-                | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+                | Self::Runtime(
+                    RuntimePayload::LifecycleObserved(_) | RuntimePayload::InstanceBound(_)
+                )
                 | Self::Ledger(LedgerPayload::Signature(_))
         ) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
@@ -9614,6 +9748,9 @@ impl EventPayload {
                 "invalid_runtime_lifecycle_action",
                 "runtime_payload",
             ));
+        }
+        if let Self::Runtime(RuntimePayload::InstanceBound(value)) = self {
+            validate_runtime_instance_binding(value)?;
         }
         if let Self::ResourceAuthoring(value) = self {
             validate_resource_authoring_fields(
