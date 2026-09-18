@@ -570,6 +570,28 @@ fn validate_planning_documents(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Request data identifying the actual source frame; the Runtime resolves its committed binding.
+pub struct InputFrameReference {
+    pub frame_id: FrameId,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl InputFrameReference {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.width == 0
+            || self.height == 0
+            || self.width > i32::MAX as u32
+            || self.height > i32::MAX as u32
+        {
+            return Err(RuntimeContractError::new("input_frame_dimensions_invalid"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputAction {
@@ -2554,6 +2576,8 @@ pub enum RuntimeOperation {
     Input {
         token: LeaseToken,
         action: InputAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<InputFrameReference>,
     },
     PublishFact {
         record: FactRecord,
@@ -2788,7 +2812,14 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 spec.validate()
             }
-            Self::Input { token, action } => {
+            Self::Input {
+                token,
+                action,
+                frame,
+            } => {
+                if let Some(frame) = frame {
+                    frame.validate()?;
+                }
                 token.validate()?;
                 action.validate()
             }

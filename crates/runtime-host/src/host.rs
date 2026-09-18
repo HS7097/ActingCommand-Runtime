@@ -84,7 +84,7 @@ use actingcommand_contract::{
     TaskTimingObservationState, TaskTimingResult, TerminalEvent, TimingObservationIssue,
     ValidatedRuntimeRequest,
 };
-use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
+use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
@@ -95,6 +95,7 @@ use actingcommand_execution_kernel::{
     StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
     decide_monitor, page_anchor_matches,
 };
+use actingcommand_execution_kernel::{InputFrameContext, ObservedFrame};
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
     CriticalOperation, DefiniteEffectDisposition, EventAppender, LeaseTransitionTarget,
@@ -156,6 +157,7 @@ mod lease;
 mod lifecycle;
 mod material_read;
 mod monitor_control;
+mod nemu_input;
 mod observation;
 mod online_observation;
 mod package_debug;
@@ -919,7 +921,7 @@ impl RuntimeHost {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
             lifecycle_admission: RwLock::new(false),
-            scheduler: Mutex::new(scheduler),
+            scheduler: Arc::new(Mutex::new(scheduler)),
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
@@ -2354,7 +2356,7 @@ struct HostShared {
     shutdown_target: actingcommand_contract::RuntimeShutdownTarget,
     // Concurrent work holds the read side; idle shutdown never waits for a busy writer slot.
     lifecycle_admission: RwLock<bool>,
-    scheduler: Mutex<SeedScheduler>,
+    scheduler: Arc<Mutex<SeedScheduler>>,
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,

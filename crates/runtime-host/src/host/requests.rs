@@ -317,14 +317,21 @@ impl HostShared {
                     connection_id,
                 )
             }
-            RuntimeOperation::Input { token, action } => self
+            RuntimeOperation::Input {
+                token,
+                action,
+                frame,
+            } => self
                 .input(
                     validated,
                     token,
                     action,
                     connection_id,
                     ExecutionBackendProvenance::PhysicalDevice,
-                    RuntimeInputContext::default(),
+                    RuntimeInputContext {
+                        input_frame: *frame,
+                        ..RuntimeInputContext::default()
+                    },
                 )
                 .map(|(success, _)| success),
             RuntimeOperation::PublishFact { record } => {

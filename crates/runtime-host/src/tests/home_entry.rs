@@ -445,10 +445,14 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     struct UnreachableRecovery;
     impl ContainedTaskRuntime for UnreachableRecovery {
         type Error = &'static str;
-        fn capture(&mut self) -> Result<Frame, Self::Error> {
+        fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
             panic!("incompatible recovery captured")
         }
-        fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+        fn input(
+            &mut self,
+            _action: InputAction,
+            _frame: Option<InputFrameContext>,
+        ) -> Result<(), Self::Error> {
             panic!("incompatible recovery input")
         }
         fn record(&mut self, _trace: ContainedTaskTrace) -> Result<(), Self::Error> {
