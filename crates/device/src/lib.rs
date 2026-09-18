@@ -39,9 +39,10 @@ pub use maatouch::*;
 pub use minitouch::*;
 pub use mumu::MumuInstallSource;
 pub use mumu_manager::{
-    DiscoveredMumuInstance, MAX_MUMU_INSTANCE_NAME_BYTES, MUMU_MANAGER_COMMAND_TIMEOUT,
-    MUMU_MANAGER_MINIMUM_VERSION, MumuDiscoveryReport, MumuManagerSource, MumuManagerVersion,
-    ResolvedMumuManager, discover_mumu_instances, query_instances, query_version,
+    DiscoveredMumuInstance, MAX_MUMU_INSTANCE_NAME_BYTES, MUMU_CAPABILITY_PROVIDER_ID,
+    MUMU_MANAGER_COMMAND_TIMEOUT, MUMU_MANAGER_MINIMUM_VERSION, MumuDiscoveryReport,
+    MumuEmulatorCapabilityBackend, MumuManagerSource, MumuManagerVersion, ResolvedMumuManager,
+    discover_mumu_instances, mumu_capability_profile, query_instances, query_version,
     resolve_mumu_manager,
 };
 pub use nemu_diagnostic::*;

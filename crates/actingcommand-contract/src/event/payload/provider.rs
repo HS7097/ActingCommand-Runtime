@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::emulator::EmulatorCapability;
+use std::collections::BTreeSet;
 
 pub const PROVIDER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.provider.v1";
 pub const MAX_PROVIDER_STARTUP_TEXT_BYTES: usize = 64 * 1024;
@@ -24,6 +26,7 @@ pub enum ProviderStartupStage {
     BackendConstruction,
     RegistryBinding,
     InstanceDiscovery,
+    CapabilityAdmission,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +80,15 @@ pub enum ProviderStartupObservation {
         mumu_manager_path: String,
         version: String,
         instances: Vec<DiscoveredInstanceObservation>,
+    },
+    /// The admitted provider capability profile: every closed capability id listed exactly
+    /// once under its availability, each list sorted (Workflow #316 A).
+    CapabilityProfile {
+        provider_id: String,
+        version: String,
+        available: Vec<String>,
+        unverified: Vec<String>,
+        unavailable: Vec<String>,
     },
     NotConfigured,
     Ready,
@@ -140,6 +152,32 @@ impl ProviderStartupRecord {
                             && instance.adb_port != 0
                             && instance.bound_alias.as_deref().is_none_or(&valid)
                     })
+            }
+            ProviderStartupObservation::CapabilityProfile {
+                provider_id,
+                version,
+                available,
+                unverified,
+                unavailable,
+            } => {
+                let sorted = |ids: &[String]| {
+                    ids.iter().all(|id| valid(id)) && ids.windows(2).all(|pair| pair[0] < pair[1])
+                };
+                let listed = [available, unverified, unavailable]
+                    .into_iter()
+                    .flatten()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>();
+                valid(provider_id)
+                    && valid(version)
+                    && sorted(available)
+                    && sorted(unverified)
+                    && sorted(unavailable)
+                    && available.len() + unverified.len() + unavailable.len()
+                        == EmulatorCapability::ALL.len()
+                    && EmulatorCapability::ALL
+                        .iter()
+                        .all(|capability| listed.contains(capability.as_str()))
             }
             _ => true,
         };

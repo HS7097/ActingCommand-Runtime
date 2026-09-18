@@ -9,6 +9,11 @@
 use crate::adb::{
     ACTINGCOMMAND_NEMU_FOLDER_ENV, CommandProgram, decode_adb_text, run_raw_with_timeout,
 };
+use crate::emulator::{
+    EmulatorCapability, EmulatorCapabilityAvailability, EmulatorCapabilityBackend,
+    EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
+    EmulatorVersionEvidence,
+};
 use crate::mumu::{
     MumuInstallSource, MumuInstallation, canonicalize_backend_file, canonicalize_install_root,
     display_paths, known_vendor_parent_dirs, path_is_within_mumu_root, resolve_mumu_adb,
@@ -175,6 +180,111 @@ fn discover_mumu_instances_inner(
         registry_display_version: manager.registry_display_version,
         instances,
     })
+}
+
+/// Provider id of the profile derived from a `MuMuManager` discovery report.
+pub const MUMU_CAPABILITY_PROVIDER_ID: &str = "mumu.manager";
+const MUMU_MANAGER_COMMAND_REFERENCE_URL: &str =
+    "https://mumu.163.com/help/20240807/40912_1170006.html";
+
+/// Derives the MuMu capability profile from one discovery report. Pure: nothing is dispatched.
+///
+/// `inventory.read` and `instance.status.read` are available because `info -v all` answered;
+/// `instance.start|stop|restart` are documented (`control -v <index> launch|shutdown|restart`)
+/// but not yet exercised by the Runtime, so they stay unverified; every other capability is
+/// unsupported and unavailable through this provider.
+pub fn mumu_capability_profile(
+    report: &MumuDiscoveryReport,
+) -> DeviceResult<EmulatorCapabilityProfile> {
+    let evidence = EmulatorCapability::ALL
+        .into_iter()
+        .map(|capability| {
+            let (implementation, availability, failure_semantics, evidence_ref) = match capability {
+                EmulatorCapability::InventoryRead | EmulatorCapability::InstanceStatusRead => (
+                    EmulatorCapabilityImplementation::Supported,
+                    EmulatorCapabilityAvailability::Available,
+                    "MuMuManager info -v all answered with exit 0 and a parseable instance map at discovery. A refusal surfaces as a fatal typed device error (mumu_manager.run, .exit, .decode, .json, .errcode, .shape, .output_bound), never as an empty inventory.",
+                    "mumu_manager.info",
+                ),
+                EmulatorCapability::InstanceStart
+                | EmulatorCapability::InstanceStop
+                | EmulatorCapability::InstanceRestart => (
+                    EmulatorCapabilityImplementation::Supported,
+                    EmulatorCapabilityAvailability::Unverified,
+                    "Documented as MuMuManager control -v <index> launch|shutdown|restart, not yet exercised by the Runtime: no control subcommand is dispatched. Execution requires the emulator control slice.",
+                    MUMU_MANAGER_COMMAND_REFERENCE_URL,
+                ),
+                EmulatorCapability::InstanceCreate
+                | EmulatorCapability::InstanceClone
+                | EmulatorCapability::InstanceDelete
+                | EmulatorCapability::InstanceConfigure
+                | EmulatorCapability::SnapshotManage => (
+                    EmulatorCapabilityImplementation::Unsupported,
+                    EmulatorCapabilityAvailability::Unavailable,
+                    "Instance creation, cloning, deletion, configuration and snapshots are not driven by this Runtime; MuMuManager is never asked to perform them.",
+                    MUMU_CAPABILITY_PROVIDER_ID,
+                ),
+                EmulatorCapability::ApplicationControl | EmulatorCapability::AdbBridge => (
+                    EmulatorCapabilityImplementation::Unsupported,
+                    EmulatorCapabilityAvailability::Unavailable,
+                    "Application control and the ADB bridge are not driven through MuMuManager; the instance is reached through its discovered ADB target, not through this provider claim.",
+                    MUMU_CAPABILITY_PROVIDER_ID,
+                ),
+                EmulatorCapability::InputTap
+                | EmulatorCapability::InputLongTap
+                | EmulatorCapability::InputSwipe
+                | EmulatorCapability::InputSegmentedSwipe
+                | EmulatorCapability::InputKey
+                | EmulatorCapability::InputText
+                | EmulatorCapability::InputReset
+                | EmulatorCapability::CaptureFrame
+                | EmulatorCapability::ApplicationLaunch
+                | EmulatorCapability::ApplicationStop
+                | EmulatorCapability::ApplicationRestart => (
+                    EmulatorCapabilityImplementation::Unsupported,
+                    EmulatorCapabilityAvailability::Unavailable,
+                    "Input, capture and application lifecycle belong to the touch/capture backend registry and the ADB application lifecycle path, not to MuMuManager.",
+                    MUMU_CAPABILITY_PROVIDER_ID,
+                ),
+            };
+            EmulatorCapabilityEvidence::new(capability, availability, failure_semantics, evidence_ref)?
+                .with_implementation(implementation)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(EmulatorCapabilityProfile::new(
+        MUMU_CAPABILITY_PROVIDER_ID,
+        EmulatorVersionEvidence::Exact {
+            value: report.version.to_string(),
+        },
+        evidence,
+    )?)
+}
+
+/// Capability backend over one already obtained discovery report; probing dispatches nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MumuEmulatorCapabilityBackend {
+    report: MumuDiscoveryReport,
+}
+
+impl MumuEmulatorCapabilityBackend {
+    pub const fn new(report: MumuDiscoveryReport) -> Self {
+        Self { report }
+    }
+
+    /// Runs `discover_mumu_instances` once (`version` and `info -v all` only) and keeps the report.
+    pub fn from_discovery(explicit_root: Option<&Path>) -> DeviceResult<Self> {
+        discover_mumu_instances(explicit_root).map(Self::new)
+    }
+
+    pub const fn report(&self) -> &MumuDiscoveryReport {
+        &self.report
+    }
+}
+
+impl EmulatorCapabilityBackend for MumuEmulatorCapabilityBackend {
+    fn probe_capabilities(&mut self) -> DeviceResult<EmulatorCapabilityProfile> {
+        mumu_capability_profile(&self.report)
+    }
 }
 
 fn with_mumu_manager_discovery_detail(error: DeviceError) -> DeviceError {
