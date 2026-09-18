@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    ForensicError, ForensicOutput, ForensicReport, ForensicResult, map_ledger_error,
-    query_view_page,
+    ForensicError, ForensicOutput, ForensicReport, ForensicResult, instance_bindings,
+    map_ledger_error, query_view_page,
 };
-use actingcommand_contract::{EventQuery, ProjectionProfile, RuntimeEventQueryPageRequest};
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig};
+use actingcommand_contract::{
+    EventQuery, InstanceId, ProjectionProfile, RuntimeEventQueryCursor,
+    RuntimeEventQueryPageRequest,
+};
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Argument values delegated by the thin executable to the native read adapter.
@@ -16,6 +20,7 @@ pub struct ForensicViewOptions {
     pub cursor: Option<String>,
     pub snapshot: Option<u64>,
     pub limit: Option<u16>,
+    pub instance_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +29,7 @@ pub struct ForensicViewRequest {
     query: EventQuery,
     profile: ProjectionProfile,
     page: RuntimeEventQueryPageRequest,
+    instance_port: Option<u16>,
 }
 
 impl ForensicViewRequest {
@@ -63,7 +69,7 @@ impl ForensicViewRequest {
         let cursor = options
             .cursor
             .map(|cursor| {
-                serde_json::from_str::<actingcommand_contract::RuntimeEventQueryCursor>(&cursor)
+                serde_json::from_str::<RuntimeEventQueryCursor>(&cursor)
                     .map_err(|_| invalid("invalid view cursor"))
             })
             .transpose()?;
@@ -80,6 +86,7 @@ impl ForensicViewRequest {
                 .map_err(|_| invalid("invalid view snapshot"))?;
         }
         Self::new(state_root, query, profile, page)
+            .map(|request| request.with_instance_port(options.instance_port))
     }
 
     pub fn new(
@@ -114,17 +121,77 @@ impl ForensicViewRequest {
             query,
             profile,
             page,
+            instance_port: None,
         })
+    }
+
+    /// Resolves the ADB port at the page's snapshot to every instance id ever bound to it
+    /// and runs the page with that set as the instance condition.
+    pub const fn with_instance_port(mut self, instance_port: Option<u16>) -> Self {
+        self.instance_port = instance_port;
+        self
     }
 }
 
 /// The view entry opens verified ledger metadata and leaves material bytes unread.
 pub fn run_views(request: ForensicViewRequest) -> ForensicResult<ForensicOutput> {
-    let snapshot =
-        GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(&request.state_root))
-            .map_err(map_ledger_error)?;
-    let page = query_view_page(&snapshot, &request.query, request.profile, &request.page)?;
+    let ForensicViewRequest {
+        state_root,
+        mut query,
+        profile,
+        page,
+        instance_port,
+    } = request;
+    let snapshot = GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(&state_root))
+        .map_err(map_ledger_error)?;
+    if let Some(port) = instance_port {
+        resolve_instance_port(&snapshot, &mut query, &page, port)?;
+    }
+    let page = query_view_page(&snapshot, &query, profile, &page)?;
     Ok(ForensicOutput::Machine(ForensicReport::Views(Box::new(
         page,
     ))))
+}
+
+/// The port map is read at the requested snapshot. An instance condition already in the
+/// query must be exactly the resolved set; the query is then normalized to that set so a
+/// continuation cursor fingerprints the same query.
+fn resolve_instance_port(
+    snapshot: &GlobalLedgerMetadata,
+    query: &mut EventQuery,
+    page: &RuntimeEventQueryPageRequest,
+    port: u16,
+) -> ForensicResult<()> {
+    let position = page
+        .cursor()
+        .map(RuntimeEventQueryCursor::snapshot_ledger_position)
+        .or(page.snapshot_position())
+        .unwrap_or_else(|| snapshot.latest_sequence());
+    let bindings = instance_bindings(snapshot, position)?;
+    let resolved = bindings
+        .ports
+        .get(&port)
+        .filter(|instance_ids| !instance_ids.is_empty())
+        .ok_or_else(|| {
+            ForensicError::new(
+                "instance_port_unknown",
+                "resolve_instance_port",
+                format!("no instance was bound to ADB port {port} through position {position}"),
+            )
+        })?;
+    let given: Option<BTreeSet<InstanceId>> = match (query.instance_id, &query.instance_ids) {
+        (Some(instance_id), _) => Some(BTreeSet::from([instance_id])),
+        (None, instance_ids) if instance_ids.is_empty() => None,
+        (None, instance_ids) => Some(instance_ids.iter().copied().collect()),
+    };
+    if given.is_some_and(|given| given != resolved.iter().copied().collect::<BTreeSet<_>>()) {
+        return Err(ForensicError::new(
+            "instance_port_conflict",
+            "resolve_instance_port",
+            format!("the query instance condition is not the set bound to ADB port {port}"),
+        ));
+    }
+    query.instance_id = None;
+    query.instance_ids = resolved.clone();
+    Ok(())
 }

@@ -222,19 +222,36 @@ impl EventIndexes {
         {
             return Box::new(std::iter::empty());
         }
+        // The instance set is the union of its index positions (OR within the set).
+        let instance_union: Option<BTreeSet<usize>> = (!query.instance_ids.is_empty()).then(|| {
+            query
+                .instance_ids
+                .iter()
+                .filter_map(|instance_id| self.instance_ids.get(instance_id))
+                .flat_map(|positions| positions.range(start..).copied())
+                .collect()
+        });
+        if instance_union.as_ref().is_some_and(BTreeSet::is_empty) {
+            return Box::new(std::iter::empty());
+        }
         // Query predicates still validate every result; borrowing the smallest index avoids
         // materializing full-set intersections while preserving all filter combinations.
-        match candidates
-            .into_iter()
-            .filter_map(Option::flatten)
-            .min_by_key(|positions| positions.len())
-        {
-            Some(positions) => Box::new(
+        let borrowed = |positions: &'a BTreeSet<usize>| -> Box<dyn Iterator<Item = &'a E> + 'a> {
+            Box::new(
                 positions
                     .range(start..)
                     .map(move |position| &events[*position]),
-            ),
-            None => Box::new(events[start..].iter()),
+            )
+        };
+        let smallest = candidates
+            .into_iter()
+            .filter_map(Option::flatten)
+            .min_by_key(|positions| positions.len());
+        match (smallest, instance_union) {
+            (Some(positions), None) => borrowed(positions),
+            (Some(positions), Some(union)) if positions.len() <= union.len() => borrowed(positions),
+            (_, Some(union)) => Box::new(union.into_iter().map(move |position| &events[position])),
+            (None, None) => Box::new(events[start..].iter()),
         }
     }
 
@@ -497,6 +514,10 @@ fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bo
             .diagnostic_code
             .is_none_or(|value| event.payload().diagnostic_code() == Some(value))
         && link_matches(query.instance_id.as_ref(), links.instance_id())
+        && (query.instance_ids.is_empty()
+            || links
+                .instance_id()
+                .is_some_and(|instance_id| query.instance_ids.contains(instance_id)))
         && link_matches(query.request_id.as_ref(), links.request_id())
         && link_matches(query.correlation_id.as_ref(), links.correlation_id())
         && link_matches(query.causation_id.as_ref(), links.causation_id())

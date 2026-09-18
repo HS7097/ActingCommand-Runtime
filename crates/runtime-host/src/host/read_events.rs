@@ -388,6 +388,13 @@ impl HostShared {
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
+            // The port identifies the instance in the ledger only when it was configured as
+            // HOST:PORT; a serial-configured target or no ADB endpoint carries no port.
+            let adb_port = instance
+                .adb_endpoint
+                .as_ref()
+                .filter(|endpoint| !endpoint.serial_configured())
+                .map(ResolvedAdbEndpoint::port);
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -409,7 +416,8 @@ impl HostShared {
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?
-                .with_backend_metadata(resolved.provenance(), resolved.capabilities().cloned()),
+                .with_backend_metadata(resolved.provenance(), resolved.capabilities().cloned())
+                .with_adb_port(adb_port),
             );
         }
         let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected).map_err(|_| {

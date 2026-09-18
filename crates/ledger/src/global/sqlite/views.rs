@@ -216,6 +216,25 @@ pub(super) fn select_sequences(
             values.push(SqlValue::Text(value.to_owned()));
         }
     }
+    if let Some(instance_ids) = query_value
+        .get("instance_ids")
+        .and_then(serde_json::Value::as_array)
+        .filter(|instance_ids| !instance_ids.is_empty())
+    {
+        // OR within the set, AND with every other predicate; one typed binding per id.
+        let mut bindings = Vec::with_capacity(instance_ids.len());
+        for instance_id in instance_ids {
+            let Some(instance_id) = instance_id.as_str() else {
+                return Err(failure("invalid_event_query_value", "encode_ledger_query"));
+            };
+            bindings.push(SqlValue::Text(instance_id.to_owned()));
+        }
+        sql.push_str(&format!(
+            " AND l.instance_id IN ({})",
+            vec!["?"; bindings.len()].join(",")
+        ));
+        values.extend(bindings);
+    }
     if query.minimum_severity.is_some() || query.maximum_severity.is_some() {
         let allowed: Vec<_> = SEVERITIES
             .into_iter()

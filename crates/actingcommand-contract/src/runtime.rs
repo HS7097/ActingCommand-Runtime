@@ -1120,6 +1120,10 @@ pub struct RuntimeInstanceStatus {
     backend_provenance: Option<crate::ExecutionBackendProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capabilities: Option<crate::EmulatorCapabilityProfile>,
+    /// The configured ADB port that identifies the emulator instance in the ledger;
+    /// absent for a serial-configured instance or one without an ADB target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adb_port: Option<u16>,
 }
 
 impl RuntimeInstanceStatus {
@@ -1142,6 +1146,7 @@ impl RuntimeInstanceStatus {
             preempt_requested,
             backend_provenance: None,
             capabilities: None,
+            adb_port: None,
         };
         status.validate()?;
         Ok(status)
@@ -1207,6 +1212,15 @@ impl RuntimeInstanceStatus {
 
     pub fn capabilities(&self) -> Option<&crate::EmulatorCapabilityProfile> {
         self.capabilities.as_ref()
+    }
+
+    pub const fn with_adb_port(mut self, adb_port: Option<u16>) -> Self {
+        self.adb_port = adb_port;
+        self
+    }
+
+    pub const fn adb_port(&self) -> Option<u16> {
+        self.adb_port
     }
 }
 
@@ -2407,7 +2421,7 @@ fn event_query_fingerprint(
 ) -> RuntimeContractResult<String> {
     query
         .validate()
-        .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
+        .map_err(|error| RuntimeContractError::new(error.code()))?;
     let bytes = serde_json::to_vec(&(query, profile))
         .map_err(|_| RuntimeContractError::new("runtime_event_query_fingerprint_failed"))?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))

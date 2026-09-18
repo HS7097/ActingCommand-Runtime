@@ -241,7 +241,14 @@ where
                         .map_err(|_| invalid_arguments("invalid view page limit"))?,
                 )
             }
-            "--query" | "--profile" | "--cursor" | "--snapshot" | "--limit" => {
+            "--instance-port" if options.instance_port.is_none() => {
+                options.instance_port = Some(
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| invalid_arguments("invalid instance port"))?,
+                )
+            }
+            "--query" | "--profile" | "--cursor" | "--snapshot" | "--limit" | "--instance-port" => {
                 return Err(invalid_arguments(format!("duplicate view option {option}")));
             }
             _ => return Err(invalid_arguments(format!("unknown view option {option}"))),
