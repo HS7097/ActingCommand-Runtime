@@ -14,6 +14,8 @@ pub enum MumuInstallSource {
     ExplicitFolder,
     ConfiguredBackendPath,
     RunningProcess,
+    /// The Windows uninstall entry of a MuMu install (`mumu_manager` discovery only).
+    RegistryUninstall,
     VendorEnumeration,
 }
 
@@ -23,6 +25,7 @@ impl MumuInstallSource {
             Self::ExplicitFolder => "explicit_folder",
             Self::ConfiguredBackendPath => "configured_backend_path",
             Self::RunningProcess => "running_process",
+            Self::RegistryUninstall => "registry_uninstall",
             Self::VendorEnumeration => "vendor_enumeration",
         }
     }
@@ -594,7 +597,7 @@ fn resolve_existing_candidate(
     ))
 }
 
-fn select_unique_installation(
+pub(crate) fn select_unique_installation(
     roots: Vec<PathBuf>,
     source: MumuInstallSource,
 ) -> DeviceResult<MumuInstallation> {
@@ -658,7 +661,7 @@ fn ensure_same_install_root(
     ))
 }
 
-fn canonicalize_backend_file(path: &Path, label: &str) -> DeviceResult<PathBuf> {
+pub(crate) fn canonicalize_backend_file(path: &Path, label: &str) -> DeviceResult<PathBuf> {
     let canonical = std::fs::canonicalize(path).map_err(|err| {
         DeviceError::fatal(format!(
             "failed to canonicalize {label} {}: {err}",
@@ -674,7 +677,10 @@ fn canonicalize_backend_file(path: &Path, label: &str) -> DeviceResult<PathBuf> 
     )))
 }
 
-fn canonicalize_install_root(root: &Path, source: MumuInstallSource) -> DeviceResult<PathBuf> {
+pub(crate) fn canonicalize_install_root(
+    root: &Path,
+    source: MumuInstallSource,
+) -> DeviceResult<PathBuf> {
     let canonical = std::fs::canonicalize(root).map_err(|err| {
         DeviceError::fatal(format!(
             "failed to canonicalize MuMu installation root from source={} at {}: {err}",
@@ -726,7 +732,7 @@ fn enumerate_vendor_install_roots(parents: &[PathBuf]) -> DeviceResult<Vec<PathB
     Ok(stable_unique_paths(roots))
 }
 
-fn known_vendor_parent_dirs() -> Vec<PathBuf> {
+pub(crate) fn known_vendor_parent_dirs() -> Vec<PathBuf> {
     let mut parents = Vec::new();
     for root in ["ProgramFiles", "ProgramFiles(x86)"]
         .into_iter()
@@ -774,7 +780,8 @@ fn mumu_version_dirs(root: &Path) -> DeviceResult<Vec<PathBuf>> {
 
 fn is_mumu_install_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.starts_with("mumu player") || lower.starts_with("mumuplayer-")
+    // The current v5/v6 default install folder is the bare `MuMuPlayer` (no dash).
+    lower.starts_with("mumu player") || lower.starts_with("mumuplayer-") || lower == "mumuplayer"
 }
 
 fn stable_unique_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -783,7 +790,7 @@ fn stable_unique_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
-fn display_paths(paths: &[PathBuf]) -> String {
+pub(crate) fn display_paths(paths: &[PathBuf]) -> String {
     paths
         .iter()
         .map(|path| path.display().to_string())

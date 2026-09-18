@@ -23,10 +23,18 @@ pub enum NemuResolutionReason {
     TargetProcessAmbiguous,
     TargetExecutableMissing,
     CaptureIdentityUncoordinated,
+    /// `MuMuManager version` is below `MUMU_MANAGER_MINIMUM_VERSION` (a Runtime policy floor).
+    ProviderVersionBelowMinimum,
+    /// `MuMuManager version` did not produce a four-part numeric version.
+    ProviderVersionUnparseable,
+    /// The Windows uninstall registry source cannot be read on this platform.
+    RegistrySourceUnavailable,
+    /// A `MuMuPlayer*` uninstall entry carries no usable install location or an unsupported value type.
+    RegistryEntryInvalid,
 }
 
 impl NemuResolutionReason {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::InstallationAbsent => "installation_absent",
             Self::InstallationAmbiguous => "installation_ambiguous",
@@ -47,6 +55,10 @@ impl NemuResolutionReason {
             Self::TargetProcessAmbiguous => "target_process_ambiguous",
             Self::TargetExecutableMissing => "target_executable_missing",
             Self::CaptureIdentityUncoordinated => "capture_identity_uncoordinated",
+            Self::ProviderVersionBelowMinimum => "provider_version_below_minimum",
+            Self::ProviderVersionUnparseable => "provider_version_unparseable",
+            Self::RegistrySourceUnavailable => "registry_source_unavailable",
+            Self::RegistryEntryInvalid => "registry_entry_invalid",
         }
     }
 }
@@ -58,6 +70,7 @@ pub enum NemuResolutionCountKind {
     CaptureDllFiles,
     AdbExecutables,
     MatchedTargetProcesses,
+    ManagerExecutables,
 }
 
 impl NemuResolutionCountKind {
@@ -68,6 +81,7 @@ impl NemuResolutionCountKind {
             Self::CaptureDllFiles => "capture_dll_files",
             Self::AdbExecutables => "adb_executables",
             Self::MatchedTargetProcesses => "matched_target_processes",
+            Self::ManagerExecutables => "manager_executables",
         }
     }
 }
@@ -126,6 +140,10 @@ impl NemuResolutionContext {
     pub const fn with_source(mut self, source: MumuInstallSource) -> Self {
         self.source = Some(source);
         self
+    }
+
+    pub const fn reason(self) -> NemuResolutionReason {
+        self.reason
     }
 
     pub const fn with_provenance(

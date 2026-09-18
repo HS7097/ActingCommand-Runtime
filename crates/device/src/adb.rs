@@ -10,6 +10,8 @@ use crate::{
     DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceResult,
 };
 use std::io::{self, Read};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::process::{Child, Command, Stdio};
@@ -70,6 +72,7 @@ pub enum AdbPathSource {
     Environment,
     MumuFolderEnvironment,
     MumuRunningProcess,
+    MumuRegistryUninstall,
     MumuVendorEnumeration,
     UserConfig,
     PathBaseline,
@@ -81,6 +84,7 @@ impl AdbPathSource {
             Self::Environment => "env:ACTINGCOMMAND_ADB_PATH",
             Self::MumuFolderEnvironment => "env:ACTINGCOMMAND_NEMU_FOLDER",
             Self::MumuRunningProcess => "mumu_running_process",
+            Self::MumuRegistryUninstall => "mumu_registry_uninstall",
             Self::MumuVendorEnumeration => "mumu_vendor_enumeration",
             Self::UserConfig => "user_config",
             Self::PathBaseline => "path_adb_baseline",
@@ -139,6 +143,7 @@ fn resolve_adb_path_after_discovery(
             MumuInstallSource::ExplicitFolder => AdbPathSource::MumuFolderEnvironment,
             MumuInstallSource::ConfiguredBackendPath => AdbPathSource::UserConfig,
             MumuInstallSource::RunningProcess => AdbPathSource::MumuRunningProcess,
+            MumuInstallSource::RegistryUninstall => AdbPathSource::MumuRegistryUninstall,
             MumuInstallSource::VendorEnumeration => AdbPathSource::MumuVendorEnumeration,
         };
         return resolved_existing_adb(resolve_mumu_adb(&installation)?, source);
@@ -361,11 +366,29 @@ fn device_state_error(
         .with_diagnostic_message(diagnostic_message)
 }
 
-struct RawCommandOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+pub(crate) struct RawCommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
+
+/// Diagnostic identity and spawn profile of a command-line program run through
+/// `run_raw_with_timeout`. Labels are `'static` because resource close causes retain them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommandProgram {
+    pub(crate) name: &'static str,
+    pub(crate) stdout_reader: &'static str,
+    pub(crate) stderr_reader: &'static str,
+    /// Windows process creation flags (0 keeps the default console behaviour).
+    pub(crate) windows_creation_flags: u32,
+}
+
+pub(crate) const ADB_PROGRAM: CommandProgram = CommandProgram {
+    name: "adb",
+    stdout_reader: "adb_stdout",
+    stderr_reader: "adb_stderr",
+    windows_creation_flags: 0,
+};
 
 pub fn run_text_with_timeout(
     adb_path: &str,
@@ -373,7 +396,7 @@ pub fn run_text_with_timeout(
     timeout: Duration,
 ) -> DeviceResult<CommandOutput> {
     validate_adb_path(adb_path)?;
-    let output = run_raw_with_timeout(adb_path, args, timeout)?;
+    let output = run_raw_with_timeout(ADB_PROGRAM, adb_path, args, timeout)?;
     let stdout = decode_adb_text(output.stdout, "stdout", args);
     let stderr = decode_adb_text(output.stderr, "stderr", args);
     if output.status.success() {
@@ -410,7 +433,7 @@ pub fn run_binary_with_timeout(
     timeout: Duration,
 ) -> DeviceResult<BinaryOutput> {
     validate_adb_path(adb_path)?;
-    let output = run_raw_with_timeout(adb_path, args, timeout)?;
+    let output = run_raw_with_timeout(ADB_PROGRAM, adb_path, args, timeout)?;
     let stderr = decode_adb_text(output.stderr, "stderr", args);
     if output.status.success() {
         return Ok(BinaryOutput {
@@ -437,32 +460,38 @@ fn validate_adb_path(adb_path: &str) -> DeviceResult<()> {
     Ok(())
 }
 
-fn run_raw_with_timeout(
-    adb_path: &str,
+pub(crate) fn run_raw_with_timeout(
+    program: CommandProgram,
+    program_path: &str,
     args: &[&str],
     timeout: Duration,
 ) -> DeviceResult<RawCommandOutput> {
-    let mut child = Command::new(adb_path)
+    let name = program.name;
+    let mut command = Command::new(program_path);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| {
-            DeviceError::fatal(format!("failed to spawn adb {}: {err}", args.join(" ")))
-        })?;
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    if program.windows_creation_flags != 0 {
+        command.creation_flags(program.windows_creation_flags);
+    }
+    let mut child = command.spawn().map_err(|err| {
+        DeviceError::fatal(format!("failed to spawn {name} {}: {err}", args.join(" ")))
+    })?;
 
     let acquired_count = 1 + u16::from(child.stdout.is_some()) + u16::from(child.stderr.is_some());
     let mut stdout_thread = None;
     let mut stderr_thread = None;
     let execution = (|| {
         let stdout = child.stdout.take().ok_or_else(|| {
-            DeviceError::fatal(format!("failed to open adb {} stdout", args.join(" ")))
+            DeviceError::fatal(format!("failed to open {name} {} stdout", args.join(" ")))
         })?;
-        stdout_thread = Some(spawn_pipe_reader(stdout)?);
+        stdout_thread = Some(spawn_pipe_reader(stdout, name)?);
         let stderr = child.stderr.take().ok_or_else(|| {
-            DeviceError::fatal(format!("failed to open adb {} stderr", args.join(" ")))
+            DeviceError::fatal(format!("failed to open {name} {} stderr", args.join(" ")))
         })?;
-        stderr_thread = Some(spawn_pipe_reader(stderr)?);
+        stderr_thread = Some(spawn_pipe_reader(stderr, name)?);
         let started = Instant::now();
         loop {
             match child.try_wait() {
@@ -470,14 +499,14 @@ fn run_raw_with_timeout(
                 Ok(None) => {}
                 Err(error) => {
                     return Err(DeviceError::fatal(format!(
-                        "failed to poll adb {} process: {error}",
+                        "failed to poll {name} {} process: {error}",
                         args.join(" ")
                     )));
                 }
             }
             if started.elapsed() >= timeout {
                 return Err(DeviceError::fatal(format!(
-                    "adb {} timed out after {timeout:?}",
+                    "{name} {} timed out after {timeout:?}",
                     args.join(" ")
                 )));
             }
@@ -491,7 +520,7 @@ fn run_raw_with_timeout(
     let close_deadline = Instant::now() + Duration::from_millis(500);
     let mut child_confirmed = status.is_some();
     if !child_confirmed {
-        match stop_child(&mut child, Duration::from_millis(500), "adb") {
+        match stop_child(&mut child, Duration::from_millis(500), name) {
             Ok(_) => child_confirmed = true,
             Err(error) => {
                 child_confirmed =
@@ -505,8 +534,8 @@ fn run_raw_with_timeout(
             }
         }
     }
-    let stdout = join_pipe_reader(&mut stdout_thread, "stdout", close_deadline);
-    let stderr = join_pipe_reader(&mut stderr_thread, "stderr", close_deadline);
+    let stdout = join_pipe_reader(&mut stdout_thread, "stdout", close_deadline, program);
+    let stderr = join_pipe_reader(&mut stderr_thread, "stderr", close_deadline, program);
     let readers_confirmed = stdout_thread.is_none() && stderr_thread.is_none();
     let mut output = [None, None];
     for (index, result) in [stdout, stderr].into_iter().enumerate() {
@@ -548,6 +577,7 @@ fn run_raw_with_timeout(
 
 fn spawn_pipe_reader(
     mut reader: impl Read + Send + 'static,
+    name: &'static str,
 ) -> DeviceResult<JoinHandle<io::Result<Vec<u8>>>> {
     thread::Builder::new()
         .spawn(move || {
@@ -555,13 +585,14 @@ fn spawn_pipe_reader(
             reader.read_to_end(&mut bytes)?;
             Ok(bytes)
         })
-        .map_err(|error| DeviceError::fatal(format!("failed to start adb pipe reader: {error}")))
+        .map_err(|error| DeviceError::fatal(format!("failed to start {name} pipe reader: {error}")))
 }
 
 fn join_pipe_reader(
     reader: &mut Option<JoinHandle<io::Result<Vec<u8>>>>,
     stream_name: &'static str,
     deadline: Instant,
+    program: CommandProgram,
 ) -> DeviceResult<Vec<u8>> {
     let Some(handle) = reader.as_ref() else {
         return Ok(Vec::new());
@@ -569,14 +600,15 @@ fn join_pipe_reader(
     while !handle.is_finished() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
+    let name = program.name;
     let backend = if stream_name == "stdout" {
-        "adb_stdout"
+        program.stdout_reader
     } else {
-        "adb_stderr"
+        program.stderr_reader
     };
     if !handle.is_finished() {
         return Err(DeviceError::fatal(format!(
-            "adb {stream_name} reader remains open at close deadline"
+            "{name} {stream_name} reader remains open at close deadline"
         ))
         .with_resource_close_cause(
             DeviceResourceKind::PipeReader,
@@ -592,10 +624,10 @@ fn join_pipe_reader(
         .take()
         .expect("acquired reader")
         .join()
-        .map_err(|_| DeviceError::fatal(format!("adb {stream_name} reader thread panicked")))
+        .map_err(|_| DeviceError::fatal(format!("{name} {stream_name} reader thread panicked")))
         .and_then(|result| {
             result.map_err(|error| {
-                DeviceError::fatal(format!("failed to read adb {stream_name}: {error}"))
+                DeviceError::fatal(format!("failed to read {name} {stream_name}: {error}"))
             })
         })
         .map_err(|error| {
@@ -611,15 +643,15 @@ fn join_pipe_reader(
         })
 }
 
-struct DecodedAdbText {
-    text: String,
-    lossy: bool,
+pub(crate) struct DecodedAdbText {
+    pub(crate) text: String,
+    pub(crate) lossy: bool,
     stream_name: &'static str,
     command: String,
 }
 
 impl DecodedAdbText {
-    fn diagnostic_text(&self) -> String {
+    pub(crate) fn diagnostic_text(&self) -> String {
         if self.lossy {
             format!(
                 "[lossy_decode=true stream={} command={}] {}",
@@ -631,7 +663,11 @@ impl DecodedAdbText {
     }
 }
 
-fn decode_adb_text(bytes: Vec<u8>, stream_name: &'static str, args: &[&str]) -> DecodedAdbText {
+pub(crate) fn decode_adb_text(
+    bytes: Vec<u8>,
+    stream_name: &'static str,
+    args: &[&str],
+) -> DecodedAdbText {
     match String::from_utf8(bytes) {
         Ok(text) => DecodedAdbText {
             text,
@@ -1041,6 +1077,10 @@ mod tests {
             "mumu_running_process"
         );
         assert_eq!(
+            AdbPathSource::MumuRegistryUninstall.as_str(),
+            "mumu_registry_uninstall"
+        );
+        assert_eq!(
             AdbPathSource::MumuVendorEnumeration.as_str(),
             "mumu_vendor_enumeration"
         );
@@ -1058,6 +1098,7 @@ mod tests {
             &mut Some(reader),
             "stdout",
             Instant::now() + Duration::from_secs(1),
+            ADB_PROGRAM,
         )
         .expect_err("reader panic must be fatal");
 

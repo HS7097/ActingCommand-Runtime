@@ -21,6 +21,7 @@ pub mod input;
 pub mod maatouch;
 pub mod minitouch;
 mod mumu;
+pub mod mumu_manager;
 mod nemu_diagnostic;
 pub mod replay;
 pub mod touch;
@@ -37,6 +38,12 @@ pub use input::*;
 pub use maatouch::*;
 pub use minitouch::*;
 pub use mumu::MumuInstallSource;
+pub use mumu_manager::{
+    DiscoveredMumuInstance, MAX_MUMU_INSTANCE_NAME_BYTES, MUMU_MANAGER_COMMAND_TIMEOUT,
+    MUMU_MANAGER_MINIMUM_VERSION, MumuDiscoveryReport, MumuManagerSource, MumuManagerVersion,
+    ResolvedMumuManager, discover_mumu_instances, query_instances, query_version,
+    resolve_mumu_manager,
+};
 pub use nemu_diagnostic::*;
 pub use replay::*;
 pub use touch::*;
