@@ -395,12 +395,15 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         )),
     )
     .expect("mid-step host");
+    // The geometry prerequisite bounds its reads by the response deadline in
+    // wall time, so the budget must comfortably cover reaching the blocked
+    // input; the manual clock still decides when the deadline is exceeded.
     let task_request = ContainedTaskRequest::new(
         package.display().to_string(),
         actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
     )
     .unwrap()
-    .with_response_deadline_ms(25)
+    .with_response_deadline_ms(2_500)
     .unwrap();
     let request = runtime_request(
         &ids,
@@ -418,7 +421,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
             thread::sleep(Duration::from_millis(1));
         }
         let input_started = state.input_started.load(Ordering::Acquire);
-        clock.advance(25);
+        clock.advance(2_500);
         state.block_input.store(false, Ordering::Release);
         assert!(
             input_started,
