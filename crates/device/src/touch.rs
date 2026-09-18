@@ -233,7 +233,13 @@ impl SelectedTouchBackend {
 
         let active_started = Instant::now();
         let active_failure = match run(self.active.backend.as_mut()) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                // MaaTouch/Minitouch measure the local write+flush; AdbShellInput's child exit is the real ack.
+                let elapsed_ms = active_started.elapsed().as_millis();
+                self.diagnostics
+                    .push_success(self.active.name, elapsed_ms, action, true);
+                return Ok(());
+            }
             Err(err) => {
                 let elapsed_ms = active_started.elapsed().as_millis();
                 let fallback_backend = err
