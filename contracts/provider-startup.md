@@ -12,9 +12,10 @@ The event is `provider.startup_observed`, with origin module `provider` and
 payload schema `actingcommand.payload.provider.v1`. Each record identifies its
 backend (`configured`, `fastdeploy_ppocr`, `onnxruntime` or `mumu_manager`) and
 one observation: stage started/completed, file binding, model binding, instance
-discovery, original failure, not configured, or ready. Stages cover manifest
-read/parse, path binding, model identity, backend construction, registry
-binding and instance discovery. File bindings retain the configured value,
+discovery, capability profile, original failure, not configured, or ready.
+Stages cover manifest read/parse, path binding, model identity, backend
+construction, registry binding, instance discovery and capability admission.
+File bindings retain the configured value,
 resolution base and resolved value; model bindings retain the logical model
 reference and digest. Paths resolve through the existing manifest-parent
 algorithm. Absolute paths and native runtime closure ordering keep their
@@ -75,6 +76,26 @@ declared `adb_path`, `host` or `port` differs from the discovered value; the
 failure message carries both values). A resolved instance is then registered
 exactly like an explicit one, with the discovered ADB path, host and port and
 no serial. Discovery runs once per startup; nothing is re-probed later.
+
+Between the discovery answer and the first instance binding, still inside the
+`instance_discovery` bracket, the same closure records `started`/`completed`
+with stage `capability_admission` around one `capability_profile` record. The
+profile is derived from the discovery report by a pure builder (no further
+subcommand is dispatched; `control` is never used) and admitted through the
+Host's `admit_emulator_capabilities` with the required ids `inventory.read`
+and `instance.status.read`. The record carries `provider_id` (`mumu.manager`),
+`version` (the `MuMuManager version` value) and the closed capability ids
+grouped as `available`, `unverified` and `unavailable`; each list is sorted and
+the three lists together name every capability id exactly once, or the record
+is rejected at sanitization. A refusal is recorded as a `failed` observation
+with stage `capability_admission` (module
+`actingcommand_runtime_host::emulator_control`, the admission code, the
+provider id and version in the message) before Host startup fails with
+`emulator_capability_admission_refused`. The admitted profile is attached to
+every discovered registration and merged into the instance capability profile
+that `status` reports (see
+`docs/architecture/emulator-control-capability-matrix.md`); explicit entries
+keep the registry-only profile.
 
 ## Instance binding
 

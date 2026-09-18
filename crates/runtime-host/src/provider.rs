@@ -29,6 +29,7 @@ pub struct ExecutionBackendRegistration {
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
     discovered: Option<DiscoveredInstanceBinding>,
+    provider_profile: Option<EmulatorCapabilityProfile>,
 }
 
 impl ExecutionBackendRegistration {
@@ -93,12 +94,20 @@ impl ExecutionBackendRegistration {
             capture,
             configuration,
             discovered: None,
+            provider_profile: None,
         })
     }
 
     /// Marks the registration as bound through MuMu instance discovery.
     pub fn with_discovered_binding(mut self, discovered: DiscoveredInstanceBinding) -> Self {
         self.discovered = Some(discovered);
+        self
+    }
+
+    /// Attaches the provider capability profile admitted at startup; its provider-owned rows
+    /// replace the registry placeholder rows when the registration is registered.
+    pub fn with_capability_profile(mut self, profile: EmulatorCapabilityProfile) -> Self {
+        self.provider_profile = Some(profile);
         self
     }
 }
@@ -178,6 +187,10 @@ impl ExecutionBackendRegistry {
         let application_adb = registration.input.adb_config.clone();
         let application_target = registration.input.target.clone();
         let capabilities = Self::capability_profile(&registration.input, &registration.capture)?;
+        let capabilities = match registration.provider_profile {
+            Some(provider) => Self::merge_capability_profile(&capabilities, &provider)?,
+            None => capabilities,
+        };
         self.entries.insert(
             registration.instance_alias,
             ExecutionBackendEntry {
@@ -257,6 +270,55 @@ impl ExecutionBackendRegistry {
             evidence,
         )
         .map_err(invalid)
+    }
+
+    /// Provider id, version and the provider-owned rows (inventory, instance status and
+    /// lifecycle, instance management, snapshots, ADB bridge) come from the admitted provider
+    /// profile; input, capture, application lifecycle and application control keep the
+    /// registry-derived evidence. The result is re-validated as a complete profile.
+    fn merge_capability_profile(
+        registry: &EmulatorCapabilityProfile,
+        provider: &EmulatorCapabilityProfile,
+    ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
+        let evidence = EmulatorCapability::ALL
+            .into_iter()
+            .map(|capability| {
+                let source = match capability {
+                    EmulatorCapability::InventoryRead
+                    | EmulatorCapability::InstanceStatusRead
+                    | EmulatorCapability::InstanceStart
+                    | EmulatorCapability::InstanceStop
+                    | EmulatorCapability::InstanceRestart
+                    | EmulatorCapability::InstanceCreate
+                    | EmulatorCapability::InstanceClone
+                    | EmulatorCapability::InstanceDelete
+                    | EmulatorCapability::InstanceConfigure
+                    | EmulatorCapability::SnapshotManage
+                    | EmulatorCapability::AdbBridge => provider,
+                    EmulatorCapability::ApplicationControl
+                    | EmulatorCapability::InputTap
+                    | EmulatorCapability::InputLongTap
+                    | EmulatorCapability::InputSwipe
+                    | EmulatorCapability::InputSegmentedSwipe
+                    | EmulatorCapability::InputKey
+                    | EmulatorCapability::InputText
+                    | EmulatorCapability::InputReset
+                    | EmulatorCapability::CaptureFrame
+                    | EmulatorCapability::ApplicationLaunch
+                    | EmulatorCapability::ApplicationStop
+                    | EmulatorCapability::ApplicationRestart => registry,
+                };
+                source.evidence(capability).clone()
+            })
+            .collect();
+        EmulatorCapabilityProfile::new(provider.provider_id(), provider.version().clone(), evidence)
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "execution_capability_profile_merge_invalid",
+                    "build_execution_backend_registry",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })
     }
 }
 
