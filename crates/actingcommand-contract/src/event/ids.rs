@@ -179,6 +179,14 @@ verified_transport!(IssuedActionId, ActionId);
 verified_transport!(IssuedTaskId, TaskId);
 verified_transport!(IssuedRunId, RunId);
 
+impl IdentifierIssuer {
+    /// Blesses an already-registered instance identifier as an event link.
+    /// It mints no other identifier; the caller owns the registry that verified the instance.
+    pub const fn issue_registered_instance(&self, instance_id: InstanceId) -> IssuedInstanceId {
+        IssuedInstanceId::from_verified_transport(instance_id)
+    }
+}
+
 /// Mints producer capabilities without accepting caller-selected identifier bytes or strings.
 pub struct IdentifierIssuer {
     namespace: u64,

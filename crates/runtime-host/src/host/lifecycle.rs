@@ -340,6 +340,44 @@ pub(super) fn append_runtime_start_event(
         .map_err(|_| ledger_error("append_runtime_start"))
 }
 
+/// Records one `runtime.instance_bound` fact per registered instance, in instance_id order.
+pub(super) fn append_instance_binding_events(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    instances: &BTreeMap<InstanceId, RegisteredInstance>,
+) -> RuntimeHostResult<()> {
+    for instance in instances.values() {
+        let links = events.system_links()?.with_instance_id(
+            events
+                .issuer()
+                .issue_registered_instance(instance.instance_id),
+        );
+        let endpoint = instance.adb_endpoint.as_ref();
+        let payload = RuntimePayloadDraft::instance_bound(
+            instance.instance_alias.clone(),
+            instance.provenance,
+            endpoint.map(|endpoint| endpoint.host().to_owned()),
+            endpoint.map(ResolvedAdbEndpoint::port),
+            endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured),
+            InstanceBindingSource::Explicit,
+            AuditInput::new(),
+        );
+        let draft = events.draft(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            payload,
+        )?;
+        let draft = events.sanitize(draft)?;
+        ledger
+            .append(draft)
+            .map_err(|_| ledger_error("append_runtime_instance_bound"))?;
+    }
+    Ok(())
+}
+
 pub(super) fn record_failure(slot: &mut Option<RuntimeHostError>, result: RuntimeHostResult<()>) {
     if let Err(error) = result
         && slot.is_none()
