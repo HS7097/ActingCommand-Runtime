@@ -269,6 +269,15 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
+            let (touch_response_us, capture_acquire_us) = match event.payload() {
+                EventPayload::Input(InputPayload::Committed(payload)) => {
+                    (payload.touch_response_us(), None)
+                }
+                EventPayload::Capture(CapturePayload::Completed(payload)) => {
+                    (None, payload.capture_acquire_us())
+                }
+                _ => (None, None),
+            };
             let observation = PipelineEventObservation {
                 event_type: event.event_type(),
                 instance_id: instance_alias,
@@ -276,6 +285,8 @@ impl HostShared {
                 frame_id: event.links().frame_id().copied(),
                 recognition_id: event.links().recognition_id().copied(),
                 action_id: event.links().action_id().copied(),
+                touch_response_us,
+                capture_acquire_us,
             };
             lock(&self.performance, "observe_performance_pipeline_event")?
                 .observe_pipeline_event(observation)
@@ -302,10 +313,19 @@ impl HostShared {
     }
 }
 
+/// `Unavailable` spans never become a zero; they leave the typed field unset.
+pub(super) const fn measured_microseconds(observed: ObservedMicroseconds) -> Option<u64> {
+    match observed {
+        ObservedMicroseconds::Measured { value } => Some(value),
+        ObservedMicroseconds::Unavailable { .. } => None,
+    }
+}
+
 const fn is_pipeline_event(event_type: EventType) -> bool {
     matches!(
         event_type,
-        EventType::CaptureRequested
+        EventType::InputCommitted
+            | EventType::CaptureRequested
             | EventType::CaptureCompleted
             | EventType::CaptureFailed
             | EventType::RecognitionRequested

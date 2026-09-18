@@ -401,6 +401,8 @@ pub(super) struct RuntimeContainedTask<'a> {
     input_step_action_id: Option<ActionId>,
     post_input_action_id: Option<ActionId>,
     last_capture_input_action_id: Option<ActionId>,
+    /// Backend acquisition span of the last successful capture, consumed by its `CaptureCompleted` trace.
+    last_capture_acquire_us: Option<u64>,
     expected_stability_declaration: Option<StabilityTerminationDeclaration>,
     stability: Option<RuntimeContainedTaskStability>,
     expects_post_admission_ocr: bool,
@@ -1781,8 +1783,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 .host
                 .execution
                 .capture_retained_with_registration_guard(self.instance_alias, registration);
-            self.task_timing
-                .finish_boundary(backend_started, captured.is_ok());
+            // The same CaptureBackend boundary span feeds the typed payload field: no second clock read.
+            let capture_acquire_us = performance::measured_microseconds(
+                self.task_timing
+                    .finish_boundary(backend_started, captured.is_ok()),
+            );
             match captured {
                 Ok(frame) => {
                     let material_started = self
@@ -1878,6 +1883,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         self.capture_evidence.persisted(frame_index, &reference)?;
                         self.last_frame_id = Some(frame_id);
                         self.last_capture_input_action_id = input_action_id;
+                        self.last_capture_acquire_us = capture_acquire_us;
                         if self.configuration_records > 0 && !self.configuration_capture_recorded {
                             let selection = frame.selection.as_ref().map(|selection| {
                                 EffectiveCaptureSelection {
@@ -2135,6 +2141,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         ))
                     })?;
                     let input_action_id = self.last_capture_input_action_id.take();
+                    let capture_acquire_us = self.last_capture_acquire_us.take();
                     let links = RuntimeRunLinks::new(self.task_id, self.run_id)
                         .apply(self.host.events.request_links(
                             self.request,
@@ -2150,11 +2157,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         module,
                         EventActor::Runtime,
                         links.clone(),
-                        CapturePayloadDraft::completed(
+                        CapturePayloadDraft::completed_with_capture_acquire(
                             EventAction::CaptureObserve,
                             EffectDisposition::NotPerformed,
                             width,
                             height,
+                            capture_acquire_us,
                             AuditInput::new(),
                         ),
                     )?;
@@ -3662,6 +3670,7 @@ impl HostShared {
             input_step_action_id: None,
             post_input_action_id: None,
             last_capture_input_action_id: None,
+            last_capture_acquire_us: None,
             expected_stability_declaration,
             stability: None,
             expects_post_admission_ocr,

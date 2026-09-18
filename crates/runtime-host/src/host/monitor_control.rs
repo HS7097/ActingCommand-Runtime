@@ -262,10 +262,14 @@ impl HostShared {
         )?;
 
         let registration = self.mark_resources_in_use()?;
-        let frame = match self
+        let capture_started = Instant::now();
+        let captured = self
             .execution
-            .capture_retained_with_registration_guard(&probe.instance_alias, registration)
-        {
+            .capture_retained_with_registration_guard(&probe.instance_alias, registration);
+        let capture_acquire_us = performance::measured_microseconds(
+            actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
+        );
+        let frame = match captured {
             Ok(frame) => frame,
             Err(error) => {
                 let error =
@@ -306,11 +310,12 @@ impl HostShared {
             OriginModule::Capture,
             EventActor::Runtime,
             links.clone(),
-            CapturePayloadDraft::completed(
+            CapturePayloadDraft::completed_with_capture_acquire(
                 EventAction::CaptureObserve,
                 EffectDisposition::Performed,
                 frame.width,
                 frame.height,
+                capture_acquire_us,
                 AuditInput::new(),
             ),
         )?;
