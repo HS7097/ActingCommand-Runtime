@@ -673,8 +673,8 @@
           "game": "arknights",
           "package_id": "golden.task",
           "resolution": {
-            "height": 2,
-            "width": 2
+            "height": 9,
+            "width": 16
           },
           "server": "cn"
         },
@@ -1159,7 +1159,7 @@
                       "fact": {
                         "kind": "package_admitted",
                         "package_label": "golden.task",
-                        "package_sha256": "a2de00e91e4433aba1a79d4b03a6f8d6fd4505a1d49ff86ffa1269601da4a88c",
+                        "package_sha256": "f6b59c89976e0c8c7222579ba4e054e529fab66cf18abe082e7ec4315c1e1b42",
                         "response_deadline_monotonic_ms": "<TIME>",
                         "task_label": "task"
                       },
@@ -1319,18 +1319,18 @@
               "artifacts": [
                 {
                   "artifact_id": "<ARTIFACT_ID>",
-                  "byte_count": 82,
+                  "byte_count": 245,
                   "correlation_id": "<CORRELATION_ID>",
                   "created_at_unix_ms": "<TIME>",
                   "frame_id": "<FRAME_ID>",
                   "kind": "capture.frame",
                   "media_type": "image/png",
-                  "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                  "object_key": "artifacts/1b/<ARTIFACT_ID>.png",
                   "producer": "capture_store",
                   "redaction_state": "not_required",
                   "retention_class": "debug_full",
                   "run_id": "<RUN_ID>",
-                  "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                  "sha256": "sha256:1b98a45a6b259f05cbe2e5084915066537f9c5496af7290f6d7557649b0e8d4d"
                 }
               ],
               "event_id": "<EVENT_ID>",
@@ -1378,18 +1378,18 @@
               "artifacts": [
                 {
                   "artifact_id": "<ARTIFACT_ID>",
-                  "byte_count": 82,
+                  "byte_count": 245,
                   "correlation_id": "<CORRELATION_ID>",
                   "created_at_unix_ms": "<TIME>",
                   "frame_id": "<FRAME_ID>",
                   "kind": "capture.frame",
                   "media_type": "image/png",
-                  "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                  "object_key": "artifacts/1b/<ARTIFACT_ID>.png",
                   "producer": "capture_store",
                   "redaction_state": "not_required",
                   "retention_class": "debug_full",
                   "run_id": "<RUN_ID>",
-                  "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                  "sha256": "sha256:1b98a45a6b259f05cbe2e5084915066537f9c5496af7290f6d7557649b0e8d4d"
                 }
               ],
               "event_id": "<EVENT_ID>",
@@ -1463,18 +1463,18 @@
                           "identity": {
                             "artifact": {
                               "artifact_id": "<ARTIFACT_ID>",
-                              "byte_count": 82,
+                              "byte_count": 245,
                               "correlation_id": "<CORRELATION_ID>",
                               "created_at_unix_ms": "<TIME>",
                               "frame_id": "<FRAME_ID>",
                               "kind": "capture.frame",
                               "media_type": "image/png",
-                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "object_key": "artifacts/1b/<ARTIFACT_ID>.png",
                               "producer": "capture_store",
                               "redaction_state": "not_required",
                               "retention_class": "debug_full",
                               "run_id": "<RUN_ID>",
-                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                              "sha256": "sha256:1b98a45a6b259f05cbe2e5084915066537f9c5496af7290f6d7557649b0e8d4d"
                             },
                             "correlation_id": "<CORRELATION_ID>",
                             "instance_id": "<INSTANCE_ID>",
@@ -1629,6 +1629,100 @@
             {
               "artifacts": [],
               "event_id": "<EVENT_ID>",
+              "event_type": "task.geometry_observed",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "frame_id": "<FRAME_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
+              },
+              "origin": {
+                "actor": "runtime",
+                "module": "runtime",
+                "source": "runtime"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "task",
+                  "payload": {
+                    "data": {
+                      "action": "runtime.task_run",
+                      "audit": {},
+                      "fact": {
+                        "kind": "geometry_observed",
+                        "observation": {
+                          "conclusion": {
+                            "state": "pass"
+                          },
+                          "frame": {
+                            "backend": "adb_screencap",
+                            "captured_at": "<TIME>",
+                            "extent": {
+                              "height": 9,
+                              "width": 16
+                            },
+                            "frame_id": "<FRAME_ID>",
+                            "producer": {
+                              "detail": "producer_observation_absent",
+                              "state": "unknown"
+                            }
+                          },
+                          "observation": {
+                            "detail": {
+                              "backend": "adb_screencap",
+                              "frame_transform": null,
+                              "logical_display_extent": {
+                                "height": 9,
+                                "width": 16
+                              },
+                              "rotation": {
+                                "rotation": "r0",
+                                "source": "dumpsys_display_orientation",
+                                "state": "observed"
+                              },
+                              "sampled_at": "<TIME>",
+                              "source": {
+                                "kind": "adb_default_display",
+                                "serial": "<sealed-golden>",
+                                "wm_extent": {
+                                  "height": 9,
+                                  "width": 16
+                                },
+                                "wm_size_kind": "physical"
+                              }
+                            },
+                            "state": "observed"
+                          },
+                          "original_failure": null,
+                          "phase": "initial",
+                          "trigger": null,
+                          "unavailable": null
+                        }
+                      }
+                    },
+                    "kind": "semantic"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.task.v3",
+              "schema_version": "actingcommand.event.v2",
+              "sensitivity": "sensitive",
+              "sequence": 24,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "observation",
+                "lab"
+              ]
+            },
+            {
+              "artifacts": [],
+              "event_id": "<EVENT_ID>",
               "event_type": "capture.completed",
               "links": {
                 "correlation_id": "<CORRELATION_ID>",
@@ -1653,8 +1747,8 @@
                       "action": "capture.observe",
                       "audit": {},
                       "effect_disposition": "not_performed",
-                      "frame_height": 2,
-                      "frame_width": 2
+                      "frame_height": 9,
+                      "frame_width": 16
                     },
                     "kind": "completed"
                   }
@@ -1663,7 +1757,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 24,
+              "sequence": 25,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1699,8 +1793,8 @@
                       "action": "runtime.task_run",
                       "audit": {},
                       "fact": {
-                        "frame_height": 2,
-                        "frame_width": 2,
+                        "frame_height": 9,
+                        "frame_width": 16,
                         "kind": "evidence_indexed"
                       }
                     },
@@ -1711,7 +1805,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 25,
+              "sequence": 26,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1755,7 +1849,7 @@
               "payload_schema": "actingcommand.payload.recognition.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 26,
+              "sequence": 27,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1795,8 +1889,8 @@
                         "candidate_pages": [
                           "arknights/home"
                         ],
-                        "frame_height": 2,
-                        "frame_width": 2,
+                        "frame_height": 9,
+                        "frame_width": 16,
                         "kind": "recognition_started"
                       }
                     },
@@ -1807,7 +1901,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 27,
+              "sequence": 28,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1844,8 +1938,8 @@
                       "action": "recognition.observe",
                       "audit": {},
                       "effect_disposition": "not_performed",
-                      "frame_height": 2,
-                      "frame_width": 2,
+                      "frame_height": 9,
+                      "frame_width": 16,
                       "recognition_verdict": "page_matched"
                     },
                     "kind": "completed"
@@ -1855,7 +1949,7 @@
               "payload_schema": "actingcommand.payload.recognition.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 28,
+              "sequence": 29,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1895,8 +1989,8 @@
                         "candidate_pages": [
                           "arknights/home"
                         ],
-                        "frame_height": 2,
-                        "frame_width": 2,
+                        "frame_height": 9,
+                        "frame_width": 16,
                         "kind": "recognition_completed",
                         "matched_page": "arknights/home"
                       }
@@ -1908,7 +2002,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 29,
+              "sequence": 30,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -1954,7 +2048,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 30,
+              "sequence": 31,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2012,7 +2106,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "secret",
-              "sequence": 31,
+              "sequence": 32,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2069,7 +2163,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "secret",
-              "sequence": 32,
+              "sequence": 33,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2118,7 +2212,7 @@
               "payload_schema": "actingcommand.payload.runtime.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 33,
+              "sequence": 34,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2161,18 +2255,18 @@
                           {
                             "artifact": {
                               "artifact_id": "<ARTIFACT_ID>",
-                              "byte_count": 82,
+                              "byte_count": 245,
                               "correlation_id": "<CORRELATION_ID>",
                               "created_at_unix_ms": "<TIME>",
                               "frame_id": "<FRAME_ID>",
                               "kind": "capture.frame",
                               "media_type": "image/png",
-                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "object_key": "artifacts/1b/<ARTIFACT_ID>.png",
                               "producer": "capture_store",
                               "redaction_state": "not_required",
                               "retention_class": "debug_full",
                               "run_id": "<RUN_ID>",
-                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                              "sha256": "sha256:1b98a45a6b259f05cbe2e5084915066537f9c5496af7290f6d7557649b0e8d4d"
                             },
                             "frame_index": 0
                           }
@@ -2182,18 +2276,18 @@
                           {
                             "artifact": {
                               "artifact_id": "<ARTIFACT_ID>",
-                              "byte_count": 82,
+                              "byte_count": 245,
                               "correlation_id": "<CORRELATION_ID>",
                               "created_at_unix_ms": "<TIME>",
                               "frame_id": "<FRAME_ID>",
                               "kind": "capture.frame",
                               "media_type": "image/png",
-                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "object_key": "artifacts/1b/<ARTIFACT_ID>.png",
                               "producer": "capture_store",
                               "redaction_state": "not_required",
                               "retention_class": "debug_full",
                               "run_id": "<RUN_ID>",
-                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                              "sha256": "sha256:1b98a45a6b259f05cbe2e5084915066537f9c5496af7290f6d7557649b0e8d4d"
                             },
                             "frame_index": 0,
                             "reason": "recognition_evidence"
@@ -2201,18 +2295,18 @@
                           {
                             "artifact": {
                               "artifact_id": "<ARTIFACT_ID>",
-                              "byte_count": 82,
+                              "byte_count": 245,
                               "correlation_id": "<CORRELATION_ID>",
                               "created_at_unix_ms": "<TIME>",
                               "frame_id": "<FRAME_ID>",
                               "kind": "capture.frame",
                               "media_type": "image/png",
-                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "object_key": "artifacts/1b/<ARTIFACT_ID>.png",
                               "producer": "capture_store",
                               "redaction_state": "not_required",
                               "retention_class": "debug_full",
                               "run_id": "<RUN_ID>",
-                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                              "sha256": "sha256:1b98a45a6b259f05cbe2e5084915066537f9c5496af7290f6d7557649b0e8d4d"
                             },
                             "frame_index": 0,
                             "reason": "terminal"
@@ -2227,7 +2321,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "internal",
-              "sequence": 34,
+              "sequence": 35,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2271,42 +2365,1158 @@
                           "correlation_id": "<CORRELATION_ID>",
                           "execution": {
                             "boundaries": {
-                              "capture_page": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":null,"recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "capture": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":null,"recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "capture_active_pressure": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":null,"recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "capture_backend": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "capture_material": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "capture_completed_record": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "recognition_started_record": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":null,"record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "recognition_payload_append": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                              "recognition_task_append": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
+                              "capture": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": null,
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "capture_active_pressure": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": null,
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "capture_backend": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": "<FRAME_ID>",
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "capture_completed_record": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": "<FRAME_ID>",
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "capture_material": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": "<FRAME_ID>",
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "capture_page": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": null,
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "recognition_payload_append": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": "<FRAME_ID>",
+                                  "recognition_id": "<RECOGNITION_ID>",
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
                               "recognition_payload_stages": {
-                                "fact_gate": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "draft": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "writer_response": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_send": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "writer": {"send_returned":"<PROCESS_INSTANT>","writer_received":"<PROCESS_INSTANT>","receive_order":"<WRITER_RECEIVE_ORDER>","previous_work_relation":"<PREVIOUS_WORK_RELATION>","previous_command":"<WRITER_COMMAND>","previous_processing":{"status":{"state":"observed"},"started":"<PROCESS_INSTANT>","finished":"<PROCESS_INSTANT>","elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"result":"ok"},"previous_after_reply":{"status":{"state":"observed"},"started":"<PROCESS_INSTANT>","finished":"<PROCESS_INSTANT>","elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"result":"ok"},"previous_reply_result":"ok"},
-                                "ledger_queue": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_persistence": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_durable": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_publication": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "device_diagnostics": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "fact_sync": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "pipeline": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"}
+                                "device_diagnostics": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "draft": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "fact_gate": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "fact_sync": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_durable": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_persistence": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_publication": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_queue": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_send": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "pipeline": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "writer": {
+                                  "previous_after_reply": {
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "finished": "<PROCESS_INSTANT>",
+                                    "result": "ok",
+                                    "started": "<PROCESS_INSTANT>",
+                                    "status": {
+                                      "state": "observed"
+                                    }
+                                  },
+                                  "previous_command": "<WRITER_COMMAND>",
+                                  "previous_processing": {
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "finished": "<PROCESS_INSTANT>",
+                                    "result": "ok",
+                                    "started": "<PROCESS_INSTANT>",
+                                    "status": {
+                                      "state": "observed"
+                                    }
+                                  },
+                                  "previous_reply_result": "ok",
+                                  "previous_work_relation": "<PREVIOUS_WORK_RELATION>",
+                                  "receive_order": "<WRITER_RECEIVE_ORDER>",
+                                  "send_returned": "<PROCESS_INSTANT>",
+                                  "writer_received": "<PROCESS_INSTANT>"
+                                },
+                                "writer_response": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                }
+                              },
+                              "recognition_started_record": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": "<FRAME_ID>",
+                                  "recognition_id": null,
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
+                              },
+                              "recognition_task_append": {
+                                "attempts": 1,
+                                "errors": 0,
+                                "last": {
+                                  "budget_before": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "elapsed_us": {
+                                    "state": "measured",
+                                    "value": "<MICROSECONDS>"
+                                  },
+                                  "frame_id": "<FRAME_ID>",
+                                  "recognition_id": "<RECOGNITION_ID>",
+                                  "record_index": null,
+                                  "result": "ok"
+                                },
+                                "last_call": {
+                                  "action_id": null,
+                                  "budget_after": {
+                                    "expired": false,
+                                    "origin": "task",
+                                    "remaining_us": "<MICROSECONDS>",
+                                    "state": "observed"
+                                  },
+                                  "step_index": null
+                                },
+                                "max_us": "<MICROSECONDS>",
+                                "status": {
+                                  "state": "observed"
+                                },
+                                "total_us": "<MICROSECONDS>"
                               },
                               "recognition_task_stages": {
-                                "fact_gate": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "draft": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "writer_response": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_send": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "writer": {"send_returned":"<PROCESS_INSTANT>","writer_received":"<PROCESS_INSTANT>","receive_order":"<WRITER_RECEIVE_ORDER>","previous_work_relation":"<PREVIOUS_WORK_RELATION>","previous_command":"<WRITER_COMMAND>","previous_processing":{"status":{"state":"observed"},"started":"<PROCESS_INSTANT>","finished":"<PROCESS_INSTANT>","elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"result":"ok"},"previous_after_reply":{"status":{"state":"observed"},"started":"<PROCESS_INSTANT>","finished":"<PROCESS_INSTANT>","elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"result":"ok"},"previous_reply_result":"ok"},
-                                "ledger_queue": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_persistence": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_durable": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "ledger_publication": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "device_diagnostics": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "fact_sync": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"},
-                                "pipeline": {"attempts":1,"errors":0,"last":{"budget_before":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"elapsed_us":{"state":"measured","value":"<MICROSECONDS>"},"frame_id":"<FRAME_ID>","recognition_id":"<RECOGNITION_ID>","record_index":null,"result":"ok"},"last_call":{"action_id":null,"budget_after":{"expired":false,"origin":"task","remaining_us":"<MICROSECONDS>","state":"observed"},"step_index":null},"max_us":"<MICROSECONDS>","status":{"state":"observed"},"total_us":"<MICROSECONDS>"}
+                                "device_diagnostics": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "draft": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "fact_gate": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "fact_sync": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_durable": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_persistence": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_publication": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_queue": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "ledger_send": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "pipeline": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                },
+                                "writer": {
+                                  "previous_after_reply": {
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "finished": "<PROCESS_INSTANT>",
+                                    "result": "ok",
+                                    "started": "<PROCESS_INSTANT>",
+                                    "status": {
+                                      "state": "observed"
+                                    }
+                                  },
+                                  "previous_command": "<WRITER_COMMAND>",
+                                  "previous_processing": {
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "finished": "<PROCESS_INSTANT>",
+                                    "result": "ok",
+                                    "started": "<PROCESS_INSTANT>",
+                                    "status": {
+                                      "state": "observed"
+                                    }
+                                  },
+                                  "previous_reply_result": "ok",
+                                  "previous_work_relation": "<PREVIOUS_WORK_RELATION>",
+                                  "receive_order": "<WRITER_RECEIVE_ORDER>",
+                                  "send_returned": "<PROCESS_INSTANT>",
+                                  "writer_received": "<PROCESS_INSTANT>"
+                                },
+                                "writer_response": {
+                                  "attempts": 1,
+                                  "errors": 0,
+                                  "last": {
+                                    "budget_before": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
+                                    "frame_id": "<FRAME_ID>",
+                                    "recognition_id": "<RECOGNITION_ID>",
+                                    "record_index": null,
+                                    "result": "ok"
+                                  },
+                                  "last_call": {
+                                    "action_id": null,
+                                    "budget_after": {
+                                      "expired": false,
+                                      "origin": "task",
+                                      "remaining_us": "<MICROSECONDS>",
+                                      "state": "observed"
+                                    },
+                                    "step_index": null
+                                  },
+                                  "max_us": "<MICROSECONDS>",
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "total_us": "<MICROSECONDS>"
+                                }
                               }
                             },
                             "capture_recognition": {
@@ -2329,7 +3539,9 @@
                                 "result": "ok"
                               },
                               "max_us": "<MICROSECONDS>",
-                              "status": { "state": "observed" },
+                              "status": {
+                                "state": "observed"
+                              },
                               "total_us": "<MICROSECONDS>"
                             },
                             "diagnostic_record_write": {
@@ -2352,43 +3564,60 @@
                                 "result": "ok"
                               },
                               "max_us": "<MICROSECONDS>",
-                              "status": { "state": "observed" },
+                              "status": {
+                                "state": "observed"
+                              },
                               "subphases": {
                                 "capacity_admit": {
                                   "attempts": 2,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 2,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "encode": {
                                   "attempts": 2,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 2,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "file_write": {
                                   "attempts": 2,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 2,
                                     "result": "ok",
                                     "returned_bytes": 481
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "successful_returned_bytes": 882,
                                   "total_us": "<MICROSECONDS>"
                                 },
@@ -2396,24 +3625,34 @@
                                   "attempts": 2,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 2,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "material_update": {
                                   "attempts": 2,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 2,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 }
                               },
@@ -2439,7 +3678,9 @@
                                 "result": "ok"
                               },
                               "max_us": "<MICROSECONDS>",
-                              "status": { "state": "observed" },
+                              "status": {
+                                "state": "observed"
+                              },
                               "total_us": "<MICROSECONDS>"
                             },
                             "recognition_evaluate": {
@@ -2462,7 +3703,9 @@
                                 "result": "ok"
                               },
                               "max_us": "<MICROSECONDS>",
-                              "status": { "state": "observed" },
+                              "status": {
+                                "state": "observed"
+                              },
                               "total_us": "<MICROSECONDS>"
                             }
                           },
@@ -2487,68 +3730,95 @@
                                 "result": "ok"
                               },
                               "max_us": "<MICROSECONDS>",
-                              "status": { "state": "observed" },
+                              "status": {
+                                "state": "observed"
+                              },
                               "subphases": {
                                 "capacity_admit": {
                                   "attempts": 4,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 6,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "encode": {
                                   "attempts": 4,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 6,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "file_write": {
                                   "attempts": 4,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 6,
                                     "result": "ok",
                                     "returned_bytes": 252
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
-                                  "successful_returned_bytes": 2477,
+                                  "status": {
+                                    "state": "observed"
+                                  },
+                                  "successful_returned_bytes": 2478,
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "framing": {
                                   "attempts": 4,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 6,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "material_update": {
                                   "attempts": 4,
                                   "errors": 0,
                                   "last": {
-                                    "elapsed_us": { "state": "measured", "value": "<MICROSECONDS>" },
+                                    "elapsed_us": {
+                                      "state": "measured",
+                                      "value": "<MICROSECONDS>"
+                                    },
                                     "record_index": 6,
                                     "result": "ok"
                                   },
                                   "max_us": "<MICROSECONDS>",
-                                  "status": { "state": "observed" },
+                                  "status": {
+                                    "state": "observed"
+                                  },
                                   "total_us": "<MICROSECONDS>"
                                 }
                               },
@@ -2559,7 +3829,9 @@
                               "errors": 0,
                               "last": null,
                               "max_us": null,
-                              "status": { "state": "unobserved" },
+                              "status": {
+                                "state": "unobserved"
+                              },
                               "total_us": null
                             }
                           },
@@ -2569,7 +3841,9 @@
                               "errors": 0,
                               "last": null,
                               "max_us": null,
-                              "status": { "state": "unobserved" },
+                              "status": {
+                                "state": "unobserved"
+                              },
                               "total_us": null
                             },
                             "recognition_evaluate": {
@@ -2577,7 +3851,9 @@
                               "errors": 0,
                               "last": null,
                               "max_us": null,
-                              "status": { "state": "unobserved" },
+                              "status": {
+                                "state": "unobserved"
+                              },
                               "total_us": null
                             }
                           },
@@ -2594,7 +3870,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 35,
+              "sequence": 36,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2636,7 +3912,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 36,
+              "sequence": 37,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2679,7 +3955,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 37,
+              "sequence": 38,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2723,7 +3999,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 38,
+              "sequence": 39,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2750,7 +4026,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 35
+              "sequence": 36
             }
           }
         }
