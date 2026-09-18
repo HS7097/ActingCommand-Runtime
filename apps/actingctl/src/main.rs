@@ -5,8 +5,8 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_contract::{
-    CaptureSequenceSpec, ContainedTaskRecoveryBinding, ContainedTaskRequest, EventActor,
-    EventSource, RuntimeMonitorPolicy,
+    CaptureSequenceSpec, ContainedTaskRecoveryBinding, ContainedTaskRequest,
+    EmulatorInstanceAction, EventActor, EventSource, RuntimeMonitorPolicy,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
@@ -108,6 +108,22 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .clear_monitor(instance()?)
                 .map_err(ActingctlError::runtime)?,
         ),
+        // Served by the existing status read, filtered to the one alias; no new operation.
+        Command::EmulatorStatus => {
+            let alias = instance()?;
+            let status = client.status().map_err(ActingctlError::runtime)?;
+            let instance = status
+                .instances()
+                .iter()
+                .find(|instance| instance.instance_alias() == alias)
+                .ok_or(ActingctlError::InstanceUnknown)?;
+            serde_json::to_value(instance)
+        }
+        Command::EmulatorControl { action } => serde_json::to_value(
+            client
+                .control_emulator_instance(instance()?, action)
+                .map_err(ActingctlError::runtime)?,
+        ),
         Command::Stream { spec } => serde_json::to_value(
             client
                 .capture_sequence(instance()?, spec)
@@ -194,6 +210,10 @@ enum Command {
         policy: RuntimeMonitorPolicy,
     },
     MonitorClear,
+    EmulatorStatus,
+    EmulatorControl {
+        action: EmulatorInstanceAction,
+    },
     Stream {
         spec: CaptureSequenceSpec,
     },
@@ -210,6 +230,17 @@ impl Invocation {
         let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
             return Err(ActingctlError::Usage);
         };
+        // `emulator` takes its action as the second token; flags follow it.
+        let emulator_action = if command == "emulator" {
+            Some(
+                arguments
+                    .get(1)
+                    .and_then(|value| value.to_str())
+                    .ok_or(ActingctlError::Usage)?,
+            )
+        } else {
+            None
+        };
         let mut state_root = None;
         let mut instance = None;
         let mut interval_ms = None;
@@ -222,7 +253,7 @@ impl Invocation {
         let mut recovery_enabled = false;
         let mut program = false;
         let mut record_file = None;
-        let mut index = 1;
+        let mut index = if emulator_action.is_some() { 2 } else { 1 };
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
             match flag {
@@ -308,6 +339,19 @@ impl Invocation {
                 .map_err(|_| ActingctlError::Usage)?,
             },
             "monitor-clear" => Command::MonitorClear,
+            "emulator" => match emulator_action {
+                Some("status") => Command::EmulatorStatus,
+                Some("start") => Command::EmulatorControl {
+                    action: EmulatorInstanceAction::Start,
+                },
+                Some("stop") => Command::EmulatorControl {
+                    action: EmulatorInstanceAction::Stop,
+                },
+                Some("restart") => Command::EmulatorControl {
+                    action: EmulatorInstanceAction::Restart,
+                },
+                _ => return Err(ActingctlError::Usage),
+            },
             "stream" => Command::Stream {
                 spec: CaptureSequenceSpec::new(
                     frame_count.unwrap_or(1),
@@ -389,6 +433,7 @@ enum ActingctlError {
     Runtime(actingcommand_runtime_client::RuntimeClientError),
     Package,
     FactRecord,
+    InstanceUnknown,
     Output,
 }
 
@@ -402,10 +447,11 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--program] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
+            Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
             Self::Output => formatter.write_str("failed to write JSON output"),
         }
     }

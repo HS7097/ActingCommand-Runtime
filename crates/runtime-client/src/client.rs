@@ -7,9 +7,9 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
     ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
-    CorrelationId, EffectDisposition, EventActor, EventId, EventPayload, EventQuery, EventSource,
-    EventType, FactRecord, FactScope, FrameId, IdentifierIssuer, InputAction, InputPayload,
-    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    CorrelationId, EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload,
+    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
+    InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
     OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
     OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
@@ -55,6 +55,10 @@ use crate::test_observation::{
 };
 
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// Receipt wait for `ControlEmulatorInstance`: the host bounds the provider `control` command
+/// at 60 s and the readiness wait at 120 s (each 1 s poll bounded at 10 s), so the worst case
+/// is about 190 s; 200 s covers it plus the IO margin.
+const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(200);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -869,6 +873,39 @@ impl RuntimeClient {
         )? {
             RuntimeResult::MonitorCleared { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_monitor_clear")),
+        }
+    }
+
+    /// Starts, stops or restarts the emulator instance through the Runtime (no lease is
+    /// acquired; the host fences the instance itself). Returns the
+    /// `RuntimeResult::EmulatorInstanceControlled` result verbatim. The receipt wait is
+    /// `EMULATOR_CONTROL_RESPONSE_TIMEOUT` because the host waits for readiness.
+    pub fn control_emulator_instance(
+        &self,
+        instance_alias: &str,
+        action: EmulatorInstanceAction,
+    ) -> RuntimeClientResult<RuntimeResult> {
+        let correlation = self.issue_correlation("control_emulator_instance")?;
+        let receipt = self.execute_receipt_with_correlation(
+            "control_emulator_instance",
+            RuntimeOperation::ControlEmulatorInstance {
+                instance_alias: instance_alias.to_string(),
+                action,
+            },
+            correlation,
+            Some(EMULATOR_CONTROL_RESPONSE_TIMEOUT),
+        )?;
+        match receipt.result() {
+            Some(
+                result @ RuntimeResult::EmulatorInstanceControlled {
+                    instance_alias: completed_alias,
+                    action: completed_action,
+                    ..
+                },
+            ) if completed_alias == instance_alias && *completed_action == action => {
+                Ok(result.clone())
+            }
+            _ => Err(self.unexpected_result("control_emulator_instance")),
         }
     }
 
