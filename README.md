@@ -160,6 +160,7 @@ actingcommand-actingd --config runtime.json
 
 # 客户端（子命令必须是第一个参数，之后才是标志；每条命令都需要 --state-root）
 actingctl status --state-root <state-root>
+actingctl facts --program --state-root <state-root>
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>
 actingctl reset --state-root <state-root> --instance <alias>
