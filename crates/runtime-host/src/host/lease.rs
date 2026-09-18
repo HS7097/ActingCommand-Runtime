@@ -88,6 +88,12 @@ impl HostShared {
         let instance_guard = self.instance_guard(resolved.instance_id())?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
         self.expire_instance_if_due(resolved.instance_id())?;
+        self.require_bound_endpoint(
+            &resolved,
+            self.events
+                .request_links(request, Some(resolved.instance_id()), None, None),
+            EventAction::LeaseAcquire,
+        )?;
         let outcome = lock(&self.scheduler, "queue_lease")?.request_queued(
             QueueLeaseRequest::new(
                 original.request_id(),
@@ -966,6 +972,12 @@ impl HostShared {
         let instance_guard = self.instance_guard(resolved.instance_id())?;
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
         self.expire_instance_if_due(resolved.instance_id())?;
+        self.require_bound_endpoint(
+            &resolved,
+            self.events
+                .request_links(request, Some(resolved.instance_id()), None, None),
+            EventAction::LeaseAcquire,
+        )?;
         let preparation = {
             let mut scheduler = lock(&self.scheduler, "prepare_lease")?;
             let now_monotonic_ms = self.monotonic_ms()?;
@@ -2232,10 +2244,12 @@ impl HostShared {
         &self,
         instance_alias: &str,
     ) -> Result<RegisteredInstance, RequestFailure> {
-        let registered = lock(&self.registered_instances, "read_instance_registry")?
+        // The identity check runs under the registry lock so an endpoint rebinding is never
+        // observed half-applied.
+        let registry = lock(&self.registered_instances, "read_instance_registry")?;
+        let registered = registry
             .values()
             .find(|instance| instance.instance_alias == instance_alias)
-            .cloned()
             .ok_or_else(|| {
                 RequestFailure::request(
                     RuntimeHostError::request(
@@ -2247,8 +2261,8 @@ impl HostShared {
                     None,
                 )
             })?;
-        self.resolve_registered_backend(&registered)?;
-        Ok(registered)
+        self.resolve_registered_backend(registered)?;
+        Ok(registered.clone())
     }
 
     pub(super) fn resolve_registered_backend(
@@ -2335,6 +2349,40 @@ impl HostShared {
             ),
             RuntimeReceiptState::Denied,
             None,
+        ))
+    }
+
+    /// Refuses a request that would open a device session on a discovery-bound instance whose
+    /// ADB endpoint is still pending (the emulator is stopped): `command.rejected` plus the
+    /// `runtime.failed` record naming the alias, host code `instance_not_running`, denied.
+    pub(super) fn require_bound_endpoint(
+        &self,
+        instance: &RegisteredInstance,
+        links: EventLinksDraft,
+        action: EventAction,
+    ) -> Result<(), RequestFailure> {
+        let Err(error) = instance_not_running(instance) else {
+            return Ok(());
+        };
+        let rejected = self.append_event(
+            EventSeverity::Error,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            CommandPayloadDraft::rejected(
+                action,
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        self.record_required_failure(&error, &rejected, links)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Err(RequestFailure::request(
+            error,
+            RuntimeReceiptState::Denied,
+            Some(terminal(&rejected)),
         ))
     }
 
@@ -2564,4 +2612,23 @@ impl HostShared {
             )),
         }
     }
+}
+
+/// The typed refusal of every device-facing path while a discovery binding is pending: the
+/// discovered instance was stopped and has reported no ADB port yet.
+pub(super) fn instance_not_running(instance: &RegisteredInstance) -> RuntimeHostResult<()> {
+    if !instance.endpoint_pending() {
+        return Ok(());
+    }
+    let mut error = RuntimeHostError::request(
+        "instance_not_running",
+        "require_bound_adb_endpoint",
+        RuntimeErrorCode::InvalidRequest,
+    )
+    .with_native_detail(format!(
+        "instance_alias={}; adb_endpoint=pending; start the instance with emulator control first",
+        instance.instance_alias
+    ));
+    error.lifecycle.instance_id = Some(instance.instance_id);
+    Err(error)
 }

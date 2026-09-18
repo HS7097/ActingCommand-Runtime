@@ -340,6 +340,32 @@ pub(super) fn append_runtime_start_event(
         .map_err(|_| ledger_error("append_runtime_start"))
 }
 
+/// The `runtime.instance_bound` payload of one registered instance: a pending discovery
+/// binding carries the discovered facts without host and port.
+pub(super) fn instance_bound_payload(instance: &RegisteredInstance) -> RuntimePayloadDraft {
+    let endpoint = instance.bound_adb_endpoint();
+    let discovered = instance
+        .adb_endpoint
+        .as_ref()
+        .and_then(ResolvedInstanceEndpoint::discovered_binding);
+    RuntimePayloadDraft::instance_bound(
+        instance.instance_alias.clone(),
+        instance.provenance,
+        endpoint.map(|endpoint| endpoint.host().to_owned()),
+        endpoint.map(ResolvedAdbEndpoint::port),
+        endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured),
+        if discovered.is_some() {
+            InstanceBindingSource::Discovered
+        } else {
+            InstanceBindingSource::Explicit
+        },
+        discovered.map(DiscoveredInstanceBinding::instance_index),
+        discovered.map(|binding| binding.instance_name().to_owned()),
+        discovered.map(|binding| binding.provider_version().to_owned()),
+        AuditInput::new(),
+    )
+}
+
 /// Records one `runtime.instance_bound` fact per registered instance, in instance_id order.
 pub(super) fn append_instance_binding_events(
     ledger: &GlobalLedger,
@@ -352,31 +378,13 @@ pub(super) fn append_instance_binding_events(
                 .issuer()
                 .issue_registered_instance(instance.instance_id),
         );
-        let endpoint = instance.adb_endpoint.as_ref();
-        let discovered = endpoint.and_then(ResolvedAdbEndpoint::discovered_binding);
-        let payload = RuntimePayloadDraft::instance_bound(
-            instance.instance_alias.clone(),
-            instance.provenance,
-            endpoint.map(|endpoint| endpoint.host().to_owned()),
-            endpoint.map(ResolvedAdbEndpoint::port),
-            endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured),
-            if discovered.is_some() {
-                InstanceBindingSource::Discovered
-            } else {
-                InstanceBindingSource::Explicit
-            },
-            discovered.map(DiscoveredInstanceBinding::instance_index),
-            discovered.map(|binding| binding.instance_name().to_owned()),
-            discovered.map(|binding| binding.provider_version().to_owned()),
-            AuditInput::new(),
-        );
         let draft = events.draft(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::Runtime,
             EventActor::Runtime,
             links,
-            payload,
+            instance_bound_payload(instance),
         )?;
         let draft = events.sanitize(draft)?;
         ledger

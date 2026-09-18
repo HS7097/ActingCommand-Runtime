@@ -362,17 +362,14 @@ impl HostShared {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Resolve only metadata before taking the scheduler lock. Identity checks and the
+        // registered instance set are shared with device-facing admission; they run under
+        // the registry lock so an endpoint rebinding is never observed half-applied.
         let instances = lock(&self.registered_instances, "read_runtime_status_registry")?
             .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        // Resolve only metadata before taking the scheduler lock. Identity checks and the
-        // registered instance set are shared with device-facing admission.
-        let instances = instances
-            .into_iter()
             .map(|instance| {
-                let resolved = self.resolve_registered_backend(&instance)?;
-                Ok((instance, resolved))
+                let resolved = self.resolve_registered_backend(instance)?;
+                Ok((instance.clone(), resolved))
             })
             .collect::<Result<Vec<_>, RequestFailure>>()?;
         let scheduler = lock(&self.scheduler, "read_runtime_status_scheduler")?;
@@ -389,10 +386,10 @@ impl HostShared {
                     ))
                 })?;
             // The port identifies the instance in the ledger only when it was configured as
-            // HOST:PORT; a serial-configured target or no ADB endpoint carries no port.
+            // HOST:PORT; a serial-configured target, a pending discovery binding or no ADB
+            // endpoint carries no port.
             let adb_port = instance
-                .adb_endpoint
-                .as_ref()
+                .bound_adb_endpoint()
                 .filter(|endpoint| !endpoint.serial_configured())
                 .map(ResolvedAdbEndpoint::port);
             projected.push(

@@ -6,11 +6,19 @@
 //! One explicit User+Ui or Cli request drives the provider's documented `control` surface
 //! once. The request is fenced per instance exactly like monitor recovery: an active or
 //! expired lease, an active destructive step, a pending preemption, the takeover cooldown or
-//! queued lease requests deny it with `emulator_control_busy` (`RuntimeBusy`). For `Stop` and
-//! `Restart` the instance's retained device session is closed first while the daemon keeps
-//! running; a refusal there is the same busy denial. The provider is driven outside the fact
-//! write gate and outside any device session, and the session is NOT reopened afterwards: it
-//! opens lazily on the next lease, as before.
+//! queued lease requests deny it with `emulator_control_busy` (`RuntimeBusy`). The instance's
+//! retained device session is closed first for every action while the daemon keeps running
+//! (a session must not outlive the endpoint it was opened on); a refusal there is the same
+//! busy denial. The provider is driven outside the fact write gate and outside any device
+//! session, and the session is NOT reopened afterwards: it opens lazily on the next lease,
+//! as before.
+//!
+//! Slice #316-B2: a discovery-bound instance may be registered with a PENDING endpoint (it
+//! was stopped at startup). After a successful `Start` / `Restart` the registry and the host
+//! record are bound to the discovered host and the reported port while the admission guard is
+//! still held, and one more `runtime.instance_bound` event records the binding; after `Stop`
+//! they return to pending. A running outcome without a port fails typed
+//! (`emulator_control_endpoint_unresolved`) instead of guessing.
 //!
 //! Every request is recorded intent -> result: `client.cli_command` / `client.ui_action` plus
 //! `command.received`, then `command.validated` (Performed) on success, or `command.rejected`
@@ -20,7 +28,7 @@
 //! with `device_closed`).
 
 use super::*;
-use crate::EmulatorControlFailure;
+use crate::{EmulatorControlFailure, EmulatorControlOutcome};
 use actingcommand_contract::{EmulatorInstanceAction, FactValue};
 
 const CONTROL_OPERATION: &str = "control_emulator_instance";
@@ -52,46 +60,43 @@ impl HostShared {
                 fence_reason_code(fence.reason),
             )?);
         }
-        if matches!(
-            action,
-            EmulatorInstanceAction::Stop | EmulatorInstanceAction::Restart
+        // A retained session was opened on the endpoint in force before the action; it must
+        // not survive the (re)binding below. Closing with no session open is a no-op.
+        match self.close_retained_instance_while_guarded(
+            instance_id,
+            links.clone(),
+            false,
+            &admission,
         ) {
-            match self.close_retained_instance_while_guarded(
-                instance_id,
-                links.clone(),
-                false,
-                &admission,
-            ) {
-                Ok(Ok(())) => {}
-                Ok(Err(close_error)) => {
-                    let mut error =
-                        RuntimeHostError::execution("close_emulator_device_session", &close_error);
-                    error.lifecycle.instance_id = Some(instance_id);
-                    return Err(self.emulator_control_failure(
-                        links,
-                        event_action,
-                        error,
-                        RuntimeReceiptState::Failed,
-                        EffectDisposition::NotPerformed,
-                    )?);
-                }
-                Err(error) if error.projection().code == RuntimeErrorCode::LeaseBusy => {
-                    return Err(self.emulator_control_busy(
-                        links,
-                        event_action,
-                        instance_id,
-                        "active_lease",
-                    )?);
-                }
-                Err(error) => {
-                    return Err(self.emulator_control_failure(
-                        links,
-                        event_action,
-                        error,
-                        RuntimeReceiptState::Failed,
-                        EffectDisposition::NotPerformed,
-                    )?);
-                }
+            Ok(Ok(())) => {}
+            Ok(Err(close_error)) => {
+                let mut error =
+                    RuntimeHostError::execution("close_emulator_device_session", &close_error);
+                error.lifecycle.instance_id = Some(instance_id);
+                return Err(self.emulator_control_failure(
+                    links,
+                    event_action,
+                    error,
+                    RuntimeReceiptState::Failed,
+                    EffectDisposition::NotPerformed,
+                )?);
+            }
+            Err(error) if error.projection().code == RuntimeErrorCode::LeaseBusy => {
+                return Err(self.emulator_control_busy(
+                    links,
+                    event_action,
+                    instance_id,
+                    "active_lease",
+                )?);
+            }
+            Err(error) => {
+                return Err(self.emulator_control_failure(
+                    links,
+                    event_action,
+                    error,
+                    RuntimeReceiptState::Failed,
+                    EffectDisposition::NotPerformed,
+                )?);
             }
         }
         // Outside the fact write gate and outside any device session; the per-instance
@@ -112,13 +117,27 @@ impl HostShared {
                 )?);
             }
         };
+        // Still under the admission guard: bind the reported port (or return to pending)
+        // before any lease can be granted on the instance.
+        let rebound = match self.rebind_instance_endpoint(&resolved, action, &outcome) {
+            Ok(rebound) => rebound,
+            Err(error) => {
+                return Err(self.emulator_control_failure(
+                    links,
+                    event_action,
+                    error,
+                    RuntimeReceiptState::Failed,
+                    EffectDisposition::Indeterminate,
+                )?);
+            }
+        };
         drop(admission);
         let validated = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::Runtime,
             EventActor::Runtime,
-            links,
+            links.clone(),
             CommandPayloadDraft::validated(
                 event_action,
                 EffectDisposition::Performed,
@@ -126,6 +145,16 @@ impl HostShared {
             ),
         )?;
         let terminal_event = terminal(&validated);
+        if action != EmulatorInstanceAction::Stop {
+            self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                instance_bound_payload(&rebound),
+            )?;
+        }
         self.record_device_connected(instance_id, action, outcome.running, terminal_event)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
@@ -139,6 +168,60 @@ impl HostShared {
                 elapsed_ms: outcome.elapsed_ms,
             },
         })
+    }
+
+    /// Applies the control outcome to the discovery binding: `Start` / `Restart` bind the
+    /// reported port, `Stop` returns the entry to pending. The registry and the host record
+    /// change together under the registry lock (readers check identity under that lock), so
+    /// the resolved instance is re-read from the registry, never assumed.
+    fn rebind_instance_endpoint(
+        &self,
+        resolved: &RegisteredInstance,
+        action: EmulatorInstanceAction,
+        outcome: &EmulatorControlOutcome,
+    ) -> RuntimeHostResult<RegisteredInstance> {
+        let instance_id = resolved.instance_id();
+        let adb_port = match action {
+            EmulatorInstanceAction::Stop => None,
+            EmulatorInstanceAction::Start | EmulatorInstanceAction::Restart => {
+                let Some(adb_port) = outcome.adb_port.filter(|port| *port != 0) else {
+                    let mut error = RuntimeHostError::request(
+                        "emulator_control_endpoint_unresolved",
+                        CONTROL_OPERATION,
+                        RuntimeErrorCode::BackendOperationFailed,
+                    )
+                    .with_native_detail(format!(
+                        "running={} adb_port=absent: the started instance reported no ADB port, so the binding stays as it was",
+                        outcome.running
+                    ));
+                    error.lifecycle.instance_id = Some(instance_id);
+                    return Err(error);
+                };
+                Some(adb_port)
+            }
+        };
+        let mut registry = lock(&self.registered_instances, "rebind_instance_endpoint")?;
+        let record = registry.get_mut(&instance_id).ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "runtime_instance_registry_incomplete",
+                "rebind_instance_endpoint",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        self.execution
+            .rebind_discovered_endpoint(&record.instance_alias, adb_port)
+            .map_err(|error| {
+                let mut error = RuntimeHostError::execution("rebind_instance_endpoint", &error);
+                error.lifecycle.instance_id = Some(instance_id);
+                error
+            })?;
+        let rebound = self
+            .execution
+            .resolve(&record.instance_alias)
+            .map_err(|error| RuntimeHostError::execution("rebind_instance_endpoint", &error))?;
+        record.audit_endpoint = rebound.audit_endpoint().to_owned();
+        record.adb_endpoint = rebound.adb_endpoint().cloned();
+        Ok(record.clone())
     }
 
     /// The program-fact producer: `device.connected` = the observed running state. After

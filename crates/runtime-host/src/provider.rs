@@ -15,14 +15,19 @@ use actingcommand_device::{
 };
 pub use actingcommand_execution_kernel::{
     DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
-    EmulatorControlResult, ExecutionBackendProvider, RecognitionVisionProvider,
-    ResolvedAdbEndpoint, ResolvedExecutionInstance, VisionFfiProvider, VisionModelIdentity,
+    EmulatorControlResult, ExecutionBackendProvider, PendingAdbEndpoint, RecognitionVisionProvider,
+    ResolvedAdbEndpoint, ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider,
+    VisionModelIdentity,
 };
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
+
+/// Placeholder port of a pending discovery binding: never dispatched, because every path that
+/// opens a session refuses a pending entry first, and always overwritten by the rebind.
+const PENDING_ADB_PORT: u16 = 0;
 
 pub struct ExecutionBackendRegistration {
     instance_alias: String,
@@ -32,6 +37,8 @@ pub struct ExecutionBackendRegistration {
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
     discovered: Option<DiscoveredInstanceBinding>,
+    /// Discovery reported the instance stopped: the target carries no port yet.
+    endpoint_pending: bool,
     provider_profile: Option<EmulatorCapabilityProfile>,
 }
 
@@ -97,6 +104,7 @@ impl ExecutionBackendRegistration {
             capture,
             configuration,
             discovered: None,
+            endpoint_pending: false,
             provider_profile: None,
         })
     }
@@ -104,6 +112,18 @@ impl ExecutionBackendRegistration {
     /// Marks the registration as bound through MuMu instance discovery.
     pub fn with_discovered_binding(mut self, discovered: DiscoveredInstanceBinding) -> Self {
         self.discovered = Some(discovered);
+        self.endpoint_pending = false;
+        self
+    }
+
+    /// Marks the registration as discovered stopped: it is registered with a pending endpoint
+    /// (no port) and bound once emulator control starts the instance.
+    pub fn with_pending_discovered_binding(
+        mut self,
+        discovered: DiscoveredInstanceBinding,
+    ) -> Self {
+        self.discovered = Some(discovered);
+        self.endpoint_pending = true;
         self
     }
 
@@ -115,18 +135,62 @@ impl ExecutionBackendRegistration {
     }
 }
 
-#[derive(Clone)]
 struct ExecutionBackendEntry {
     instance_id: InstanceId,
-    audit_endpoint: String,
-    adb_endpoint: ResolvedAdbEndpoint,
     application_id: String,
     application_adb: AdbConfig,
+    capabilities: EmulatorCapabilityProfile,
+    /// The ADB endpoint and everything built on it, behind a lock because emulator control
+    /// (re)binds a discovery-bound entry. Every guarded section only copies plain data.
+    endpoint: Mutex<EntryEndpoint>,
+}
+
+struct EntryEndpoint {
+    state: ResolvedInstanceEndpoint,
+    audit_endpoint: String,
     application_target: DeviceTarget,
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
-    capabilities: EmulatorCapabilityProfile,
+}
+
+impl EntryEndpoint {
+    /// The typed refusal of every session-opening path while the port is unknown.
+    fn require_bound(&self, operation: &'static str) -> DeviceResult<()> {
+        if self.state.is_pending() {
+            return Err(DeviceError::fatal(
+                "adb endpoint pending: the discovered instance was stopped and has reported no ADB port; start it through emulator control first",
+            )
+            .with_diagnostic(DeviceErrorCategory::Protocol, "adb.endpoint_pending")
+            .with_diagnostic_context(
+                "execution_backend_registry",
+                operation,
+                DeviceErrorSensitivity::Sensitive,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Rewrites every port-dependent field for the given target.
+    fn set_target(&mut self, host: &str, port: u16) {
+        for target in [
+            &mut self.application_target,
+            &mut self.input.target,
+            &mut self.capture.target,
+        ] {
+            target.host = host.to_owned();
+            target.port = port;
+        }
+        self.audit_endpoint = self.application_target.resolved_serial();
+        self.configuration.resolved_serial = self.audit_endpoint.clone();
+    }
+}
+
+impl ExecutionBackendEntry {
+    /// The guarded sections never panic, so a poisoned lock still holds a consistent state.
+    fn endpoint(&self) -> MutexGuard<'_, EntryEndpoint> {
+        self.endpoint.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 pub struct ExecutionBackendRegistry {
@@ -178,15 +242,23 @@ impl ExecutionBackendRegistry {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        let audit_endpoint = registration.input.target.resolved_serial();
-        let mut adb_endpoint = ResolvedAdbEndpoint::new(
-            registration.input.target.host.clone(),
-            registration.input.target.port,
-            registration.input.target.serial.is_some(),
-        );
-        if let Some(discovered) = registration.discovered {
-            adb_endpoint = adb_endpoint.with_discovered_binding(discovered);
-        }
+        let state = match (registration.discovered, registration.endpoint_pending) {
+            (Some(discovered), true) => ResolvedInstanceEndpoint::Pending(PendingAdbEndpoint::new(
+                registration.input.target.host.clone(),
+                discovered,
+            )),
+            (discovered, _) => {
+                let mut adb_endpoint = ResolvedAdbEndpoint::new(
+                    registration.input.target.host.clone(),
+                    registration.input.target.port,
+                    registration.input.target.serial.is_some(),
+                );
+                if let Some(discovered) = discovered {
+                    adb_endpoint = adb_endpoint.with_discovered_binding(discovered);
+                }
+                ResolvedInstanceEndpoint::Bound(adb_endpoint)
+            }
+        };
         let application_adb = registration.input.adb_config.clone();
         let application_target = registration.input.target.clone();
         let capabilities = Self::capability_profile(&registration.input, &registration.capture)?;
@@ -194,19 +266,26 @@ impl ExecutionBackendRegistry {
             Some(provider) => Self::merge_capability_profile(&capabilities, &provider)?,
             None => capabilities,
         };
+        let mut endpoint = EntryEndpoint {
+            state,
+            audit_endpoint: application_target.resolved_serial(),
+            application_target,
+            input: registration.input,
+            capture: registration.capture,
+            configuration: registration.configuration,
+        };
+        if endpoint.state.is_pending() {
+            let host = endpoint.application_target.host.clone();
+            endpoint.set_target(&host, PENDING_ADB_PORT);
+        }
         self.entries.insert(
             registration.instance_alias,
             ExecutionBackendEntry {
                 instance_id: registration.instance_id,
-                audit_endpoint,
-                adb_endpoint,
                 application_id: registration.application_id,
                 application_adb,
-                application_target,
-                input: registration.input,
-                capture: registration.capture,
-                configuration: registration.configuration,
                 capabilities,
+                endpoint: Mutex::new(endpoint),
             },
         );
         Ok(())
@@ -342,12 +421,23 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
-        Some(
-            ResolvedExecutionInstance::new(entry.instance_id, &entry.audit_endpoint)
-                .with_adb_endpoint(entry.adb_endpoint.clone())
-                .with_configuration(entry.configuration.clone())
-                .with_capabilities(entry.capabilities.clone()),
-        )
+        let (state, audit_endpoint, configuration) = {
+            let endpoint = entry.endpoint();
+            (
+                endpoint.state.clone(),
+                endpoint.audit_endpoint.clone(),
+                endpoint.configuration.clone(),
+            )
+        };
+        let resolved = ResolvedExecutionInstance::new(entry.instance_id, audit_endpoint)
+            .with_configuration(configuration)
+            .with_capabilities(entry.capabilities.clone());
+        Some(match state {
+            ResolvedInstanceEndpoint::Bound(adb_endpoint) => {
+                resolved.with_adb_endpoint(adb_endpoint)
+            }
+            ResolvedInstanceEndpoint::Pending(pending) => resolved.with_pending_endpoint(pending),
+        })
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
@@ -355,7 +445,12 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
-        create_touch_backend_for_fenced_input(entry.input.clone())
+        let input = {
+            let endpoint = entry.endpoint();
+            endpoint.require_bound("open_input")?;
+            endpoint.input.clone()
+        };
+        create_touch_backend_for_fenced_input(input)
             .map(|backend| Box::new(backend) as Box<dyn InputBackend>)
     }
 
@@ -364,7 +459,12 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
-        create_capture_backend(entry.capture.clone())
+        let capture = {
+            let endpoint = entry.endpoint();
+            endpoint.require_bound("open_capture")?;
+            endpoint.capture.clone()
+        };
+        create_capture_backend(capture)
             .map(|selected| Box::new(selected) as Box<dyn CaptureBackend>)
     }
 
@@ -377,9 +477,14 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
-        let serial = entry.application_target.resolved_serial();
+        let application_target = {
+            let endpoint = entry.endpoint();
+            endpoint.require_bound("control_application")?;
+            endpoint.application_target.clone()
+        };
+        let serial = application_target.resolved_serial();
         let adb = Adb::new(entry.application_adb.clone());
-        adb.ensure_device(&serial, entry.application_target.connect)?;
+        adb.ensure_device(&serial, application_target.connect)?;
         match action {
             ApplicationLifecycleAction::Launch => {
                 adb.launch_package(&serial, &entry.application_id)?;
@@ -422,7 +527,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                 "emulator_control.unregistered",
             )
         })?;
-        let Some(discovered) = entry.adb_endpoint.discovered_binding() else {
+        let Some(discovered) = entry.endpoint().state.discovered_binding().cloned() else {
             return Err(refused(
                 "emulator control unavailable: the instance was registered explicitly, without MuMuManager discovery, so no MuMuManager executable is bound to it",
                 "emulator_control.unavailable",
@@ -434,6 +539,58 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             action,
             mumu_state_wait(action),
         )
+    }
+
+    /// Binds a discovery-bound entry to the port the started instance reported (its host is
+    /// the one the entry was registered with) or returns it to pending after a stop.
+    fn rebind_discovered_endpoint(
+        &self,
+        instance_alias: &str,
+        adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        let refused = |message: &str, stage: &'static str| {
+            DeviceError::fatal(message)
+                .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                .with_diagnostic_context(
+                    "execution_backend_registry",
+                    "rebind_discovered_endpoint",
+                    DeviceErrorSensitivity::Sensitive,
+                )
+        };
+        let entry = self.entries.get(instance_alias).ok_or_else(|| {
+            refused(
+                "execution backend instance is not registered",
+                "emulator_control.unregistered",
+            )
+        })?;
+        let mut endpoint = entry.endpoint();
+        let Some(discovered) = endpoint.state.discovered_binding().cloned() else {
+            return Err(refused(
+                "endpoint rebinding unavailable: the instance was registered explicitly, without MuMuManager discovery",
+                "emulator_control.unavailable",
+            ));
+        };
+        let host = endpoint.application_target.host.clone();
+        match adb_port {
+            Some(PENDING_ADB_PORT) => {
+                return Err(refused(
+                    "endpoint rebinding refused: the started instance reported ADB port 0",
+                    "adb.endpoint_unresolved",
+                ));
+            }
+            Some(port) => {
+                endpoint.set_target(&host, port);
+                endpoint.state = ResolvedInstanceEndpoint::Bound(
+                    ResolvedAdbEndpoint::new(host, port, false).with_discovered_binding(discovered),
+                );
+            }
+            None => {
+                endpoint.set_target(&host, PENDING_ADB_PORT);
+                endpoint.state =
+                    ResolvedInstanceEndpoint::Pending(PendingAdbEndpoint::new(host, discovered));
+            }
+        }
+        Ok(())
     }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {

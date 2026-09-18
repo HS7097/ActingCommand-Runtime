@@ -92,8 +92,8 @@ use actingcommand_execution_kernel::{
     ContainedTaskTrace, DiscoveredInstanceBinding, ExecutionBackendProvenance,
     ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
     PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint,
-    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
-    decide_monitor, page_anchor_matches,
+    ResolvedInstanceEndpoint, StabilityComparisonResult, StabilityTerminalReason,
+    StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -191,8 +191,13 @@ use contained_task::{ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft
 use input::RuntimeInputContext;
 #[cfg(test)]
 use lease::{LeaseExpiryTestCheckpoint, lease_token_identity_match_count};
-use lease::{QueueTerminalStore, QueuedRequestContext, RuntimeLeaseAcquisition};
-use lifecycle::{append_instance_binding_events, append_runtime_start_event, record_failure};
+use lease::{
+    QueueTerminalStore, QueuedRequestContext, RuntimeLeaseAcquisition, instance_not_running,
+};
+use lifecycle::{
+    append_instance_binding_events, append_runtime_start_event, instance_bound_payload,
+    record_failure,
+};
 use monitor_control::monitor_probe_loop;
 use observation::CompletedReadonlyObservation;
 use performance::{CapacityUse, performance_monitor_loop};
@@ -2143,7 +2148,9 @@ struct RegisteredInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
-    adb_endpoint: Option<ResolvedAdbEndpoint>,
+    /// Mirrors the registry: emulator control (re)binds a discovery-bound instance and
+    /// refreshes this copy together with `audit_endpoint` under the registry lock.
+    adb_endpoint: Option<ResolvedInstanceEndpoint>,
 }
 
 #[cfg(test)]
@@ -2278,6 +2285,19 @@ impl RegisteredInstance {
 
     const fn provenance(&self) -> ExecutionBackendProvenance {
         self.provenance
+    }
+
+    /// The bound HOST:PORT target, absent while a discovery binding is pending.
+    fn bound_adb_endpoint(&self) -> Option<&ResolvedAdbEndpoint> {
+        self.adb_endpoint
+            .as_ref()
+            .and_then(ResolvedInstanceEndpoint::bound)
+    }
+
+    fn endpoint_pending(&self) -> bool {
+        self.adb_endpoint
+            .as_ref()
+            .is_some_and(ResolvedInstanceEndpoint::is_pending)
     }
 }
 

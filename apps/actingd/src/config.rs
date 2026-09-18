@@ -735,20 +735,23 @@ impl InstanceConfig {
         let adb_path = self.adb_path.clone().ok_or("instance_config_invalid")?;
         let host = self.host.clone().unwrap_or_else(default_device_host);
         let port = self.port.unwrap_or_else(default_device_port);
-        self.device_registration(adb_path, host, port)
+        self.device_registration(adb_path, host, Some(port))
     }
 
-    /// Builds the device registration for one complete ADB target (explicit or discovered).
+    /// Builds the device registration for one ADB target (explicit or discovered). `None` is
+    /// a discovered instance that is stopped: it registers with a pending endpoint and the
+    /// port placeholder is never dispatched (`ExecutionBackendRegistry` refuses every session
+    /// while pending).
     fn device_registration(
         self,
         adb_path: String,
         host: String,
-        port: u16,
+        port: Option<u16>,
     ) -> Result<ConfiguredInstanceBackend, &'static str> {
         let connect = self.connect.unwrap_or_else(enabled);
         if adb_path.trim().is_empty()
             || host.trim().is_empty()
-            || port == 0
+            || port == Some(0)
             || self
                 .serial
                 .as_ref()
@@ -771,7 +774,7 @@ impl InstanceConfig {
         let target = DeviceTarget {
             serial: self.serial,
             host,
-            port,
+            port: port.unwrap_or(0),
             connect,
         };
         let mut maatouch = MaaTouchConfig::default();
@@ -1150,6 +1153,42 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                 .control_instance(instance_alias, action),
             Some(ScheduledExecutionMode::FixtureSimulation) => Err(refused(
                 "emulator control unavailable: a fixture simulation instance has no emulator",
+                "emulator_control.unavailable",
+            )),
+            None => Err(refused(
+                "execution backend instance is not registered",
+                "emulator_control.unregistered",
+            )),
+        }
+    }
+
+    fn rebind_discovered_endpoint(
+        &self,
+        instance_alias: &str,
+        adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        let refused = |message: &str, stage: &'static str| {
+            DeviceError::fatal(message)
+                .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                .with_diagnostic_context(
+                    "configured_execution_backend_registry",
+                    "rebind_discovered_endpoint",
+                    DeviceErrorSensitivity::Sensitive,
+                )
+        };
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| {
+                    refused(
+                        "device registry is unavailable",
+                        "emulator_control.unavailable",
+                    )
+                })?
+                .rebind_discovered_endpoint(instance_alias, adb_port),
+            Some(ScheduledExecutionMode::FixtureSimulation) => Err(refused(
+                "endpoint rebinding unavailable: a fixture simulation instance has no emulator",
                 "emulator_control.unavailable",
             )),
             None => Err(refused(
