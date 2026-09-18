@@ -324,6 +324,8 @@ pub(super) fn performance_monitor_loop(
     shared: Arc<HostShared>,
     sample_interval: Duration,
 ) -> RuntimeHostResult<()> {
+    let snapshot_interval = Duration::from_millis(RUNTIME_FACT_SNAPSHOT_INTERVAL_MS);
+    let mut since_runtime_fact_snapshot = Duration::ZERO;
     while !shared.fatal.is_shutdown_requested() {
         thread::sleep(sample_interval);
         if shared.fatal.is_shutdown_requested() {
@@ -341,6 +343,15 @@ pub(super) fn performance_monitor_loop(
             }
         };
         let retention_enabled = shared.maintain_frame_retention()?;
+        // Sealed at most once per RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, whatever the sample interval.
+        since_runtime_fact_snapshot = since_runtime_fact_snapshot.saturating_add(sample_interval);
+        if since_runtime_fact_snapshot >= snapshot_interval {
+            since_runtime_fact_snapshot = Duration::ZERO;
+            if let Err(error) = shared.append_runtime_fact_snapshot_if_dirty() {
+                shared.fatal.mark(error.clone())?;
+                return Err(error);
+            }
+        }
         if stop_sampling && !retention_enabled {
             break;
         }
