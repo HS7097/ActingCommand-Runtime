@@ -38,6 +38,9 @@ by construction. Lazy initialization and inference remain unobserved.
 
 Immediately after `runtime.started` or `runtime.takeover`, the Host records one
 `runtime.instance_bound` event per registered instance, ordered by instance id.
+A registry with no configured instance records `runtime.started` and zero
+`runtime.instance_bound` events; the daemon runs control-plane-only until the
+configuration lists instances and it is restarted.
 The event is family Runtime with severity Info; its sensitivity is derived as
 Internal rather than declared. Its links carry the registered `instance_id`, and
 its payload carries the registered `instance_alias`, the backend `provenance`,

@@ -67,8 +67,10 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
 - Populate `instances` with your already authorized instance configuration.
   Each entry requires `alias` and the existing typed `instance_id`; device entries
   also need the explicit backend and connection fields required by the same
-  config schema. The empty array supplies no device targets. Retain the existing
-  identity, unique-registration, path, backend and timeout rules.
+  config schema. The template's `"instances": []` starts a control-plane-only
+  daemon with no device targets; instances are added later by editing the
+  configuration and restarting the daemon. Retain the existing identity,
+  unique-registration, path, backend and timeout rules.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
 The blank state root and salt must be filled before startup. Use your existing
@@ -77,6 +79,18 @@ required; optional fields must follow the same source schema. Provider models,
 SDKs, drivers, device tools and private connection data are separate dependencies
 and are not installed by this Runtime artifact. Nothing in the template creates
 an instance, chooses a device or supplies credentials.
+
+Before starting, validate the filled copy without side effects:
+
+```powershell
+.\actingcommand-actingd.exe check-config --config <private-config-path>
+```
+
+It prints one JSON result line and exits 0 only when the configuration loads,
+assembles and validates exactly as startup would. It creates, reads or locks
+nothing under `state_root`, does not read the vision provider manifest, and
+resolves relative policy package paths against the current directory exactly as
+startup does; see `contracts/actingd-check-config.md`.
 
 ## Start, inspect and close
 
@@ -87,8 +101,11 @@ From the verified Runtime directory, using your filled private configuration:
 ```
 
 The daemon remains in that process. Its normal startup line is
-`actingd ready pid=<pid> host=<host> port=<port>`. From a second terminal, use the
-same private state root for the existing control commands:
+`actingd ready pid=<pid> host=<host> port=<port>`. With `"instances": []`
+the daemon starts control-plane-only: it records `runtime.started` and no
+instance binding, `actingctl status` reports no instances, and instances are
+added by editing the configuration and restarting the daemon. From a second
+terminal, use the same private state root for the existing control commands:
 
 ```powershell
 .\actingctl.exe status --state-root <private-state-root>

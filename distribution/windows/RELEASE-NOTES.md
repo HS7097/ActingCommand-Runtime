@@ -19,7 +19,10 @@ to reject incomplete or unexpected payloads. The separate Tools artifact retains
 
 Configuration uses `actingcommand.actingd.config.v1` and the existing
 `actingcommand-actingd --config <path>` entry. The supplied template has empty
-private state-root and salt values and no device instances. Follow `INSTALL.md`
+private state-root and salt values and no device instances; once `state_root`
+and `secret_fingerprint_salt` are filled, the template's `"instances": []` starts
+a control-plane-only daemon, and instances are added by editing the
+configuration and restarting. Follow `INSTALL.md`
 and the exact source schema to provide a private configuration and any required
 provider dependencies before use.
 

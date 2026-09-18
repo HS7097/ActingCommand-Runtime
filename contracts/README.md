@@ -21,6 +21,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `selection-policy.md` — the declared selection document, its canonical identity, and the pure evaluator's semantics.
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
+- `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 
 ## Rust mainline boundary

@@ -142,7 +142,7 @@ Recognition targets come in five kinds: Template, Color, ClickOnly, Ocr and Nn. 
 
 The `build.rs` of `apps/actinglab` reads Git metadata to determine HEAD. When Git metadata is available and `ACTINGCOMMAND_RUNTIME_HEAD` is also set, it must be 40 hexadecimal characters and must match the repository HEAD, or the build panics; when Git metadata is unavailable (a source tree with no `.git`, for example), that variable is required.
 
-A normal `actingd` invocation accepts only the two arguments `--config <path>`; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
+A normal `actingd` invocation accepts only the two arguments `--config <path>`; the first argument may instead select the `ledger-maintenance` or `check-config` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
 
 ```bash
 # Local build; the three gate commands below are identical to CI (CI's release build additionally uses --locked and an explicit MSVC target)
@@ -178,6 +178,9 @@ actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance verify  --config runtime.json
+
+# Side-effect-free configuration check (same load/assemble/validate as startup; touches nothing under state_root)
+actingcommand-actingd check-config --config runtime.json
 
 # Vision provider artifact check
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
