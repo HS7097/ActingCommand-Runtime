@@ -190,6 +190,9 @@ actingcommand-actingd check-config --config runtime.json
 # 视觉提供者工件检查
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
 actingcommand-vision-provider-check --manifest provider.json --backend all --require-existing
+
+# 只读 MuMu 实例发现探针（只运行 MuMuManager version 与 info -v all；输出一行 JSON）
+actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
 注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actingctl`、`actinglab`、`actingledger`，以及工具二进制 `actinglab-command-inventory`。

@@ -10,13 +10,15 @@ it does not claim to have observed their construction.
 
 The event is `provider.startup_observed`, with origin module `provider` and
 payload schema `actingcommand.payload.provider.v1`. Each record identifies its
-backend and one observation: stage started/completed, file binding, model
-binding, original failure, not configured, or ready. Stages cover manifest
-read/parse, path binding, model identity, backend construction and registry
-binding. File bindings retain the configured value, resolution base and
-resolved value; model bindings retain the logical model reference and digest.
-Paths resolve through the existing manifest-parent algorithm. Absolute paths
-and native runtime closure ordering keep their existing meanings.
+backend (`configured`, `fastdeploy_ppocr`, `onnxruntime` or `mumu_manager`) and
+one observation: stage started/completed, file binding, model binding, instance
+discovery, original failure, not configured, or ready. Stages cover manifest
+read/parse, path binding, model identity, backend construction, registry
+binding and instance discovery. File bindings retain the configured value,
+resolution base and resolved value; model bindings retain the logical model
+reference and digest. Paths resolve through the existing manifest-parent
+algorithm. Absolute paths and native runtime closure ordering keep their
+existing meanings.
 
 Failures retain the original module, classification, severity and message,
 including sensitive native detail. The failure event precedes Host startup
@@ -34,6 +36,46 @@ Lab and verbose projections withhold the raw startup record; forensic reads
 retain it. A construction-ready observation covers only work actually performed
 by construction. Lazy initialization and inference remain unobserved.
 
+## MuMu instance discovery
+
+When at least one configured instance carries a discovery binding key
+(`instance_index` or `instance_name`), the same assembly closure runs one
+`MuMuManager.exe` discovery before the vision provider is assembled and before
+any instance is bound. Only the vendor-documented read-only subcommands
+`version` and `info -v all` are dispatched, with a 10 s timeout and no console
+window; no mutating subcommand and no hidden subcommand is ever used, and no
+vendor-private file is read. `MuMuManager.exe` is resolved in this priority:
+the configured `mumu_root`, `ACTINGCOMMAND_NEMU_FOLDER`, the install root of a
+running MuMu process, the Windows uninstall entry, then vendor folder
+enumeration. The registry tier enumerates `MuMuPlayer*` subkeys under
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`, its
+`WOW6432Node` twin and the `HKCU` twin, and reads only the standard uninstall
+values `InstallLocation` (fallback: the directory of `DisplayIcon`) and
+`DisplayVersion`; `DisplayVersion` is advisory, `MuMuManager version` stays
+authoritative, and the vendor's own `SOFTWARE\Netease` keys are never opened.
+Several distinct registry roots, or a root without a `MuMuManager.exe`
+candidate, are typed refusals. The version floor `6.3.2.0` is a Runtime policy
+with no vendor basis (the vendor documents only `4.0.0.3179` as the
+`MuMuManager` baseline).
+
+The observation records `started`/`completed` with stage `instance_discovery`
+around one `instance_discovery` record that names the resolved source, the
+`MuMuManager.exe` path, the reported version and every reported instance
+(`instance_index`, `instance_name`, `adb_host`, `adb_port`, `running` and the
+`bound_alias` it was matched to, if any). Every refusal is recorded as a
+`failed` observation with stage `instance_discovery` whose failure message
+carries the discovery facts (source, path, version, index, name, port and the
+declared values) before Host startup fails with the same classification:
+`instance_discovery_unavailable` (tool, spawn, exit, decode or JSON failure,
+including a missing install), `mumu_manager_version_unsupported` (below the
+policy floor or unparseable), `instance_discovery_no_match` (no reported
+instance has the index or exact name), `instance_discovery_ambiguous` (more
+than one instance carries the name) and `instance_discovery_conflict` (a
+declared `adb_path`, `host` or `port` differs from the discovered value; the
+failure message carries both values). A resolved instance is then registered
+exactly like an explicit one, with the discovered ADB path, host and port and
+no serial. Discovery runs once per startup; nothing is re-probed later.
+
 ## Instance binding
 
 Immediately after `runtime.started` or `runtime.takeover`, the Host records one
@@ -45,8 +87,13 @@ The event is family Runtime with severity Info; its sensitivity is derived as
 Internal rather than declared. Its links carry the registered `instance_id`, and
 its payload carries the registered `instance_alias`, the backend `provenance`,
 the configured `adb_host` and `adb_port`, `serial_configured` and
-`binding_source`. `binding_source` is `explicit` for a configured registry entry;
-`discovered` is reserved for later discovery. The port is a plain payload field,
+`binding_source`. `binding_source` is `explicit` for a configured registry entry
+and `discovered` for an instance bound through MuMu instance discovery. A
+discovered binding also carries `discovered_instance_index`,
+`discovered_instance_name` (at most 256 bytes) and `provider_version` (the
+`MuMuManager version` value, at most 64 bytes); an explicit binding carries none
+of the three, and a discovered binding without index and name is rejected at
+sanitization. The port is a plain payload field,
 because an instance is recognised in the ledger by its ADB port; the audit
 `device_endpoint` keeps its existing redaction wherever it is carried, and this
 event carries no audit endpoint of its own. `serial_configured` states that

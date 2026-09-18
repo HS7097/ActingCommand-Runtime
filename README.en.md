@@ -186,6 +186,9 @@ actingcommand-actingd check-config --config runtime.json
 # Vision provider artifact check
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
 actingcommand-vision-provider-check --manifest provider.json --backend all --require-existing
+
+# Read-only MuMu instance discovery probe (runs only MuMuManager version and info -v all; prints one JSON line)
+actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
 Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`, plus the tool binary `actinglab-command-inventory`.
