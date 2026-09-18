@@ -1602,6 +1602,9 @@ pub struct OutcomePayload {
     effect_disposition: EffectDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
+    /// Microseconds spent in the input backend call; only `input.committed` may carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    touch_response_us: Option<u64>,
     audit: SanitizedAudit,
 }
 
@@ -2031,6 +2034,9 @@ pub struct ObservationResultPayload {
     frame_height: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     recognition_verdict: Option<RecognitionVerdict>,
+    /// Microseconds spent acquiring the frame from the backend; only `capture.completed` may carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_acquire_us: Option<u64>,
     audit: SanitizedAudit,
 }
 
@@ -3983,6 +3989,12 @@ trait PayloadDetail {
     fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         None
     }
+    fn touch_response_us(&self) -> Option<u64> {
+        None
+    }
+    fn capture_acquire_us(&self) -> Option<u64> {
+        None
+    }
     fn action(&self) -> EventAction;
     fn diagnostic_code(&self) -> Option<DiagnosticCode>;
     fn effect_disposition(&self) -> Option<EffectDisposition>;
@@ -4268,6 +4280,10 @@ impl OutcomePayload {
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
     }
+
+    pub const fn touch_response_us(&self) -> Option<u64> {
+        self.touch_response_us
+    }
 }
 
 impl DiagnosticOutcomePayload {
@@ -4410,6 +4426,10 @@ impl ObservationResultPayload {
 
     pub const fn recognition_verdict(&self) -> Option<RecognitionVerdict> {
         self.recognition_verdict
+    }
+
+    pub const fn capture_acquire_us(&self) -> Option<u64> {
+        self.capture_acquire_us
     }
 }
 
@@ -4556,6 +4576,9 @@ impl PayloadDetail for OutcomePayload {
     fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         self.runtime_state.as_deref()
     }
+    fn touch_response_us(&self) -> Option<u64> {
+        self.touch_response_us
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -4651,6 +4674,9 @@ impl PayloadDetail for MonitorRecoveryCoordinationPayload {
 }
 
 impl PayloadDetail for ObservationResultPayload {
+    fn capture_acquire_us(&self) -> Option<u64> {
+        self.capture_acquire_us
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -4997,6 +5023,7 @@ struct OutcomeDraft {
     action: EventAction,
     effect_disposition: EffectDisposition,
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
+    touch_response_us: Option<u64>,
     audit: AuditInput,
 }
 
@@ -5066,6 +5093,7 @@ struct ObservationResultDraft {
     frame_width: u32,
     frame_height: u32,
     recognition_verdict: Option<RecognitionVerdict>,
+    capture_acquire_us: Option<u64>,
     audit: AuditInput,
 }
 
@@ -6581,6 +6609,7 @@ impl OutcomeDraft {
             action,
             effect_disposition,
             runtime_state: None,
+            touch_response_us: None,
             audit,
         }
     }
@@ -6593,6 +6622,7 @@ impl OutcomeDraft {
             action: self.action,
             effect_disposition: self.effect_disposition,
             runtime_state: self.runtime_state,
+            touch_response_us: self.touch_response_us,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6810,6 +6840,7 @@ impl ObservationResultDraft {
         frame_width: u32,
         frame_height: u32,
         recognition_verdict: Option<RecognitionVerdict>,
+        capture_acquire_us: Option<u64>,
         audit: AuditInput,
     ) -> Self {
         Self {
@@ -6818,6 +6849,7 @@ impl ObservationResultDraft {
             frame_width,
             frame_height,
             recognition_verdict,
+            capture_acquire_us,
             audit,
         }
     }
@@ -6838,6 +6870,7 @@ impl ObservationResultDraft {
             frame_width: self.frame_width,
             frame_height: self.frame_height,
             recognition_verdict: self.recognition_verdict,
+            capture_acquire_us: self.capture_acquire_us,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7752,6 +7785,18 @@ impl InputPayloadDraft {
         )))
     }
 
+    /// `input.committed` carrying the measured backend response in microseconds (`None` = unmeasured).
+    pub fn committed_with_touch_response(
+        action: EventAction,
+        effect: EffectDisposition,
+        touch_response_us: Option<u64>,
+        audit: AuditInput,
+    ) -> Self {
+        let mut detail = OutcomeDraft::new(action, effect, audit);
+        detail.touch_response_us = touch_response_us;
+        Self(InputDraftKind::Committed(detail))
+    }
+
     pub fn completed(action: EventAction, audit: AuditInput) -> Self {
         Self(InputDraftKind::Completed(ObservationDraft::new(
             action, audit,
@@ -7873,6 +7918,27 @@ impl CapturePayloadDraft {
             frame_width,
             frame_height,
             None,
+            None,
+            audit,
+        )))
+    }
+
+    /// `capture.completed` carrying the measured frame acquisition in microseconds (`None` = unmeasured).
+    pub fn completed_with_capture_acquire(
+        action: EventAction,
+        effect: EffectDisposition,
+        frame_width: u32,
+        frame_height: u32,
+        capture_acquire_us: Option<u64>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Completed(ObservationResultDraft::new(
+            action,
+            effect,
+            frame_width,
+            frame_height,
+            None,
+            capture_acquire_us,
             audit,
         )))
     }
@@ -8017,6 +8083,7 @@ impl RecognitionPayloadDraft {
                 frame_width,
                 frame_height,
                 Some(verdict),
+                None,
                 audit,
             ),
         ))
@@ -9909,6 +9976,22 @@ impl EventPayload {
         }
         if let Self::Ledger(LedgerPayload::Signature(payload)) = self {
             payload.record().validate()?;
+        }
+        if detail.touch_response_us().is_some()
+            && !matches!(self, Self::Input(InputPayload::Committed(_)))
+        {
+            return Err(SanitizationError::new(
+                "invalid_touch_response_scope",
+                "touch_response_us",
+            ));
+        }
+        if detail.capture_acquire_us().is_some()
+            && !matches!(self, Self::Capture(CapturePayload::Completed(_)))
+        {
+            return Err(SanitizationError::new(
+                "invalid_capture_acquire_scope",
+                "capture_acquire_us",
+            ));
         }
         if let Some(config) = detail.device_diagnostic_config() {
             if !matches!(
