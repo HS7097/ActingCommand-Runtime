@@ -1,4 +1,4 @@
-**🌐 Language / 语言:** English · [简体中文](./README.zh-CN.md)
+<p align="right">🌐 <b>English</b> · <a href="./README.zh-CN.md">简体中文</a></p>
 
 <div align="center">
 
@@ -165,6 +165,8 @@ actingctl reset --state-root <state-root> --instance <alias>
 actingctl stream --state-root <state-root> --instance <alias> --max-frames 8 --interval-ms 250
 actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms 30000 --expect home --recover
 actingctl monitor-clear --state-root <state-root> --instance <alias>
+actingctl emulator status --state-root <state-root> --instance <alias>
+actingctl emulator start --state-root <state-root> --instance <alias>     # also: stop | restart (explicit request only; fenced per instance)
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>
 actingctl request-shutdown --state-root <state-root>
 

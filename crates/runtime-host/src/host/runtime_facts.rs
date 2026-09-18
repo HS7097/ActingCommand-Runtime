@@ -15,9 +15,8 @@ const TAKEOVER_INVALIDATED_FAMILIES: [&str; 2] = ["device.", "backend."];
 impl HostShared {
     /// Appends `runtime.fact_recorded` first, then accepts the record into
     /// memory. A record the store would reject is refused before the append;
-    /// an identical record appends nothing.
-    // Producers land in later #313 slices; the host is the only writer.
-    #[allow(dead_code)]
+    /// an identical record appends nothing. The host is the only writer; the
+    /// first producer is emulator instance control (`device.connected`).
     pub(super) fn record_runtime_fact(
         &self,
         record: RuntimeFactRecord,
@@ -56,9 +55,8 @@ impl HostShared {
     }
 
     /// Appends `runtime.fact_invalidated` first, then drops the record from
-    /// memory. A key the store does not hold is refused before the append.
-    // Producers land in later #313 slices; the host is the only writer.
-    #[allow(dead_code)]
+    /// memory. A key the store does not hold is refused before the append
+    /// (`runtime_fact_missing`).
     pub(super) fn invalidate_runtime_fact(
         &self,
         scope: &RuntimeFactScope,

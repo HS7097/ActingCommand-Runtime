@@ -3,7 +3,9 @@
 use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
-use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, InstanceId};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, ContainedTaskRequest, EmulatorInstanceAction, InstanceId,
+};
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
@@ -15,10 +17,11 @@ use actingcommand_policy::{
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
 };
 use actingcommand_runtime_host::{
-    AgentDispatcherConfig, ExecutionBackendProvider, ExecutionBackendRegistration,
-    ExecutionBackendRegistry, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
-    ProcedureBinding, ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance,
-    RuntimeHostConfig, VisionFfiProvider, VisionModelIdentity,
+    AgentDispatcherConfig, EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+    ExecutionBackendProvider, ExecutionBackendRegistration, ExecutionBackendRegistry,
+    PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
+    ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance, RuntimeHostConfig,
+    VisionFfiProvider, VisionModelIdentity,
 };
 use actingcommand_vision_ffi::{
     NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
@@ -1167,6 +1170,45 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                 .control_application(instance_alias, action),
             None => Err(DeviceError::fatal(
                 "execution backend instance is not registered",
+            )),
+        }
+    }
+
+    fn control_instance(
+        &self,
+        instance_alias: &str,
+        action: EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        let refused = |message: &str, stage: &'static str| {
+            EmulatorControlFailure::without_output(
+                DeviceError::fatal(message)
+                    .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                    .with_diagnostic_context(
+                        "configured_execution_backend_registry",
+                        "control_instance",
+                        DeviceErrorSensitivity::Sensitive,
+                    ),
+                0,
+            )
+        };
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| {
+                    refused(
+                        "device registry is unavailable",
+                        "emulator_control.unavailable",
+                    )
+                })?
+                .control_instance(instance_alias, action),
+            Some(ScheduledExecutionMode::FixtureSimulation) => Err(refused(
+                "emulator control unavailable: a fixture simulation instance has no emulator",
+                "emulator_control.unavailable",
+            )),
+            None => Err(refused(
+                "execution backend instance is not registered",
+                "emulator_control.unregistered",
             )),
         }
     }

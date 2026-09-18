@@ -87,7 +87,9 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   Program Files. `MuMuManager` must report at least `6.3.2.0`, a Runtime policy
   floor. Startup refuses with `instance_discovery_unavailable`,
   `mumu_manager_version_unsupported`, `instance_discovery_no_match`,
-  `instance_discovery_ambiguous` or `instance_discovery_conflict`, and
+  `instance_discovery_ambiguous`, `instance_discovery_conflict` or
+  `instance_discovered_stopped` (the configured instance must be running when
+  the daemon starts), and
   `check-config` reports such entries as `"binding":"discovery_pending"`
   without running discovery; see `contracts/provider-startup.md`.
 

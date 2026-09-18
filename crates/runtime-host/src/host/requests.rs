@@ -302,6 +302,13 @@ impl HostShared {
                     connection_id,
                 )
             }
+            RuntimeOperation::ControlEmulatorInstance {
+                instance_alias,
+                action,
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.control_emulator_instance(request, validated, instance_alias, *action)
+            }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
                 holder_id,

@@ -4,16 +4,19 @@ use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
-    EmulatorVersionEvidence, InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
+    EmulatorInstanceAction, EmulatorVersionEvidence, InstanceId, MAX_INSTANCE_ALIAS_BYTES,
+    RuntimeErrorCode,
 };
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
-    DeviceResult, DeviceTarget, InputBackend, NemuAppIndex, NemuApplicationTarget, NemuInputConfig,
-    NemuIpcSession, NemuSessionBackends, TouchBackendChoice, TouchBackendConfig,
-    create_capture_backend, create_touch_backend_for_fenced_input,
+    DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, DeviceTarget, InputBackend,
+    NemuAppIndex, NemuApplicationTarget, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
+    TouchBackendChoice, TouchBackendConfig, create_capture_backend,
+    create_touch_backend_for_fenced_input, mumu_state_wait,
 };
 pub use actingcommand_execution_kernel::{
-    DiscoveredInstanceBinding, ExecutionBackendProvider, RecognitionVisionProvider,
+    DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
+    EmulatorControlResult, ExecutionBackendProvider, RecognitionVisionProvider,
     ResolvedAdbEndpoint, ResolvedExecutionInstance, VisionFfiProvider, VisionModelIdentity,
 };
 use std::collections::BTreeMap;
@@ -462,6 +465,46 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Drives `MuMuManager control` for a discovery-bound entry only. Explicit (non-discovered)
+    /// entries carry no `MuMuManager` path and are refused with `emulator_control.unavailable`.
+    /// No device session is opened or touched here.
+    fn control_instance(
+        &self,
+        instance_alias: &str,
+        action: EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        let refused = |message: &str, stage: &'static str| {
+            EmulatorControlFailure::without_output(
+                DeviceError::fatal(message)
+                    .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                    .with_diagnostic_context(
+                        "execution_backend_registry",
+                        "control_instance",
+                        DeviceErrorSensitivity::Sensitive,
+                    ),
+                0,
+            )
+        };
+        let entry = self.entries.get(instance_alias).ok_or_else(|| {
+            refused(
+                "execution backend instance is not registered",
+                "emulator_control.unregistered",
+            )
+        })?;
+        let Some(discovered) = entry.adb_endpoint.discovered_binding() else {
+            return Err(refused(
+                "emulator control unavailable: the instance was registered explicitly, without MuMuManager discovery, so no MuMuManager executable is bound to it",
+                "emulator_control.unavailable",
+            ));
+        };
+        actingcommand_device::control_instance(
+            discovered.mumu_manager_path(),
+            discovered.instance_index(),
+            action,
+            mumu_state_wait(action),
+        )
     }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
