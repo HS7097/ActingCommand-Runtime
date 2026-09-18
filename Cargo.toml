@@ -8,7 +8,6 @@ members = [
     "apps/device-test",
     "apps/ledger-forensics",
     "apps/vision-provider-check",
-    "benchmarks/rust",
     "crates/actingcommand-contract",
     "crates/artifact-store",
     "crates/device",

@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{
-    ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome,
-    CapturePipelineCounts,
-};
-use actingcommand_contract::{
-    ArtifactReference, CapturePressureState, EvidenceCompleteness, PinnedFrameReason,
-};
+use crate::{ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome};
+use actingcommand_contract::{ArtifactReference, CapturePressureState, PinnedFrameReason};
 use actingcommand_device::{Frame, PixelFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -423,20 +418,6 @@ pub enum FrameStoreEvent {
     },
 }
 
-/// Four-way frame accounting for the portable compatibility projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PortableFrameEvidenceProjection {
-    pub counts: CapturePipelineCounts,
-    pub evidence_completeness: EvidenceCompleteness,
-    pub pinned: Vec<PortablePinnedFrameEvidence>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PortablePinnedFrameEvidence {
-    pub frame_index: usize,
-    pub reason: PinnedFrameReason,
-    pub persisted: bool,
-}
 #[derive(Debug, Clone)]
 pub struct FramePersistenceCandidate {
     pub frame_index: usize,
@@ -490,7 +471,6 @@ pub struct FrameStore {
     spill_warning_count: u64,
     next_segment_id: u64,
     active_segment_id: Option<u64>,
-    materialized_count: Option<u64>,
 }
 
 impl FrameStore {
@@ -521,7 +501,6 @@ impl FrameStore {
             spill_warning_count: 0,
             next_segment_id: 1,
             active_segment_id: None,
-            materialized_count: None,
         })
     }
 
@@ -705,7 +684,6 @@ impl FrameStore {
         };
         self.add_estimate(entry.resident_estimate);
         self.entries.push(entry);
-        self.materialized_count = None;
         let entry_index = self.entries.len() - 1;
         if let Some(message) = &admission_spill_warning {
             if admission_spill_failed {
@@ -766,10 +744,6 @@ impl FrameStore {
     }
 
     pub fn materialize(&mut self, screenshots_dir: &Path) -> CliOutcome<()> {
-        self.materialized_count = None;
-        let materialized_count =
-            u64::try_from(self.entries.iter().filter(|entry| entry.retained).count())
-                .map_err(|_| CliError::package_invalid("materialized frame count exceeds u64"))?;
         fs::create_dir_all(screenshots_dir).map_err(|err| {
             CliError::package_invalid(format!(
                 "failed to create {}: {err}",
@@ -789,61 +763,9 @@ impl FrameStore {
                 ))
             })?;
         }
-        self.materialized_count = Some(materialized_count);
         Ok(())
     }
 
-    /// Reports portable materialization counts without claiming ArtifactStore references.
-    pub fn portable_evidence_projection(&self) -> CliOutcome<PortableFrameEvidenceProjection> {
-        let captured = u64::try_from(self.entries.len())
-            .map_err(|_| CliError::package_invalid("captured frame count exceeds u64"))?;
-        let deduplicated = self.entries.iter().try_fold(0_u64, |count, entry| {
-            count
-                .checked_add(entry.merged_count)
-                .ok_or_else(|| CliError::package_invalid("deduplicated frame count exceeds u64"))
-        })?;
-        let persisted = self.materialized_count.ok_or_else(|| {
-            CliError::package_invalid(
-                "portable frame evidence requires successful screenshot materialization",
-            )
-        })?;
-        let classified = persisted.checked_add(deduplicated).ok_or_else(|| {
-            CliError::package_invalid("classified portable frame count exceeds u64")
-        })?;
-        let dropped = captured.checked_sub(classified).ok_or_else(|| {
-            CliError::package_invalid("portable frame counts exceed captured frame count")
-        })?;
-        let pinned = self
-            .entries
-            .iter()
-            .filter_map(|entry| {
-                entry
-                    .pinned_reason
-                    .map(|reason| PortablePinnedFrameEvidence {
-                        frame_index: entry.frame_index,
-                        reason,
-                        persisted: entry.retained,
-                    })
-            })
-            .collect::<Vec<_>>();
-        let evidence_completeness = if pinned.iter().any(|frame| !frame.persisted) {
-            EvidenceCompleteness::Failed
-        } else if dropped > 0 {
-            EvidenceCompleteness::Partial
-        } else {
-            EvidenceCompleteness::Complete
-        };
-        Ok(PortableFrameEvidenceProjection {
-            counts: CapturePipelineCounts {
-                captured,
-                deduplicated,
-                dropped,
-                persisted,
-            },
-            evidence_completeness,
-            pinned,
-        })
-    }
     pub fn cleanup_temp(&mut self) -> Vec<String> {
         if !self.temp_dir.exists() {
             return Vec::new();
@@ -2463,94 +2385,6 @@ mod tests {
 
         assert_eq!(thumb.values.len(), THUMB_WIDTH * THUMB_HEIGHT);
     }
-    #[test]
-    fn portable_evidence_projection_requires_successful_materialization() {
-        let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 220);
-        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-
-        let error = store
-            .portable_evidence_projection()
-            .expect_err("unmaterialized projection must fail");
-        assert!(error.is_fatal());
-        assert!(
-            error
-                .detail()
-                .contains("requires successful screenshot materialization")
-        );
-    }
-
-    #[test]
-    fn failed_rematerialization_invalidates_portable_evidence_projection() {
-        let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 220);
-        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-        store
-            .materialize(&temp.path().join("screenshots"))
-            .expect("initial materialization");
-
-        let blocked = temp.path().join("blocked");
-        fs::write(&blocked, b"not a directory").expect("blocked path");
-        store
-            .materialize(&blocked)
-            .expect_err("rematerialization must fail");
-
-        let error = store
-            .portable_evidence_projection()
-            .expect_err("failed rematerialization must invalidate projection");
-        assert!(error.is_fatal());
-        assert!(
-            error
-                .detail()
-                .contains("requires successful screenshot materialization")
-        );
-    }
-
-    #[test]
-    fn portable_evidence_projection_reports_four_way_counts_and_pinned_frames() {
-        let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 220);
-        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-        add_test_frame(&mut store, 2, 10, matched("fixture01/home"), "page_wait");
-        let frame = Frame::from_pixels(
-            4,
-            4,
-            vec![10; 4 * 4 * 4],
-            PixelFormat::Rgba8,
-            CaptureBackendName::NemuIpc,
-        )
-        .expect("frame");
-        store
-            .add_frame(FrameStoreFrameInput {
-                frame_index: 3,
-                file_name: "frame3.png".to_string(),
-                label: "terminal".to_string(),
-                recognition_state: matched("fixture01/home"),
-                pinned_reason: Some(PinnedFrameReason::Terminal),
-                frame,
-            })
-            .expect("pinned frame");
-        store
-            .materialize(&temp.path().join("screenshots"))
-            .expect("materialize");
-
-        let projection = store
-            .portable_evidence_projection()
-            .expect("portable projection");
-        assert_eq!(projection.counts.captured, 3);
-        assert_eq!(projection.counts.deduplicated, 1);
-        assert_eq!(projection.counts.dropped, 0);
-        assert_eq!(projection.counts.persisted, 2);
-        assert_eq!(
-            projection.evidence_completeness,
-            EvidenceCompleteness::Complete
-        );
-        assert_eq!(projection.pinned.len(), 1);
-        assert_eq!(projection.pinned[0].frame_index, 3);
-        assert_eq!(projection.pinned[0].reason, PinnedFrameReason::Terminal);
-        assert!(projection.pinned[0].persisted);
-    }
-
     fn matched(page_id: &str) -> RecognitionState {
         RecognitionState::Matched {
             page_id: page_id.to_string(),

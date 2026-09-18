@@ -9,7 +9,7 @@ Status: complete.
 - Frozen specification SHA-256:
   `28273b85491b0b43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`.
 - Approved C0 architecture:
-  `docs/architecture/runtime-ledger-v3-c0-freeze.md`.
+  `docs/archive/runtime-ledger-v3-c0-freeze.md`.
 - C4 baseline: `61e9868b03e74eb40f47ad7958b43d405f645ab6`.
 - Implementation branch: `issue-35-runtime-ledger-v3`.
 

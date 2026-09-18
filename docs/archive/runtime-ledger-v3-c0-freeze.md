@@ -1,3 +1,5 @@
+> 已被 C0 冻结取代
+
 # Runtime Ledger V3 C0 Architecture Freeze
 
 - Status: approved C0 architecture for GitHub Issue #35
