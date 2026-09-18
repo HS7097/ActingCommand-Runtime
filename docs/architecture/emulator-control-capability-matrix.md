@@ -69,6 +69,33 @@ Those are separate tools and a future adapter must not pretend they form one ato
   parsed error fields, provider/version, capability, and target instance in diagnostics. G3 adds no
   retry, reconnect, fallback, or provider process invocation.
 
+## MuMuManager 6.5.7.0 observation (Runtime slice #316, discovery only)
+
+Observed on the owner's machine with the read-only subcommands only; this is the basis of
+`actingcommand-device::mumu_manager`:
+
+- The executable is `<root>\nx_main\MuMuManager.exe` (v5/v6 layout; legacy installs used
+  `<root>\shell\MuMuManager.exe`). There is no `nx_device\<version>\shell` variant, so the ADB
+  version-match invariants do not apply to it.
+- `MuMuManager.exe version` prints `{"version":"6.5.7.0"}` and exits 0.
+- `MuMuManager.exe info -v all` prints a JSON map keyed by the index string; each entry carries
+  `index` (a string), `name`, `adb_host_ip`, `adb_port` (a number), `is_process_started`,
+  `is_android_started`, `player_state`, `pid`, optional `headless_pid`, window handles,
+  `vt_enabled`, `hyperv_enabled`, `error_code`, `launch_err_code`, `launch_err_msg`,
+  `launch_time`, `android_version`, `disk_size_bytes`, `created_timestamp`, `is_main` and
+  `info_source`. `info -v <single>` returns a flat object instead; Runtime always asks for `all`
+  and tolerates the flat shape. Output is UTF-8 without BOM, LF-terminated.
+- Failures are an undocumented top-level `{"errcode":<n>,"errmsg":"..."}` envelope with the exit
+  code equal to `errcode` (for example `-200` index not found, `-23` bad parameter). A
+  multi-index query with one failing entry still exits 0 and carries the envelope inside that
+  entry, so every map entry is checked for `errcode` before it is read as an instance.
+- The hidden `api` subcommand attaches to an instance merely on dispatch, so it is banned; only
+  `version` and `info` are dispatched, `control`, `setting`, `launch`, `shutdown` and `restart`
+  never are.
+- `6.3.2.0` is a Runtime policy floor with no vendor basis; the vendor documents only
+  `V4.0.0.3179` as the `MuMuManager` baseline. Windows registry `DisplayVersion` is advisory;
+  `MuMuManager version` is authoritative.
+
 ## Offline workstation observation
 
 A static file-only inspection found MuMu and LDPlayer manager binaries, while their PE
@@ -80,6 +107,8 @@ a documented read-only provider query or mark it unavailable.
 
 - NetEase MuMu Player 12, `MuMuManager` developer guide:
   https://mumu.163.com/help/20240726/35047_1170006.html
+- NetEase MuMu Player, `MuMuManager` command reference (`version`, `info`):
+  https://mumu.163.com/help/20240807/40912_1170006.html
 - LDPlayer, command-line interface guide:
   https://www.ldplayer.net/blog/introduction-to-ldplayer-command-line-interface.html
 - LDPlayer Korea, extended command table including restart and running-state queries:

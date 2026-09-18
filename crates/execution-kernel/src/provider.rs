@@ -553,12 +553,47 @@ fn invalid_region() -> VisionProviderError {
     )
 }
 
+/// Facts of a MuMu instance the endpoint was discovered from (`MuMuManager info -v all`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredInstanceBinding {
+    instance_index: u16,
+    instance_name: String,
+    provider_version: String,
+}
+
+impl DiscoveredInstanceBinding {
+    pub fn new(
+        instance_index: u16,
+        instance_name: impl Into<String>,
+        provider_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            instance_index,
+            instance_name: instance_name.into(),
+            provider_version: provider_version.into(),
+        }
+    }
+
+    pub const fn instance_index(&self) -> u16 {
+        self.instance_index
+    }
+
+    pub fn instance_name(&self) -> &str {
+        &self.instance_name
+    }
+
+    pub fn provider_version(&self) -> &str {
+        &self.provider_version
+    }
+}
+
 /// The structured ADB target a registered instance was configured with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedAdbEndpoint {
     host: String,
     port: u16,
     serial_configured: bool,
+    discovered: Option<DiscoveredInstanceBinding>,
 }
 
 impl ResolvedAdbEndpoint {
@@ -567,7 +602,18 @@ impl ResolvedAdbEndpoint {
             host: host.into(),
             port,
             serial_configured,
+            discovered: None,
         }
+    }
+
+    pub fn with_discovered_binding(mut self, discovered: DiscoveredInstanceBinding) -> Self {
+        self.discovered = Some(discovered);
+        self
+    }
+
+    /// Present only when the endpoint was bound through instance discovery.
+    pub const fn discovered_binding(&self) -> Option<&DiscoveredInstanceBinding> {
+        self.discovered.as_ref()
     }
 
     pub fn host(&self) -> &str {

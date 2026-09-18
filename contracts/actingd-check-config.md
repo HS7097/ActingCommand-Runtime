@@ -34,16 +34,21 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":2,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","adb_host":null,"adb_port":null},{"alias":"node.a","mode":"device_registry","adb_host":"127.0.0.1","adb_port":16384}],"policy_configured":false,"not_checked":["vision_provider_manifest","state_root"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384}],"policy_configured":false,"not_checked":["vision_provider_manifest","state_root"]}
 ```
 
 - `config_path` is the path as given; `state_root` is the configured value,
   neither resolved nor inspected.
 - `bind_port` `0` means the OS chooses the listening port.
 - `instances` lists the assembled registry in alias order. `mode` is
-  `device_registry` or `fixture_simulation`; `adb_host` and `adb_port` are the
-  configured ADB target of a device entry and `null` for a fixture entry.
-  Nothing is probed and no serial is parsed.
+  `device_registry` or `fixture_simulation`. `binding` is `explicit` for a
+  configured entry, whose `adb_host` and `adb_port` are the configured ADB
+  target of a device entry and `null` for a fixture entry, or
+  `discovery_pending` for an instance bound by `instance_index` or
+  `instance_name`, which echoes that key (the other key is `null`) and carries
+  no ADB fields: the target is completed by one `MuMuManager` discovery inside
+  host startup (see `contracts/provider-startup.md`), which this command never
+  runs. Nothing is probed and no serial is parsed.
 - `policy_configured` states whether a `policy` section was assembled.
 - `not_checked` is a fixed list of what this command cannot validate:
   `vision_provider_manifest` (only read and validated inside host startup,
@@ -58,6 +63,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 (`config_unavailable`, `config_size_invalid`, `config_read_failed`,
 `config_decode_failed`), `assemble` (the typed configuration codes, for example
 `config_invalid`, `bind_host_not_loopback`, `execution_registry_invalid`,
+`instance_binding_key_invalid`, `mumu_root_invalid`,
 `scheduled_execution_instance_unknown`, `policy_governance_capability_missing`)
 or `validate` (`invalid_runtime_host_config` and the other
 `RuntimeHostConfig::validate` codes). The secret fingerprint salt and the

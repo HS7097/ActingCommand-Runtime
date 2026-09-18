@@ -353,13 +353,21 @@ pub(super) fn append_instance_binding_events(
                 .issue_registered_instance(instance.instance_id),
         );
         let endpoint = instance.adb_endpoint.as_ref();
+        let discovered = endpoint.and_then(ResolvedAdbEndpoint::discovered_binding);
         let payload = RuntimePayloadDraft::instance_bound(
             instance.instance_alias.clone(),
             instance.provenance,
             endpoint.map(|endpoint| endpoint.host().to_owned()),
             endpoint.map(ResolvedAdbEndpoint::port),
             endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured),
-            InstanceBindingSource::Explicit,
+            if discovered.is_some() {
+                InstanceBindingSource::Discovered
+            } else {
+                InstanceBindingSource::Explicit
+            },
+            discovered.map(DiscoveredInstanceBinding::instance_index),
+            discovered.map(|binding| binding.instance_name().to_owned()),
+            discovered.map(|binding| binding.provider_version().to_owned()),
             AuditInput::new(),
         );
         let draft = events.draft(

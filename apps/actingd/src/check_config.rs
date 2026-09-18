@@ -70,6 +70,16 @@ fn summarize(
                 Some(ScheduledExecutionMode::FixtureSimulation) => "fixture_simulation",
                 None => return Err(("execution_backend_registry_incomplete", "validate")),
             };
+            if let Some(key) = registry.deferred_binding(&alias) {
+                // Bound at startup by one MuMuManager discovery run; nothing is spawned here.
+                return Ok(json!({
+                    "alias": alias,
+                    "mode": mode,
+                    "binding": "discovery_pending",
+                    "instance_index": key.index(),
+                    "instance_name": key.name(),
+                }));
+            }
             let resolved = registry
                 .resolve(&alias)
                 .ok_or(("execution_backend_registry_incomplete", "validate"))?;
@@ -77,6 +87,7 @@ fn summarize(
             Ok(json!({
                 "alias": alias,
                 "mode": mode,
+                "binding": "explicit",
                 "adb_host": endpoint.map(ResolvedAdbEndpoint::host),
                 "adb_port": endpoint.map(ResolvedAdbEndpoint::port),
             }))

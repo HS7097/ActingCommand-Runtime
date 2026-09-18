@@ -71,6 +71,25 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   daemon with no device targets; instances are added later by editing the
   configuration and restarting the daemon. Retain the existing identity,
   unique-registration, path, backend and timeout rules.
+- A MuMu instance may instead be bound by discovery: give the entry exactly one
+  of `instance_index` (the index `MuMuManager info -v all` reports) or
+  `instance_name` (the exact instance name) and omit `serial`. `adb_path`,
+  `host` and `port` may then be omitted; no default host or port applies, and
+  any of them you do declare is cross-checked against the discovered value.
+  The optional top-level `mumu_root` names the MuMu install root explicitly and
+  must be absolute. At startup the daemon runs `MuMuManager.exe version` and
+  `info -v all` once (read-only, 10 s timeout, never any mutating subcommand),
+  resolving `MuMuManager.exe` in this order: `mumu_root`,
+  `ACTINGCOMMAND_NEMU_FOLDER`, the install root of a running MuMu process, the
+  Windows uninstall entry (`MuMuPlayer*` under the standard `Uninstall` keys of
+  `HKLM`, `HKLM\...\WOW6432Node` and `HKCU`; only `InstallLocation`,
+  `DisplayIcon` and `DisplayVersion` are read), then the vendor folders under
+  Program Files. `MuMuManager` must report at least `6.3.2.0`, a Runtime policy
+  floor. Startup refuses with `instance_discovery_unavailable`,
+  `mumu_manager_version_unsupported`, `instance_discovery_no_match`,
+  `instance_discovery_ambiguous` or `instance_discovery_conflict`, and
+  `check-config` reports such entries as `"binding":"discovery_pending"`
+  without running discovery; see `contracts/provider-startup.md`.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
 The blank state root and salt must be filled before startup. Use your existing

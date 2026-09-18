@@ -11,6 +11,7 @@ pub enum ProviderBackend {
     Configured,
     FastdeployPpocr,
     Onnxruntime,
+    MumuManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +23,7 @@ pub enum ProviderStartupStage {
     ModelIdentity,
     BackendConstruction,
     RegistryBinding,
+    InstanceDiscovery,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +33,19 @@ pub struct ProviderNativeFailure {
     pub code: String,
     pub severity: String,
     pub message: String,
+}
+
+/// One instance reported by `MuMuManager info -v all`, with the alias it was bound to, if any.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveredInstanceObservation {
+    pub instance_index: u16,
+    pub instance_name: String,
+    pub adb_host: String,
+    pub adb_port: u16,
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +70,13 @@ pub enum ProviderStartupObservation {
     Failed {
         stage: ProviderStartupStage,
         failure: ProviderNativeFailure,
+    },
+    /// One successful `MuMuManager` discovery run per startup (Workflow #316).
+    InstanceDiscovery {
+        source: String,
+        mumu_manager_path: String,
+        version: String,
+        instances: Vec<DiscoveredInstanceObservation>,
     },
     NotConfigured,
     Ready,
@@ -102,6 +124,22 @@ impl ProviderStartupRecord {
                     && model_sha256
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            }
+            ProviderStartupObservation::InstanceDiscovery {
+                source,
+                mumu_manager_path,
+                version,
+                instances,
+            } => {
+                [source, mumu_manager_path, version]
+                    .into_iter()
+                    .all(|value| valid(value))
+                    && instances.iter().all(|instance| {
+                        valid(&instance.instance_name)
+                            && valid(&instance.adb_host)
+                            && instance.adb_port != 0
+                            && instance.bound_alias.as_deref().is_none_or(&valid)
+                    })
             }
             _ => true,
         };
