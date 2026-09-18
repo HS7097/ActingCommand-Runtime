@@ -81,7 +81,7 @@ CI 共三个工作流：`ci.yml` 在 windows-latest 上跑 `cargo fmt --all -- -
 
 ## Workspace 成员
 
-工作区声明 31 个成员，resolver `3`，工作区声明 edition 2024（`benchmarks/rust` 自行钉为 2021），全部 `publish = false`。
+工作区声明 30 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
 ### apps（6）
 
@@ -131,8 +131,7 @@ CI 共三个工作流：`ci.yml` 在 windows-latest 上跑 `cargo fmt --all -- -
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
-| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib + bin `actinglab-command-inventory` | 从源码推导的架构守卫；仅限开发，不链接进运行时二进制 |
-| benchmarks/rust | actingcommand-runtime-bench | bin | JSON 解析与本地 TCP 环回基准；无工作区依赖，edition 2021 |
+| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | 从源码推导的架构守卫；仅限开发，不链接进运行时二进制 |
 
 ## 设备与识别
 
@@ -197,7 +196,7 @@ actingcommand-vision-provider-check --manifest provider.json --backend all --req
 actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
-注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actingctl`、`actinglab`、`actingledger`，以及工具二进制 `actinglab-command-inventory`。
+注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actingctl`、`actinglab`、`actingledger`。
 
 ## 当前边界（2026-09-13）
 

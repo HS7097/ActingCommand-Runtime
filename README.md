@@ -81,7 +81,7 @@ There are three CI workflows in total. `ci.yml` runs `cargo fmt --all -- --check
 
 ## Workspace members
 
-The workspace declares 31 members, resolver `3`, a workspace-level edition of 2024 (`benchmarks/rust` pins its own edition 2021), all `publish = false`.
+The workspace declares 30 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
 ### apps (6)
 
@@ -131,8 +131,7 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
-| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib + bin `actinglab-command-inventory` | Source-derived architecture guards; development only, linked into no runtime binary |
-| benchmarks/rust | actingcommand-runtime-bench | bin | JSON parsing and local TCP loopback benchmarks; no workspace dependency, edition 2021 |
+| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | Source-derived architecture guards; development only, linked into no runtime binary |
 
 ## Device and recognition
 
@@ -193,7 +192,7 @@ actingcommand-vision-provider-check --manifest provider.json --backend all --req
 actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
-Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`, plus the tool binary `actinglab-command-inventory`.
+Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`.
 
 ## Current boundaries (2026-09-13)
 
