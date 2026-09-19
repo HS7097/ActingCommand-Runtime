@@ -7,10 +7,11 @@ use super::*;
 fn task_teardown_precedes_terminal_and_lease_release() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("resource-close-order-task.zip");
-    let bytes = neutral_contained_task_package();
+    let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
@@ -186,8 +187,11 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             before: None,
             after: None,
             related: None,
+            target_retirement: None,
         }],
         dropped_count: 0,
+        paths: Vec::new(),
+        restart_manager: None,
     });
     for close_error in [
         DeviceError::fatal("injected unconfirmed capture close"),
@@ -195,10 +199,11 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
     ] {
         let root = TempDir::new().expect("tempdir");
         let package = root.path().join("unconfirmed-resource-close-task.zip");
-        let bytes = neutral_contained_task_package();
+        let bytes = neutral_contained_task_package(true);
         fs::write(&package, &bytes).expect("write package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         state
             .require_fenced_capture_close
             .store(true, Ordering::Release);

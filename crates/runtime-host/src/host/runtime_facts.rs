@@ -13,10 +13,27 @@ use super::*;
 const TAKEOVER_INVALIDATED_FAMILIES: [&str; 2] = ["device.", "backend."];
 
 impl HostShared {
+    /// Records the in-memory runtime configuration manifest as its two
+    /// `config.*` facts, ledger-first through [`Self::record_runtime_fact`].
+    /// The clock is sampled once so both records share one observation time;
+    /// on a restart that time is newer than the replayed records, so they are
+    /// replaced rather than refused as stale. Any refusal fails startup.
+    pub(super) fn record_config_manifest(
+        &self,
+        manifest: &RuntimeConfigManifest,
+    ) -> RuntimeHostResult<()> {
+        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
+        for record in manifest.to_fact_records(observed_at_unix_ms, OriginModule::Runtime) {
+            self.record_runtime_fact(record)?;
+        }
+        Ok(())
+    }
+
     /// Appends `runtime.fact_recorded` first, then accepts the record into
     /// memory. A record the store would reject is refused before the append;
     /// an identical record appends nothing. The host is the only writer; the
-    /// first producer is emulator instance control (`device.connected`).
+    /// producers are emulator instance control (`device.connected`) and the
+    /// startup configuration manifest (`config.subsystems`, `config.parameters`).
     pub(super) fn record_runtime_fact(
         &self,
         record: RuntimeFactRecord,

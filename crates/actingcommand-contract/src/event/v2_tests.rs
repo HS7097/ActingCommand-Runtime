@@ -2217,6 +2217,7 @@ fn task_semantic_effect_intent_redacts_text_and_key_before_persistence() {
         let event = sanitize(
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::EffectIntent {
+                    frame_extent: None,
                     step_index: index as u32,
                     operation_label: "input".to_string(),
                     action: action.clone(),
@@ -2276,6 +2277,7 @@ fn task_semantic_effect_intent_sampling_round_trips_and_legacy_payload_decodes()
     let sampled = sanitize(
         TaskPayloadDraft::semantic_with_sampling(
             TaskSemanticFact::EffectIntent {
+                frame_extent: None,
                 step_index: 3,
                 operation_label: "collect".to_string(),
                 action: InputAction::Tap { x: 11, y: 22 },
@@ -2304,6 +2306,7 @@ fn task_semantic_effect_intent_sampling_round_trips_and_legacy_payload_decodes()
     let legacy = sanitize(
         TaskPayloadDraft::semantic(
             TaskSemanticFact::EffectIntent {
+                frame_extent: None,
                 step_index: 4,
                 operation_label: "legacy".to_string(),
                 action: InputAction::Tap { x: 1, y: 2 },
@@ -2340,6 +2343,7 @@ fn task_semantic_effect_intent_sampling_rejects_invalid_evidence() {
     for (fact, sampling) in [
         (
             TaskSemanticFact::EffectIntent {
+                frame_extent: None,
                 step_index: 1,
                 operation_label: "invalid-region".to_string(),
                 action: InputAction::Tap { x: 0, y: 0 },
@@ -2348,6 +2352,7 @@ fn task_semantic_effect_intent_sampling_rejects_invalid_evidence() {
         ),
         (
             TaskSemanticFact::EffectIntent {
+                frame_extent: None,
                 step_index: 2,
                 operation_label: "mismatch".to_string(),
                 action: InputAction::Tap { x: 0, y: 0 },

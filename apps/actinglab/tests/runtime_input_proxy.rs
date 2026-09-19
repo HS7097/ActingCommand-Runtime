@@ -37,6 +37,8 @@ struct FakeState {
     transition_after_tap: AtomicBool,
     tap_started: AtomicBool,
     tap_delay_ms: AtomicUsize,
+    /// Serve 16x9 frames with a matching display geometry for Runtime-owned Task runs.
+    physical_task_geometry: AtomicBool,
 }
 
 #[test]
@@ -968,16 +970,51 @@ impl CaptureBackend for FakeCapture {
         } else {
             [255, 0, 0]
         };
-        let pixels = (0..self.frame_size * self.frame_size)
-            .flat_map(|_| color)
-            .collect();
+        let (width, height) = if self.state.physical_task_geometry.load(Ordering::Acquire) {
+            (16, 9)
+        } else {
+            (self.frame_size, self.frame_size)
+        };
+        let pixels = (0..width * height).flat_map(|_| color).collect();
         Frame::from_pixels(
-            self.frame_size,
-            self.frame_size,
+            width,
+            height,
             pixels,
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+    fn observe_geometry(
+        &mut self,
+        _deadline: Instant,
+    ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
+        use actingcommand_contract::{
+            CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
+            CaptureGeometryUnknownReason, CaptureRotation, CaptureRotationObservation,
+            CaptureRotationSource, CaptureWmSizeKind,
+        };
+        if !self.state.physical_task_geometry.load(Ordering::Acquire) {
+            return Ok(CaptureGeometryObservation::Unknown(
+                CaptureGeometryUnknownReason::BackendUnsupported,
+            ));
+        }
+        // The same 16x9 extent this fake serves; no device is queried.
+        let extent = CaptureExtent::new(16, 9).expect("positive fake extent");
+        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::AdbScreencap,
+            source: CaptureGeometrySource::AdbDefaultDisplay {
+                serial: "<sealed-test>".to_string(),
+                wm_extent: extent,
+                wm_size_kind: CaptureWmSizeKind::Physical,
+            },
+            logical_display_extent: extent,
+            rotation: CaptureRotationObservation::Observed {
+                rotation: CaptureRotation::R0,
+                source: CaptureRotationSource::DumpsysDisplayOrientation,
+            },
+            sampled_at: std::time::SystemTime::now(),
+            frame_transform: None,
+        }))
     }
     fn close_once(
         &mut self,
@@ -2874,6 +2911,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     );
     let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state.transition_after_tap.store(true, Ordering::Release);
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -3026,6 +3064,7 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
     );
     let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state.transition_after_tap.store(true, Ordering::Release);
     state.tap_delay_ms.store(500, Ordering::Release);
     let instance_id = *IdentifierIssuer::new()
@@ -3190,6 +3229,7 @@ fn task_fact_kind(fact: &TaskSemanticFact) -> &'static str {
         TaskSemanticFact::PackageAdmitted { .. } => "package_admitted",
         TaskSemanticFact::RunStarted => "run_started",
         TaskSemanticFact::EvidenceIndexed { .. } => "evidence_indexed",
+        TaskSemanticFact::GeometryObserved { .. } => "geometry_observed",
         TaskSemanticFact::RecognitionStarted { .. } => "recognition_started",
         TaskSemanticFact::RecognitionCompleted { .. } => "recognition_completed",
         TaskSemanticFact::EntryRecognition { .. } => "entry_recognition",
@@ -3231,7 +3271,7 @@ fn write_runtime_owned_lab_package(path: &Path) {
                     "execution_mode":"navigable_route",
                     "game":"neutral",
                     "server":"test",
-                    "resolution":{"width":2,"height":2},
+                    "resolution":{"width":16,"height":9},
                     "entry_task_id":"task",
                     "capture_interval_ms":1,
                     "step_timeout_ms":1,
@@ -3249,7 +3289,7 @@ fn write_runtime_owned_lab_package(path: &Path) {
                     "task_id":"task",
                     "game":"neutral",
                     "server_scope":["test"],
-                    "coordinate_space":{"width":2,"height":2},
+                    "coordinate_space":{"width":16,"height":9},
                     "defaults":{"max_attempts":1,"retry_interval_ms":1},
                     "entry_page":"home",
                     "target_page":"terminal",
@@ -3272,7 +3312,7 @@ fn write_runtime_owned_lab_package(path: &Path) {
                     "task_id":"return_home",
                     "game":"neutral",
                     "server_scope":["test"],
-                    "coordinate_space":{"width":2,"height":2},
+                    "coordinate_space":{"width":16,"height":9},
                     "target_page":"home",
                     "operations":[{
                         "id":"return_home_action",
@@ -3290,7 +3330,7 @@ fn write_runtime_owned_lab_package(path: &Path) {
                     "schema_version":"0.3",
                     "game":"neutral",
                     "server":"test",
-                    "coordinate_space":{"width":2,"height":2},
+                    "coordinate_space":{"width":16,"height":9},
                     "defaults":{"color_max_distance":0.0},
                     "targets":[
                         {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},

@@ -217,11 +217,12 @@ fn admitted_physical_run_fixture(
     ContainedTaskRequest,
     Arc<std::sync::Mutex<ResolvedExecutionInstance>>,
 ) {
-    let package = neutral_contained_task_package();
+    let package = neutral_contained_task_package(true);
     let package_path = root.path().join("physical-scheduled-task.zip");
     fs::write(&package_path, &package).expect("write physical package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);

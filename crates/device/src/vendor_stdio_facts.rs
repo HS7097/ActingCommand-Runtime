@@ -28,9 +28,12 @@ pub enum StdioApi {
     Dup,
     Dup2,
     Open,
+    CreateFile,
+    CloseHandle,
     GetStdHandle,
     GetOsfhandle,
     SetStdHandle,
+    SetHandleInformation,
     Flush,
     Close,
     Unlink,
@@ -95,6 +98,70 @@ pub struct StdioStep {
     pub before: Option<StdioReferenceFact>,
     pub after: Option<StdioReferenceFact>,
     pub related: Option<StdioReferenceFact>,
+    /// The target was explicitly retired while owned, before restore's _dup2.
+    pub target_retirement: Option<StdioTargetRetirement>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioTargetRetirement {
+    ClosedBeforeReplacement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StdioPathRemoval {
+    Removed,
+    Residual(StdioNativeError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StdioPathFact {
+    pub reference: StdioReference,
+    /// The exact Windows path supplied to unlink and Restart Manager, without NUL.
+    pub path_utf16: Vec<u16>,
+    pub removal: StdioPathRemoval,
+}
+
+pub const MAX_STDIO_RM_PROCESSES: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioRmApi {
+    StartSession,
+    RegisterResources,
+    GetList,
+    EndSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StdioRmCall {
+    pub api: StdioRmApi,
+    pub status: u32,
+    pub completed_filetime: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioRmAvailability {
+    Complete,
+    Incomplete,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StdioRmProcess {
+    pub process_id: u32,
+    /// RM_UNIQUE_PROCESS.ProcessStartTime: UTC 100 ns ticks since 1601-01-01.
+    pub created_filetime: u64,
+    /// RM_PROCESS_INFO.strAppName, an application/service display name, not an exe name.
+    pub rm_app_name_utf16: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StdioRmFacts {
+    pub availability: StdioRmAvailability,
+    pub calls: Vec<StdioRmCall>,
+    pub needed_processes: u32,
+    pub reported_processes: u32,
+    pub reboot_reasons: u32,
+    pub processes: Vec<StdioRmProcess>,
 }
 
 /// Only acquisition and teardown operations append facts, never frame snapshots.
@@ -107,6 +174,8 @@ pub struct VendorStdioFacts {
     pub started_filetime: u64,
     pub steps: Vec<StdioStep>,
     pub dropped_count: u16,
+    pub paths: Vec<StdioPathFact>,
+    pub restart_manager: Option<StdioRmFacts>,
 }
 
 impl std::fmt::Debug for VendorStdioFacts {

@@ -667,6 +667,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_links.clone(),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::EffectIntent {
+                    frame_extent: None,
                     step_index: 0,
                     operation_label: "fixture".to_owned(),
                     action: InputAction::Reset,

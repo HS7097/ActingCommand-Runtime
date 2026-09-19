@@ -108,6 +108,7 @@ fn summarize(
         "instance_count": instances.len(),
         "instances": instances,
         "policy_configured": assembly.policy.is_some(),
+        "config_manifest": assembly.manifest,
         "not_checked": NOT_CHECKED,
     }))
 }

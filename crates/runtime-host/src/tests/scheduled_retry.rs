@@ -359,7 +359,7 @@ fn scheduled_non_retryable_destination_observation_is_fail_closed_and_no_destina
         let package = if with_destination {
             neutral_non_retryable_destination_package(error_page)
         } else {
-            neutral_contained_task_package()
+            neutral_contained_task_package(false)
         };
         let package_path = root.path().join("scheduled-task.zip");
         fs::write(&package_path, &package).expect("write package");

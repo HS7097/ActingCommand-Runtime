@@ -6,14 +6,16 @@ use crate::{
     ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, EmulatorInstanceAction, InputAction, InstanceId, MonitorObservation,
+    ApplicationLifecycleAction, CaptureGeometryObservation, EmulatorInstanceAction, InputAction,
+    InstanceId, MonitorObservation,
 };
 use actingcommand_device::{
     DeviceCloseAuthority, EmulatorControlOutcome, EmulatorControlResult, Frame,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 use std::thread;
+use std::time::Instant;
 
 struct KernelState {
     sessions: BTreeMap<InstanceId, Arc<ExecutionSession>>,
@@ -26,6 +28,22 @@ struct KernelState {
 pub struct ExecutionKernel {
     provider: Arc<dyn ExecutionBackendProvider>,
     state: Mutex<KernelState>,
+}
+
+/// Weak association with the exact session that produced a retained frame.
+pub struct CaptureGeometrySessionRef {
+    instance_id: InstanceId,
+    session: Weak<ExecutionSession>,
+}
+
+impl CaptureGeometrySessionRef {
+    pub const fn instance_id(&self) -> InstanceId {
+        self.instance_id
+    }
+
+    pub fn same_session(&self, other: &Self) -> bool {
+        self.instance_id == other.instance_id && Weak::ptr_eq(&self.session, &other.session)
+    }
 }
 
 impl ExecutionKernel {
@@ -116,11 +134,29 @@ impl ExecutionKernel {
         instance_alias: &str,
         registration_guard: G,
     ) -> ExecutionKernelResult<Frame> {
+        self.capture_retained_with_geometry_session_and_registration_guard(
+            instance_alias,
+            registration_guard,
+        )
+        .map(|(frame, _)| frame)
+    }
+
+    /// Carries the producing session without retaining another backend holder.
+    pub fn capture_retained_with_geometry_session_and_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
-        session
+        let frame = session
             .capture_retained()
-            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
+            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))?;
+        let reference = CaptureGeometrySessionRef {
+            instance_id: session.resolved().instance_id(),
+            session: Arc::downgrade(&session),
+        };
+        Ok((frame, reference))
     }
 
     pub fn finish_failed_capture(
@@ -132,9 +168,90 @@ impl ExecutionKernel {
             return primary;
         };
         match self.close_instance(instance, authority) {
-            Ok(_) => primary,
+            Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
             Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
         }
+    }
+
+    /// Reads only the capture object belonging to the original producing session.
+    pub fn observe_capture_geometry(
+        &self,
+        reference: &CaptureGeometrySessionRef,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<CaptureGeometryObservation> {
+        self.capture_geometry_session(reference, deadline)?
+            .observe_geometry(deadline)
+            .map_err(|error| error.with_instance_id(reference.instance_id))
+    }
+
+    /// Checks the retained frame binding without querying the producer again.
+    pub fn validate_capture_geometry_session(
+        &self,
+        reference: &CaptureGeometrySessionRef,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<()> {
+        self.capture_geometry_session(reference, deadline)?
+            .validate_geometry_open(deadline)
+            .map_err(|error| error.with_instance_id(reference.instance_id))
+    }
+
+    fn capture_geometry_session(
+        &self,
+        reference: &CaptureGeometrySessionRef,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<Arc<ExecutionSession>> {
+        crate::session::geometry_remaining(deadline)?;
+        let state = self.state.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => crate::session::geometry_unavailable(
+                "capture_geometry_kernel_busy",
+                "the existing kernel session registry is busy",
+            ),
+            TryLockError::Poisoned(_) => {
+                ExecutionKernelError::fatal("execution_kernel_state_poisoned")
+            }
+        })?;
+        crate::session::geometry_remaining(deadline)?;
+        if state.closed {
+            return Err(state
+                .close_result
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::session::geometry_unavailable(
+                        "capture_geometry_kernel_closed",
+                        "the kernel is closed",
+                    )
+                }));
+        }
+        if let Some(Err(error)) = state.instance_closes.get(&reference.instance_id)
+            && error.resource_quiescence()
+                == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+        {
+            return Err(error.clone());
+        }
+        let session = state.sessions.get(&reference.instance_id).ok_or_else(|| {
+            state
+                .instance_closes
+                .get(&reference.instance_id)
+                .and_then(|result| result.as_ref().err())
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::session::geometry_unavailable(
+                        "capture_geometry_session_missing",
+                        "the original producing session is no longer registered",
+                    )
+                })
+        })?;
+        if !Weak::ptr_eq(&reference.session, &Arc::downgrade(session)) {
+            return Err(crate::session::geometry_unavailable(
+                "capture_geometry_session_changed",
+                "the registered session differs from the frame-producing session",
+            ));
+        }
+        let session = Arc::clone(session);
+        drop(state);
+        Ok(session)
     }
 
     pub fn control_application(

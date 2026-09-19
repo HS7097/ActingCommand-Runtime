@@ -41,6 +41,71 @@ impl HostShared {
         .map_err(|_| ledger_error("append_runtime_lifecycle_observed"))
     }
 
+    pub(super) fn append_stdio_close_observations(
+        &self,
+        observations: &[actingcommand_execution_kernel::ExecutionStdioObservation],
+        instance_id: Option<InstanceId>,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
+        if observations.is_empty() {
+            return Ok(());
+        }
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(ledger_error("append_vendor_stdio_close"));
+        }
+        let gate = lock(&self.fact_write_gate, "append_vendor_stdio_close")?;
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(ledger_error("append_vendor_stdio_close"));
+        }
+        let mut persisted = Vec::new();
+        for observation in observations {
+            if observation.recorded_event.get().is_some() {
+                continue;
+            }
+            let residual = observation.facts.paths.iter().any(|path| {
+                matches!(
+                    path.removal,
+                    actingcommand_contract::StdioPathRemoval::Residual(_)
+                )
+            });
+            let event = self
+                .append_event_under_fact_gate(
+                    if residual {
+                        EventSeverity::Warning
+                    } else {
+                        EventSeverity::Info
+                    },
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links.clone(),
+                    RuntimePayloadDraft::vendor_stdio_close(
+                        self.owner_epoch,
+                        instance_id,
+                        (*observation.facts).clone(),
+                    ),
+                )
+                .map_err(|_| {
+                    self.lifecycle_append_failed.store(true, Ordering::Release);
+                    ledger_error("append_vendor_stdio_close")
+                })?;
+            persisted.push((observation, event));
+        }
+        if !persisted.is_empty() {
+            self.synchronize_fact_store_under_gate().inspect_err(|_| {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+            })?;
+            for (observation, event) in &persisted {
+                let _ = observation.recorded_event.set(*event.event_id());
+            }
+        }
+        drop(gate);
+        for (_, event) in persisted {
+            self.observe_pipeline_event(&event)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn append_lifecycle_failure(
         &self,
         stage: RuntimeLifecycleFailureStage,
@@ -59,6 +124,11 @@ impl HostShared {
                 .causes
                 .iter()
                 .all(|cause| cause.recorded_event.get().is_some())
+            && error
+                .lifecycle
+                .vendor_stdio
+                .iter()
+                .all(|observation| observation.recorded_event.get().is_some())
         {
             return Ok(());
         }
@@ -69,6 +139,13 @@ impl HostShared {
             && error.projection().code == RuntimeErrorCode::LedgerFailure
         {
             return Err(error.clone());
+        }
+        if let Some(error) = host_error {
+            self.append_stdio_close_observations(
+                &error.lifecycle.vendor_stdio,
+                error.lifecycle.instance_id,
+                links.clone(),
+            )?;
         }
         let (origin, code, operation, fatal, runtime_code) = match failure {
             RuntimeLifecycleFailure::Host(error) => (

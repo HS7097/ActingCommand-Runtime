@@ -60,6 +60,30 @@ impl PerformanceControlConfig {
         self
     }
 
+    pub const fn escalation_samples(&self) -> u16 {
+        self.escalation_samples
+    }
+
+    pub const fn recovery_samples(&self) -> u16 {
+        self.recovery_samples
+    }
+
+    pub const fn transition_cooldown(&self) -> Duration {
+        self.transition_cooldown
+    }
+
+    pub const fn clock_jump_threshold(&self) -> Duration {
+        self.clock_jump_threshold
+    }
+
+    pub const fn normal_heavy_dispatch_limit(&self) -> u16 {
+        self.normal_heavy_dispatch_limit
+    }
+
+    pub const fn pressured_heavy_dispatch_limit(&self) -> u16 {
+        self.pressured_heavy_dispatch_limit
+    }
+
     pub fn validate(&self) -> RuntimeHostResult<()> {
         if self.escalation_samples == 0
             || self.recovery_samples == 0

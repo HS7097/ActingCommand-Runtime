@@ -81,7 +81,7 @@ There are three CI workflows in total. `ci.yml` runs `cargo fmt --all -- --check
 
 ## Workspace members
 
-The workspace declares 31 members, resolver `3`, a workspace-level edition of 2024 (`benchmarks/rust` pins its own edition 2021), all `publish = false`.
+The workspace declares 30 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
 ### apps (6)
 
@@ -131,8 +131,7 @@ The workspace declares 31 members, resolver `3`, a workspace-level edition of 20
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
-| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib + bin `actinglab-command-inventory` | Source-derived architecture guards; development only, linked into no runtime binary |
-| benchmarks/rust | actingcommand-runtime-bench | bin | JSON parsing and local TCP loopback benchmarks; no workspace dependency, edition 2021 |
+| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | Source-derived architecture guards; development only, linked into no runtime binary |
 
 ## Device and recognition
 
@@ -144,7 +143,7 @@ Recognition targets come in five kinds: Template, Color, ClickOnly, Ocr and Nn. 
 
 The `build.rs` of `apps/actinglab` reads Git metadata to determine HEAD. When Git metadata is available and `ACTINGCOMMAND_RUNTIME_HEAD` is also set, it must be 40 hexadecimal characters and must match the repository HEAD, or the build panics; when Git metadata is unavailable (a source tree with no `.git`, for example), that variable is required.
 
-A normal `actingd` invocation accepts only the two arguments `--config <path>`; the first argument may instead select the `ledger-maintenance` or `check-config` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
+A normal `actingd` invocation accepts only the two arguments `--config <path>`; the first argument may instead select the `ledger-maintenance` or `check-config` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. At startup `actingd` records its in-memory runtime configuration manifest (the subsystems it runs and every effective parameter with its source; the salt only as a byte length) as the program facts `config.subsystems` / `config.parameters`, readable with `actingctl facts --program` and printed by `check-config`. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
 
 ```bash
 # Local build; the three gate commands below are identical to CI (CI's release build additionally uses --locked and an explicit MSVC target)
@@ -195,7 +194,7 @@ actingcommand-vision-provider-check --manifest provider.json --backend all --req
 actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
-Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`, plus the tool binary `actinglab-command-inventory`.
+Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`.
 
 ## Current boundaries (2026-09-13)
 

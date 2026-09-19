@@ -4,7 +4,10 @@ use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
     ResolvedExecutionInstance,
 };
-use actingcommand_contract::{ApplicationLifecycleAction, InputAction, ResourceQuiescence};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, CaptureGeometryObservation, CaptureGeometryUnknownReason,
+    InputAction, ResourceQuiescence,
+};
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, Frame, InputBackend,
@@ -13,8 +16,9 @@ use actingcommand_device::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 const SESSION_CHANNEL_CAPACITY: usize = 8;
 
@@ -82,6 +86,10 @@ enum SessionCommand {
     Capture {
         response: SyncSender<ExecutionKernelResult<Frame>>,
     },
+    ObserveGeometry {
+        deadline: Instant,
+        response: SyncSender<ExecutionKernelResult<CaptureGeometryObservation>>,
+    },
     ApplicationLifecycle {
         action: ApplicationLifecycleAction,
         response: SyncSender<ExecutionKernelResult<()>>,
@@ -92,26 +100,47 @@ enum SessionCommand {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionResourceCloseOutcome {
     resource_count: u16,
+    vendor_stdio: Vec<crate::ExecutionStdioObservation>,
 }
 
 impl ExecutionResourceCloseOutcome {
     pub(crate) const fn confirmed(resource_count: u16) -> Self {
-        Self { resource_count }
+        Self {
+            resource_count,
+            vendor_stdio: Vec::new(),
+        }
     }
 
-    pub const fn quiescence(self) -> ResourceQuiescence {
+    fn from_device(outcome: actingcommand_device::DeviceResourceCloseOutcome) -> Self {
+        Self {
+            resource_count: outcome.resource_count(),
+            vendor_stdio: outcome
+                .vendor_stdio()
+                .iter()
+                .map(crate::ExecutionStdioObservation::from_device)
+                .collect(),
+        }
+    }
+
+    pub fn vendor_stdio(&self) -> &[crate::ExecutionStdioObservation] {
+        &self.vendor_stdio
+    }
+
+    pub const fn quiescence(&self) -> ResourceQuiescence {
         ResourceQuiescence::Confirmed
     }
 
-    pub const fn resource_count(self) -> u16 {
+    pub const fn resource_count(&self) -> u16 {
         self.resource_count
     }
 
-    fn combine(self, other: Self) -> Self {
-        Self::confirmed(self.resource_count.saturating_add(other.resource_count))
+    fn combine(mut self, other: Self) -> Self {
+        self.resource_count = self.resource_count.saturating_add(other.resource_count);
+        crate::error::merge_stdio_observations(&mut self.vendor_stdio, &other.vendor_stdio);
+        self
     }
 }
 
@@ -277,6 +306,79 @@ impl ExecutionSession {
         finish_after_result(&mut state, result)
     }
 
+    pub(crate) fn observe_geometry(
+        &self,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<CaptureGeometryObservation> {
+        let state = self.geometry_state(deadline)?;
+        geometry_remaining(deadline)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .try_send(SessionCommand::ObserveGeometry { deadline, response })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => geometry_unavailable(
+                    "capture_geometry_queue_full",
+                    "the existing session command queue is full",
+                ),
+                mpsc::TrySendError::Disconnected(_) => {
+                    ExecutionKernelError::fatal("execution_session_unavailable")
+                }
+            })?;
+        drop(state);
+        match receiver.recv_timeout(geometry_remaining(deadline)?) {
+            Ok(Ok(observation)) => {
+                geometry_remaining(deadline)?;
+                Ok(observation)
+            }
+            Ok(Err(error)) => Err(error),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(geometry_unavailable(
+                "capture_geometry_deadline_elapsed",
+                "the geometry reply did not arrive within the task deadline",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ExecutionKernelError::fatal(
+                "execution_session_response_lost",
+            )),
+        }
+    }
+
+    pub(crate) fn validate_geometry_open(&self, deadline: Instant) -> ExecutionKernelResult<()> {
+        self.geometry_state(deadline).map(drop)
+    }
+
+    fn geometry_state(
+        &self,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<MutexGuard<'_, SessionState>> {
+        geometry_remaining(deadline)?;
+        let state = self.state.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => geometry_unavailable(
+                "capture_geometry_session_busy",
+                "the existing session state is busy",
+            ),
+            TryLockError::Poisoned(_) => {
+                ExecutionKernelError::fatal("execution_session_state_poisoned")
+            }
+        })?;
+        if state.closed || state.sender.is_none() {
+            return Err(state
+                .close_result
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .cloned()
+                .unwrap_or_else(|| {
+                    geometry_unavailable(
+                        "capture_geometry_session_closed",
+                        "the producing session is closed",
+                    )
+                }));
+        }
+        geometry_remaining(deadline)?;
+        Ok(state)
+    }
+
     pub fn close(&self) -> ExecutionKernelResult<()> {
         self.close_with_authority(DeviceCloseAuthority::LocalOnly)
             .map(|_| ())
@@ -312,7 +414,8 @@ impl ExecutionSession {
         });
         let result = match (close_result, join_session(&mut state)) {
             (Ok(outcome), Ok(())) => Ok(outcome),
-            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(outcome), Err(error)) => Err(error.with_stdio_observations(outcome.vendor_stdio())),
             (Err(primary), Err(secondary)) => Err(ExecutionKernelError::merge(primary, secondary)),
         };
         state.close_result = Some(result.clone());
@@ -353,6 +456,25 @@ fn ensure_open(state: &SessionState) -> ExecutionKernelResult<()> {
     } else {
         Ok(())
     }
+}
+
+pub(crate) fn geometry_unavailable(
+    code: &'static str,
+    detail: &'static str,
+) -> ExecutionKernelError {
+    ExecutionKernelError::device(code, &DeviceError::transient(detail))
+}
+
+pub(crate) fn geometry_remaining(deadline: Instant) -> ExecutionKernelResult<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            geometry_unavailable(
+                "capture_geometry_deadline_elapsed",
+                "the original task deadline has elapsed",
+            )
+        })
 }
 
 fn finish_after_result<T>(
@@ -467,6 +589,42 @@ fn run_session(
                     }
                 }
             }
+            SessionCommand::ObserveGeometry { deadline, response } => {
+                let result = (|| {
+                    geometry_remaining(deadline)?;
+                    let Some(backend) = capture.as_mut() else {
+                        return Ok(CaptureGeometryObservation::Unknown(
+                            CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                        ));
+                    };
+                    let observation = backend.observe_geometry(deadline).map_err(|error| {
+                        ExecutionKernelError::device("capture_geometry_read_failed", &error)
+                    })?;
+                    geometry_remaining(deadline)?;
+                    Ok(observation)
+                })();
+                if let Err(mpsc::SendError(result)) = response.send(result) {
+                    let primary = match result {
+                        // An expired caller has already returned Unavailable. A late value
+                        // does not establish a successful Task check or admit cleanup.
+                        Ok(_) if Instant::now() >= deadline => continue,
+                        Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
+                        Err(primary) => primary,
+                    };
+                    // Preserve backend errors and unexpected reply loss for the owner's Close.
+                    let cleanup = close_retained_after_failure(
+                        &receiver,
+                        capture,
+                        input,
+                        primary.clone(),
+                        ResourceCloseOrder::CaptureFirst,
+                    );
+                    return Err(match cleanup {
+                        Ok(()) => primary,
+                        Err(cleanup) => ExecutionKernelError::merge(primary, cleanup),
+                    });
+                }
+            }
             SessionCommand::ApplicationLifecycle { action, response } => {
                 if let Err(error) = close_resources(
                     capture.take(),
@@ -512,9 +670,10 @@ fn run_session(
                 );
                 if response.send(result.clone()).is_err() {
                     return match result {
-                        Ok(_) => Err(ExecutionKernelError::fatal(
+                        Ok(outcome) => Err(ExecutionKernelError::fatal(
                             "execution_session_response_lost",
-                        )),
+                        )
+                        .with_stdio_observations(outcome.vendor_stdio())),
                         Err(error) => Err(ExecutionKernelError::merge(
                             error,
                             ExecutionKernelError::fatal("execution_session_response_lost"),
@@ -542,6 +701,7 @@ fn close_retained_after_failure(
     order: ResourceCloseOrder,
 ) -> ExecutionKernelResult<()> {
     // Keep the actual backends here until the Host chooses close admission.
+    let mut geometry_response_lost = false;
     loop {
         match receiver.recv() {
             Ok(SessionCommand::Close {
@@ -551,8 +711,21 @@ fn close_retained_after_failure(
                 let result = close_resources(capture.take(), input.take(), authority, order);
                 if response.send(result.clone()).is_err() {
                     return Err(match result {
-                        Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
+                        Ok(outcome) => {
+                            ExecutionKernelError::fatal("execution_session_response_lost")
+                                .with_stdio_observations(outcome.vendor_stdio())
+                        }
                         Err(cleanup) => cleanup,
+                    });
+                }
+                if geometry_response_lost {
+                    let primary = ExecutionKernelError::merge(
+                        primary,
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                    );
+                    return Err(match result {
+                        Ok(_) => primary,
+                        Err(cleanup) => ExecutionKernelError::merge(primary, cleanup),
                     });
                 }
                 return result.map(|_| ());
@@ -581,6 +754,18 @@ fn close_retained_after_failure(
                     order,
                     DeviceCloseAuthority::LocalOnly,
                 ));
+            }
+            Ok(SessionCommand::ObserveGeometry { deadline, response }) => {
+                let rejected = response.send(Err(geometry_unavailable(
+                    "execution_session_close_pending",
+                    "geometry is unavailable while the resource owner closes the session",
+                )));
+                if rejected.is_err() && Instant::now() < deadline {
+                    geometry_response_lost = true;
+                }
+                // Expired observers cannot consume the close handoff; unexpected reply loss
+                // is returned with the original primary after the owner's Close.
+                continue;
             }
             _ => {
                 return Err(close_after_failure(
@@ -686,7 +871,7 @@ fn close_after_failure(
     authority: DeviceCloseAuthority,
 ) -> ExecutionKernelError {
     match close_resources(capture, input, authority, order) {
-        Ok(_) => primary,
+        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
         Err(secondary) => ExecutionKernelError::merge_cleanup(primary, secondary),
     }
 }
@@ -709,7 +894,9 @@ fn close_resources(
     };
     match (first, second) {
         (Ok(first), Ok(second)) => Ok(first.combine(second)),
-        (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(outcome)) | (Ok(outcome), Err(error)) => {
+            Err(error.with_stdio_observations(outcome.vendor_stdio()))
+        }
         (Err(primary), Err(secondary)) => {
             Err(ExecutionKernelError::merge_cleanup(primary, secondary))
         }
@@ -729,9 +916,7 @@ fn close_capture(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
         });
     match result {
-        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::confirmed(
-            outcome.resource_count(),
-        )),
+        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(outcome)),
         Err(error) => {
             let quiescence = error
                 .resource_quiescence()
@@ -773,9 +958,7 @@ fn close_input(
                 .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1))
         });
     match result {
-        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::confirmed(
-            outcome.resource_count(),
-        )),
+        Ok(outcome) => Ok(ExecutionResourceCloseOutcome::from_device(outcome)),
         Err(error) => {
             let quiescence = error
                 .resource_quiescence()

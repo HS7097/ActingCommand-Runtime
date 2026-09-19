@@ -23,10 +23,12 @@ fn entry_preflight_facts(events: &[ProjectedEvent]) -> Vec<&TaskSemanticFact> {
 #[test]
 fn explicit_home_entry_mismatch_fails_before_target_input() {
     let root = TempDir::new().expect("tempdir");
-    let target = explicit_home_contained_task_package("fixture01.target", [0, 0, 255], [255, 0, 0]);
+    let target =
+        explicit_home_contained_task_package(true, "fixture01.target", [0, 0, 255], [255, 0, 0]);
     let target_path = root.path().join("fixture01-target.zip");
     fs::write(&target_path, &target).expect("write target package");
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
@@ -108,10 +110,12 @@ fn explicit_home_entry_mismatch_fails_before_target_input() {
 #[test]
 fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
     let root = TempDir::new().expect("tempdir");
-    let target = explicit_home_contained_task_package("fixture01.target", [0, 0, 255], [255, 0, 0]);
+    let target =
+        explicit_home_contained_task_package(true, "fixture01.target", [0, 0, 255], [255, 0, 0]);
     let target_path = root.path().join("fixture01-target.zip");
     fs::write(&target_path, &target).expect("write target package");
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_capture
         .store(1, Ordering::Release);
@@ -179,8 +183,12 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
     host.close().expect("close runtime host");
     for leaves_home in [false, true] {
         let root = TempDir::new().unwrap();
-        let source =
-            explicit_home_contained_task_package("fixture01.target", [255, 0, 0], [0, 0, 255]);
+        let source = explicit_home_contained_task_package(
+            true,
+            "fixture01.target",
+            [255, 0, 0],
+            [0, 0, 255],
+        );
         let mut archive = zip::ZipArchive::new(Cursor::new(source)).unwrap();
         let mut package = ZipWriter::new(Cursor::new(Vec::new()));
         for index in 0..archive.len() {
@@ -200,6 +208,7 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
         let path = root.path().join("required-home.zip");
         fs::write(&path, &bytes).unwrap();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         if leaves_home {
             state
                 .transition_capture_after_capture
@@ -311,15 +320,21 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
 #[test]
 fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     let root = TempDir::new().expect("tempdir");
-    let target = explicit_home_contained_task_package("fixture01.target", [0, 0, 255], [255, 0, 0]);
-    let recovery =
-        explicit_home_contained_task_package("fixture01.return-home", [0, 0, 255], [255, 0, 0]);
+    let target =
+        explicit_home_contained_task_package(true, "fixture01.target", [0, 0, 255], [255, 0, 0]);
+    let recovery = explicit_home_contained_task_package(
+        true,
+        "fixture01.return-home",
+        [0, 0, 255],
+        [255, 0, 0],
+    );
     let target_path = root.path().join("fixture01-target.zip");
     let recovery_path = root.path().join("return-home.zip");
     fs::write(&target_path, &target).expect("write target package");
     fs::write(&recovery_path, &recovery).expect("write recovery package");
     let recovery_sha256 = format!("{:x}", Sha256::digest(&recovery));
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
@@ -465,6 +480,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     fs::write(&target_path, &target).unwrap();
     fs::write(&recovery_path, &incompatible).unwrap();
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
@@ -542,9 +558,14 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
         ),
     ] {
         let root = TempDir::new().expect("tempdir");
-        let target =
-            explicit_home_contained_task_package("fixture01.target", target_home, [255, 0, 0]);
+        let target = explicit_home_contained_task_package(
+            true,
+            "fixture01.target",
+            target_home,
+            [255, 0, 0],
+        );
         let recovery = explicit_home_contained_task_package(
+            true,
             "fixture01.return-home",
             recovery_home,
             recovery_other,
@@ -555,6 +576,7 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
         fs::write(&recovery_path, &recovery).expect("write recovery package");
         let recovery_sha256 = format!("{:x}", Sha256::digest(&recovery));
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         state
             .transition_capture_after_input
             .store(true, Ordering::Release);
@@ -671,10 +693,11 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
 #[test]
 fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
     let root = TempDir::new().expect("tempdir");
-    let target = neutral_non_home_start_contained_task_package();
+    let target = neutral_non_home_start_contained_task_package(true);
     let target_path = root.path().join("neutral-target.zip");
     fs::write(&target_path, &target).expect("write neutral package");
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);

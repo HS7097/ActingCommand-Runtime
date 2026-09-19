@@ -1,3 +1,5 @@
+> 已被 C0 冻结取代
+
 # ActingLab Issue 33 Chain Amendment
 
 Status: approved and frozen for issue #33 after A7
