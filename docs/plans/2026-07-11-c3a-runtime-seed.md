@@ -5,7 +5,7 @@
 This plan implements Issue #35 C3a from:
 
 - `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`
-- `docs/architecture/runtime-ledger-v3-c0-freeze.md`
+- `docs/archive/runtime-ledger-v3-c0-freeze.md`
 
 C3a is the first production slice of the terminal scheduler and Runtime host. It is not a
 temporary mock. The implementation must grow in place during C3b.

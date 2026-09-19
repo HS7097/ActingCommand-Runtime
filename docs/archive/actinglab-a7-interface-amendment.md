@@ -1,3 +1,5 @@
+> 已被 C0 冻结取代
+
 # ActingLab A7 Interface Amendment
 
 Status: approved and frozen for issue #33 A7 onward
