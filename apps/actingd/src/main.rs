@@ -66,6 +66,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host,
         registry,
         policy,
+        ..
     } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
