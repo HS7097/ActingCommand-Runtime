@@ -3964,6 +3964,24 @@ impl HostShared {
                 ),
             ));
         }
+        // ADB baseline: the package runs only against an answering adbd; a probe failure is
+        // recorded typed and takes no lease.
+        if let Err(error) = self.execution.probe_adb_baseline(instance_alias) {
+            let mut host_error = RuntimeHostError::request(
+                "startup_package_adb_not_ready",
+                "run_startup_package",
+                RuntimeErrorCode::BackendOperationFailed,
+            )
+            .with_native_detail(format!(
+                "instance_alias={instance_alias}; adb_failed={error}"
+            ));
+            host_error.lifecycle.instance_id = Some(resolved.instance_id());
+            return Err(RequestFailure::request(
+                host_error,
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
         let execution_provenance = resolved.provenance();
         let (task_actor, task_source) = scheduled_request_transport_origin(execution_provenance);
         let issuer = self.events.issuer();

@@ -121,7 +121,9 @@ startup binds each alias to a registered physical instance
 a fixture instance is refused at assembly with `instance_config_invalid`).
 
 Behaviour (`contracts/emulator-control.md`, "Startup package hook"): only a successful
-`start` / `restart` schedules the package; the control request appends one
+`start` / `restart` schedules the package, and success includes the ADB baseline answering
+(the host waits up to 30 s for adbd after the vendor reports `running`;
+`emulator_control_adb_not_ready` otherwise); the control request appends one
 `runtime.lifecycle_observed` (phase `startup_package_scheduled`, the locator in the audit
 path, a fresh causation id) and returns `startup_package: scheduled`; the host's own
 scheduling thread then runs the package as an ordinary contained task under that causation
@@ -130,12 +132,15 @@ synthesized connection, hash admission, its own lease and the full `task.*` chai
 configured package is always invoked; no configuration, `stop`, a failed action, or an
 instance found already running at daemon startup pull nothing.
 
-Typed codes: `startup_package_missing` (the locator does not open),
-`startup_package_admission_failed` (every other admission refusal; the underlying
-`contained_task_package_*` code is the related failure), both `package_invalid` and recorded
-before any lease as `runtime.failed` (category `startup_package`, stage `operation_cleanup`)
-under the instance and the causation id. Failures after admission are the ordinary contained
-task failures (`task.failed`, lease release, `runtime.failed` on the cleanup path).
+The package runs only after ADB is ready: the scheduling thread probes the ADB baseline once
+more before admission, and a failed probe is `startup_package_adb_not_ready`
+(`backend_operation_failed`), recorded without a lease. Typed admission codes:
+`startup_package_missing` (the locator does not open), `startup_package_admission_failed`
+(every other admission refusal; the underlying `contained_task_package_*` code is the related
+failure), both `package_invalid`; all three are recorded before any lease as `runtime.failed`
+(category `startup_package`, stage `operation_cleanup`) under the instance and the causation
+id. Failures after admission are the ordinary contained task failures (`task.failed`, lease
+release, `runtime.failed` on the cleanup path).
 
 ## Expected ledger sequence (one `emulator restart` with a startup package)
 
@@ -163,7 +168,8 @@ lease.released
 `application_not_foreground`, `application_foreground_unknown` (`invalid_request`, denied);
 `application_effect_requires_assigned_application` (`invalid_request`, denied);
 `startup_package_missing`, `startup_package_admission_failed` (`package_invalid`, denied);
-startup-time fatal: `startup_package_instance_unknown`,
+`emulator_control_adb_not_ready`, `startup_package_adb_not_ready`
+(`backend_operation_failed`, failed); startup-time fatal: `startup_package_instance_unknown`,
 `startup_package_requires_physical_instance`, `invalid_startup_package`; `actingd` assembly:
 `startup_package_path_invalid`, `startup_package_digest_invalid`, `startup_package_invalid`.
 Fact invalidation reason: `adb_unreachable`.

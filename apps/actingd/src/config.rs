@@ -1269,6 +1269,21 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         }
     }
 
+    fn probe_adb_baseline(&self, instance_alias: &str) -> DeviceResult<()> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .probe_adb_baseline(instance_alias),
+            // A fixture has no ADB baseline to wait for.
+            Some(ScheduledExecutionMode::FixtureSimulation) => Ok(()),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
+
     fn observe_foreground_application(
         &self,
         instance_alias: &str,

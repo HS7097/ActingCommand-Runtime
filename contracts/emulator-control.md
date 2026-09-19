@@ -136,7 +136,18 @@ instance (same discovered fields, now with `adb_host` and `adb_port`, linked to 
 request) is appended after `command.validated` and before `runtime.fact_recorded`. A running
 outcome that carries no port fails typed with `emulator_control_endpoint_unresolved`
 (`backend_operation_failed`, receipt state `failed`, effect `indeterminate`); the binding stays as
-it was and the request may be repeated. After a successful `stop` the entry returns to pending
+it was and the request may be repeated.
+
+ADB baseline (slice #316-B3): the vendor reports `running` a few seconds before adbd answers,
+so a bound `start` / `restart` succeeds only once the ADB baseline answers. Still under the
+admission guard, after the rebinding, the host probes the bound endpoint (`ensure_device`
+with a connect attempt allowed) every 500 ms for at most 30 s; the probes are not recorded,
+the wait is part of the receipt's `elapsed_ms`. A timeout fails typed with
+`emulator_control_adb_not_ready` (`backend_operation_failed`, receipt state `failed`, effect
+`indeterminate`; native detail carries the alias, the port, the milliseconds waited and the
+last ADB error): `command.validated`, the second `runtime.instance_bound`, `device.connected`
+and the startup package are all withheld, the binding keeps the reported port, and the
+request may be repeated. After a successful `stop` the entry returns to pending
 and `status` shows `adb_port: null` again; no event beyond the existing `device.connected`
 invalidation records that transition.
 
@@ -174,8 +185,8 @@ Every request is recorded intent -> result, all linked to the instance:
 
 Host codes: `emulator_control_busy` (`runtime_busy`, denied), `emulator_control_unavailable`
 and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_control_wait_timeout`,
-`emulator_control_failed` and `emulator_control_endpoint_unresolved` (`backend_operation_failed`,
-failed). Device-facing requests on a pending instance are denied with `instance_not_running`
+`emulator_control_failed`, `emulator_control_endpoint_unresolved` and
+`emulator_control_adb_not_ready` (`backend_operation_failed`, failed). Device-facing requests on a pending instance are denied with `instance_not_running`
 (`invalid_request`), see "Cold start".
 
 ## The `device.connected` program fact
@@ -217,36 +228,40 @@ digest semantics as `actingctl task-run --package / --expected-sha256`. Nothing 
 hashed at startup. The full contract lives in `contracts/application-lifecycle.md`; the part
 that belongs to emulator control:
 
-- Only a successful `start` / `restart` sets the package in motion; `stop`, a refused or
-  failed action, and a daemon that finds the instance already running at startup schedule
-  nothing. A configured package is always invoked; an instance without one never has
-  anything pulled.
+- Only a successful `start` / `restart` sets the package in motion, and success includes the
+  ADB baseline answering ("Cold start" above); `stop`, a refused or failed action (including
+  `emulator_control_adb_not_ready`), and a daemon that finds the instance already running at
+  startup schedule nothing. A configured package is always invoked; an instance without one
+  never has anything pulled.
 - The control request only *schedules* it, after `command.validated`, the second
   `runtime.instance_bound` and the `device.connected` fact: one `runtime.lifecycle_observed`
   (phase `startup_package_scheduled { instance_id }`, the package locator in the audit machine
   path, links of the control request plus a freshly minted causation id) is appended, the
   entry is queued for the host's own scheduling thread, and the receipt returns as before with
-  `startup_package: scheduled`. The 200 s control wait is never spent on the package.
+  `startup_package: scheduled`. The 230 s control wait is never spent on the package.
 - The scheduling thread (`actingcommand-runtime-startup`, a peer of the monitor thread) runs
   the package as an ordinary contained task under the same causation id: self-minted request,
   correlation and holder ids, origin `(Agent, Adapter)`, a synthesized connection, hash
   admission, its own lease, and the complete `command.received` -> `command.validated` ->
   `lease.*` -> `task.requested` ... `task.completed` / `task.failed` -> `lease.released` chain.
   Its success or failure is read from those events, never from the control receipt.
-- Admission refusals fail typed before any lease: `startup_package_missing` when the locator
-  does not open, `startup_package_admission_failed` for every other admission refusal (the
-  underlying `contained_task_package_*` code attached as related failure, a resource
-  declaration rejection carried along). Every failure of the run is recorded as
+- The thread runs the package only after one more ADB baseline probe of the instance; a
+  probe failure is `startup_package_adb_not_ready` (`backend_operation_failed`), recorded
+  and consumed without a lease. Admission refusals fail typed before any lease:
+  `startup_package_missing` when the locator does not open,
+  `startup_package_admission_failed` for every other admission refusal (the underlying
+  `contained_task_package_*` code attached as related failure, a resource declaration
+  rejection carried along). Every failure of the run is recorded as
   `runtime.failed` (stage `operation_cleanup`, category `startup_package`) linked to the
   instance and the causation id; a fatal one poisons the host as any other.
 
 ## Client and CLI
 
 `RuntimeClient::control_emulator_instance(instance_alias, action)` sends the operation with an
-explicit receipt wait of 200 s (`EMULATOR_CONTROL_RESPONSE_TIMEOUT`: 60 s tool bound + 120 s
+explicit receipt wait of 230 s (`EMULATOR_CONTROL_RESPONSE_TIMEOUT`: 60 s tool bound + 120 s
 readiness wait, the same for start, restart and stop + one 10 s poll that may straddle the
-deadline = 190 s, plus the IO margin) and returns the `EmulatorInstanceControlled` result
-verbatim.
+deadline + the 30 s ADB baseline wait after start / restart = 220 s, plus the IO margin) and
+returns the `EmulatorInstanceControlled` result verbatim.
 
 ```
 actingctl emulator status  --state-root <state-root> --instance <alias>

@@ -33,6 +33,9 @@ use actingcommand_contract::{EmulatorInstanceAction, FactValue, StartupPackageDi
 
 const CONTROL_OPERATION: &str = "control_emulator_instance";
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
+/// Longest wait for adbd after the vendor reports the instance running (#316-B3).
+const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
+const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 impl HostShared {
     pub(super) fn control_emulator_instance(
@@ -131,6 +134,26 @@ impl HostShared {
                 )?);
             }
         };
+        // Slice #316-B3 (ADB baseline): the vendor reports `running` a few seconds before
+        // adbd answers. Still under the admission guard, a bound `start` / `restart` succeeds
+        // only once the ADB baseline answers; a timeout is a non-fatal backend failure that
+        // records neither `device.connected` nor a startup package.
+        let adb_wait_ms = if action == EmulatorInstanceAction::Stop {
+            0
+        } else {
+            match self.await_adb_baseline(&rebound) {
+                Ok(waited_ms) => waited_ms,
+                Err(error) => {
+                    return Err(self.emulator_control_failure(
+                        links,
+                        event_action,
+                        error,
+                        RuntimeReceiptState::Failed,
+                        EffectDisposition::Indeterminate,
+                    )?);
+                }
+            }
+        };
         drop(admission);
         let validated = self.append_event(
             EventSeverity::Info,
@@ -172,10 +195,50 @@ impl HostShared {
                 instance_index: outcome.instance_index,
                 running: outcome.running,
                 adb_port: outcome.adb_port,
-                elapsed_ms: outcome.elapsed_ms,
+                elapsed_ms: outcome.elapsed_ms.saturating_add(adb_wait_ms),
                 startup_package,
             },
         })
+    }
+
+    /// Polls the ADB baseline of the freshly bound endpoint until adbd answers `device`
+    /// (`ADB_BASELINE_WAIT` at most, one probe every `ADB_BASELINE_POLL_INTERVAL`). Returns
+    /// the milliseconds waited; the probes themselves are not recorded, the wait is part of
+    /// the receipt's `elapsed_ms`. A timeout is `emulator_control_adb_not_ready`
+    /// (`backend_operation_failed`) whose native detail carries the port, the wait and the
+    /// last ADB error.
+    fn await_adb_baseline(&self, rebound: &RegisteredInstance) -> RuntimeHostResult<u64> {
+        let started = Instant::now();
+        let deadline = started + ADB_BASELINE_WAIT;
+        let last_error = loop {
+            match self.execution.probe_adb_baseline(&rebound.instance_alias) {
+                Ok(()) => {
+                    return Ok(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+                }
+                Err(error) => {
+                    if Instant::now() >= deadline || self.fatal.is_shutdown_requested() {
+                        break error;
+                    }
+                    thread::sleep(ADB_BASELINE_POLL_INTERVAL);
+                }
+            }
+        };
+        let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut error = RuntimeHostError::request(
+            "emulator_control_adb_not_ready",
+            CONTROL_OPERATION,
+            RuntimeErrorCode::BackendOperationFailed,
+        )
+        .with_native_detail(format!(
+            "instance_alias={}; adb_port={}; waited_ms={waited_ms}; last_error={last_error}",
+            rebound.instance_alias,
+            rebound.bound_adb_endpoint().map_or_else(
+                || "absent".to_owned(),
+                |endpoint| endpoint.port().to_string()
+            )
+        ));
+        error.lifecycle.instance_id = Some(rebound.instance_id());
+        Err(error)
     }
 
     /// Applies the control outcome to the discovery binding: `Start` / `Restart` bind the

@@ -852,6 +852,14 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()>;
 
+    /// One ADB baseline probe of a bound instance (slice #316-B3): `ensure_device` with a
+    /// connect attempt allowed, nothing else. `Ok` means adbd answered `device`; an error is
+    /// the ADB failure. Opens no device session. Providers without an ADB baseline have
+    /// nothing to wait for and keep this `Ok`.
+    fn probe_adb_baseline(&self, _instance_alias: &str) -> DeviceResult<()> {
+        Ok(())
+    }
+
     /// Read-only: the package the instance reports in the foreground, next to the application
     /// assigned to the instance (slice #316-B3). Goes through the ADB baseline only and opens
     /// no device session; a failure is an ADB failure. Providers without an ADB baseline keep

@@ -342,6 +342,15 @@ impl ExecutionKernel {
         self.finish_session_operation(&session, result)
     }
 
+    /// One ADB baseline probe (slice #316-B3), driven on the provider directly like
+    /// `control_instance`, outside any session; the device error comes back untyped.
+    pub fn probe_adb_baseline(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<()> {
+        self.provider.probe_adb_baseline(instance_alias)
+    }
+
     /// Read-only: what the provider reports in the foreground of the instance next to its
     /// assigned application (slice #316-B3). Drives the provider directly like
     /// `control_instance`, outside any session; the device error comes back untyped so the

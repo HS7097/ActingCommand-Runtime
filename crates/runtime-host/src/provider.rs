@@ -579,6 +579,24 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         Ok(())
     }
 
+    /// The ADB baseline probe: the bound endpoint's `ensure_device` with a connect attempt
+    /// allowed (a freshly started emulator answers `adb connect` a few seconds after the
+    /// vendor reports it running). No session is opened.
+    fn probe_adb_baseline(&self, instance_alias: &str) -> DeviceResult<()> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        let application_target = {
+            let endpoint = entry.endpoint();
+            endpoint.require_bound("probe_adb_baseline")?;
+            endpoint.application_target.clone()
+        };
+        Adb::new(entry.application_adb.clone())
+            .ensure_device(&application_target.resolved_serial(), true)
+            .map(|_| ())
+    }
+
     /// The ADB baseline query behind the foreground gate: same bound-endpoint guard and
     /// `ensure_device` as `control_application`, then one read-only `dumpsys`. No session
     /// is opened; a Nemu paired session, when one is open, is not consulted.
