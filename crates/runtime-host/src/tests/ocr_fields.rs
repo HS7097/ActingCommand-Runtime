@@ -398,6 +398,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             serial: "neutral-selected-input".to_owned(),
         });
         *state.capture_selection.lock().unwrap() = Some(CaptureSelectionContext {
+            nemu_frame: None,
             requested: CaptureBackendChoice::NemuIpc,
             configured_adb: "neutral-configured-adb".to_owned(),
             configured_serial: Some("127.0.0.1:16384".to_owned()),
@@ -787,6 +788,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             serial: "neutral-recovery".to_owned(),
         });
         *state.capture_selection.lock().unwrap() = Some(CaptureSelectionContext {
+            nemu_frame: None,
             requested: CaptureBackendChoice::Adb,
             configured_adb: "neutral-adb".to_owned(),
             configured_serial: Some("neutral-recovery".to_owned()),

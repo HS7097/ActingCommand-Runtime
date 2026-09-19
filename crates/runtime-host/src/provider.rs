@@ -10,6 +10,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
     DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, DeviceTarget, InputBackend,
+    NemuAppIndex, NemuApplicationTarget, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
     TouchBackendChoice, TouchBackendConfig, create_capture_backend,
     create_touch_backend_for_fenced_input, mumu_state_wait,
 };
@@ -40,6 +41,7 @@ pub struct ExecutionBackendRegistration {
     /// Discovery reported the instance stopped: the target carries no port yet.
     endpoint_pending: bool,
     provider_profile: Option<EmulatorCapabilityProfile>,
+    nemu_app_index: Option<NemuAppIndex>,
 }
 
 impl ExecutionBackendRegistration {
@@ -70,6 +72,15 @@ impl ExecutionBackendRegistration {
         if input.target.resolved_serial() != capture.target.resolved_serial() {
             return Err(RuntimeHostError::fatal(
                 "execution_backend_target_mismatch",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        if input.requested == TouchBackendChoice::NemuIpc
+            && capture.requested != CaptureBackendChoice::NemuIpc
+        {
+            return Err(RuntimeHostError::fatal(
+                "nemu_input_requires_paired_capture",
                 "build_execution_backend_registry",
                 RuntimeErrorCode::RuntimeFatal,
             ));
@@ -106,6 +117,7 @@ impl ExecutionBackendRegistration {
             discovered: None,
             endpoint_pending: false,
             provider_profile: None,
+            nemu_app_index: None,
         })
     }
 
@@ -133,6 +145,28 @@ impl ExecutionBackendRegistration {
         self.provider_profile = Some(profile);
         self
     }
+
+    pub fn with_nemu_app_index(mut self, app_index: NemuAppIndex) -> RuntimeHostResult<Self> {
+        if self.input.requested != TouchBackendChoice::NemuIpc
+            || self.capture.requested != CaptureBackendChoice::NemuIpc
+        {
+            return Err(RuntimeHostError::fatal(
+                "nemu_app_index_requires_paired_input",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        NemuApplicationTarget::new(&self.application_id, app_index).map_err(|error| {
+            RuntimeHostError::fatal(
+                "nemu_application_identity_invalid",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+            .with_native_detail(error.to_string())
+        })?;
+        self.nemu_app_index = Some(app_index);
+        Ok(self)
+    }
 }
 
 struct ExecutionBackendEntry {
@@ -140,6 +174,7 @@ struct ExecutionBackendEntry {
     application_id: String,
     application_adb: AdbConfig,
     capabilities: EmulatorCapabilityProfile,
+    nemu_app_index: Option<NemuAppIndex>,
     /// The ADB endpoint and everything built on it, behind a lock because emulator control
     /// (re)binds a discovery-bound entry. Every guarded section only copies plain data.
     endpoint: Mutex<EntryEndpoint>,
@@ -224,6 +259,15 @@ impl ExecutionBackendRegistry {
         &mut self,
         registration: ExecutionBackendRegistration,
     ) -> RuntimeHostResult<()> {
+        if registration.input.requested == TouchBackendChoice::NemuIpc
+            && registration.nemu_app_index.is_none()
+        {
+            return Err(RuntimeHostError::fatal(
+                "nemu_app_index_missing",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         if self.entries.contains_key(&registration.instance_alias) {
             return Err(RuntimeHostError::fatal(
                 "duplicate_instance_alias",
@@ -285,6 +329,7 @@ impl ExecutionBackendRegistry {
                 application_id: registration.application_id,
                 application_adb,
                 capabilities,
+                nemu_app_index: registration.nemu_app_index,
                 endpoint: Mutex::new(endpoint),
             },
         );
@@ -466,6 +511,39 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         };
         create_capture_backend(capture)
             .map(|selected| Box::new(selected) as Box<dyn CaptureBackend>)
+    }
+
+    fn open_nemu_session(&self, instance_alias: &str) -> DeviceResult<Option<NemuSessionBackends>> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        // Same pending guard as `open_input` / `open_capture`: a paired session is opened on
+        // the bound target only.
+        let (input, capture) = {
+            let endpoint = entry.endpoint();
+            if endpoint.input.requested != TouchBackendChoice::NemuIpc {
+                return Ok(None);
+            }
+            endpoint.require_bound("open_nemu_session")?;
+            (endpoint.input.clone(), endpoint.capture.clone())
+        };
+        let application = NemuApplicationTarget::new(
+            &entry.application_id,
+            entry
+                .nemu_app_index
+                .ok_or_else(|| DeviceError::fatal("Nemu application index is missing"))?,
+        )?;
+        NemuIpcSession::open(
+            capture,
+            application,
+            NemuInputConfig {
+                command_timeout: input.adb_config.command_timeout,
+                shutdown_timeout: input.maatouch_config.shutdown_timeout,
+                tap_hold: input.maatouch_config.tap_hold,
+            },
+        )
+        .map(Some)
     }
 
     fn control_application(

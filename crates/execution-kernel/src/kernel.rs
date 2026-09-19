@@ -2,15 +2,15 @@
 
 use crate::{
     ExecutionBackendProvider, ExecutionInputOutcome, ExecutionKernelError, ExecutionKernelResult,
-    ExecutionResourceCloseOutcome, ExecutionSession, PreparedInputAction,
+    ExecutionResourceCloseOutcome, ExecutionSession, InputFrameContext, PreparedInputAction,
     ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureGeometryObservation, EmulatorInstanceAction, InputAction,
-    InstanceId, MonitorObservation,
+    ApplicationLifecycleAction, CaptureGeometryObservation, EmulatorInstanceAction, FrameId,
+    InputAction, InputFrameReference, InstanceId, MonitorObservation,
 };
 use actingcommand_device::{
-    DeviceCloseAuthority, EmulatorControlOutcome, EmulatorControlResult, Frame,
+    DeviceCloseAuthority, EmulatorControlOutcome, EmulatorControlResult, Frame, InputOperationCheck,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
@@ -111,10 +111,21 @@ impl ExecutionKernel {
         action: PreparedInputAction,
         registration_guard: G,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
+        self.input_prepared_in_frame(instance_alias, action, None, None, registration_guard)
+    }
+
+    pub fn input_prepared_in_frame<G>(
+        &self,
+        instance_alias: &str,
+        action: PreparedInputAction,
+        frame: Option<InputFrameReference>,
+        check: Option<Arc<dyn InputOperationCheck>>,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         session
-            .input_prepared_retained(action)
+            .input_prepared_in_frame(action, frame, check)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
     }
 
@@ -134,8 +145,23 @@ impl ExecutionKernel {
         instance_alias: &str,
         registration_guard: G,
     ) -> ExecutionKernelResult<Frame> {
-        self.capture_retained_with_geometry_session_and_registration_guard(
+        self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
+            None,
+            registration_guard,
+        )
+        .map(|(frame, _)| frame)
+    }
+
+    pub fn capture_frame_retained_with_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        frame_id: Option<FrameId>,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<Frame> {
+        self.capture_frame_retained_with_geometry_session_and_registration_guard(
+            instance_alias,
+            frame_id,
             registration_guard,
         )
         .map(|(frame, _)| frame)
@@ -147,10 +173,24 @@ impl ExecutionKernel {
         instance_alias: &str,
         registration_guard: G,
     ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
+        self.capture_frame_retained_with_geometry_session_and_registration_guard(
+            instance_alias,
+            None,
+            registration_guard,
+        )
+    }
+
+    /// Carries the producing session and the pending input frame identity together.
+    pub fn capture_frame_retained_with_geometry_session_and_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        frame_id: Option<FrameId>,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         let frame = session
-            .capture_retained()
+            .capture_frame_retained(frame_id)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))?;
         let reference = CaptureGeometrySessionRef {
             instance_id: session.resolved().instance_id(),
@@ -171,6 +211,34 @@ impl ExecutionKernel {
             Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
             Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
         }
+    }
+
+    /// Called by the Runtime after its original capture event has committed.
+    pub fn commit_input_frame(
+        &self,
+        alias: &str,
+        reference: InputFrameReference,
+    ) -> ExecutionKernelResult<InputFrameContext> {
+        self.existing_frame_session(alias)?
+            .commit_input_frame(reference)
+    }
+
+    pub fn resolve_input_frame(
+        &self,
+        alias: &str,
+        reference: InputFrameReference,
+    ) -> ExecutionKernelResult<InputFrameContext> {
+        self.existing_frame_session(alias)?
+            .resolve_input_frame(reference)
+    }
+
+    fn existing_frame_session(&self, alias: &str) -> ExecutionKernelResult<Arc<ExecutionSession>> {
+        let instance = self.resolve(alias)?.instance_id();
+        self.lock_state()?
+            .sessions
+            .get(&instance)
+            .cloned()
+            .ok_or_else(|| ExecutionKernelError::fatal("input_frame_session_missing"))
     }
 
     /// Reads only the capture object belonging to the original producing session.
@@ -324,6 +392,19 @@ impl ExecutionKernel {
         Ok(observation)
     }
 
+    pub fn control_application_retained_with_registration_guard<G>(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+        registration_guard: G,
+    ) -> ExecutionKernelResult<()> {
+        let session = self.session(instance_alias)?;
+        drop(registration_guard);
+        session
+            .control_application_retained(action)
+            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
+    }
+
     pub fn close(&self) -> ExecutionKernelResult<()> {
         let mut state = self.lock_state()?;
         if let Some(result) = &state.close_result {
@@ -368,6 +449,15 @@ impl ExecutionKernel {
         instance_id: InstanceId,
         authority: DeviceCloseAuthority,
     ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+        self.close_instance_with_input_check(instance_id, authority, None)
+    }
+
+    pub fn close_instance_with_input_check(
+        &self,
+        instance_id: InstanceId,
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
+    ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
         let mut state = self.lock_state()?;
         let session = {
             if state.closed {
@@ -382,7 +472,7 @@ impl ExecutionKernel {
             return Ok(ExecutionResourceCloseOutcome::confirmed(0));
         };
         let result = session
-            .close_with_authority(authority)
+            .close_with_input_check(authority, input_check)
             .map_err(|error| error.with_instance_id(instance_id));
         state.instance_closes.insert(instance_id, result.clone());
         result

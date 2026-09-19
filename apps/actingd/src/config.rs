@@ -121,6 +121,8 @@ struct InstanceConfig {
     #[serde(default)]
     instance_name: Option<String>,
     #[serde(default)]
+    nemu_app_index: Option<u32>,
+    #[serde(default)]
     adb_path: Option<String>,
     #[serde(default)]
     serial: Option<String>,
@@ -796,6 +798,21 @@ impl InstanceConfig {
             return Err("instance_config_invalid");
         }
         let (requested, capture_requested) = self.backend_choices()?;
+        let nemu_app_index = match (requested, self.nemu_app_index) {
+            (TouchBackendChoice::NemuIpc, Some(index))
+                if capture_requested == CaptureBackendChoice::NemuIpc =>
+            {
+                Some(
+                    actingcommand_device::NemuAppIndex::try_from(index)
+                        .map_err(|_| "nemu_app_index_invalid")?,
+                )
+            }
+            (TouchBackendChoice::NemuIpc, _) => {
+                return Err("nemu_paired_input_configuration_missing");
+            }
+            (_, Some(_)) => return Err("nemu_app_index_requires_paired_input"),
+            (_, None) => None,
+        };
         let application_id = self
             .application_id
             .filter(|value| !value.trim().is_empty())
@@ -851,6 +868,10 @@ impl InstanceConfig {
             touch,
             capture,
         )
+        .and_then(|registration| match nemu_app_index {
+            Some(index) => registration.with_nemu_app_index(index),
+            None => Ok(registration),
+        })
         .map(Box::new)
         .map(|registration| ConfiguredInstanceBackend::Device {
             alias,
@@ -864,6 +885,7 @@ impl InstanceConfig {
 
     fn fixture_backend(self) -> Result<ConfiguredInstanceBackend, &'static str> {
         if self.application_id.is_some()
+            || self.nemu_app_index.is_some()
             || self.instance_index.is_some()
             || self.instance_name.is_some()
             || self.adb_path.is_some()
@@ -1067,6 +1089,38 @@ impl ConfiguredExecutionBackendRegistry {
 }
 
 impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
+    fn open_nemu_session(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<Option<actingcommand_device::NemuSessionBackends>> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => {
+                let selected = self.device_input_backends.get(instance_alias).copied();
+                if selected != Some(TouchBackendChoice::NemuIpc) {
+                    return Ok(None);
+                }
+                open_device_registry_input_with_diagnostic(selected, || {
+                    let mut pair = self
+                        .devices
+                        .as_ref()
+                        .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                        .open_nemu_session(instance_alias)?
+                        .ok_or_else(|| {
+                            DeviceError::fatal("selected Nemu paired session is unavailable")
+                        })?;
+                    pair.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
+                        pair.input,
+                        TouchBackendChoice::NemuIpc,
+                    ));
+                    Ok(Some(pair))
+                })
+            }
+            Some(ScheduledExecutionMode::FixtureSimulation) => Ok(None),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
     fn instance_aliases(&self) -> Vec<String> {
         self.modes.keys().cloned().collect()
     }
@@ -1301,6 +1355,15 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         self.run("tap", |backend| backend.tap(x, y))
     }
 
+    fn tap_in_frame(
+        &mut self,
+        x: i32,
+        y: i32,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run("tap", |backend| backend.tap_in_frame(x, y, context))
+    }
+
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
         self.run("long_tap", |backend| backend.long_tap(x, y, duration_ms))
     }
@@ -1318,6 +1381,16 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
     fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
         self.run("segmented_swipe", |backend| {
             backend.segmented_swipe_prepared(plan)
+        })
+    }
+
+    fn segmented_swipe_prepared_in_frame(
+        &mut self,
+        plan: &PreparedSegmentedSwipePlan,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run("segmented_swipe", |backend| {
+            backend.segmented_swipe_prepared_in_frame(plan, context)
         })
     }
 

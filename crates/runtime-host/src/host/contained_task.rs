@@ -144,7 +144,7 @@ impl ContainedRunControl {
         );
     }
 
-    fn cancellation_reason(
+    pub(super) fn cancellation_reason(
         &self,
         now_monotonic_ms: u64,
     ) -> Option<ContainedTaskCancellationReason> {
@@ -164,7 +164,7 @@ impl ContainedRunControl {
         }
     }
 
-    fn deadline(&self) -> u64 {
+    pub(super) fn deadline(&self) -> u64 {
         self.deadline_monotonic_ms.load(Ordering::Acquire)
     }
 }
@@ -509,8 +509,15 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         RuntimeContainedTask::classify_error(error)
     }
 
-    fn capture(&mut self) -> Result<Frame, Self::Error> {
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
         self.inner.capture()
+    }
+
+    fn committed_input_frame(
+        &mut self,
+        reference: actingcommand_contract::InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        self.inner.committed_input_frame(reference)
     }
 
     fn action_seed(
@@ -521,8 +528,12 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.action_seed(step_index, operation_label)
     }
 
-    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-        self.inner.input(action)
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
+        self.inner.input(action, frame)
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -2157,7 +2168,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         }
     }
 
-    fn capture(&mut self) -> Result<Frame, Self::Error> {
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
         use actingcommand_contract::TaskTimingBoundary as Boundary;
         let capture_started = self
             .task_timing
@@ -2210,8 +2221,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             let captured = self
                 .host
                 .execution
-                .capture_retained_with_geometry_session_and_registration_guard(
+                .capture_frame_retained_with_geometry_session_and_registration_guard(
                     self.instance_alias,
+                    Some(*frame_id.transport()),
                     registration,
                 );
             // The same CaptureBackend boundary span feeds the typed payload field: no second clock read.
@@ -2344,7 +2356,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             )?;
                             self.configuration_capture_recorded = true;
                         }
-                        Ok(frame)
+                        Ok(ObservedFrame {
+                            input_reference: Some(actingcommand_contract::InputFrameReference {
+                                frame_id: *frame_id.transport(),
+                                width: frame.width,
+                                height: frame.height,
+                            }),
+                            frame,
+                        })
                     })();
                     self.task_timing
                         .finish_boundary(material_started, material.is_ok());
@@ -2434,7 +2453,27 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(Some(action_seed))
     }
 
-    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+    fn committed_input_frame(
+        &mut self,
+        reference: actingcommand_contract::InputFrameReference,
+    ) -> Result<Option<InputFrameContext>, Self::Error> {
+        self.host
+            .execution
+            .resolve_input_frame(self.instance_alias, reference)
+            .map(Some)
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "resolve_committed_input_frame",
+                    &error,
+                ))
+            })
+    }
+
+    fn input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
         let input_started = self.task_timing.begin_boundary(
             actingcommand_contract::TaskTimingBoundary::Input,
             self.timing_identity(actingcommand_contract::TaskTimingBoundary::Input),
@@ -2452,7 +2491,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 RuntimeInputContext {
                     run_links: Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
                     source_step_action_id: self.input_step_action_id.take(),
-                    before_frame_id: self.last_frame_id.map(|frame| *frame.transport()),
+                    before_frame_id: None,
+                    input_frame: frame.map(|frame| frame.reference()),
+                    input_control: Some(Arc::clone(&self.control)),
                 },
             )?;
             self.ensure_active()?;
@@ -2611,7 +2652,24 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             },
                             AuditInput::new(),
                         ),
-                    )
+                    )?;
+                    self.host
+                        .execution
+                        .commit_input_frame(
+                            self.instance_alias,
+                            actingcommand_contract::InputFrameReference {
+                                frame_id: *frame_id.transport(),
+                                width,
+                                height,
+                            },
+                        )
+                        .map(|_| ())
+                        .map_err(|error| {
+                            RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                                "commit_capture_input_frame",
+                                &error,
+                            ))
+                        })
                 })();
                 self.task_timing.finish_boundary(observed, result.is_ok());
                 result
