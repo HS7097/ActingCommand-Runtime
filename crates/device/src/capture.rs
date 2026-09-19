@@ -690,7 +690,7 @@ where
         if let Some(primary) = cleanup_error {
             let mut backend = backend;
             return Err(match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-                Ok(_) => primary,
+                Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
                 Err(winner_cleanup) => {
                     if winner_cleanup.resource_quiescence()
                         == Some(DeviceResourceQuiescence::Unconfirmed)
@@ -728,7 +728,7 @@ fn close_capture_candidates(
         |primary, (index, _name, _elapsed_ms, mut backend)| match backend
             .close_once(DeviceCloseAuthority::LocalOnly)
         {
-            Ok(_) => primary,
+            Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
             Err(cleanup) => {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(backend);
@@ -830,7 +830,7 @@ fn close_capture_backend_after_error(
     primary: DeviceError,
 ) -> DeviceError {
     match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-        Ok(_) => primary,
+        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
         Err(cleanup) => {
             if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                 std::mem::forget(backend);
@@ -1041,7 +1041,7 @@ fn prime_capture_backend(
             ))
         }
         Err(primary) => match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-            Ok(_) => Err(primary),
+            Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
             Err(cleanup) => {
                 if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     std::mem::forget(backend);
@@ -1473,7 +1473,7 @@ impl NemuIpcBackend {
             Ok(resolution) => resolution,
             Err(primary) => {
                 return match worker.shutdown_once(DeviceCloseAuthority::LocalOnly) {
-                    Ok(_) => Err(primary),
+                    Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
                     Err(cleanup) => {
                         let unconfirmed = cleanup.resource_quiescence()
                             == Some(DeviceResourceQuiescence::Unconfirmed);
@@ -1561,7 +1561,10 @@ impl NemuIpcWorker {
                             closed = true;
                             if response.send(result.clone()).is_err() {
                                 return Err(match result {
-                                    Ok(_) => DeviceError::fatal("Nemu IPC close response lost"),
+                                    Ok(outcome) => {
+                                        DeviceError::fatal("Nemu IPC close response lost")
+                                            .with_stdio_observations(outcome.vendor_stdio())
+                                    }
                                     Err(primary) => primary,
                                 });
                             }
@@ -1598,7 +1601,9 @@ impl NemuIpcWorker {
                 });
                 match (result, cleanup) {
                     (Ok(()), Ok(_)) => Ok(()),
-                    (Err(primary), Ok(_)) => Err(primary),
+                    (Err(primary), Ok(outcome)) => {
+                        Err(primary.with_stdio_observations(outcome.vendor_stdio()))
+                    }
                     (Ok(()), Err(cleanup)) => Err(cleanup),
                     (Err(primary), Err(cleanup)) => Err(primary.merge_resource_cleanup(cleanup)),
                 }
@@ -1724,7 +1729,7 @@ impl NemuIpcWorker {
         let result = match (result, self.join_bounded()) {
             (Ok(outcome), Ok(())) => Ok(outcome.combine(DeviceResourceCloseOutcome::confirmed(1))),
             (Err(primary), Ok(())) => Err(primary),
-            (Ok(_), Err(join)) => Err(join),
+            (Ok(outcome), Err(join)) => Err(join.with_stdio_observations(outcome.vendor_stdio())),
             (Err(primary), Err(join)) => Err(primary.merge_resource_cleanup(join)),
         };
         self.close_result = Some(result.clone());
@@ -2066,9 +2071,13 @@ impl NemuIpcWorkerState {
             state.symbol::<NemuDisconnect>(b"nemu_disconnect\0")
         })?;
         let mut failure = None;
+        let mut stdio_observations = Vec::new();
         if let Some(stdio) = self.stdio_session.as_mut() {
             match stdio.finish() {
-                Ok(outcome) => resource_count = resource_count.max(outcome.resource_count()),
+                Ok(outcome) => {
+                    resource_count = resource_count.max(outcome.resource_count());
+                    stdio_observations.extend_from_slice(outcome.vendor_stdio());
+                }
                 Err(error)
                     if error.resource_quiescence() == Some(DeviceResourceQuiescence::Confirmed) =>
                 {
@@ -2095,12 +2104,15 @@ impl NemuIpcWorkerState {
             return Err(match failure {
                 Some(primary) => primary.merge_resource_cleanup(error),
                 None => error,
-            });
+            }
+            .with_stdio_observations(&stdio_observations));
         }
         failure.map_or(
-            Ok(DeviceResourceCloseOutcome::confirmed(resource_count)),
+            Ok(DeviceResourceCloseOutcome::confirmed(resource_count)
+                .with_stdio_observations(&stdio_observations)),
             |error| {
                 Err(error
+                    .with_stdio_observations(&stdio_observations)
                     .with_resource_summary(DeviceResourceQuiescence::Confirmed, resource_count))
             },
         )

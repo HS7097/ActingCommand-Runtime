@@ -152,6 +152,8 @@ impl VendorStdioFacts {
             started_filetime: filetime(),
             steps: Vec::with_capacity(MAX_VENDOR_STDIO_STEPS),
             dropped_count: 0,
+            paths: Vec::with_capacity(2),
+            restart_manager: None,
         }
     }
 
@@ -183,7 +185,164 @@ pub(super) fn step(
         before: None,
         after: None,
         related: None,
+        target_retirement: None,
     }
+}
+
+/// One observation of this session's paths; size/read is bounded to two GetList calls.
+pub(super) fn probe_residue(facts: &mut VendorStdioFacts) {
+    use crate::{
+        MAX_STDIO_RM_PROCESSES, StdioPathRemoval, StdioRmApi, StdioRmAvailability, StdioRmCall,
+        StdioRmFacts, StdioRmProcess,
+    };
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows_sys::Win32::System::RestartManager::{
+        CCH_RM_SESSION_KEY, RM_PROCESS_INFO, RmEndSession, RmGetList,
+        RmRebootReasonPermissionDenied, RmRebootReasonSessionMismatch, RmRegisterResources,
+        RmStartSession,
+    };
+
+    if facts.restart_manager.is_some()
+        || !facts
+            .paths
+            .iter()
+            .any(|path| matches!(path.removal, StdioPathRemoval::Residual(_)))
+    {
+        return;
+    }
+    let _error_state = NativeErrorState::save();
+    let mut report = StdioRmFacts {
+        availability: StdioRmAvailability::Unavailable,
+        calls: Vec::with_capacity(5),
+        needed_processes: 0,
+        reported_processes: 0,
+        reboot_reasons: 0,
+        processes: Vec::new(),
+    };
+    let mut session = 0;
+    let mut key = [0u16; CCH_RM_SESSION_KEY as usize + 1];
+    let status = unsafe { RmStartSession(&mut session, 0, key.as_mut_ptr()) };
+    report.calls.push(StdioRmCall {
+        api: StdioRmApi::StartSession,
+        status,
+        completed_filetime: filetime(),
+    });
+    if status == ERROR_SUCCESS {
+        let paths = facts
+            .paths
+            .iter()
+            .map(|path| {
+                path.path_utf16
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let pointers = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
+        let status = unsafe {
+            RmRegisterResources(
+                session,
+                pointers.len() as u32,
+                pointers.as_ptr(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        report.calls.push(StdioRmCall {
+            api: StdioRmApi::RegisterResources,
+            status,
+            completed_filetime: filetime(),
+        });
+        if status == ERROR_SUCCESS {
+            let status = unsafe {
+                RmGetList(
+                    session,
+                    &mut report.needed_processes,
+                    &mut report.reported_processes,
+                    std::ptr::null_mut(),
+                    &mut report.reboot_reasons,
+                )
+            };
+            report.calls.push(StdioRmCall {
+                api: StdioRmApi::GetList,
+                status,
+                completed_filetime: filetime(),
+            });
+            if status == ERROR_SUCCESS
+                && report.needed_processes == 0
+                && report.reported_processes == 0
+            {
+                report.availability = StdioRmAvailability::Complete;
+            } else if status == ERROR_MORE_DATA {
+                report.availability = StdioRmAvailability::Incomplete;
+                if report.needed_processes <= MAX_STDIO_RM_PROCESSES as u32 {
+                    let mut processes = [RM_PROCESS_INFO::default(); MAX_STDIO_RM_PROCESSES];
+                    report.reported_processes = MAX_STDIO_RM_PROCESSES as u32;
+                    let status = unsafe {
+                        RmGetList(
+                            session,
+                            &mut report.needed_processes,
+                            &mut report.reported_processes,
+                            processes.as_mut_ptr(),
+                            &mut report.reboot_reasons,
+                        )
+                    };
+                    report.calls.push(StdioRmCall {
+                        api: StdioRmApi::GetList,
+                        status,
+                        completed_filetime: filetime(),
+                    });
+                    if status == ERROR_SUCCESS
+                        && report.reported_processes <= MAX_STDIO_RM_PROCESSES as u32
+                        && report.needed_processes <= report.reported_processes
+                    {
+                        report.availability = StdioRmAvailability::Complete;
+                        report.processes = processes[..report.reported_processes as usize]
+                            .iter()
+                            .map(|process| StdioRmProcess {
+                                process_id: process.Process.dwProcessId,
+                                created_filetime: u64::from(
+                                    process.Process.ProcessStartTime.dwLowDateTime,
+                                ) | (u64::from(
+                                    process.Process.ProcessStartTime.dwHighDateTime,
+                                ) << 32),
+                                rm_app_name_utf16: process
+                                    .strAppName
+                                    .iter()
+                                    .copied()
+                                    .take_while(|unit| *unit != 0)
+                                    .collect(),
+                            })
+                            .collect();
+                    } else if status != ERROR_MORE_DATA && status != ERROR_SUCCESS {
+                        report.availability = StdioRmAvailability::Unavailable;
+                    }
+                }
+            } else if status == ERROR_SUCCESS {
+                report.availability = StdioRmAvailability::Incomplete;
+            }
+        }
+        let status = unsafe { RmEndSession(session) };
+        report.calls.push(StdioRmCall {
+            api: StdioRmApi::EndSession,
+            status,
+            completed_filetime: filetime(),
+        });
+        if status != ERROR_SUCCESS && report.availability == StdioRmAvailability::Complete {
+            report.availability = StdioRmAvailability::Incomplete;
+        }
+        if report.reboot_reasons
+            & (RmRebootReasonPermissionDenied | RmRebootReasonSessionMismatch) as u32
+            != 0
+            && report.availability == StdioRmAvailability::Complete
+        {
+            report.availability = StdioRmAvailability::Incomplete;
+        }
+    }
+    facts.restart_manager = Some(report);
 }
 
 /// Caller must hold a live CRT descriptor. Never call following any _close attempt.
