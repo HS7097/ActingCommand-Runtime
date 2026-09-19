@@ -29,10 +29,10 @@
 
 use super::*;
 use crate::{EmulatorControlFailure, EmulatorControlOutcome};
-use actingcommand_contract::{EmulatorInstanceAction, FactValue};
+use actingcommand_contract::{EmulatorInstanceAction, FactValue, StartupPackageDisposition};
 
 const CONTROL_OPERATION: &str = "control_emulator_instance";
-const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
+pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
 
 impl HostShared {
     pub(super) fn control_emulator_instance(
@@ -151,11 +151,18 @@ impl HostShared {
                 EventSource::Runtime,
                 OriginModule::Runtime,
                 EventActor::Runtime,
-                links,
+                links.clone(),
                 instance_bound_payload(&rebound),
             )?;
         }
         self.record_device_connected(instance_id, action, outcome.running, terminal_event)?;
+        // Slice #316-B3: after `start` / `restart` the configured startup package is only
+        // scheduled here (intent event + queue); it runs on the host's own scheduling thread.
+        let startup_package = if action == EmulatorInstanceAction::Stop {
+            StartupPackageDisposition::None
+        } else {
+            self.schedule_startup_package(&rebound, links, original.request_id())?
+        };
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal_event),
@@ -166,6 +173,7 @@ impl HostShared {
                 running: outcome.running,
                 adb_port: outcome.adb_port,
                 elapsed_ms: outcome.elapsed_ms,
+                startup_package,
             },
         })
     }
@@ -250,14 +258,20 @@ impl HostShared {
         })
         .map_err(|error| fact_failure(error, terminal_event))?;
         if action == EmulatorInstanceAction::Stop {
-            match self.invalidate_runtime_fact(
-                &scope,
+            // A stopped instance has no foreground either (#316-B3).
+            for key in [
                 DEVICE_CONNECTED_FACT_KEY,
-                RuntimeFactInvalidationReason::DeviceClosed,
-            ) {
-                Ok(_) => {}
-                Err(error) if error.code() == "runtime_fact_missing" => {}
-                Err(error) => return Err(fact_failure(error, terminal_event)),
+                actingcommand_contract::APPLICATION_FOREGROUND_FACT_KEY,
+            ] {
+                match self.invalidate_runtime_fact(
+                    &scope,
+                    key,
+                    RuntimeFactInvalidationReason::DeviceClosed,
+                ) {
+                    Ok(_) => {}
+                    Err(error) if error.code() == "runtime_fact_missing" => {}
+                    Err(error) => return Err(fact_failure(error, terminal_event)),
+                }
             }
         }
         Ok(())

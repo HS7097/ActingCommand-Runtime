@@ -744,6 +744,17 @@ impl ApplicationLifecycleAction {
     }
 }
 
+/// What emulator instance control did with the instance's configured startup package
+/// (slice #316-B3): `none` when no package is configured for the instance or the action was
+/// `stop`, `scheduled` when the host queued it for its own scheduling point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupPackageDisposition {
+    #[default]
+    None,
+    Scheduled,
+}
+
 /// One lifecycle action on the emulator instance itself (the provider's `control` surface),
 /// distinct from the application lifecycle inside a running instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3570,6 +3581,11 @@ pub enum RuntimeResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         adb_port: Option<u16>,
         elapsed_ms: u64,
+        /// Whether the instance's configured startup package was handed to the host's own
+        /// scheduling point after this action (slice #316-B3). The package runs later as a
+        /// contained task with its own `task.*` events; nothing runs inside this request.
+        #[serde(default)]
+        startup_package: StartupPackageDisposition,
     },
     ContainedTaskCompleted {
         run_id: RunId,

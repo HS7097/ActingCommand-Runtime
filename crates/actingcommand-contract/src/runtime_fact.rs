@@ -47,9 +47,12 @@ pub const MAX_CONFIG_MANIFEST_PARAMETERS: usize = 256;
 pub const MAX_CONFIG_MANIFEST_NAME_BYTES: usize = 128;
 /// Upper bound on a subsystem reason, in bytes.
 pub const MAX_CONFIG_MANIFEST_REASON_BYTES: usize = 512;
+/// Key of the instance-scoped runtime fact that carries the package name the device
+/// reported in the foreground (slice #316-B3).
+pub const APPLICATION_FOREGROUND_FACT_KEY: &str = "application.foreground";
 /// Key families accepted for runtime facts. None of them overlaps the
 /// instance-fact families validated by `crate::fact`.
-pub const RUNTIME_FACT_FAMILIES: [&str; 8] = [
+pub const RUNTIME_FACT_FAMILIES: [&str; 9] = [
     "device.",
     "backend.",
     "task.",
@@ -58,6 +61,7 @@ pub const RUNTIME_FACT_FAMILIES: [&str; 8] = [
     "config.",
     "provider.",
     "eligible.",
+    "application.",
 ];
 
 /// Validates a runtime fact key: bounded, printable, no whitespace, and inside
@@ -311,6 +315,9 @@ pub enum RuntimeFactInvalidationReason {
     RuntimeTakeover,
     /// The instance's device session was closed.
     DeviceClosed,
+    /// An ADB command against the instance failed: the ADB baseline is lost, so every
+    /// device-bound observation is stale until ADB answers again.
+    AdbUnreachable,
     /// The declared lifetime elapsed.
     Expired,
     /// An operator asked for the value to be dropped.

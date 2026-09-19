@@ -10,7 +10,7 @@
 use super::*;
 
 /// Key families that stop describing the device once a new owner epoch starts.
-const TAKEOVER_INVALIDATED_FAMILIES: [&str; 2] = ["device.", "backend."];
+const TAKEOVER_INVALIDATED_FAMILIES: [&str; 3] = ["device.", "backend.", "application."];
 
 impl HostShared {
     /// Records the in-memory runtime configuration manifest as its two

@@ -342,6 +342,17 @@ impl ExecutionKernel {
         self.finish_session_operation(&session, result)
     }
 
+    /// Read-only: what the provider reports in the foreground of the instance next to its
+    /// assigned application (slice #316-B3). Drives the provider directly like
+    /// `control_instance`, outside any session; the device error comes back untyped so the
+    /// host can classify it as an ADB failure itself.
+    pub fn observe_foreground_application(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<crate::ForegroundApplicationObservation> {
+        self.provider.observe_foreground_application(instance_alias)
+    }
+
     /// Drives the provider's instance control surface directly: no session is opened, touched
     /// or closed here. The host closes the instance's device session first and does not
     /// reopen it afterwards (it opens lazily on the next lease).

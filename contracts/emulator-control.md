@@ -12,7 +12,9 @@ application lifecycle inside a running instance (`ApplicationLifecycle`) is unch
 - `RuntimeRequest::validate` admits the operation only when `(actor, source)` is
   `(User, Ui)` or `(Cli, Cli)`; every other origin is `invalid_emulator_control_origin`.
   `Adapter` / `Agent` are excluded on purpose: the scheduler and agents can never issue it, and
-  there is no automatic restart policy.
+  there is no policy that restarts the emulator by itself. The startup package (slice
+  #316-B3, "Startup package hook" below) is the one thing a successful `start` / `restart`
+  sets in motion: a configuration-declared, fully ledgered contained task, not a restart.
 - The instance must be a registered physical instance (`fixture_execution_scope_forbidden`
   otherwise).
 
@@ -196,12 +198,47 @@ fact store (`runtime-fact-store.md`).
   "instance_index": 0,
   "running": true,
   "adb_port": 16384,
-  "elapsed_ms": 12345
+  "elapsed_ms": 12345,
+  "startup_package": "none"
 }
 ```
 
 `adb_port` is omitted when the last observation carried none (a stopped instance). The receipt
-state is `completed` with the `command.validated` event as terminal.
+state is `completed` with the `command.validated` event as terminal. `startup_package` is
+`scheduled` when a successful `start` / `restart` handed the instance's configured startup
+package to the host's scheduling thread (see "Startup package hook"), `none` otherwise
+(nothing configured, or `stop`).
+
+## Startup package hook (slice #316-B3)
+
+An instance may declare `startup_package { "package": <locator>, "expected_sha256": <hex> }`
+in its `actingd` configuration (`contracts/actingd-check-config.md`), the same locator and
+digest semantics as `actingctl task-run --package / --expected-sha256`. Nothing is opened or
+hashed at startup. The full contract lives in `contracts/application-lifecycle.md`; the part
+that belongs to emulator control:
+
+- Only a successful `start` / `restart` sets the package in motion; `stop`, a refused or
+  failed action, and a daemon that finds the instance already running at startup schedule
+  nothing. A configured package is always invoked; an instance without one never has
+  anything pulled.
+- The control request only *schedules* it, after `command.validated`, the second
+  `runtime.instance_bound` and the `device.connected` fact: one `runtime.lifecycle_observed`
+  (phase `startup_package_scheduled { instance_id }`, the package locator in the audit machine
+  path, links of the control request plus a freshly minted causation id) is appended, the
+  entry is queued for the host's own scheduling thread, and the receipt returns as before with
+  `startup_package: scheduled`. The 200 s control wait is never spent on the package.
+- The scheduling thread (`actingcommand-runtime-startup`, a peer of the monitor thread) runs
+  the package as an ordinary contained task under the same causation id: self-minted request,
+  correlation and holder ids, origin `(Agent, Adapter)`, a synthesized connection, hash
+  admission, its own lease, and the complete `command.received` -> `command.validated` ->
+  `lease.*` -> `task.requested` ... `task.completed` / `task.failed` -> `lease.released` chain.
+  Its success or failure is read from those events, never from the control receipt.
+- Admission refusals fail typed before any lease: `startup_package_missing` when the locator
+  does not open, `startup_package_admission_failed` for every other admission refusal (the
+  underlying `contained_task_package_*` code attached as related failure, a resource
+  declaration rejection carried along). Every failure of the run is recorded as
+  `runtime.failed` (stage `operation_cleanup`, category `startup_package`) linked to the
+  instance and the causation id; a fatal one poisons the host as any other.
 
 ## Client and CLI
 
