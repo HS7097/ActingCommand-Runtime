@@ -82,16 +82,19 @@ declared values) before Host startup fails with the same classification:
 including a missing install), `mumu_manager_version_unsupported` (below the
 policy floor or unparseable), `instance_discovery_no_match` (no reported
 instance has the index or exact name), `instance_discovery_ambiguous` (more
-than one instance carries the name), `instance_discovered_stopped` (the
-matched instance reports no ADB endpoint because it is stopped; the failure
-message names the alias, the binding key and the discovered index; it is never
-bound with a guessed port, so today the daemon must be started while the
-configured instance is running, and starting a stopped instance from a cold
-daemon lands in the next slice) and `instance_discovery_conflict` (a
-declared `adb_path`, `host` or `port` differs from the discovered value; the
-failure message carries both values). A resolved instance is then registered
-exactly like an explicit one, with the discovered ADB path, host and port and
-no serial. Discovery runs once per startup; nothing is re-probed later.
+than one instance carries the name) and `instance_discovery_conflict` (a
+declared `adb_path`, `host` or `port` differs from the discovered value, or a
+`port` is declared for a matched instance that is stopped and therefore cannot
+be cross-checked, code `port_unverifiable`; the failure message carries the
+declared and the discovered values). A resolved running instance is then
+registered exactly like an explicit one, with the discovered ADB path, host and
+port and no serial. A resolved instance that is stopped (it reports no ADB
+endpoint) is registered with a PENDING binding instead of being refused: the
+discovered facts plus the host the binding will be completed with (the reported
+`adb_host_ip` if any, else the declared `host`, else `127.0.0.1`), but no port;
+it is never bound with a guessed port, and `actingctl emulator start` resolves
+the port (`emulator-control.md`, "Cold start"). Discovery runs once per
+startup; nothing is re-probed later.
 
 Between the discovery answer and the first instance binding, still inside the
 `instance_discovery` bracket, the same closure records `started`/`completed`
@@ -137,9 +140,15 @@ event carries no audit endpoint of its own. `serial_configured` states that
 an explicit serial was configured, so the recorded host and port are the
 configured target rather than the resolved transport serial; the resolved serial
 is never parsed. An instance with no ADB target, including a fixture simulation,
-omits host and port. A serial-configured instance, like one without a port, is
-excluded from port grouping: its port never identifies it in the ledger port map
-or in the `status` `adb_port` field. A failed append is fatal, as for
+omits host and port, and so does a discovered binding that is still pending
+(the instance was stopped at startup): it carries the discovered index, name
+and provider version with `binding_source` `discovered` and no host or port.
+Emulator control appends one more `runtime.instance_bound` for that instance,
+with host and port, once a successful `start` / `restart` resolved them
+(`emulator-control.md`, "Cold start"); the newest event's port represents the
+instance from then on. A serial-configured instance, like one without a port,
+is excluded from port grouping: its port never identifies it in the ledger port
+map or in the `status` `adb_port` field. A failed append is fatal, as for
 `runtime.started`.
 
 `actingcommand-vision-provider-check --state-root <runtime-state>` reads the

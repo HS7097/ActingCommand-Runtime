@@ -648,12 +648,67 @@ impl ResolvedAdbEndpoint {
     }
 }
 
+/// A discovery binding whose ADB port is not known yet: discovery reported the instance
+/// stopped. Emulator control resolves the port when it starts the instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingAdbEndpoint {
+    host: String,
+    discovered: DiscoveredInstanceBinding,
+}
+
+impl PendingAdbEndpoint {
+    pub fn new(host: impl Into<String>, discovered: DiscoveredInstanceBinding) -> Self {
+        Self {
+            host: host.into(),
+            discovered,
+        }
+    }
+
+    /// The host the instance is bound with once its port is reported.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub const fn discovered_binding(&self) -> &DiscoveredInstanceBinding {
+        &self.discovered
+    }
+}
+
+/// The ADB endpoint state of a registered instance: bound to a HOST:PORT target, or pending
+/// until emulator control starts the discovered instance and reports its port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedInstanceEndpoint {
+    Bound(ResolvedAdbEndpoint),
+    Pending(PendingAdbEndpoint),
+}
+
+impl ResolvedInstanceEndpoint {
+    pub const fn bound(&self) -> Option<&ResolvedAdbEndpoint> {
+        match self {
+            Self::Bound(endpoint) => Some(endpoint),
+            Self::Pending(_) => None,
+        }
+    }
+
+    pub const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending(_))
+    }
+
+    /// Present for both states of a discovery-bound instance, absent for an explicit one.
+    pub const fn discovered_binding(&self) -> Option<&DiscoveredInstanceBinding> {
+        match self {
+            Self::Bound(endpoint) => endpoint.discovered_binding(),
+            Self::Pending(pending) => Some(pending.discovered_binding()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ResolvedExecutionInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
-    adb_endpoint: Option<ResolvedAdbEndpoint>,
+    adb_endpoint: Option<ResolvedInstanceEndpoint>,
     configuration: Option<actingcommand_contract::EffectiveDeviceConfiguration>,
     capabilities: Option<actingcommand_contract::EmulatorCapabilityProfile>,
 }
@@ -704,11 +759,16 @@ impl ResolvedExecutionInstance {
     }
 
     pub fn with_adb_endpoint(mut self, adb_endpoint: ResolvedAdbEndpoint) -> Self {
-        self.adb_endpoint = Some(adb_endpoint);
+        self.adb_endpoint = Some(ResolvedInstanceEndpoint::Bound(adb_endpoint));
         self
     }
 
-    pub const fn adb_endpoint(&self) -> Option<&ResolvedAdbEndpoint> {
+    pub fn with_pending_endpoint(mut self, pending: PendingAdbEndpoint) -> Self {
+        self.adb_endpoint = Some(ResolvedInstanceEndpoint::Pending(pending));
+        self
+    }
+
+    pub const fn adb_endpoint(&self) -> Option<&ResolvedInstanceEndpoint> {
         self.adb_endpoint.as_ref()
     }
 
@@ -802,6 +862,30 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 ),
             0,
         ))
+    }
+
+    /// Completes or reverts the discovery binding of an instance after emulator control:
+    /// `Some(port)` binds the discovered host with the port the started instance reported
+    /// (`start` / `restart`), `None` returns the entry to pending (`stop`). Opens no device
+    /// session; the caller holds the instance's admission guard and has closed its session.
+    /// Providers without an instance-control surface keep this typed refusal.
+    fn rebind_discovered_endpoint(
+        &self,
+        _instance_alias: &str,
+        _adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        Err(
+            DeviceError::fatal("emulator control unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "emulator_control.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "rebind_discovered_endpoint",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        )
     }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {

@@ -191,9 +191,12 @@ adb_port != 0` after `launch` / `restart` (120 s), `!is_process_started` after `
 is recorded opaquely and never branched on. The vendor documents no return value, exit code or
 blocking behaviour for `control`, so the bounds are Runtime policy. No automatic restart exists:
 the scheduler and agents cannot issue the operation (`invalid_emulator_control_origin`). Cold
-start is out of scope: the daemon must be started while the configured instance is running (a
-stopped configured instance refuses startup with `instance_discovered_stopped`); starting a
-stopped instance from a cold daemon lands in the next slice.
+start (slice #316-B2): a configured instance that discovery reports stopped is bound PENDING
+(discovered facts and host, no port; `status` shows `adb_port: null`), every device-facing
+request on it is denied typed with `instance_not_running` until `start` / `restart` succeeds,
+at which point the registry binds the reported port and the host appends a second
+`runtime.instance_bound` for the instance; `stop` returns it to pending. Nothing is bound with
+a guessed port (`contracts/emulator-control.md`, "Cold start").
 
 ## Offline workstation observation
 

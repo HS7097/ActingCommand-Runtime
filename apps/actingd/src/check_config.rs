@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use actingcommand_runtime_host::{ExecutionBackendProvider, ResolvedAdbEndpoint};
+use actingcommand_runtime_host::{
+    ExecutionBackendProvider, ResolvedAdbEndpoint, ResolvedInstanceEndpoint,
+};
 use serde_json::json;
 use std::path::Path;
 
@@ -83,7 +85,9 @@ fn summarize(
             let resolved = registry
                 .resolve(&alias)
                 .ok_or(("execution_backend_registry_incomplete", "validate"))?;
-            let endpoint = resolved.adb_endpoint();
+            let endpoint = resolved
+                .adb_endpoint()
+                .and_then(ResolvedInstanceEndpoint::bound);
             Ok(json!({
                 "alias": alias,
                 "mode": mode,

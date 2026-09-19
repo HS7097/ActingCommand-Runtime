@@ -353,6 +353,27 @@ impl ExecutionKernel {
         self.provider.control_instance(instance_alias, action)
     }
 
+    /// Rebinds the provider's endpoint after emulator control. A retained session would keep
+    /// the previous endpoint identity, so one still open here is an invariant violation: the
+    /// host closes the instance's session before every control action.
+    pub fn rebind_discovered_endpoint(
+        &self,
+        instance_alias: &str,
+        adb_port: Option<u16>,
+    ) -> ExecutionKernelResult<()> {
+        let resolved = self.resolve(instance_alias)?;
+        if self.has_session(resolved.instance_id())? {
+            return Err(ExecutionKernelError::fatal(
+                "execution_endpoint_rebind_session_open",
+            ));
+        }
+        self.provider
+            .rebind_discovered_endpoint(instance_alias, adb_port)
+            .map_err(|error| {
+                ExecutionKernelError::device("execution_endpoint_rebind_failed", &error)
+            })
+    }
+
     pub fn observe_monitor(
         &self,
         instance_alias: &str,

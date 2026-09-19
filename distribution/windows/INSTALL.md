@@ -87,11 +87,14 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   Program Files. `MuMuManager` must report at least `6.3.2.0`, a Runtime policy
   floor. Startup refuses with `instance_discovery_unavailable`,
   `mumu_manager_version_unsupported`, `instance_discovery_no_match`,
-  `instance_discovery_ambiguous`, `instance_discovery_conflict` or
-  `instance_discovered_stopped` (the configured instance must be running when
-  the daemon starts), and
+  `instance_discovery_ambiguous` or `instance_discovery_conflict`, and
   `check-config` reports such entries as `"binding":"discovery_pending"`
-  without running discovery; see `contracts/provider-startup.md`.
+  without running discovery; see `contracts/provider-startup.md`. A configured
+  instance that is stopped when the daemon starts is bound pending (no port,
+  `status` shows `adb_port: null`, device requests are denied with
+  `instance_not_running`) and is started with
+  `.\actingctl.exe emulator start --state-root <private-state-root> --instance <alias>`;
+  declare no `port` for such an instance.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
 The blank state root and salt must be filled before startup. Use your existing

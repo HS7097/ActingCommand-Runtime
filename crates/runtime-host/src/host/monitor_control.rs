@@ -205,37 +205,12 @@ impl HostShared {
             if error.is_fatal() {
                 return Err(error);
             }
-            let mut registry = lock(&self.monitor_registry, "refuse_monitor_capacity")?;
-            let update = registry.prepare_failure(
-                probe,
-                started_at_unix_ms,
-                unix_ms_now()?,
-                error.projection().code,
-            )?;
-            let failed = self.append_event_raw(
-                EventSeverity::Warning,
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-                links.clone(),
-                MonitorPayloadDraft::failed(
-                    DiagnosticCode::RuntimeDiagnostic,
-                    EffectDisposition::NotPerformed,
-                    AuditInput::new(),
-                )
-                .with_runtime_state(update.fact)
-                .map_err(|_| {
-                    RuntimeHostError::fatal(
-                        "monitor_state_invalid",
-                        "refuse_monitor_capacity",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?,
-            )?;
-            registry.apply(&failed)?;
-            drop(registry);
-            self.record_required_failure(&error, &failed, links)?;
-            return Ok(());
+            return self.refuse_monitor_probe(probe, links, started_at_unix_ms, error);
+        }
+        // The probe would open the device session: a pending discovery binding refuses it
+        // typed (`instance_not_running`) before any capture is requested.
+        if let Err(error) = instance_not_running(&instance) {
+            return self.refuse_monitor_probe(probe, links, started_at_unix_ms, error);
         }
         self.append_event_raw(
             EventSeverity::Info,
@@ -428,6 +403,47 @@ impl HostShared {
         Ok(())
     }
 
+    /// A probe refused before it started (no capacity, or the instance is not running):
+    /// `monitor.failed` with the refusal's runtime code plus the `runtime.failed` record.
+    fn refuse_monitor_probe(
+        &self,
+        probe: &DueMonitorProbe,
+        links: EventLinksDraft,
+        started_at_unix_ms: u64,
+        error: RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
+        let mut registry = lock(&self.monitor_registry, "refuse_monitor_probe")?;
+        let update = registry.prepare_failure(
+            probe,
+            started_at_unix_ms,
+            unix_ms_now()?,
+            error.projection().code,
+        )?;
+        let failed = self.append_event_raw(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            MonitorPayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            )
+            .with_runtime_state(update.fact)
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "monitor_state_invalid",
+                    "refuse_monitor_probe",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?,
+        )?;
+        registry.apply(&failed)?;
+        drop(registry);
+        self.record_required_failure(&error, &failed, links)
+    }
+
     fn record_monitor_recovery_coordination(
         &self,
         instance: &RegisteredInstance,
@@ -595,10 +611,12 @@ impl HostShared {
     }
 
     fn monitor_instance(&self, instance_alias: &str) -> RuntimeHostResult<RegisteredInstance> {
-        let registered = lock(&self.registered_instances, "resolve_monitor_instance")?
+        // The identity check runs under the registry lock so an endpoint rebinding is never
+        // observed half-applied.
+        let registry = lock(&self.registered_instances, "resolve_monitor_instance")?;
+        let registered = registry
             .values()
             .find(|instance| instance.instance_alias == instance_alias)
-            .cloned()
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
                     "monitor_instance_unknown",
@@ -620,7 +638,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        Ok(registered)
+        Ok(registered.clone())
     }
 }
 

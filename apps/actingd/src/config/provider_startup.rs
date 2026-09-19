@@ -291,20 +291,6 @@ fn resolve_deferred_instance(
         instance.adb_port,
         instance.adb_path.display()
     );
-    // A stopped instance reports no ADB endpoint (observed on MuMuManager 6.5.7.0). It is
-    // refused, never bound with a guessed port; starting it from a cold daemon is the next
-    // slice.
-    let (Some(adb_host), Some(adb_port)) = (instance.adb_host.as_deref(), instance.adb_port) else {
-        return Err((
-            "instance_discovered_stopped",
-            failure(
-                "instance_discovered_stopped",
-                format!(
-                    "{facts}; {discovered}; the configured instance is stopped and reports no ADB endpoint; start it, then start the daemon"
-                ),
-            ),
-        ));
-    };
     if let Some(declared) = config.adb_path.as_deref()
         && !fs::canonicalize(declared).is_ok_and(|path| path == instance.adb_path)
     {
@@ -316,7 +302,7 @@ fn resolve_deferred_instance(
             ),
         ));
     }
-    if let Some(declared) = config.host.as_deref()
+    if let (Some(declared), Some(adb_host)) = (config.host.as_deref(), instance.adb_host.as_deref())
         && declared.trim() != adb_host
     {
         return Err((
@@ -327,17 +313,39 @@ fn resolve_deferred_instance(
             ),
         ));
     }
-    if let Some(declared) = config.port
-        && declared != adb_port
-    {
-        return Err((
-            "instance_discovery_conflict",
-            failure(
-                "port_conflict",
-                format!("{facts}; declared port={declared}; {discovered}"),
-            ),
-        ));
+    // A stopped instance reports no ADB endpoint (observed on MuMuManager 6.5.7.0): it is
+    // bound PENDING, never with a guessed port, and `emulator start` resolves the port. A
+    // declared port cannot be cross-checked then and is refused rather than trusted.
+    match (config.port, instance.adb_port) {
+        (Some(declared), Some(adb_port)) if declared != adb_port => {
+            return Err((
+                "instance_discovery_conflict",
+                failure(
+                    "port_conflict",
+                    format!("{facts}; declared port={declared}; {discovered}"),
+                ),
+            ));
+        }
+        (Some(declared), None) => {
+            return Err((
+                "instance_discovery_conflict",
+                failure(
+                    "port_unverifiable",
+                    format!(
+                        "{facts}; declared port={declared}; {discovered}; the instance is stopped, so the declared port cannot be cross-checked: omit `port` to bind it pending"
+                    ),
+                ),
+            ));
+        }
+        _ => {}
     }
+    // The host a pending binding is completed with: the reported one, else the declared one,
+    // else the daemon's explicit-entry default.
+    let adb_host = instance
+        .adb_host
+        .clone()
+        .or_else(|| config.host.as_deref().map(str::trim).map(str::to_owned))
+        .unwrap_or_else(default_device_host);
     let adb_path = instance.adb_path.to_str().ok_or_else(|| {
         (
             "instance_discovery_unavailable",
@@ -353,8 +361,9 @@ fn resolve_deferred_instance(
         report.version.to_string(),
         instance.mumu_manager_path.clone(),
     );
+    let adb_port = instance.adb_port;
     let device = config
-        .device_registration(adb_path.to_owned(), adb_host.to_owned(), adb_port)
+        .device_registration(adb_path.to_owned(), adb_host, adb_port)
         .map_err(|code| (code, failure(code, format!("{facts}; {discovered}"))))?;
     let ConfiguredInstanceBackend::Device {
         alias,
@@ -377,9 +386,11 @@ fn resolve_deferred_instance(
             input_backend,
             capture_backend,
             registration: Box::new(
-                registration
-                    .with_discovered_binding(binding)
-                    .with_capability_profile(profile.clone()),
+                match adb_port {
+                    Some(_) => registration.with_discovered_binding(binding),
+                    None => registration.with_pending_discovered_binding(binding),
+                }
+                .with_capability_profile(profile.clone()),
             ),
         },
     ))

@@ -31,14 +31,15 @@ emulator changes state. A concurrent READ-ONLY observation such as `capture_sequ
 the session is closed; only lease holders, queued lease requests, destructive steps, preemption
 and the takeover cooldown deny the control.
 
-## Close before stop
+## Close before the action
 
-For `stop` and `restart` the instance's retained device session is closed first through
+For every action (`start` included since slice #316-B2, because a session must not outlive the
+endpoint it was opened on) the instance's retained device session is closed first through
 `close_retained_instance_while_guarded` (the daemon keeps running; other instances are
-untouched). A refusal because a lease is held is the same busy denial; a close failure is
-recorded through the existing session-close lifecycle path and fails the request. The device
-session is NOT reopened by this operation after any action: it opens lazily on the next lease,
-as before.
+untouched; closing when no session is open is a no-op). A refusal because a lease is held is the
+same busy denial; a close failure is recorded through the existing session-close lifecycle path
+and fails the request. The device session is NOT reopened by this operation after any action: it
+opens lazily on the next lease, as before.
 
 ## Tool dispatch, timeouts and wait criteria
 
@@ -95,14 +96,50 @@ as before.
   `error_code` (not `errcode`), so it is not an envelope.
 - `info -v all` lists a stopped instance with those same flat fields (no `adb_port`).
 
-## Cold start (limitation of this slice)
+## Cold start (slice #316-B2)
 
-Today the daemon must be started while the configured instance is running: discovery binds an
-instance through its reported ADB endpoint, and a stopped configured instance refuses startup
-with `instance_discovered_stopped` (`contracts/provider-startup.md`); it is never bound with a
-guessed port. Starting a stopped instance from a cold daemon (bind, `start`, then resolve the
-port) lands in the next slice. A stopped instance elsewhere in the inventory no longer breaks
-discovery.
+A configured instance that discovery reports stopped is bound PENDING at startup instead of
+refused (`contracts/provider-startup.md`): the registry entry carries the discovered facts and
+the host the binding will be completed with, but no port; the startup `runtime.instance_bound`
+event carries `binding_source: discovered` with the discovered index, name and provider version
+and with `adb_host` and `adb_port` omitted; `actingctl emulator status` reports `adb_port: null`
+for it. Nothing is ever bound with a guessed port. A stopped instance elsewhere in the inventory
+does not break discovery either.
+
+While the binding is pending, every path that would open the instance's device session refuses
+typed before any backend is touched, host code `instance_not_running` (`invalid_request`,
+receipt state `denied`):
+
+- lease acquisition (`acquire_lease` and `queue_lease`, before the scheduler prepares or queues
+  anything) and read-only observation (`observe`, `capture_sequence`, `observe_contained_page`,
+  after `command.received`) record `command.rejected` (diagnostic `runtime.diagnostic`, effect
+  `not_performed`, the receipt terminal) plus one `runtime.failed` (stage `operation_cleanup`)
+  whose native detail names the alias (`instance_alias=<alias>; adb_endpoint=pending; ...`);
+- the monitor probe records `monitor.failed` (diagnostic `runtime.diagnostic`, runtime code
+  `invalid_request`) plus the same `runtime.failed` instead of a command event, and the probe
+  is rescheduled as after any other refusal.
+
+Explicit entries and fixture instances are never pending. The registry keeps one last typed
+guard so nothing can bypass the host checks: `open_input`, `open_capture` and
+`control_application` on a pending entry fail with a device error at stage
+`adb.endpoint_pending` (category `protocol`).
+
+Emulator control itself works on a pending instance: the fence and the close-before step do not
+require a bound endpoint. After a successful `start` or `restart`, still under the per-instance
+admission guard, the registry binds the entry to the host it was registered with and the port the
+control outcome reported (`EmulatorControlOutcome.adb_port`), the host refreshes its
+`registered_instances` record (endpoint and audit endpoint together, under the registry lock
+that every identity check now also holds), and one more `runtime.instance_bound` event for the
+instance (same discovered fields, now with `adb_host` and `adb_port`, linked to the control
+request) is appended after `command.validated` and before `runtime.fact_recorded`. A running
+outcome that carries no port fails typed with `emulator_control_endpoint_unresolved`
+(`backend_operation_failed`, receipt state `failed`, effect `indeterminate`); the binding stays as
+it was and the request may be repeated. After a successful `stop` the entry returns to pending
+and `status` shows `adb_port: null` again; no event beyond the existing `device.connected`
+invalidation records that transition.
+
+Note for #322 readers: the port recorded by the newest `runtime.instance_bound` of an instance
+represents that instance from then on; older events keep the port they were recorded with.
 
 The registry (`ExecutionBackendRegistry::control_instance`) serves discovery-bound entries only,
 using the `MuMuManager.exe` path carried on the `DiscoveredInstanceBinding`; an explicit entry
@@ -117,10 +154,11 @@ Every request is recorded intent -> result, all linked to the instance:
 
 1. `client.cli_command` (Cli) or `client.ui_action` (Ui) and `command.received`, action
    `emulator.instance.start | stop | restart`.
-2. For `stop` / `restart`, the existing resource-close events of the device session
+2. When a device session was open, the existing resource-close events of that session
    (`runtime.lifecycle_observed` with `resource_quiescence`, or the session-close failure).
-3. On success `command.validated` with effect `performed` (the receipt terminal), then
-   `runtime.fact_recorded` for `device.connected` (and after `stop` a
+3. On success `command.validated` with effect `performed` (the receipt terminal), then after
+   `start` / `restart` one `runtime.instance_bound` carrying the resolved `adb_host` and
+   `adb_port`, then `runtime.fact_recorded` for `device.connected` (and after `stop` a
    `runtime.fact_invalidated` with reason `device_closed`).
 4. On denial or failure `command.rejected` (the receipt terminal; diagnostic
    `backend.operation_failed` for tool failures, `lease.fencing_denied` for the busy denial,
@@ -133,8 +171,10 @@ Every request is recorded intent -> result, all linked to the instance:
    `.timeout`, `.path`, an `info` reader stage, `emulator_control.unavailable`, `.unsupported`).
 
 Host codes: `emulator_control_busy` (`runtime_busy`, denied), `emulator_control_unavailable`
-and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_control_wait_timeout`
-and `emulator_control_failed` (`backend_operation_failed`, failed).
+and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_control_wait_timeout`,
+`emulator_control_failed` and `emulator_control_endpoint_unresolved` (`backend_operation_failed`,
+failed). Device-facing requests on a pending instance are denied with `instance_not_running`
+(`invalid_request`), see "Cold start".
 
 ## The `device.connected` program fact
 
