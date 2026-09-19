@@ -88,6 +88,32 @@ impl CaptureBackend for SealedCapture {
         self.state.captures.fetch_add(1, Ordering::AcqRel);
         frame(self.state.mail_visible.load(Ordering::Acquire))
     }
+    fn observe_geometry(
+        &mut self,
+        _deadline: std::time::Instant,
+    ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
+        use actingcommand_contract::{
+            CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
+            CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+        };
+        // The same 16x9 extent `frame` serves; no device is queried.
+        let extent = CaptureExtent::new(16, 9).expect("positive sealed extent");
+        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::AdbScreencap,
+            source: CaptureGeometrySource::AdbDefaultDisplay {
+                serial: "sealed-authoring".to_string(),
+                wm_extent: extent,
+                wm_size_kind: CaptureWmSizeKind::Physical,
+            },
+            logical_display_extent: extent,
+            rotation: CaptureRotationObservation::Observed {
+                rotation: CaptureRotation::R0,
+                source: CaptureRotationSource::DumpsysDisplayOrientation,
+            },
+            sampled_at: std::time::SystemTime::now(),
+            frame_transform: None,
+        }))
+    }
     fn close_once(
         &mut self,
         _authority: actingcommand_device::DeviceCloseAuthority,
@@ -468,8 +494,8 @@ fn frame_png(mail_visible: bool) -> Vec<u8> {
 
 fn frame(mail_visible: bool) -> DeviceResult<Frame> {
     let mut pixels = Vec::new();
-    for y in 0..10_u32 {
-        for x in 0..12_u32 {
+    for y in 0..9_u32 {
+        for x in 0..16_u32 {
             if mail_visible {
                 pixels.extend_from_slice(&[
                     ((x * 37 + y * 17 + 91) % 256) as u8,
@@ -483,8 +509,8 @@ fn frame(mail_visible: bool) -> DeviceResult<Frame> {
         }
     }
     Frame::from_pixels(
-        12,
-        10,
+        16,
+        9,
         pixels,
         PixelFormat::Rgba8,
         CaptureBackendName::AdbScreencap,

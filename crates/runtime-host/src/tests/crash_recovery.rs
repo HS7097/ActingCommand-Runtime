@@ -18,7 +18,7 @@ fn policy_dispatch_crash_child_process() {
     let instance_bytes = fs::read(Path::new(&root).join("instance.json")).expect("instance bytes");
     let instance_id: InstanceId =
         serde_json::from_slice(&instance_bytes).expect("instance identifier");
-    let package = outcome_crash.then(neutral_contained_task_package);
+    let package = outcome_crash.then(|| neutral_contained_task_package(false));
     let package_path = Path::new(&root).join("scheduled-task.zip");
     if let Some(package) = &package {
         fs::write(&package_path, package).expect("scheduled package");

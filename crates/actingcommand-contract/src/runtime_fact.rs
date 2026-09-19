@@ -15,8 +15,9 @@
 //! sealed periodically as a [`RuntimeFactSnapshot`] (iron rule 13).
 
 use crate::event::{InstanceId, OriginModule, SanitizationError};
-use crate::fact::FactValue;
+use crate::fact::{FactScalar, FactValue};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Schema identity carried by every sealed snapshot.
 pub const RUNTIME_FACT_SCHEMA_VERSION: &str = "actingcommand.runtime-fact.v1";
@@ -34,6 +35,18 @@ pub const MAX_RUNTIME_FACT_RECORD_FIELDS: usize = 64;
 pub const MAX_RUNTIME_FACT_SNAPSHOT_BYTES: usize = crate::fact::MAX_FACT_OBSERVATION_BYTES;
 /// Shortest period between two periodic `runtime.fact_snapshot` events.
 pub const RUNTIME_FACT_SNAPSHOT_INTERVAL_MS: u64 = 60_000;
+/// Key of the runtime fact that carries the manifest's subsystem rows.
+pub const CONFIG_SUBSYSTEMS_FACT_KEY: &str = "config.subsystems";
+/// Key of the runtime fact that carries the manifest's parameter rows.
+pub const CONFIG_PARAMETERS_FACT_KEY: &str = "config.parameters";
+/// Upper bound on subsystems in one configuration manifest.
+pub const MAX_CONFIG_MANIFEST_SUBSYSTEMS: usize = 64;
+/// Upper bound on parameters in one configuration manifest.
+pub const MAX_CONFIG_MANIFEST_PARAMETERS: usize = 256;
+/// Upper bound on a subsystem name or a parameter key, in bytes.
+pub const MAX_CONFIG_MANIFEST_NAME_BYTES: usize = 128;
+/// Upper bound on a subsystem reason, in bytes.
+pub const MAX_CONFIG_MANIFEST_REASON_BYTES: usize = 512;
 /// Key families accepted for runtime facts. None of them overlaps the
 /// instance-fact families validated by `crate::fact`.
 pub const RUNTIME_FACT_FAMILIES: [&str; 8] = [
@@ -126,6 +139,167 @@ impl RuntimeFactRecord {
         self.expires_at_unix_ms()
             .is_some_and(|expires_at| now_unix_ms >= expires_at)
     }
+}
+
+/// The in-memory runtime configuration manifest: which subsystems the host
+/// runs and why, and the effective value of every parameter it applies, each
+/// marked with where the value came from. It is data only; the host records
+/// it as the two `config.*` runtime facts once per startup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeConfigManifest {
+    pub subsystems: Vec<ConfigSubsystem>,
+    pub parameters: Vec<ConfigParameter>,
+}
+
+/// One subsystem the host either runs or leaves out, with a short reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSubsystem {
+    pub name: String,
+    pub enabled: bool,
+    pub reason: String,
+}
+
+/// One effective parameter value and where it came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigParameter {
+    pub key: String,
+    pub value: FactScalar,
+    pub source: ConfigParameterSource,
+}
+
+/// Where an effective parameter value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigParameterSource {
+    /// Set in the configuration file.
+    Explicit,
+    /// A library default; nothing in the configuration file named it.
+    Default,
+    /// Learned at startup from the environment (for example discovery).
+    Discovered,
+}
+
+impl ConfigParameterSource {
+    /// The wire spelling, also used as the `source` row field.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Default => "default",
+            Self::Discovered => "discovered",
+        }
+    }
+}
+
+impl RuntimeConfigManifest {
+    /// Checks the two list bounds and every name, key, and reason: non-empty,
+    /// control-free, and within the byte bounds. A manifest that passes here
+    /// always yields two records that pass [`RuntimeFactRecord::validate`].
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        if self.subsystems.len() > MAX_CONFIG_MANIFEST_SUBSYSTEMS {
+            return Err(SanitizationError::new(
+                "config_manifest_subsystems_too_many",
+                "subsystems",
+            ));
+        }
+        if self.parameters.len() > MAX_CONFIG_MANIFEST_PARAMETERS {
+            return Err(SanitizationError::new(
+                "config_manifest_parameters_too_many",
+                "parameters",
+            ));
+        }
+        for subsystem in &self.subsystems {
+            if !manifest_text_ok(&subsystem.name, MAX_CONFIG_MANIFEST_NAME_BYTES) {
+                return Err(SanitizationError::new(
+                    "invalid_config_subsystem_name",
+                    "subsystems",
+                ));
+            }
+            if !manifest_text_ok(&subsystem.reason, MAX_CONFIG_MANIFEST_REASON_BYTES) {
+                return Err(SanitizationError::new(
+                    "invalid_config_subsystem_reason",
+                    "subsystems",
+                ));
+            }
+        }
+        for parameter in &self.parameters {
+            if !manifest_text_ok(&parameter.key, MAX_CONFIG_MANIFEST_NAME_BYTES) {
+                return Err(SanitizationError::new(
+                    "invalid_config_parameter_key",
+                    "parameters",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Encodes the manifest as its two runtime facts, both in scope `runtime`
+    /// with no lifetime and the same observation time: `config.subsystems`
+    /// holds one row `{name, enabled, reason}` per subsystem and
+    /// `config.parameters` one row `{key, value, source}` per parameter, in
+    /// manifest order. Pure: nothing is sampled or appended here.
+    pub fn to_fact_records(
+        &self,
+        observed_at_unix_ms: u64,
+        source: OriginModule,
+    ) -> [RuntimeFactRecord; 2] {
+        let subsystems = self
+            .subsystems
+            .iter()
+            .map(|subsystem| {
+                BTreeMap::from([
+                    (
+                        "name".to_owned(),
+                        FactScalar::String(subsystem.name.clone()),
+                    ),
+                    ("enabled".to_owned(), FactScalar::Boolean(subsystem.enabled)),
+                    (
+                        "reason".to_owned(),
+                        FactScalar::String(subsystem.reason.clone()),
+                    ),
+                ])
+            })
+            .collect();
+        let parameters = self
+            .parameters
+            .iter()
+            .map(|parameter| {
+                BTreeMap::from([
+                    ("key".to_owned(), FactScalar::String(parameter.key.clone())),
+                    ("value".to_owned(), parameter.value.clone()),
+                    (
+                        "source".to_owned(),
+                        FactScalar::String(parameter.source.as_str().to_owned()),
+                    ),
+                ])
+            })
+            .collect();
+        [
+            RuntimeFactRecord {
+                scope: RuntimeFactScope::Runtime,
+                key: CONFIG_SUBSYSTEMS_FACT_KEY.to_owned(),
+                value: FactValue::RecordList(subsystems),
+                observed_at_unix_ms,
+                source,
+                ttl_ms: None,
+            },
+            RuntimeFactRecord {
+                scope: RuntimeFactScope::Runtime,
+                key: CONFIG_PARAMETERS_FACT_KEY.to_owned(),
+                value: FactValue::RecordList(parameters),
+                observed_at_unix_ms,
+                source,
+                ttl_ms: None,
+            },
+        ]
+    }
+}
+
+/// Non-empty, control-free, and at most `max_bytes` long.
+fn manifest_text_ok(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
 }
 
 /// Why a runtime fact was dropped from the store.

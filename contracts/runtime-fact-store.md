@@ -10,9 +10,10 @@ disjoint by construction.
 Workflow #313 owns the design. This document freezes the contract half, the
 pure store, and the host wiring that makes the store ledger-backed: the three
 ledger events, the append-first rule, startup replay, takeover invalidation,
-the periodic snapshot, and the read operation. Producers (the modules that
-write `device.`, `task.`, `host.`, … facts), policy-input rewiring, and the
-per-instance read operation land in later slices.
+the periodic snapshot, the read operation, and the producers built so far
+(see "Producers"). The remaining producers (`task.`, `host.`, … facts),
+policy-input rewiring, and the per-instance read operation land in later
+slices.
 
 ## Records
 
@@ -175,12 +176,56 @@ dirty. `RuntimeHost::runtime_fact_snapshot` and
 JSON. `facts` without `--program` (the per-instance read) is not built and is a
 usage error; the command takes no `--instance`.
 
+## Producers
+
+Two producers write the store today; both go through the append-first rule
+above with source `runtime`.
+
+- `device.connected` (slice #316-B) — instance scope, `boolean`: the running
+  state emulator instance control observed after `status` / `start` / `stop` /
+  `restart`. After `stop` the key is also invalidated with `device_closed`.
+- `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
+  runtime scope, `record_list`, no lifetime: the in-memory runtime
+  configuration manifest (`RuntimeConfigManifest` in contract module
+  `runtime_fact`). `actingd` builds it in `assemble` from what it actually
+  applies and hands it to the host with
+  `RuntimeHostConfig::with_config_manifest`; `RuntimeHostConfig::validate`
+  runs the manifest's own validation (at most 64 subsystems and 256
+  parameters; names, keys and reasons non-empty, control-free, at most
+  128 / 128 / 512 bytes) and refuses a bad one with
+  `invalid_runtime_config_manifest`. The host records the two facts once per
+  startup, after the startup events, replay and the instance-fact
+  synchronization and before any thread is spawned, with one clock sample
+  shared by both records; a refusal there (stale, capacity, invalid) fails
+  startup through the normal abort path. On a restart the replayed records
+  are superseded by the fresh observation, never refused as stale. Hosts
+  built without a manifest (tests, `actinglab` goldens, `ledger-maintenance`)
+  record nothing.
+  - `config.subsystems` rows: `name` (string), `enabled` (boolean),
+    `reason` (string, a short fact such as `configured`, `section absent`,
+    `always on; mode shadow`).
+  - `config.parameters` rows: `key` (string), `value` (the effective scalar:
+    `string`, `integer`, `boolean` or `duration_ms`), `source` (`explicit` for
+    a value set in the configuration file, `default` for a library default,
+    `discovered` is reserved for values learned at startup and is not produced
+    yet). Values are effective values, not raw file contents. The secret
+    fingerprint salt is never a value: only `secret_fingerprint_salt_bytes`,
+    its byte length, is reported.
+
+`contracts/actingd-check-config.md` lists the subsystems and parameters
+`actingd` reports; `actingctl facts --program` returns both records as part of
+the snapshot.
+
 ## Typed codes
 
 Contract: `runtime_fact_ledger_position_invalid`,
 `runtime_fact_snapshot_payload_too_large`, `invalid_runtime_fact_snapshot`,
 `invalid_runtime_fact_recorded_action`, `invalid_runtime_fact_invalidated_action`,
-`invalid_runtime_fact_snapshot_action`. Host: `runtime_fact_stale`,
+`invalid_runtime_fact_snapshot_action`; manifest:
+`config_manifest_subsystems_too_many`, `config_manifest_parameters_too_many`,
+`invalid_config_subsystem_name`, `invalid_config_subsystem_reason`,
+`invalid_config_parameter_key`. Host: `runtime_fact_stale`,
 `runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
 `runtime_fact_instance_unknown` (request class);
-`runtime_fact_store_desync`, `runtime_fact_replay_failed` (fatal).
+`runtime_fact_store_desync`, `runtime_fact_replay_failed`,
+`invalid_runtime_config_manifest` (fatal).

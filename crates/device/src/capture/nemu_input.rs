@@ -233,6 +233,13 @@ impl CaptureBackend for NemuCaptureView {
         Ok(frame)
     }
 
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        if self.detached {
+            return Err(DeviceError::fatal("Nemu capture view is detached"));
+        }
+        self.owner.lock()?.observe_geometry(deadline)
+    }
+
     fn close_once(&mut self, _: DeviceCloseAuthority) -> DeviceResult<DeviceResourceCloseOutcome> {
         self.detached = true;
         Ok(DeviceResourceCloseOutcome::confirmed(0))

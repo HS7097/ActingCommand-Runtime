@@ -56,6 +56,9 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
         state
+            .physical_task_geometry
+            .store(contained, Ordering::Release);
+        state
             .require_fenced_capture_close
             .store(true, Ordering::Release);
         state
@@ -110,7 +113,7 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         .expect("official RuntimeClient");
         let execute_input = || {
             if contained {
-                let bytes = neutral_contained_task_package();
+                let bytes = neutral_contained_task_package(true);
                 let package = root.path().join("input-failure-task.zip");
                 fs::write(&package, &bytes).expect("existing inline package");
                 let expected =

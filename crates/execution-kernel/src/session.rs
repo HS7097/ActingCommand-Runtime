@@ -5,7 +5,8 @@ use crate::{
     ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, FrameId, InputAction, InputFrameReference, ResourceQuiescence,
+    ApplicationLifecycleAction, CaptureGeometryObservation, CaptureGeometryUnknownReason, FrameId,
+    InputAction, InputFrameReference, ResourceQuiescence,
 };
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
@@ -16,8 +17,9 @@ use actingcommand_device::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 const SESSION_CHANNEL_CAPACITY: usize = 8;
 
@@ -178,6 +180,10 @@ enum SessionCommand {
     ResolveFrame {
         reference: InputFrameReference,
         response: SyncSender<ExecutionKernelResult<InputFrameContext>>,
+    },
+    ObserveGeometry {
+        deadline: Instant,
+        response: SyncSender<ExecutionKernelResult<CaptureGeometryObservation>>,
     },
     ApplicationLifecycle {
         action: ApplicationLifecycleAction,
@@ -483,6 +489,79 @@ impl ExecutionSession {
         }
     }
 
+    pub(crate) fn observe_geometry(
+        &self,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<CaptureGeometryObservation> {
+        let state = self.geometry_state(deadline)?;
+        geometry_remaining(deadline)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .try_send(SessionCommand::ObserveGeometry { deadline, response })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => geometry_unavailable(
+                    "capture_geometry_queue_full",
+                    "the existing session command queue is full",
+                ),
+                mpsc::TrySendError::Disconnected(_) => {
+                    ExecutionKernelError::fatal("execution_session_unavailable")
+                }
+            })?;
+        drop(state);
+        match receiver.recv_timeout(geometry_remaining(deadline)?) {
+            Ok(Ok(observation)) => {
+                geometry_remaining(deadline)?;
+                Ok(observation)
+            }
+            Ok(Err(error)) => Err(error),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(geometry_unavailable(
+                "capture_geometry_deadline_elapsed",
+                "the geometry reply did not arrive within the task deadline",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ExecutionKernelError::fatal(
+                "execution_session_response_lost",
+            )),
+        }
+    }
+
+    pub(crate) fn validate_geometry_open(&self, deadline: Instant) -> ExecutionKernelResult<()> {
+        self.geometry_state(deadline).map(drop)
+    }
+
+    fn geometry_state(
+        &self,
+        deadline: Instant,
+    ) -> ExecutionKernelResult<MutexGuard<'_, SessionState>> {
+        geometry_remaining(deadline)?;
+        let state = self.state.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => geometry_unavailable(
+                "capture_geometry_session_busy",
+                "the existing session state is busy",
+            ),
+            TryLockError::Poisoned(_) => {
+                ExecutionKernelError::fatal("execution_session_state_poisoned")
+            }
+        })?;
+        if state.closed || state.sender.is_none() {
+            return Err(state
+                .close_result
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .cloned()
+                .unwrap_or_else(|| {
+                    geometry_unavailable(
+                        "capture_geometry_session_closed",
+                        "the producing session is closed",
+                    )
+                }));
+        }
+        geometry_remaining(deadline)?;
+        Ok(state)
+    }
+
     pub fn close(&self) -> ExecutionKernelResult<()> {
         self.close_with_authority(DeviceCloseAuthority::LocalOnly)
             .map(|_| ())
@@ -569,6 +648,25 @@ fn ensure_open(state: &SessionState) -> ExecutionKernelResult<()> {
     } else {
         Ok(())
     }
+}
+
+pub(crate) fn geometry_unavailable(
+    code: &'static str,
+    detail: &'static str,
+) -> ExecutionKernelError {
+    ExecutionKernelError::device(code, &DeviceError::transient(detail))
+}
+
+pub(crate) fn geometry_remaining(deadline: Instant) -> ExecutionKernelResult<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            geometry_unavailable(
+                "capture_geometry_deadline_elapsed",
+                "the original task deadline has elapsed",
+            )
+        })
 }
 
 fn finish_after_result<T>(
@@ -737,6 +835,49 @@ fn run_session(
                     ));
                 }
             }
+            SessionCommand::ObserveGeometry { deadline, response } => {
+                let result = (|| {
+                    geometry_remaining(deadline)?;
+                    let backend = match backends {
+                        SessionBackends::Independent {
+                            capture: Some(backend),
+                            ..
+                        } => backend.as_mut(),
+                        SessionBackends::Nemu(pair) => pair.capture.as_mut(),
+                        SessionBackends::Pending
+                        | SessionBackends::Independent { capture: None, .. } => {
+                            return Ok(CaptureGeometryObservation::Unknown(
+                                CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                            ));
+                        }
+                    };
+                    let observation = backend.observe_geometry(deadline).map_err(|error| {
+                        ExecutionKernelError::device("capture_geometry_read_failed", &error)
+                    })?;
+                    geometry_remaining(deadline)?;
+                    Ok(observation)
+                })();
+                if let Err(mpsc::SendError(result)) = response.send(result) {
+                    let primary = match result {
+                        // An expired caller has already returned Unavailable. A late value
+                        // does not establish a successful Task check or admit cleanup.
+                        Ok(_) if Instant::now() >= deadline => continue,
+                        Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
+                        Err(primary) => primary,
+                    };
+                    // Preserve backend errors and unexpected reply loss for the owner's Close.
+                    let cleanup = close_retained_after_failure(
+                        &receiver,
+                        backends,
+                        primary.clone(),
+                        ResourceCloseOrder::CaptureFirst,
+                    );
+                    return Err(match cleanup {
+                        Ok(()) => primary,
+                        Err(cleanup) => ExecutionKernelError::merge(primary, cleanup),
+                    });
+                }
+            }
             SessionCommand::ApplicationLifecycle { action, response } => {
                 pending_frame = None;
                 committed_frame = None;
@@ -852,6 +993,7 @@ fn close_retained_after_failure(
     order: ResourceCloseOrder,
 ) -> ExecutionKernelResult<()> {
     // Keep the actual backends here until the Host chooses close admission.
+    let mut geometry_response_lost = false;
     loop {
         match receiver.recv() {
             Ok(
@@ -891,6 +1033,16 @@ fn close_retained_after_failure(
                         Err(cleanup) => cleanup,
                     });
                 }
+                if geometry_response_lost {
+                    let primary = ExecutionKernelError::merge(
+                        primary,
+                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                    );
+                    return Err(match result {
+                        Ok(_) => primary,
+                        Err(cleanup) => ExecutionKernelError::merge(primary, cleanup),
+                    });
+                }
                 return result.map(|_| ());
             }
             Ok(SessionCommand::Capture { response, .. }) => {
@@ -916,6 +1068,18 @@ fn close_retained_after_failure(
                     order,
                     DeviceCloseAuthority::LocalOnly,
                 ));
+            }
+            Ok(SessionCommand::ObserveGeometry { deadline, response }) => {
+                let rejected = response.send(Err(geometry_unavailable(
+                    "execution_session_close_pending",
+                    "geometry is unavailable while the resource owner closes the session",
+                )));
+                if rejected.is_err() && Instant::now() < deadline {
+                    geometry_response_lost = true;
+                }
+                // Expired observers cannot consume the close handoff; unexpected reply loss
+                // is returned with the original primary after the owner's Close.
+                continue;
             }
             _ => {
                 return Err(close_after_failure(

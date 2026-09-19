@@ -12,6 +12,12 @@ use crate::{
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     NemuResolutionContext, NemuResolutionCountKind, NemuResolutionReason,
 };
+pub use actingcommand_contract::{
+    CaptureAdbDisplayMapping, CaptureBackendName, CaptureExtent, CaptureFrameTransform,
+    CaptureGeometry, CaptureGeometryNotApplicable, CaptureGeometryObservation,
+    CaptureGeometrySource, CaptureGeometryUnknownReason, CaptureRotation,
+    CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+};
 use image::{
     ColorType, ImageEncoder,
     codecs::png::{CompressionType, FilterType, PngEncoder},
@@ -48,6 +54,14 @@ const DEFAULT_CAPTURE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
 pub trait CaptureBackend {
     fn capture(&mut self) -> DeviceResult<Frame>;
 
+    /// Read this producer's display geometry within the caller's absolute deadline.
+    /// Unsupported implementations report unknown without creating a producer.
+    fn observe_geometry(&mut self, _deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        Ok(CaptureGeometryObservation::Unknown(
+            CaptureGeometryUnknownReason::BackendUnsupported,
+        ))
+    }
+
     fn close_once(
         &mut self,
         authority: DeviceCloseAuthority,
@@ -83,29 +97,6 @@ impl PixelFormat {
         match self {
             Self::Rgb8 => "rgb8",
             Self::Rgba8 => "rgba8",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CaptureBackendName {
-    FixtureSimulation,
-    AdbScreencap,
-    AdbScreencapEncode,
-    AdbScreencapRawGzip,
-    DroidcastRaw,
-    NemuIpc,
-}
-
-impl CaptureBackendName {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FixtureSimulation => "fixture_simulation",
-            Self::AdbScreencap => "adb_screencap",
-            Self::AdbScreencapEncode => "adb_screencap_encode",
-            Self::AdbScreencapRawGzip => "adb_screencap_raw_gzip",
-            Self::DroidcastRaw => "droidcast_raw",
-            Self::NemuIpc => "nemu_ipc",
         }
     }
 }
@@ -157,6 +148,8 @@ pub struct Frame {
     pub backend_name: CaptureBackendName,
     /// Context from the same selected producer; decoded or synthetic frames have none.
     pub selection: Option<Arc<CaptureSelectionContext>>,
+    /// Observation made by this frame's producer, without an additional capture.
+    pub geometry: CaptureGeometryObservation,
 }
 
 impl Frame {
@@ -174,6 +167,15 @@ impl Frame {
             captured_at: SystemTime::now(),
             backend_name,
             selection: None,
+            geometry: if backend_name == CaptureBackendName::FixtureSimulation {
+                CaptureGeometryObservation::NotApplicable(
+                    CaptureGeometryNotApplicable::FixtureSimulation,
+                )
+            } else {
+                CaptureGeometryObservation::Unknown(
+                    CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                )
+            },
         })
     }
 
@@ -194,6 +196,15 @@ impl Frame {
             captured_at: SystemTime::now(),
             backend_name,
             selection: None,
+            geometry: if backend_name == CaptureBackendName::FixtureSimulation {
+                CaptureGeometryObservation::NotApplicable(
+                    CaptureGeometryNotApplicable::FixtureSimulation,
+                )
+            } else {
+                CaptureGeometryObservation::Unknown(
+                    CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                )
+            },
         })
     }
 
@@ -331,6 +342,10 @@ pub struct SelectedCaptureBackend {
 }
 
 impl CaptureBackend for SelectedCaptureBackend {
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        self.backend.observe_geometry(deadline)
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame> {
         let mut frame = self.backend.capture()?;
         if let Some(selection) = &self.selection {
@@ -996,6 +1011,11 @@ struct PrimedCaptureBackend {
 }
 
 impl CaptureBackend for PrimedCaptureBackend {
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        require_geometry_open(&self.close_result)?;
+        self.inner.observe_geometry(deadline)
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame> {
         if let Some(frame) = self.primed.take() {
             return Ok(frame);
@@ -1115,6 +1135,16 @@ impl ScreencapBackend {
 }
 
 impl CaptureBackend for ScreencapBackend {
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        require_geometry_open(&self.close_result)?;
+        read_adb_capture_geometry(
+            &Adb::new(self.adb_config.clone()),
+            &self.target.resolved_serial(),
+            CaptureBackendName::AdbScreencap,
+            deadline,
+        )
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame> {
         let serial = self.target.resolved_serial();
         let adb = Adb::new(self.adb_config.clone());
@@ -1203,7 +1233,7 @@ impl DroidcastRawBackend {
         })
     }
 
-    fn start_if_needed(&mut self) -> DeviceResult<(u32, u32)> {
+    fn start_if_needed(&mut self) -> DeviceResult<(u32, u32, CaptureWmSizeKind)> {
         let adb = Adb::new(self.adb_config.clone());
         verify_adb_device(
             &adb,
@@ -1211,9 +1241,16 @@ impl DroidcastRawBackend {
             &self.serial,
             CaptureBackendName::DroidcastRaw,
         )?;
-        let (width, height) = parse_screen_size(&adb.screen_size(&self.serial)?)?;
+        let wm_output = adb.screen_size(&self.serial)?;
+        let (width, height) = parse_screen_size(&wm_output)?;
+        let selected_token = wm_output.split_whitespace().find(|part| part.contains('x'));
+        let selected_label = selected_token
+            .and_then(|token| wm_output.lines().find(|line| line.contains(token)))
+            .and_then(|line| line.split_once(':').map(|(label, _)| label))
+            .unwrap_or("");
+        let size_kind = wm_size_kind(selected_label);
         if self.started {
-            return Ok((width, height));
+            return Ok((width, height, size_kind));
         }
         self.stop_child_if_present()?;
 
@@ -1244,7 +1281,7 @@ impl DroidcastRawBackend {
             };
         }
         self.started = true;
-        Ok((width, height))
+        Ok((width, height, size_kind))
     }
 
     fn stop_child_if_present(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
@@ -1266,9 +1303,29 @@ impl DroidcastRawBackend {
 }
 
 impl CaptureBackend for DroidcastRawBackend {
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        require_geometry_open(&self.close_result)?;
+        if !self.started {
+            return Ok(CaptureGeometryObservation::Unknown(
+                CaptureGeometryUnknownReason::ProducerUnavailable,
+            ));
+        }
+        read_adb_capture_geometry(
+            &Adb::new(self.adb_config.clone()),
+            &self.serial,
+            CaptureBackendName::DroidcastRaw,
+            deadline,
+        )
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame> {
-        let (natural_width, natural_height) = self.start_if_needed()?;
-        let rotation = read_device_rotation(&Adb::new(self.adb_config.clone()), &self.serial)?;
+        let (natural_width, natural_height, size_kind) = self.start_if_needed()?;
+        let (rotation, rotation_source) = read_device_rotation_with_source(
+            &Adb::new(self.adb_config.clone()),
+            &self.serial,
+            None,
+        )?;
+        let geometry_sampled_at = SystemTime::now();
         let (display_width, display_height) =
             display_size_from_natural(natural_width, natural_height, rotation);
         let (request_width, request_height) =
@@ -1286,13 +1343,33 @@ impl CaptureBackend for DroidcastRawBackend {
             display_height,
             rotation,
         )?;
-        Frame::from_pixels(
+        let mut frame = Frame::from_pixels(
             frame_width,
             frame_height,
             pixels,
             PixelFormat::Rgb8,
             CaptureBackendName::DroidcastRaw,
-        )
+        )?;
+        let transform = if decode_width == display_width && decode_height == display_height {
+            CaptureFrameTransform::Identity
+        } else if rotation == DeviceRotation::R270 {
+            CaptureFrameTransform::RotateCounterclockwise90
+        } else {
+            CaptureFrameTransform::RotateClockwise90
+        };
+        frame.geometry = CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::DroidcastRaw,
+            source: CaptureGeometrySource::AdbDefaultDisplay {
+                serial: self.serial.clone(),
+                wm_extent: geometry_extent(natural_width, natural_height)?,
+                wm_size_kind: size_kind,
+            },
+            logical_display_extent: geometry_extent(display_width, display_height)?,
+            rotation: observed_rotation(rotation, rotation_source),
+            sampled_at: geometry_sampled_at,
+            frame_transform: Some(transform),
+        });
+        Ok(frame)
     }
 
     fn close_once(
@@ -1524,6 +1601,10 @@ impl NemuIpcBackend {
 
 enum NemuIpcCommand {
     Probe(mpsc::Sender<DeviceResult<(u32, u32)>>),
+    ObserveGeometry {
+        deadline: Instant,
+        response: mpsc::Sender<DeviceResult<CaptureGeometryObservation>>,
+    },
     Capture(mpsc::Sender<DeviceResult<NemuCapturedFrame>>),
     InputTap {
         x: i32,
@@ -1549,7 +1630,8 @@ struct NemuCapturedFrame {
     height: u32,
     pixels: Vec<u8>,
     vendor_stdio: Vec<VendorStdioCapture>,
-    geometry: Option<Arc<NemuFrameGeometry>>,
+    input_geometry: Option<Arc<NemuFrameGeometry>>,
+    geometry: CaptureGeometryObservation,
 }
 
 struct NemuIpcWorker {
@@ -1576,9 +1658,31 @@ impl NemuIpcWorker {
             let mut state =
                 NemuIpcWorkerState::load(nemu_folder, dll_path, instance_id, display_id, input);
             let mut closed = false;
+            let mut geometry_owner_retained = false;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 while let Ok(command) = rx.recv() {
                     match command {
+                        NemuIpcCommand::ObserveGeometry { deadline, response } => {
+                            let result = worker_state_result(&mut state, |state| {
+                                state.observe_geometry(deadline)
+                            });
+                            if result.as_ref().is_err_and(|error| {
+                                error.resource_quiescence()
+                                    == Some(DeviceResourceQuiescence::Unconfirmed)
+                            }) {
+                                geometry_owner_retained = true;
+                            }
+                            if let Err(undelivered) = response.send(result) {
+                                geometry_owner_retained = true;
+                                let unavailable = nemu_geometry_unconfirmed(
+                                    "Nemu IPC geometry response was not received before its deadline",
+                                );
+                                return Err(match undelivered.0 {
+                                    Err(primary) => primary.merge_resource_cleanup(unavailable),
+                                    Ok(_) => unavailable,
+                                });
+                            }
+                        }
                         NemuIpcCommand::Probe(response) => {
                             response
                                 .send(worker_state_result(&mut state, |state| {
@@ -1673,7 +1777,7 @@ impl NemuIpcWorker {
                     ),
                 )
             });
-            let result = if closed {
+            let result = if closed || geometry_owner_retained {
                 result
             } else {
                 let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1694,9 +1798,11 @@ impl NemuIpcWorker {
                     (Err(primary), Err(cleanup)) => Err(primary.merge_resource_cleanup(cleanup)),
                 }
             };
-            if result.as_ref().is_err_and(|error| {
-                error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
-            }) {
+            if (geometry_owner_retained && !closed)
+                || result.as_ref().is_err_and(|error| {
+                    error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                })
+            {
                 std::mem::forget(state);
             }
             result
@@ -1712,6 +1818,55 @@ impl NemuIpcWorker {
 
     fn probe_resolution(&mut self) -> DeviceResult<(u32, u32)> {
         self.request(NemuIpcCommand::Probe)
+    }
+
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        require_geometry_open(&self.close_result)?;
+        let deadline = Instant::now()
+            .checked_add(self.timeout)
+            .map_or(deadline, |worker_deadline| deadline.min(worker_deadline));
+        let remaining = geometry_remaining(deadline)?;
+        if self.poisoned.load(Ordering::Acquire) {
+            return Err(nemu_geometry_unconfirmed(
+                "Nemu IPC backend is poisoned after a previous timeout",
+            ));
+        }
+        if self.handle.is_none() {
+            return Err(DeviceError::fatal("Nemu IPC worker is unavailable"));
+        }
+        let (response, result) = mpsc::channel();
+        self.tx
+            .send(NemuIpcCommand::ObserveGeometry { deadline, response })
+            .map_err(|error| {
+                DeviceError::fatal(format!("failed to send Nemu IPC worker command: {error}"))
+            })?;
+        match result.recv_timeout(remaining.min(self.timeout)) {
+            Ok(result) => {
+                if result.as_ref().is_err_and(|error| {
+                    error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                }) {
+                    self.poisoned.store(true, Ordering::Release);
+                }
+                if Instant::now() >= deadline {
+                    self.poisoned.store(true, Ordering::Release);
+                    return match result {
+                        Err(error) => Err(error.merge_resource_cleanup(nemu_geometry_unconfirmed(
+                            "Nemu IPC geometry reply arrived after its deadline",
+                        ))),
+                        Ok(_) => Err(nemu_geometry_unconfirmed(
+                            "Nemu IPC geometry reply arrived after its deadline",
+                        )),
+                    };
+                }
+                result
+            }
+            Err(error) => {
+                self.poisoned.store(true, Ordering::Release);
+                Err(nemu_geometry_unconfirmed(format!(
+                    "Nemu IPC geometry worker response unavailable: {error}"
+                )))
+            }
+        }
     }
 
     fn capture_frame(&mut self) -> DeviceResult<NemuCapturedFrame> {
@@ -2069,8 +2224,51 @@ impl NemuIpcWorkerState {
         Ok((width as u32, height as u32))
     }
 
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        geometry_remaining(deadline)?;
+        if self.connect_id <= 0 {
+            return Ok(CaptureGeometryObservation::Unknown(
+                CaptureGeometryUnknownReason::ProducerUnavailable,
+            ));
+        }
+        let resolution = self.probe_resolution();
+        let sampled_at = SystemTime::now();
+        if Instant::now() >= deadline {
+            let unavailable =
+                nemu_geometry_unconfirmed("Nemu IPC geometry probe returned after its deadline");
+            return Err(match resolution {
+                Err(primary) => primary.merge_resource_cleanup(unavailable),
+                Ok(_) => unavailable,
+            });
+        }
+        let (width, height) = resolution?;
+        self.geometry_observation(width, height, sampled_at, None)
+    }
+
+    fn geometry_observation(
+        &self,
+        width: u32,
+        height: u32,
+        sampled_at: SystemTime,
+        frame_transform: Option<CaptureFrameTransform>,
+    ) -> DeviceResult<CaptureGeometryObservation> {
+        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::NemuIpc,
+            source: CaptureGeometrySource::NemuSdkDisplay {
+                sdk_instance_id: self.instance_id,
+                sdk_display_id: self.display_id,
+                adb_display_mapping: CaptureAdbDisplayMapping::Unproven,
+            },
+            logical_display_extent: geometry_extent(width, height)?,
+            rotation: CaptureRotationObservation::NotProvidedBySource,
+            sampled_at,
+            frame_transform,
+        }))
+    }
+
     fn capture_frame(&mut self) -> DeviceResult<NemuCapturedFrame> {
         let (width, height) = self.probe_resolution()?;
+        let geometry_sampled_at = SystemTime::now();
         let pixel_len = checked_pixel_len(width, height, PixelFormat::Rgba8)?;
         if width != self.frame_width
             || height != self.frame_height
@@ -2128,7 +2326,13 @@ impl NemuIpcWorkerState {
             height,
             pixels,
             vendor_stdio: self.vendor_stdio.clone(),
-            geometry: self.input_geometry(width, height)?,
+            input_geometry: self.input_geometry(width, height)?,
+            geometry: self.geometry_observation(
+                width,
+                height,
+                geometry_sampled_at,
+                Some(CaptureFrameTransform::FlipVertical),
+            )?,
         })
     }
 
@@ -2253,6 +2457,14 @@ fn worker_state_result<T>(
 }
 
 impl CaptureBackend for NemuIpcBackend {
+    fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
+        require_geometry_open(&self.close_result)?;
+        self.worker
+            .as_mut()
+            .ok_or_else(|| DeviceError::fatal("Nemu IPC worker is unavailable"))?
+            .observe_geometry(deadline)
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame> {
         let worker = self
             .worker
@@ -2269,7 +2481,8 @@ impl CaptureBackend for NemuIpcBackend {
             PixelFormat::Rgba8,
             CaptureBackendName::NemuIpc,
         )?;
-        if let Some(geometry) = frame.geometry {
+        captured.geometry = frame.geometry;
+        if let Some(geometry) = frame.input_geometry {
             captured.selection = Some(Arc::new(CaptureSelectionContext {
                 requested: CaptureBackendChoice::NemuIpc,
                 configured_adb: String::new(),
@@ -2493,11 +2706,23 @@ pub(crate) enum DeviceRotation {
 }
 
 pub(crate) fn read_device_rotation(adb: &Adb, serial: &str) -> DeviceResult<DeviceRotation> {
-    let output = adb.run(&["-s", serial, "shell", "dumpsys", "display"])?;
+    read_device_rotation_with_source(adb, serial, None).map(|(rotation, _)| rotation)
+}
+
+fn read_device_rotation_with_source(
+    adb: &Adb,
+    serial: &str,
+    deadline: Option<Instant>,
+) -> DeviceResult<(DeviceRotation, CaptureRotationSource)> {
+    let run = |args: &[&str]| match deadline {
+        Some(deadline) => adb.run_until(args, deadline),
+        None => adb.run(args),
+    };
+    let output = run(&["-s", serial, "shell", "dumpsys", "display"])?;
     if let Some(rotation) = parse_display_orientation(&output.stdout)? {
-        return Ok(rotation);
+        return Ok((rotation, CaptureRotationSource::DumpsysDisplayOrientation));
     }
-    let output = adb.run(&[
+    let output = run(&[
         "-s",
         serial,
         "shell",
@@ -2507,6 +2732,100 @@ pub(crate) fn read_device_rotation(adb: &Adb, serial: &str) -> DeviceResult<Devi
         "user_rotation",
     ])?;
     parse_device_rotation(&output.stdout)
+        .map(|rotation| (rotation, CaptureRotationSource::UserRotation))
+}
+
+fn require_geometry_open(
+    close_result: &Option<DeviceResult<DeviceResourceCloseOutcome>>,
+) -> DeviceResult<()> {
+    match close_result {
+        None => Ok(()),
+        Some(Err(error)) => Err(error.clone()),
+        Some(Ok(_)) => Err(DeviceError::fatal(
+            "capture geometry is unavailable after producer close",
+        )),
+    }
+}
+
+fn nemu_geometry_unconfirmed(message: impl Into<String>) -> DeviceError {
+    DeviceError::fatal(message).with_resource_close_cause(
+        DeviceResourceKind::InProcessWorker,
+        DeviceResourceClosePhase::WorkerReceive,
+        "nemu_ipc",
+        None,
+        None,
+        DeviceResourceQuiescence::Unconfirmed,
+        1,
+    )
+}
+
+fn geometry_remaining(deadline: Instant) -> DeviceResult<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| DeviceError::fatal("capture geometry deadline expired"))
+}
+
+fn geometry_extent(width: u32, height: u32) -> DeviceResult<CaptureExtent> {
+    CaptureExtent::new(width, height)
+        .ok_or_else(|| DeviceError::fatal("capture geometry contains a zero dimension"))
+}
+
+fn wm_size_kind(label: &str) -> CaptureWmSizeKind {
+    match label.trim() {
+        "Physical size" => CaptureWmSizeKind::Physical,
+        "Override size" => CaptureWmSizeKind::Override,
+        _ => CaptureWmSizeKind::Unlabelled,
+    }
+}
+
+fn observed_rotation(
+    rotation: DeviceRotation,
+    source: CaptureRotationSource,
+) -> CaptureRotationObservation {
+    CaptureRotationObservation::Observed {
+        rotation: match rotation {
+            DeviceRotation::R0 => CaptureRotation::R0,
+            DeviceRotation::R90 => CaptureRotation::R90,
+            DeviceRotation::R180 => CaptureRotation::R180,
+            DeviceRotation::R270 => CaptureRotation::R270,
+        },
+        source,
+    }
+}
+
+fn read_adb_capture_geometry(
+    adb: &Adb,
+    serial: &str,
+    backend: CaptureBackendName,
+    deadline: Instant,
+) -> DeviceResult<CaptureGeometryObservation> {
+    let output = adb.run_until(&["-s", serial, "shell", "wm", "size"], deadline)?;
+    // Reuse the original input bounds interpretation, including Override selection.
+    let bounds = crate::touch::touch_bounds_from_screen_size(&output.stdout)?;
+    let width = bounds.max_x as u32;
+    let height = bounds.max_y as u32;
+    let label = output
+        .stdout
+        .rsplit_once(':')
+        .and_then(|(prefix, _)| prefix.lines().last())
+        .unwrap_or("");
+    let (rotation, rotation_source) =
+        read_device_rotation_with_source(adb, serial, Some(deadline))?;
+    geometry_remaining(deadline)?;
+    let (logical_width, logical_height) = display_size_from_natural(width, height, rotation);
+    Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+        backend,
+        source: CaptureGeometrySource::AdbDefaultDisplay {
+            serial: serial.to_string(),
+            wm_extent: geometry_extent(width, height)?,
+            wm_size_kind: wm_size_kind(label),
+        },
+        logical_display_extent: geometry_extent(logical_width, logical_height)?,
+        rotation: observed_rotation(rotation, rotation_source),
+        sampled_at: SystemTime::now(),
+        frame_transform: None,
+    }))
 }
 
 fn parse_display_orientation(text: &str) -> DeviceResult<Option<DeviceRotation>> {

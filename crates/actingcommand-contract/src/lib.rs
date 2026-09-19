@@ -9,6 +9,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod agent;
+pub mod capture_geometry;
 pub mod emulator;
 pub mod event;
 pub mod fact;
@@ -31,6 +32,7 @@ pub mod taskflow;
 pub mod types;
 
 pub use agent::*;
+pub use capture_geometry::*;
 pub use emulator::*;
 pub use event::*;
 pub use fact::*;

@@ -42,7 +42,8 @@ impl ContainedTaskTimingContext {
         }
     }
 
-    pub(super) fn deadline(self) -> Instant {
+    /// The original absolute task deadline, including for bounded Host prerequisites.
+    pub fn deadline(self) -> Instant {
         self.deadline
     }
 

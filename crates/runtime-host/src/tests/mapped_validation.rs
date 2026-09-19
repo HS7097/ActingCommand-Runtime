@@ -7,7 +7,7 @@ fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
     for (case, package, outcome_keys) in [
         (
             "missing-declaration",
-            neutral_contained_task_package(),
+            neutral_contained_task_package(false),
             vec!["mapped-result", "mapped-result-alternate"],
         ),
         (

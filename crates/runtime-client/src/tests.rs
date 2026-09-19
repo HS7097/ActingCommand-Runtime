@@ -1161,6 +1161,9 @@ impl CaptureBackend for FakeCapture {
                 captured_at: std::time::SystemTime::now(),
                 backend_name: CaptureBackendName::AdbScreencap,
                 selection: None,
+                geometry: actingcommand_contract::CaptureGeometryObservation::Unknown(
+                    actingcommand_contract::CaptureGeometryUnknownReason::ProducerObservationAbsent,
+                ),
             });
         }
         Frame::from_pixels(

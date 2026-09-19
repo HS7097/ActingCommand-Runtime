@@ -1254,9 +1254,9 @@ impl InputBackend for AdbShellInputBackend {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TouchBounds {
-    max_x: i32,
-    max_y: i32,
+pub(crate) struct TouchBounds {
+    pub(crate) max_x: i32,
+    pub(crate) max_y: i32,
 }
 
 fn touch_bounds_from_device(
@@ -1288,7 +1288,7 @@ fn touch_bounds_for_backend(
     }
 }
 
-fn touch_bounds_from_screen_size(screen_size: &str) -> DeviceResult<TouchBounds> {
+pub(crate) fn touch_bounds_from_screen_size(screen_size: &str) -> DeviceResult<TouchBounds> {
     let (_, dimensions) = screen_size.rsplit_once(':').unwrap_or(("", screen_size));
     let (width, height) = dimensions.trim().split_once('x').ok_or_else(|| {
         DeviceError::fatal(format!(

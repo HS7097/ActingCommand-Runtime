@@ -5,6 +5,7 @@ use actingcommand_contract::resource_declaration::{
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, ContainedTaskRequest, EmulatorInstanceAction, InstanceId,
+    RuntimeConfigManifest,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
@@ -34,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod manifest;
 mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
@@ -51,15 +53,17 @@ pub(super) struct ActingdConfigFile {
     schema_version: String,
     state_root: PathBuf,
     bind_host: String,
+    /// The four defaulted scalars stay `Option` so the manifest can tell an explicit value
+    /// from the library default; `assemble` applies the default.
     #[serde(default)]
-    bind_port: u16,
+    bind_port: Option<u16>,
     secret_fingerprint_salt: String,
     #[serde(default)]
-    device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
+    device_diagnostic_mode: Option<actingcommand_contract::DeviceDiagnosticMode>,
     #[serde(default)]
-    capacity_thresholds: actingcommand_contract::CapacityThresholds,
+    capacity_thresholds: Option<actingcommand_contract::CapacityThresholds>,
     #[serde(default)]
-    frame_retention_enabled: bool,
+    frame_retention_enabled: Option<bool>,
     #[serde(default)]
     governance_capability: Option<String>,
     #[serde(default)]
@@ -169,6 +173,8 @@ pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) registry: ConfiguredExecutionBackendRegistry,
     pub(super) policy: Option<PolicyBootstrap>,
+    /// The manifest handed to `host`; `check-config` prints it.
+    pub(super) manifest: RuntimeConfigManifest,
 }
 
 pub(super) struct PolicyBootstrap {
@@ -350,14 +356,43 @@ impl ActingdConfigFile {
         let policy_state_root = self.state_root.clone();
         let policy_governance_capability = self.governance_capability.clone();
         let policy_cadence = PolicyCadence::default();
+        let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
+            (
+                dispatcher.max_attempts,
+                dispatcher.max_session_ms,
+                dispatcher.max_projection_events,
+            )
+        });
         let mut host =
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
-                .with_device_diagnostic_mode(self.device_diagnostic_mode)
-                .with_capacity_thresholds(self.capacity_thresholds)
-                .with_frame_retention_enabled(self.frame_retention_enabled)
-                .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
+                .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
+                .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
+                .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or_default())
+                .with_bind_address(SocketAddr::new(
+                    bind_host,
+                    self.bind_port.unwrap_or_default(),
+                ))
                 .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());
+        let manifest = manifest::build(&manifest::ManifestInputs {
+            bind_host,
+            bind_port: self.bind_port,
+            device_diagnostic_mode: self.device_diagnostic_mode,
+            frame_retention_enabled: self.frame_retention_enabled,
+            capacity_thresholds: self.capacity_thresholds,
+            secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
+            mumu_root: registry.mumu_root.as_deref(),
+            governance_configured: self.governance_capability.is_some(),
+            agent_dispatcher: agent_dispatcher_budget,
+            policy_configured: policy.is_some(),
+            vision_provider_configured: registry.pending_vision.is_some(),
+            instances_count: registry.modes.len(),
+            instances_deferred_count: registry.deferred.len(),
+            policy_cadence: &policy_cadence,
+            io_timeout: host.io_timeout(),
+            maximum_frame_bytes: host.maximum_frame_bytes(),
+        })?;
+        host = host.with_config_manifest(manifest.clone());
         if let Some(capability) = self.governance_capability {
             host = host.with_governance_capability(capability);
         }
@@ -386,6 +421,7 @@ impl ActingdConfigFile {
             host,
             registry,
             policy,
+            manifest,
         })
     }
 }

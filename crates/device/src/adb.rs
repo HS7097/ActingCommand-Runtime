@@ -338,6 +338,29 @@ impl Adb {
     pub fn run(&self, args: &[&str]) -> DeviceResult<CommandOutput> {
         run_text_with_timeout(&self.config.adb_path, args, self.config.command_timeout)
     }
+
+    pub(crate) fn run_until(
+        &self,
+        args: &[&str],
+        deadline: Instant,
+    ) -> DeviceResult<CommandOutput> {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                DeviceError::fatal("capture geometry deadline expired before adb command")
+            })?;
+        let mut config = self.config.clone();
+        config.command_timeout = config.command_timeout.min(remaining);
+        // The existing command owner still performs its original bounded cleanup.
+        let output = Self::new(config).run(args)?;
+        if Instant::now() >= deadline {
+            return Err(DeviceError::fatal(
+                "capture geometry deadline expired during adb command",
+            ));
+        }
+        Ok(output)
+    }
 }
 
 fn device_state_error(

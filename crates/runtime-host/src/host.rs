@@ -67,24 +67,24 @@ use actingcommand_contract::{
     RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
     ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
     ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
-    RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
-    RuntimeEvidenceScreenshotCounts, RuntimeFactInvalidation, RuntimeFactInvalidationReason,
-    RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayload, RuntimePayloadDraft,
-    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimePolicyInputIdentity,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
-    SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
-    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    Sensitivity, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome,
-    TaskPayload, TaskPayloadDraft, TaskSemanticFact, TaskTimingBoundary,
-    TaskTimingObservationState, TaskTimingResult, TerminalEvent, TimingObservationIssue,
-    ValidatedRuntimeRequest,
+    RuntimeConfigManifest, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventBatch, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeFactInvalidation,
+    RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase,
+    RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayload,
+    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
+    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
+    SchedulingOutcomeProjection, Sensitivity, TaskEntryRecognitionPhase,
+    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
+    TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
+    TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
 };
-use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, SegmentedSwipeEvent};
+use actingcommand_device::{CaptureBackendName, DeviceCloseAuthority, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_execution_kernel::{
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
@@ -315,6 +315,7 @@ pub struct RuntimeHostConfig {
     clock: Arc<dyn RuntimeClock>,
     policy_inputs: Option<PolicyInputSnapshot>,
     procedure_manifest: Option<ProcedureManifest>,
+    config_manifest: Option<RuntimeConfigManifest>,
 }
 
 impl RuntimeHostConfig {
@@ -338,6 +339,7 @@ impl RuntimeHostConfig {
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
             procedure_manifest: None,
+            config_manifest: None,
         }
     }
 
@@ -437,12 +439,27 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Installs the in-memory runtime configuration manifest the host records as the two
+    /// `config.*` runtime facts once per startup. A host without one records nothing.
+    pub fn with_config_manifest(mut self, config_manifest: RuntimeConfigManifest) -> Self {
+        self.config_manifest = Some(config_manifest);
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
 
     pub const fn bind_address(&self) -> SocketAddr {
         self.bind_address
+    }
+
+    pub const fn io_timeout(&self) -> Duration {
+        self.io_timeout
+    }
+
+    pub const fn maximum_frame_bytes(&self) -> usize {
+        self.maximum_frame_bytes
     }
 
     pub fn validate(&self) -> RuntimeHostResult<()> {
@@ -461,6 +478,16 @@ impl RuntimeHostConfig {
             performance_monitor.validate()?;
         }
         self.performance_control.validate()?;
+        if let Some(config_manifest) = &self.config_manifest {
+            config_manifest.validate().map_err(|error| {
+                RuntimeHostError::fatal(
+                    "invalid_runtime_config_manifest",
+                    "validate_runtime_config",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_native_detail(error.code().to_owned())
+            })?;
+        }
         if self.state_root.as_os_str().is_empty()
             || !self.bind_address.ip().is_loopback()
             || self.io_timeout.is_zero()
@@ -511,6 +538,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 "procedure_manifest",
                 &self.procedure_manifest.as_ref().map(|_| "<runtime-owned>"),
             )
+            .field("config_manifest", &self.config_manifest)
             .finish()
     }
 }
@@ -997,6 +1025,12 @@ impl RuntimeHost {
             fatal,
         });
         if let Err(original) = shared.synchronize_fact_store() {
+            failed_start_cleanup(shared, &info_path, None, None, None)?;
+            return Err(original);
+        }
+        if let Some(config_manifest) = &config.config_manifest
+            && let Err(original) = shared.record_config_manifest(config_manifest)
+        {
             failed_start_cleanup(shared, &info_path, None, None, None)?;
             return Err(original);
         }
