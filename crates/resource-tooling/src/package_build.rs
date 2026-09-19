@@ -2848,10 +2848,9 @@ impl OperationBundle {
                 .guard
                 .as_ref()
                 .and_then(|guard| guard.verify_template.as_ref())
-                && !matches!(
-                    operation.click.kind.as_str(),
-                    "offset" | "target" | "target_center"
-                )
+                && !operation.click.as_ref().is_some_and(|click| {
+                    matches!(click.kind.as_str(), "offset" | "target" | "target_center")
+                })
                 && !operation_asset_exists(guard_template)?
             {
                 return Err(CliError::package_invalid(format!(
@@ -3082,7 +3081,11 @@ struct Operation {
     from: String,
     #[serde(default)]
     to: Option<PageDeclaration>,
-    click: OperationClick,
+    /// Exactly one of `click` and `application` carries the effect (slice #316-B3).
+    #[serde(default)]
+    click: Option<OperationClick>,
+    #[serde(default)]
+    application: Option<OperationApplication>,
     #[serde(default)]
     verify_template: Option<String>,
     #[serde(default)]
@@ -3130,30 +3133,30 @@ impl Operation {
                 )));
             }
         }
-        self.click.validate(control, schema_version)?;
-        if matches!(
-            self.click.kind.as_str(),
-            "offset" | "target" | "target_center"
-        ) {
-            let guard = self.guard.as_ref().ok_or_else(|| {
-                CliError::package_invalid(format!(
-                    "operation '{}' {} click requires guard metadata",
-                    self.id, self.click.kind
-                ))
-            })?;
-            if let Some(target_id) = self.click.target_id.as_deref()
-                && target_id != guard.target_id
-            {
-                return Err(CliError::package_invalid(format!(
-                    "operation '{}' {} click target_id '{}' does not match guard target_id '{}'",
-                    self.id, self.click.kind, target_id, guard.target_id
-                )));
-            }
-            if guard.verify_template.is_none() {
-                return Err(CliError::package_invalid(format!(
-                    "operation '{}' {} click requires template guard metadata; color-probe guards cannot produce a matched_rect",
-                    self.id, self.click.kind
-                )));
+        let click = self.validate_effect_shape()?;
+        if let Some(click) = click {
+            click.validate(control, schema_version)?;
+            if matches!(click.kind.as_str(), "offset" | "target" | "target_center") {
+                let guard = self.guard.as_ref().ok_or_else(|| {
+                    CliError::package_invalid(format!(
+                        "operation '{}' {} click requires guard metadata",
+                        self.id, click.kind
+                    ))
+                })?;
+                if let Some(target_id) = click.target_id.as_deref()
+                    && target_id != guard.target_id
+                {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' {} click target_id '{}' does not match guard target_id '{}'",
+                        self.id, click.kind, target_id, guard.target_id
+                    )));
+                }
+                if guard.verify_template.is_none() {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' {} click requires template guard metadata; color-probe guards cannot produce a matched_rect",
+                        self.id, click.kind
+                    )));
+                }
             }
         }
         if let Some(to) = &self.to {
@@ -3171,7 +3174,42 @@ impl Operation {
             )));
         }
         self.validate_flow()?;
-        self.validate_guard(control)
+        if click.is_some() {
+            self.validate_guard(control)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Exactly one effect (slice #316-B3): `Some(click)` for a click operation, `None` for a
+    /// validated `application` effect, which carries neither guard nor trusted coordinate.
+    fn validate_effect_shape(&self) -> CliOutcome<Option<&OperationClick>> {
+        match (&self.click, &self.application) {
+            (Some(click), None) => Ok(Some(click)),
+            (None, Some(application)) => {
+                if !matches!(application.action.as_str(), "launch" | "restart" | "stop") {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' application.action must be launch, restart or stop",
+                        self.id
+                    )));
+                }
+                if self.guard.is_some() || self.unguarded_trusted_coordinate {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' application effect cannot carry guard metadata",
+                        self.id
+                    )));
+                }
+                Ok(None)
+            }
+            (Some(_), Some(_)) => Err(CliError::package_invalid(format!(
+                "operation '{}' carries both click and application effects",
+                self.id
+            ))),
+            (None, None) => Err(CliError::package_invalid(format!(
+                "operation '{}' missing click or application effect",
+                self.id
+            ))),
+        }
     }
 
     fn validate_flow(&self) -> CliOutcome<()> {
@@ -3342,6 +3380,13 @@ impl OperationGuard {
         }
         Ok(())
     }
+}
+
+/// The `application` effect (slice #316-B3): the action alone; the package is the instance's.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperationApplication {
+    action: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1711,6 +1711,12 @@ pub enum RuntimeLifecyclePhase {
         quiescence: ResourceQuiescence,
         owner_disposition: OwnerResourceDisposition,
     },
+    /// Emulator instance control handed the instance's configured startup package to the
+    /// host's own scheduling point (slice #316-B3); the run itself records `task.*` events
+    /// under the same causation id.
+    StartupPackageScheduled {
+        instance_id: InstanceId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

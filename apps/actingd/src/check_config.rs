@@ -72,6 +72,13 @@ fn summarize(
                 Some(ScheduledExecutionMode::FixtureSimulation) => "fixture_simulation",
                 None => return Err(("execution_backend_registry_incomplete", "validate")),
             };
+            // The startup package as assembled: locator and digest, neither opened nor hashed.
+            let startup_package = assembly.host.startup_packages().get(&alias).map(|request| {
+                json!({
+                    "package": request.package_path(),
+                    "expected_sha256": request.expected_sha256(),
+                })
+            });
             if let Some(key) = registry.deferred_binding(&alias) {
                 // Bound at startup by one MuMuManager discovery run; nothing is spawned here.
                 return Ok(json!({
@@ -80,6 +87,7 @@ fn summarize(
                     "binding": "discovery_pending",
                     "instance_index": key.index(),
                     "instance_name": key.name(),
+                    "startup_package": startup_package,
                 }));
             }
             let resolved = registry
@@ -94,6 +102,7 @@ fn summarize(
                 "binding": "explicit",
                 "adb_host": endpoint.map(ResolvedAdbEndpoint::host),
                 "adb_port": endpoint.map(ResolvedAdbEndpoint::port),
+                "startup_package": startup_package,
             }))
         })
         .collect::<Result<Vec<_>, _>>()?;

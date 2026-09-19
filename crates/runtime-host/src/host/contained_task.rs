@@ -2530,6 +2530,30 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         result
     }
 
+    /// The `application` effect of a task step (slice #316-B3): the host's own application
+    /// lifecycle path under the run's lease, with the task and run ids on every
+    /// `application.*` event. A fixture run has no assigned application and reports
+    /// `Unsupported`, which the interpreter turns into the typed task failure.
+    fn control_application(
+        &mut self,
+        action: ApplicationLifecycleAction,
+    ) -> Result<actingcommand_execution_kernel::ApplicationEffectSupport, Self::Error> {
+        use actingcommand_execution_kernel::ApplicationEffectSupport;
+        self.ensure_active()?;
+        if self.execution_provenance != ExecutionBackendProvenance::PhysicalDevice {
+            return Ok(ApplicationEffectSupport::Unsupported);
+        }
+        self.host.application_control(
+            self.request,
+            self.token,
+            action,
+            self.connection_id,
+            Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+        )?;
+        self.ensure_active()?;
+        Ok(ApplicationEffectSupport::Performed)
+    }
+
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
         if !matches!(&trace, ContainedTaskTrace::PackageAdmitted { .. }) {
             self.ensure_active()?;
@@ -3242,6 +3266,30 @@ fn contained_task_package_failure(code: &'static str) -> RequestFailure {
     )
 }
 
+/// Types a startup package admission refusal (slice #316-B3): a locator that does not open
+/// is `startup_package_missing`, every other refusal `startup_package_admission_failed`; the
+/// underlying admission code stays attached as the related failure. The resource declaration
+/// rejection, when there is one, travels with it.
+fn startup_package_admission_failure(mut failure: RequestFailure) -> RequestFailure {
+    if failure.poison_runtime || failure.error.is_fatal() {
+        return failure;
+    }
+    let code = if failure.error.code() == "contained_task_package_open_failed" {
+        "startup_package_missing"
+    } else {
+        "startup_package_admission_failed"
+    };
+    let mut error = RuntimeHostError::request(
+        code,
+        "run_startup_package",
+        RuntimeErrorCode::PackageInvalid,
+    )
+    .with_related_failure("package_admission", &failure.error);
+    error.lifecycle.resource_declaration = failure.error.lifecycle.resource_declaration.take();
+    failure.error = Box::new(error);
+    failure
+}
+
 fn select_scheduling_disposition(
     events: &[PersistedEvent],
     outcome: TaskOutcome,
@@ -3892,6 +3940,185 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })
+    }
+
+    /// Runs one startup package on the host's own scheduling thread (slice #316-B3): the
+    /// request, correlation and holder ids are minted here, the connection is synthesized,
+    /// the run carries the causation id of its scheduling event, and everything after
+    /// admission is the ordinary contained-task path with its own lease and `task.*` chain.
+    /// Admission refusals are typed `startup_package_missing` /
+    /// `startup_package_admission_failed` before any lease is requested.
+    pub(super) fn run_startup_package(
+        &self,
+        pending: &startup_package::PendingStartupPackage,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let instance_alias = pending.instance_alias.as_str();
+        let task_request = &pending.request;
+        let resolved = self.resolve_instance(instance_alias)?;
+        if resolved.instance_id() != pending.instance_id {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "startup_package_instance_mismatch",
+                    "run_startup_package",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        // ADB baseline: the package runs only against an answering adbd; a probe failure is
+        // recorded typed and takes no lease.
+        if let Err(error) = self.execution.probe_adb_baseline(instance_alias) {
+            let mut host_error = RuntimeHostError::request(
+                "startup_package_adb_not_ready",
+                "run_startup_package",
+                RuntimeErrorCode::BackendOperationFailed,
+            )
+            .with_native_detail(format!(
+                "instance_alias={instance_alias}; adb_failed={error}"
+            ));
+            host_error.lifecycle.instance_id = Some(resolved.instance_id());
+            return Err(RequestFailure::request(
+                host_error,
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        let execution_provenance = resolved.provenance();
+        let (task_actor, task_source) = scheduled_request_transport_origin(execution_provenance);
+        let issuer = self.events.issuer();
+        let identifier = || RequestFailure::poison_without_terminal(runtime_identifier_error());
+        let request_id = issuer.mint_request_id().map_err(|_| identifier())?;
+        let correlation_id = issuer.mint_correlation_id().map_err(|_| identifier())?;
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| identifier())?
+            .transport();
+        let task_id = issuer.mint_task_id().map_err(|_| identifier())?;
+        let run_id = issuer.mint_run_id().map_err(|_| identifier())?;
+        let invalid_request = || {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "startup_package_request_invalid",
+                "run_startup_package",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        };
+        let task_request_message = RuntimeRequest::new(
+            request_id,
+            correlation_id,
+            Some(pending.causation_id),
+            task_actor,
+            task_source,
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+            RuntimeOperation::RunContainedTask {
+                instance_alias: instance_alias.to_owned(),
+                holder_id,
+                request: task_request.clone(),
+            },
+        )
+        .map_err(|_| invalid_request())?;
+        let validated = task_request_message
+            .validate()
+            .map_err(|_| invalid_request())?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    "build_startup_package_connection",
+                    &error,
+                ))
+            })?;
+        self.require_business_capacity(self.events.request_links(
+            &validated,
+            Some(resolved.instance_id()),
+            None,
+            None,
+        ))?;
+        let active_run = self.begin_contained_run(
+            task_request_message.request_id(),
+            resolved.instance_id(),
+            false,
+        )?;
+        active_run
+            .control
+            .set_deadline(
+                self.monotonic_ms()
+                    .and_then(|now| {
+                        now.checked_add(task_request.response_deadline_ms())
+                            .ok_or_else(|| {
+                                RuntimeHostError::fatal(
+                                    "contained_task_deadline_overflow",
+                                    "derive_contained_task_deadline",
+                                    RuntimeErrorCode::RuntimeFatal,
+                                )
+                            })
+                    })
+                    .map_err(RequestFailure::poison_without_terminal)?,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let material_deadline = self.package_material_deadline(active_run.control.deadline())?;
+        let prepared = prepare_contained_task(
+            instance_alias,
+            task_request,
+            self.execution.vision_provider(),
+            material_deadline,
+        )
+        .map_err(startup_package_admission_failure)?;
+        let run_links = RuntimeRunLinks::new(task_id, run_id);
+        self.append_scheduled_request_lifecycle(
+            &task_request_message,
+            &validated,
+            resolved.instance_id(),
+            run_links,
+            execution_provenance,
+        )?;
+        let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
+        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
+            request: &validated,
+            request_id: task_request_message.request_id(),
+            instance_alias,
+            holder_id,
+            connection_id,
+            run_links: Some(run_links),
+            lease_ttl_ms: Some(lease_ttl_ms),
+        })?;
+        let RuntimeResult::LeaseGranted { token } = acquired.result else {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "startup_package_lease_result_invalid",
+                    "run_startup_package",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        };
+        let deadline_monotonic_ms = match self.contained_task_deadline(task_request, &token) {
+            Ok(deadline) => deadline,
+            Err(failure) => {
+                return Err(self.cleanup_composite_failure_with_run_links(
+                    &validated,
+                    token,
+                    connection_id,
+                    Some(run_links),
+                    failure,
+                ));
+            }
+        };
+        active_run
+            .control
+            .set_deadline(deadline_monotonic_ms)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        self.execute_contained_task_with_lease(
+            &task_request_message,
+            &validated,
+            instance_alias,
+            connection_id,
+            prepared,
+            task_request,
+            token,
+            task_id,
+            run_id,
+            execution_provenance,
+            Some(run_links),
+            active_run.control(),
+            Some(pending.control_request_id),
+        )
     }
 
     pub(super) fn run_scheduled_contained_task(

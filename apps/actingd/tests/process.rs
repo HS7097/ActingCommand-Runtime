@@ -3621,6 +3621,20 @@ impl ExecutionBackendProvider for PlanningSeedProvider {
         Ok(Box::new(PlanningSeedCapture))
     }
 
+    // Slice #316-B3: the fake device always reports its assigned application in the
+    // foreground, so the foreground gate passes exactly as before the gate existed.
+    fn observe_foreground_application(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
+        Ok(
+            actingcommand_runtime_host::ForegroundApplicationObservation {
+                foreground: Some("neutral.application".to_owned()),
+                assigned: "neutral.application".to_owned(),
+            },
+        )
+    }
+
     fn control_application(
         &self,
         _instance_alias: &str,
@@ -3650,6 +3664,20 @@ impl ExecutionBackendProvider for FakeProvider {
         Err(DeviceError::fatal(
             "fake capture backend must not be opened",
         ))
+    }
+
+    // Slice #316-B3: the fake device always reports its assigned application in the
+    // foreground, so the foreground gate passes exactly as before the gate existed.
+    fn observe_foreground_application(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
+        Ok(
+            actingcommand_runtime_host::ForegroundApplicationObservation {
+                foreground: Some("neutral.application".to_owned()),
+                assigned: "neutral.application".to_owned(),
+            },
+        )
     }
 
     fn control_application(

@@ -298,6 +298,16 @@ impl Adb {
         ])
     }
 
+    /// Read-only: the package name of the activity Android reports as resumed
+    /// (`dumpsys activity activities`, `topResumedActivity` first, then
+    /// `mResumedActivity` / `ResumedActivity`). `Ok(None)` means the command ran but no
+    /// resumed activity was reported (for example mid-transition); an error is an ADB
+    /// failure, never a parse outcome.
+    pub fn foreground_package(&self, serial: &str) -> DeviceResult<Option<String>> {
+        let output = self.run(&["-s", serial, "shell", "dumpsys", "activity", "activities"])?;
+        Ok(parse_foreground_package(&output.stdout))
+    }
+
     pub fn screencap(&self, serial: &str, timeout: Duration) -> DeviceResult<BinaryOutput> {
         run_binary_with_timeout(
             &self.config.adb_path,
@@ -361,6 +371,50 @@ impl Adb {
         }
         Ok(output)
     }
+}
+
+/// Pure parse of `dumpsys activity activities`: the package of the first
+/// `ActivityRecord{<hash> u<user> <package>/<activity> ...}` behind a resumed-activity
+/// marker, `topResumedActivity=` taking precedence over `mResumedActivity:` /
+/// `ResumedActivity:`. `None` when no marker carries a record.
+pub fn parse_foreground_package(dumpsys: &str) -> Option<String> {
+    const MARKERS: [&str; 3] = [
+        "topResumedActivity=",
+        "mResumedActivity:",
+        "ResumedActivity:",
+    ];
+    MARKERS.iter().find_map(|marker| {
+        dumpsys.lines().find_map(|line| {
+            line.find(marker)
+                .and_then(|index| activity_record_package(&line[index + marker.len()..]))
+        })
+    })
+}
+
+fn activity_record_package(record: &str) -> Option<String> {
+    let body = record
+        .find('{')
+        .map_or(record, |index| &record[index + 1..]);
+    let body = body.split('}').next()?;
+    let mut tokens = body.split_whitespace();
+    while let Some(token) = tokens.next() {
+        let is_user = token.len() > 1
+            && token.starts_with('u')
+            && token[1..].bytes().all(|byte| byte.is_ascii_digit());
+        if !is_user {
+            continue;
+        }
+        let package = tokens.next()?.split('/').next()?;
+        if package.is_empty()
+            || package
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return None;
+        }
+        return Some(package.to_owned());
+    }
+    None
 }
 
 fn device_state_error(

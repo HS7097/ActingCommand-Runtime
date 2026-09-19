@@ -321,6 +321,7 @@ impl Declaration<'_> {
                 "to",
                 "expect_after",
                 "click",
+                "application",
                 "on_error",
                 "retryable",
                 "max_attempts",
@@ -373,11 +374,25 @@ impl Declaration<'_> {
                 &child(pointer, field),
             )?;
         }
-        self.click(
-            self.required(object, pointer, "click")?,
-            &child(pointer, "click"),
-            canonical,
-        )?;
+        // Exactly one effect: `click`, or the `application` effect of slice #316-B3.
+        match (
+            object.get("click").filter(|value| !value.is_null()),
+            object.get("application").filter(|value| !value.is_null()),
+        ) {
+            (Some(click), None) => self.click(click, &child(pointer, "click"), canonical)?,
+            (None, Some(application)) => {
+                self.application(application, &child(pointer, "application"))?;
+            }
+            (Some(_), Some(_)) => {
+                return Err(self.error(
+                    &child(pointer, "application"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            (None, None) => {
+                self.required(object, pointer, "click")?;
+            }
+        }
         for (field, value) in object {
             let pointer = child(pointer, field);
             match field.as_str() {
@@ -439,6 +454,19 @@ impl Declaration<'_> {
                 "rect_move" => self.rect_move(value, &pointer)?,
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    /// The `application` effect (slice #316-B3): `{ "action": "launch" | "restart" | "stop" }`,
+    /// nothing else. The package name is never declared here; it is the instance's pointer.
+    fn application(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["action"])?;
+        let action = self.required(object, pointer, "action")?;
+        let pointer = child(pointer, "action");
+        self.string(action, &pointer)?;
+        if !matches!(action.as_str(), Some("launch" | "restart" | "stop")) {
+            return Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue));
         }
         Ok(())
     }

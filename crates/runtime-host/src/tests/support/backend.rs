@@ -573,6 +573,18 @@ impl ExecutionBackendProvider for FakeProvider {
         Ok(observation)
     }
 
+    // Slice #316-B3: the fake device always reports its assigned application in the
+    // foreground, so the foreground gate passes exactly as before the gate existed.
+    fn observe_foreground_application(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<crate::ForegroundApplicationObservation> {
+        Ok(crate::ForegroundApplicationObservation {
+            foreground: Some("neutral.application".to_owned()),
+            assigned: "neutral.application".to_owned(),
+        })
+    }
+
     fn control_application(
         &self,
         instance_alias: &str,
