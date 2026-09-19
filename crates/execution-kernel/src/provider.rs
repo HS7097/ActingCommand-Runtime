@@ -769,6 +769,13 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>>;
 
+    fn open_nemu_session(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<Option<actingcommand_device::NemuSessionBackends>> {
+        Ok(None)
+    }
+
     fn control_application(
         &self,
         instance_alias: &str,

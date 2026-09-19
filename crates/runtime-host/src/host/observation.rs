@@ -179,7 +179,11 @@ impl HostShared {
         let capture_started = Instant::now();
         let captured = self
             .execution
-            .capture_retained_with_registration_guard(instance_alias, registration);
+            .capture_frame_retained_with_registration_guard(
+                instance_alias,
+                links.frame_id().copied(),
+                registration,
+            );
         let capture_acquire_us = performance::measured_microseconds(
             actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
         );
@@ -380,14 +384,28 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
+        let verified = terminal(&sink.verified.ok_or_else(|| {
+            online_observation::observation_integrity_failure("observation_verified_event_missing")
+        })?);
+        self.execution
+            .commit_input_frame(
+                instance_alias,
+                actingcommand_contract::InputFrameReference {
+                    frame_id: *frame_id,
+                    width: observation.width(),
+                    height: observation.height(),
+                },
+            )
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "commit_capture_input_frame",
+                    &error,
+                ))
+            })?;
         Ok(CompletedReadonlyObservation {
             observation,
             terminal: event,
-            verified: terminal(&sink.verified.ok_or_else(|| {
-                online_observation::observation_integrity_failure(
-                    "observation_verified_event_missing",
-                )
-            })?),
+            verified,
             links,
             artifact_links,
         })

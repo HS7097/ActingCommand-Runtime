@@ -381,6 +381,7 @@ fn required_failure_events_preserve_cleanup_detail() {
             let (_, token) = client.acquire("node.a");
             if capture {
                 let prime = client.request(RuntimeOperation::Input {
+                    frame: None,
                     token: token.clone(),
                     action: InputAction::Reset,
                 });
@@ -432,6 +433,7 @@ fn required_failure_events_preserve_cleanup_detail() {
                     }
                 } else {
                     RuntimeOperation::Input {
+                        frame: None,
                         token,
                         action: InputAction::Reset,
                     }

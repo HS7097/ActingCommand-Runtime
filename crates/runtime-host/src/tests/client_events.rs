@@ -24,6 +24,7 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
     let input = client.request_with_correlation(
         correlation_id,
         RuntimeOperation::Input {
+            frame: None,
             token: token.clone(),
             action: InputAction::Tap { x: 10, y: 20 },
         },

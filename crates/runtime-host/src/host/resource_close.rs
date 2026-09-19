@@ -166,10 +166,12 @@ impl HostShared {
                 ))
             })?;
 
-        match self
-            .execution
-            .close_instance(token.instance_id(), DeviceCloseAuthority::FencedDeviceWrite)
-        {
+        match self.execution.close_instance_with_input_check(
+            token.instance_id(),
+            DeviceCloseAuthority::FencedDeviceWrite,
+            self.nemu_close_check(token, connection_id)
+                .map_err(RequestFailure::poison_without_terminal)?,
+        ) {
             Ok(outcome) => {
                 self.append_stdio_close_observations(
                     outcome.vendor_stdio(),

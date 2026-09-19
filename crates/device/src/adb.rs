@@ -422,8 +422,27 @@ pub fn run_text_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> DeviceResult<CommandOutput> {
+    run_text_command(adb_path, args, timeout, None)
+}
+
+pub(crate) fn run_text_in_directory_with_timeout(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    directory: &std::path::Path,
+) -> DeviceResult<CommandOutput> {
+    run_text_command(program, args, timeout, Some(directory))
+}
+
+fn run_text_command(
+    adb_path: &str,
+    args: &[&str],
+    timeout: Duration,
+    directory: Option<&std::path::Path>,
+) -> DeviceResult<CommandOutput> {
     validate_adb_path(adb_path)?;
-    let output = run_raw_with_timeout(ADB_PROGRAM, adb_path, args, timeout)?;
+    let output =
+        run_raw_with_timeout_in_directory(ADB_PROGRAM, adb_path, args, timeout, directory)?;
     let stdout = decode_adb_text(output.stdout, "stdout", args);
     let stderr = decode_adb_text(output.stderr, "stderr", args);
     if output.status.success() {
@@ -493,8 +512,21 @@ pub(crate) fn run_raw_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> DeviceResult<RawCommandOutput> {
+    run_raw_with_timeout_in_directory(program, program_path, args, timeout, None)
+}
+
+fn run_raw_with_timeout_in_directory(
+    program: CommandProgram,
+    program_path: &str,
+    args: &[&str],
+    timeout: Duration,
+    directory: Option<&std::path::Path>,
+) -> DeviceResult<RawCommandOutput> {
     let name = program.name;
     let mut command = Command::new(program_path);
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
     command
         .args(args)
         .stdout(Stdio::piped())

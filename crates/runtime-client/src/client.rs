@@ -9,22 +9,22 @@ use actingcommand_contract::{
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
     CorrelationId, EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload,
     EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
-    InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
-    OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
-    OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest,
-    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionPayload, ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE,
-    RequestId, ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeFactSnapshot,
-    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeMaintenanceQuery,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind,
-    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome, TaskPayload,
-    TaskSemanticFact, TerminalEvent,
+    InputAction, InputFrameReference, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA,
+    OcrFieldPrivacy, OcrFieldReason, OcrFieldResult, OcrFieldType, OcrFieldValue,
+    OcrFieldsDeclaration, OcrFieldsReport, OriginModule, OwnerEpoch, PackageDebugRequest,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeEvidenceExportRequest, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
+    RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
+    TaskPayload, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -1415,6 +1415,15 @@ impl RuntimeClient {
         token: &LeaseToken,
         action: InputAction,
     ) -> RuntimeClientResult<RuntimeReceipt> {
+        self.input_with_frame(token, action, None)
+    }
+
+    pub fn input_with_frame(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientInputStart,
@@ -1428,6 +1437,7 @@ impl RuntimeClient {
         let result = match self.execute_receipt(
             "runtime_input",
             RuntimeOperation::Input {
+                frame,
                 token: token.clone(),
                 action,
             },
@@ -4143,9 +4153,19 @@ impl RuntimeDebugSession {
         token: &LeaseToken,
         action: InputAction,
     ) -> RuntimeClientResult<RuntimeReceipt> {
+        self.input_with_frame(token, action, None)
+    }
+
+    pub fn input_with_frame(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.client.execute_receipt_with_correlation(
             "debug_runtime_input",
             RuntimeOperation::Input {
+                frame,
                 token: token.clone(),
                 action,
             },
