@@ -113,7 +113,7 @@ fn scheduled_policy_checkpoint_is_exact_thread_bound_one_shot_and_clock_independ
 #[test]
 fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_region_contained_task_package();
+    let package = neutral_region_contained_task_package(false);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
@@ -288,7 +288,7 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
 #[test]
 fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_contained_task_package();
+    let package = neutral_contained_task_package(false);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
@@ -405,7 +405,7 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
         let package = if case == "guard-refused" {
             neutral_retrying_contained_task_package()
         } else {
-            neutral_contained_task_package()
+            neutral_contained_task_package(false)
         };
         let package_path = root.path().join("scheduled-task.zip");
         fs::write(&package_path, &package).expect("write package");
@@ -588,11 +588,12 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
 #[test]
 fn scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_contained_task_package();
+    let package = neutral_contained_task_package(true);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
@@ -745,7 +746,7 @@ fn scheduled_physical_identity_and_package_mismatches_fail_before_io() {
 #[test]
 fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_contained_task_package();
+    let package = neutral_contained_task_package(false);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));

@@ -763,7 +763,7 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
     let effect_key = "opaque-effect-result";
     let no_effect_key = "opaque-no-effect-result";
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_two_key_mapped_contained_task_package(effect_key, no_effect_key);
+    let package = neutral_two_key_mapped_contained_task_package(false, effect_key, no_effect_key);
     let package_path = root.path().join("two-key-mapped-task.zip");
     fs::write(&package_path, &package).expect("write two-key mapped package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
@@ -1327,10 +1327,11 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
     ] {
         let root = TempDir::new().expect("tempdir");
         let package = root.path().join("mapped-task.zip");
-        let bytes = neutral_two_key_mapped_contained_task_package("claimed", "no-op");
+        let bytes = neutral_two_key_mapped_contained_task_package(true, "claimed", "no-op");
         fs::write(&package, &bytes).expect("write mapped package");
         let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
+        state.physical_task_geometry.store(true, Ordering::Release);
         if performs_effect {
             state
                 .transition_capture_after_input
