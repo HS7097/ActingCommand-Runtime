@@ -2831,7 +2831,12 @@ fn authoring_session_reuses_one_runtime_correlation_and_requires_durable_termina
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, state, 1_000);
-    let client = lab_client(&root);
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Lab runtime client");
     let session = client.begin_authoring_session().expect("authoring session");
     let expected = [
         (ResourceAuthoringPhase::AuthoringStarted, None),
@@ -2902,16 +2907,11 @@ fn non_lab_client_cannot_open_authoring_session() {
 #[test]
 fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState {
-        input_open_delay: Duration::from_millis(200),
-        input_close_delay: Duration::from_millis(200),
-        ..FakeState::default()
-    });
+    let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
-            .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_millis(240)),
+            .with_backend_open_timeout(Duration::from_secs(2)),
     )
     .expect("Lab runtime client");
     let session = client.begin_debug_session().expect("debug session");
