@@ -667,7 +667,7 @@ fn task_geometry_error(code: &'static str) -> RuntimeHostError {
 fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
     TaskGeometryFailure {
         code: error.code().to_owned(),
-        event_id: error.lifecycle.recorded_event.get().copied(),
+        event_id: error.diagnostics().recorded_event().get().copied(),
     }
 }
 
@@ -687,7 +687,7 @@ fn task_geometry_request_failure(
     event: Option<&PersistedEvent>,
 ) -> RequestFailure {
     if let Some(event) = event {
-        let _ = error.lifecycle.recorded_event.set(*event.event_id());
+        let _ = error.diagnostics().recorded_event().set(*event.event_id());
     }
     RequestFailure {
         state: RuntimeReceiptState::Failed,
@@ -1015,10 +1015,7 @@ impl RuntimeContainedTask<'_> {
                 preserved_primary.lifecycle.resource_quiescence =
                     observation_context.resource_quiescence;
                 preserved_primary.lifecycle.instance_id = observation_context.instance_id;
-                preserved_primary
-                    .lifecycle
-                    .causes
-                    .extend(observation_context.causes.iter().cloned());
+                preserved_primary = preserved_primary.with_related_causes(&failure.error);
             }
             failure.error = Box::new(
                 if failure.error.projection().code == RuntimeErrorCode::LedgerFailure {
@@ -4718,8 +4715,8 @@ impl HostShared {
                     {
                         let _ = failure
                             .error
-                            .lifecycle
-                            .recorded_event
+                            .diagnostics()
+                            .recorded_event()
                             .set(*event.event_id());
                     }
                 }
@@ -4803,8 +4800,8 @@ impl HostShared {
                 });
                 let _ = failure
                     .error
-                    .lifecycle
-                    .recorded_event
+                    .diagnostics()
+                    .recorded_event()
                     .set(*event.event_id());
                 let failure = match post_admission_ocr_failure_diagnostic {
                     Ok(()) => failure,

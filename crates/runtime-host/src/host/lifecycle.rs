@@ -149,8 +149,8 @@ impl HostShared {
             )?;
             let reference = complete
                 .primary
-                .lifecycle
-                .recorded_event
+                .diagnostics()
+                .recorded_event()
                 .get()
                 .copied()
                 .or(entered_event_id);
@@ -171,15 +171,15 @@ impl HostShared {
             return Ok(());
         }
         if let Some(error) = host_error
-            && error.lifecycle.recorded_event.get().is_some()
+            && error.diagnostics().recorded_event().get().is_some()
             && error
-                .lifecycle
-                .causes
+                .diagnostics()
+                .lifecycle_causes()
                 .iter()
                 .all(|cause| cause.recorded_event.get().is_some())
             && error
-                .lifecycle
-                .vendor_stdio
+                .diagnostics()
+                .vendor_stdio()
                 .iter()
                 .all(|observation| observation.recorded_event.get().is_some())
         {
@@ -195,7 +195,7 @@ impl HostShared {
         }
         if let Some(error) = host_error {
             self.append_stdio_close_observations(
-                &error.lifecycle.vendor_stdio,
+                error.diagnostics().vendor_stdio(),
                 error.lifecycle.instance_id,
                 links.clone(),
             )?;
@@ -252,7 +252,7 @@ impl HostShared {
             .with_instance_id(host_error.and_then(|error| error.lifecycle.instance_id))
             .with_primary_detail(host_error.and_then(|error| error.diagnostic_detail().cloned()))
             .with_adb_recovery(
-                host_error.and_then(|error| error.lifecycle.adb_recovery.as_deref().cloned()),
+                host_error.and_then(|error| error.diagnostics().adb_recovery().cloned()),
             )
             .with_native_detail(
                 client_part
@@ -260,8 +260,7 @@ impl HostShared {
                         actingcommand_contract::LifecycleNativeDetail::new(text, false)
                     })
                     .or_else(|| {
-                        host_error
-                            .and_then(|error| error.lifecycle.native_detail.as_deref().cloned())
+                        host_error.and_then(|error| error.diagnostics().native_detail().cloned())
                     }),
             )
             .with_capacity(host_error.and_then(|error| error.lifecycle.capacity.clone()))
@@ -330,10 +329,10 @@ impl HostShared {
             let phase_close = matches!(
                 error.code(),
                 "input_backend_close_failed" | "capture_backend_close_failed"
-            ) && error.lifecycle.causes.iter().any(|cause| {
+            ) && error.diagnostics().lifecycle_causes().iter().any(|cause| {
                 cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
             });
-            if error.lifecycle.recorded_event.get().is_none() && !phase_close {
+            if error.diagnostics().recorded_event().get().is_none() && !phase_close {
                 let mut parts = Vec::new();
                 let mut remaining = error.lifecycle.ppocr_message.as_deref().unwrap_or("");
                 while !remaining.is_empty() {
@@ -358,11 +357,11 @@ impl HostShared {
                     None => emit(None, entered_event_id, None)?,
                 };
                 // A partial message is not a fully recorded error.
-                let _ = error.lifecycle.recorded_event.set(id);
+                let _ = error.diagnostics().recorded_event().set(id);
             }
             let reference =
-                entered_event_id.or_else(|| error.lifecycle.recorded_event.get().copied());
-            for cause in &error.lifecycle.causes {
+                entered_event_id.or_else(|| error.diagnostics().recorded_event().get().copied());
+            for cause in error.diagnostics().lifecycle_causes() {
                 if cause.recorded_event.get().is_none() {
                     let id = emit(Some(&cause.cause), reference, None)?;
                     let _ = cause.recorded_event.set(id);
@@ -370,12 +369,12 @@ impl HostShared {
             }
             if phase_close
                 && let Some(id) = error
-                    .lifecycle
-                    .causes
+                    .diagnostics()
+                    .lifecycle_causes()
                     .first()
                     .and_then(|cause| cause.recorded_event.get())
             {
-                let _ = error.lifecycle.recorded_event.set(*id);
+                let _ = error.diagnostics().recorded_event().set(*id);
             }
         } else if let Some(text) = client_message {
             // Each original detail retains its 1024-byte schema limit. Ordered,
@@ -464,18 +463,21 @@ impl HostShared {
             ),
             _ => (false, false),
         };
-        if error.lifecycle.native_detail.is_none()
+        if error.diagnostics().native_detail().is_none()
             && error.lifecycle.capacity.is_none()
             && (error.diagnostic_detail().is_none() || primary_detail_recorded)
             && (error.cleanup_cause().is_none() || cleanup_cause_recorded)
             && error.lifecycle.raw_os_error.is_none()
-            && error.lifecycle.adb_recovery.is_none()
+            && error.diagnostics().adb_recovery().is_none()
             && error.lifecycle.complete_failure.is_none()
             && error.lifecycle.ppocr_message.is_none()
         {
             // This marks only the primary outcome. append_lifecycle_failure still
             // records every cause and stdio observation with its own identity.
-            let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
+            let _ = error
+                .diagnostics()
+                .recorded_event()
+                .set(*outcome.event_id());
         }
         self.append_lifecycle_failure(
             RuntimeLifecycleFailureStage::OperationCleanup,
@@ -491,7 +493,7 @@ impl HostShared {
         stage: ConnectionFailureStage,
         error: &RuntimeHostError,
     ) -> RuntimeHostResult<()> {
-        if error.lifecycle.recorded_event.get().is_some()
+        if error.diagnostics().recorded_event().get().is_some()
             || error.projection().code == RuntimeErrorCode::LedgerFailure
         {
             return self.append_lifecycle_failure(

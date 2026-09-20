@@ -128,14 +128,14 @@ impl HostShared {
                             RuntimeErrorCode::InvalidRequest,
                         )
                     };
-                    host.lifecycle.native_detail = Some(Box::new(
+                    host = host.with_native_failure_detail(
                         ArtifactStoreError::fatal(
                             error.code(),
                             error.operation(),
                             error.detail().unwrap_or("Ledger request failed"),
                         )
                         .native_detail(),
-                    ));
+                    );
                     if error.is_fatal() {
                         return Err(RequestFailure::poison_without_terminal(host));
                     }

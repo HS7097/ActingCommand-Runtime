@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-
 struct ManualRuntimeClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
@@ -151,9 +150,8 @@ impl TestClient {
             panic!(
                 "runtime receipt: {error:?}; native read context: {}",
                 error
-                    .lifecycle
-                    .native_detail
-                    .as_deref()
+                    .diagnostics()
+                    .native_detail()
                     .map_or("unavailable", |detail| detail.text()),
             )
         })

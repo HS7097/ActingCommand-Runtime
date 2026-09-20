@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CleanupCauseDraft, DiagnosticDetailDraft, EventId, InstanceId, ResourceQuiescence,
-    RuntimeErrorCode, RuntimeErrorProjection,
+    CleanupCauseDraft, DiagnosticDetailDraft, InstanceId, ResourceQuiescence, RuntimeErrorCode,
+    RuntimeErrorProjection,
 };
-use actingcommand_execution_kernel::{ExecutionKernelError, ExecutionLifecycleCause};
+use actingcommand_execution_kernel::{ExecutionFailureContext, ExecutionKernelError};
 use actingcommand_runtime_state::RuntimeStateError;
 use actingcommand_scheduler::SchedulerError;
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 pub type RuntimeHostResult<T> = Result<T, RuntimeHostError>;
 
@@ -53,6 +53,7 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    diagnostics: ExecutionFailureContext,
     pub(crate) failure_stage: Option<&'static str>,
     pub(crate) ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     pub(crate) ppocr_message: Option<String>,
@@ -60,18 +61,11 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) ppocr_artifact_failure:
         Option<Arc<actingcommand_artifact_store::ArtifactStoreError>>,
     pub(crate) complete_failure: Option<Box<RuntimeCompleteFailure>>,
-    pub(crate) vendor_stdio: Vec<actingcommand_execution_kernel::ExecutionStdioObservation>,
     pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
     pub(crate) raw_os_error: Option<i32>,
-    pub(crate) adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
-    diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
-    cleanup_cause: Option<Box<CleanupCauseDraft>>,
-    pub(crate) recorded_event: Arc<OnceLock<EventId>>,
-    pub(crate) causes: Vec<ExecutionLifecycleCause>,
     pub(crate) instance_id: Option<InstanceId>,
-    pub(crate) native_detail: Option<Box<actingcommand_contract::LifecycleNativeDetail>>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
     pub(crate) policy_rejection: Option<Box<actingcommand_contract::PolicyDispatchRejection>>,
     pub(crate) resource_declaration:
@@ -90,8 +84,8 @@ impl PartialEq for RuntimeHostError {
             && self.lifecycle.ppocr_source == other.lifecycle.ppocr_source
             && self.lifecycle.ppocr_diagnostics == other.lifecycle.ppocr_diagnostics
             && self.lifecycle.ppocr_artifact_failure == other.lifecycle.ppocr_artifact_failure
-            && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
-            && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
+            && self.diagnostic_detail() == other.diagnostic_detail()
+            && self.cleanup_cause() == other.cleanup_cause()
             && self.lifecycle.policy_rejection == other.lifecycle.policy_rejection
             && self.lifecycle.resource_declaration == other.lifecycle.resource_declaration
             && self.lifecycle.resource_declaration_event
@@ -113,6 +107,34 @@ impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
 }
 
 impl RuntimeHostError {
+    pub(crate) fn diagnostics(&self) -> &ExecutionFailureContext {
+        &self.lifecycle.diagnostics
+    }
+
+    pub(crate) fn with_native_failure_detail(
+        mut self,
+        detail: actingcommand_contract::LifecycleNativeDetail,
+    ) -> Self {
+        self.lifecycle.diagnostics = self.lifecycle.diagnostics.with_native_detail(detail);
+        self
+    }
+
+    pub(crate) fn with_recording_from(mut self, source: &Self) -> Self {
+        self.lifecycle.diagnostics = self
+            .lifecycle
+            .diagnostics
+            .with_recording_from(source.diagnostics());
+        self
+    }
+
+    pub(crate) fn with_related_causes(mut self, related: &Self) -> Self {
+        self.lifecycle.diagnostics = self
+            .lifecycle
+            .diagnostics
+            .with_related_causes(related.diagnostics());
+        self
+    }
+
     pub(crate) fn with_failure_stage(mut self, stage: &'static str) -> Self {
         self.lifecycle.failure_stage.get_or_insert(stage);
         if let Some(complete) = &mut self.lifecycle.complete_failure {
@@ -221,7 +243,7 @@ impl RuntimeHostError {
                 RuntimeErrorCode::InvalidRequest,
             )
         };
-        result.lifecycle.native_detail = Some(Box::new(error.native_detail()));
+        result = result.with_native_failure_detail(error.native_detail());
         result.lifecycle.capacity = error.capacity().cloned();
         result.lifecycle.raw_os_error = error.raw_os_error();
         result
@@ -254,18 +276,16 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
-        self.lifecycle.diagnostic_detail.as_deref()
+        self.diagnostics().diagnostic_detail()
     }
 
     pub(crate) fn with_diagnostic_detail(mut self, detail: DiagnosticDetailDraft) -> Self {
-        if self.lifecycle.diagnostic_detail.is_none() {
-            self.lifecycle.diagnostic_detail = Some(Box::new(detail));
-        }
+        self.lifecycle.diagnostics = self.lifecycle.diagnostics.with_diagnostic_detail(detail);
         self
     }
 
     pub(crate) fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
-        self.lifecycle.cleanup_cause.as_deref()
+        self.diagnostics().cleanup_cause()
     }
 
     pub(crate) fn fatal(
@@ -337,28 +357,10 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
-                failure_stage: None,
-                complete_failure: None,
-                ppocr_diagnostics: Vec::new(),
-                ppocr_message: None,
-                ppocr_source: None,
-                ppocr_artifact_failure: None,
-                vendor_stdio: error.vendor_stdio().to_vec(),
-                task_timing: None,
-                capacity: None,
-                raw_os_error: None,
-                adb_recovery: error.adb_recovery().cloned().map(Box::new),
-                incomplete_device_diagnostic_summary: None,
-                diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
-                cleanup_cause: error.cleanup_cause().cloned().map(Box::new),
-                recorded_event: Arc::clone(error.recorded_event()),
-                causes: error.lifecycle_causes().to_vec(),
+                diagnostics: error.failure_context().clone(),
                 instance_id: error.instance_id(),
-                native_detail: error.native_detail().cloned().map(Box::new),
                 resource_quiescence: error.resource_quiescence(),
-                policy_rejection: None,
-                resource_declaration: None,
-                resource_declaration_event: None,
+                ..RuntimeHostFailureContext::default()
             }),
         };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
@@ -384,15 +386,15 @@ impl RuntimeHostError {
         }
     }
 
-    pub(crate) fn with_native_detail(mut self, detail: String) -> Self {
+    pub(crate) fn with_native_detail(self, detail: String) -> Self {
         let mut end = detail.len().min(1024);
         while !detail.is_char_boundary(end) {
             end -= 1;
         }
-        self.lifecycle.native_detail = Some(Box::new(
-            actingcommand_contract::LifecycleNativeDetail::new(&detail[..end], end < detail.len()),
-        ));
-        self
+        self.with_native_failure_detail(actingcommand_contract::LifecycleNativeDetail::new(
+            &detail[..end],
+            end < detail.len(),
+        ))
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
@@ -400,16 +402,10 @@ impl RuntimeHostError {
             return self
                 .with_complete_failure(RuntimeFailureRelation::DiagnosticArchive, other.clone());
         }
-        for observation in &other.lifecycle.vendor_stdio {
-            if !self
-                .lifecycle
-                .vendor_stdio
-                .iter()
-                .any(|current| Arc::ptr_eq(&current.recorded_event, &observation.recorded_event))
-            {
-                self.lifecycle.vendor_stdio.push(observation.clone());
-            }
-        }
+        self.lifecycle.diagnostics = self
+            .lifecycle
+            .diagnostics
+            .with_related_stdio(other.diagnostics());
         if self.lifecycle.task_timing.is_none() {
             self.lifecycle.task_timing = other.lifecycle.task_timing.clone();
         }
@@ -418,7 +414,7 @@ impl RuntimeHostError {
         }
         if self.code == other.code
             && self.operation == other.operation
-            && self.lifecycle.native_detail == other.lifecycle.native_detail
+            && self.diagnostics().native_detail() == other.diagnostics().native_detail()
         {
             return self;
         }
@@ -427,8 +423,8 @@ impl RuntimeHostError {
             self.code, self.operation, other.code, other.operation
         );
         let details = [
-            self.lifecycle.native_detail.as_deref(),
-            other.lifecycle.native_detail.as_deref(),
+            self.diagnostics().native_detail(),
+            other.diagnostics().native_detail(),
         ];
         let count = details.iter().flatten().count();
         let budget = 1024usize.saturating_sub(text.len() + count * 3) / count.max(1);
@@ -443,11 +439,10 @@ impl RuntimeHostError {
             text.push_str(&detail.text()[..end]);
         }
         self = self.with_native_detail(text);
-        self.lifecycle.recorded_event = Arc::new(OnceLock::new());
-        if truncated && let Some(detail) = self.lifecycle.native_detail.as_deref() {
-            self.lifecycle.native_detail = Some(Box::new(
-                actingcommand_contract::LifecycleNativeDetail::new(detail.text(), true),
-            ));
+        self.lifecycle.diagnostics = self.lifecycle.diagnostics.with_fresh_recording();
+        if truncated && let Some(detail) = self.diagnostics().native_detail() {
+            let detail = actingcommand_contract::LifecycleNativeDetail::new(detail.text(), true);
+            self = self.with_native_failure_detail(detail);
         }
         self
     }

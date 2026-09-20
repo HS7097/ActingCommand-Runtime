@@ -108,7 +108,7 @@ impl HostShared {
                 let error = error
                     .into_fatal()
                     .with_related_failure("committed_planning_fact", &context);
-                let _ = error.lifecycle.recorded_event.set(event_id);
+                let _ = error.diagnostics().recorded_event().set(event_id);
                 error
             } else {
                 error
@@ -118,9 +118,10 @@ impl HostShared {
             && error.is_fatal()
         {
             self.fatal.mark(error.clone()).map_err(|secondary| {
-                let mut combined = error.clone().with_related_failure("fatal_mark", &secondary);
-                combined.lifecycle.recorded_event = Arc::clone(&error.lifecycle.recorded_event);
-                combined
+                error
+                    .clone()
+                    .with_related_failure("fatal_mark", &secondary)
+                    .with_recording_from(error)
             })?;
         }
         result
