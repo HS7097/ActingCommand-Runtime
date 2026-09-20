@@ -89,6 +89,7 @@ pub struct ContainedTaskError {
     timing: Option<TaskTimingFailure>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
+    ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 impl ContainedTaskError {
@@ -99,6 +100,7 @@ impl ContainedTaskError {
             timing: None,
             timing_check_position: None,
             declaration_issue: None,
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -109,6 +111,7 @@ impl ContainedTaskError {
             timing: None,
             timing_check_position: None,
             declaration_issue: None,
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -153,6 +156,18 @@ impl ContainedTaskError {
 
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &actingcommand_contract::PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(
+        mut self,
+        diagnostics: actingcommand_contract::PpocrDiagnostics,
+    ) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
@@ -1893,6 +1908,7 @@ impl PreparedContainedTask {
                     "contained_task_recognition_failed",
                     error.to_string(),
                 )
+                .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?
             .matched;
         runtime
@@ -2963,9 +2979,20 @@ impl PreparedContainedTask {
             runtime
                 .record_page_evaluations("page", &results, Some(evaluation_timing))
                 .map_err(ContainedTaskRunError::Boundary)?;
+            let ppocr_diagnostics = match &results {
+                Ok(outcomes) => outcomes
+                    .iter()
+                    .flat_map(|outcome| match &outcome.result {
+                        Ok(page) => page.ppocr_diagnostics(),
+                        Err(error) => error.ppocr_diagnostics(),
+                    })
+                    .collect(),
+                Err(error) => error.ppocr_diagnostics(),
+            };
             let matched_pages = results
                 .map_err(|error| {
                     actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
+                        .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })
                 .and_then(require_all_page_evaluations)
                 .map_err(|error| {
@@ -2973,6 +3000,7 @@ impl PreparedContainedTask {
                         "contained_task_recognition_failed",
                         error.to_string(),
                     )
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })?
                 .into_iter()
                 .filter(|evaluation| evaluation.matched)
@@ -2983,6 +3011,7 @@ impl PreparedContainedTask {
                     "contained_task_recognition_conflict",
                     matched_pages.join(","),
                 )
+                .with_ppocr_diagnostics(ppocr_diagnostics)
                 .into());
             }
             let page = matched_pages.into_iter().next();
@@ -5620,6 +5649,7 @@ mod post_admission_ocr_tests {
     fn provider_observation(invocation_id: &str, values: &[String]) -> OcrProviderObservation {
         OcrProviderObservation {
             result: OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: values.join("\n"),
                 blocks: values
                     .iter()

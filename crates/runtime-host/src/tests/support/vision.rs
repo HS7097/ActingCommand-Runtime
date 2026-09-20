@@ -85,6 +85,7 @@ impl VisionProvider for FakeVisionProvider {
                 }
             );
             return Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: format!("provider aggregate {text}"),
                 confidence: Some(0.99),
                 blocks: vec![
@@ -112,6 +113,7 @@ impl VisionProvider for FakeVisionProvider {
             });
         }
         Ok(OcrProviderResult {
+            ppocr_diagnostics: Vec::new(),
             text: text.to_owned(),
             blocks: Vec::new(),
             confidence: Some(0.99),

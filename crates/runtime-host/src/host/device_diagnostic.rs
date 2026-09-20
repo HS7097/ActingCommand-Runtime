@@ -159,9 +159,23 @@ pub(super) fn summary_incomplete(
     original: Option<RuntimeHostError>,
     error: &RuntimeHostError,
 ) -> RuntimeHostError {
-    let mut failure = original.unwrap_or_else(|| error.clone()).into_fatal();
+    let mut failure = match original {
+        Some(original) => original.with_complete_failure(
+            crate::error::RuntimeFailureRelation::LifecycleRecord,
+            error.clone(),
+        ),
+        None => error.clone(),
+    }
+    .into_fatal();
     failure.lifecycle.incomplete_device_diagnostic_summary =
         Some((error.code(), error.operation()));
+    if let Some(complete) = &mut failure.lifecycle.complete_failure {
+        complete
+            .primary
+            .lifecycle
+            .incomplete_device_diagnostic_summary =
+            failure.lifecycle.incomplete_device_diagnostic_summary;
+    }
     failure
 }
 
@@ -202,10 +216,17 @@ pub(super) fn record_host_close_result(
                 .incomplete_device_diagnostic_summary
                 .is_some() =>
         {
-            let mut preserved = failure.take().unwrap_or_else(|| error.clone()).into_fatal();
-            preserved.lifecycle.incomplete_device_diagnostic_summary =
-                error.lifecycle.incomplete_device_diagnostic_summary;
-            *failure = Some(preserved);
+            let summary = error.lifecycle.incomplete_device_diagnostic_summary;
+            record_failure(failure, Err(error));
+            if let Some(preserved) = failure {
+                preserved.lifecycle.incomplete_device_diagnostic_summary = summary;
+                if let Some(complete) = &mut preserved.lifecycle.complete_failure {
+                    complete
+                        .primary
+                        .lifecycle
+                        .incomplete_device_diagnostic_summary = summary;
+                }
+            }
         }
         result => record_failure(failure, result),
     }

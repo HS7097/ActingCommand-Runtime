@@ -523,7 +523,12 @@ impl RequestFailure {
     }
 
     pub(super) fn replace_with_poison(self, error: RuntimeHostError) -> Self {
-        let mut error = if self.error.lifecycle.capacity.is_some() {
+        let mut error = if self.error.has_ppocr_diagnostics() {
+            self.error.as_ref().clone().with_complete_failure(
+                crate::error::RuntimeFailureRelation::DiagnosticArchive,
+                error,
+            )
+        } else if self.error.lifecycle.capacity.is_some() {
             error.with_related_failure("prior_capacity_admission", &self.error)
         } else {
             error
@@ -776,7 +781,7 @@ pub(super) fn connection_boundary(
     if let (Some(error), Some(stage)) = (&failure, context.stage)
         && let Err(append_error) = shared.append_connection_failure(&context, stage, error)
     {
-        failure = Some(append_error);
+        record_failure(&mut failure, Err(append_error));
     }
     drop(stream);
     let reason = if shared.fatal.is_shutdown_requested() {
@@ -804,8 +809,13 @@ pub(super) fn connection_boundary(
     );
     if let Some(error) = failure {
         if error.is_fatal() {
-            shared.fatal.mark(error.clone())?;
-            Err(error)
+            match shared.fatal.mark(error.clone()) {
+                Ok(()) => Err(error),
+                Err(mark) => Err(error.with_complete_failure(
+                    crate::error::RuntimeFailureRelation::LifecycleRecord,
+                    mark,
+                )),
+            }
         } else {
             Ok(())
         }

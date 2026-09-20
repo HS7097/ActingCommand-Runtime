@@ -113,10 +113,63 @@ impl HostShared {
         links: EventLinksDraft,
         entered_event_id: Option<EventId>,
     ) -> RuntimeHostResult<()> {
-        let host_error = match &failure {
-            RuntimeLifecycleFailure::Host(error) => Some(*error),
+        let decision_id = match &failure {
+            RuntimeLifecycleFailure::PolicyAdmission { decision_id, .. } => Some(*decision_id),
             _ => None,
         };
+        let client_message = match &failure {
+            RuntimeLifecycleFailure::Client { message, .. } => Some(*message),
+            _ => None,
+        };
+        let host_error = match &failure {
+            RuntimeLifecycleFailure::Host(error)
+            | RuntimeLifecycleFailure::PolicyAdmission { error, .. } => Some(*error),
+            _ => None,
+        };
+        let failure_stage = host_error
+            .and_then(|error| error.lifecycle.failure_stage)
+            .unwrap_or_else(|| stage.as_str());
+        if let Some(error) = host_error
+            && let Some(complete) = &error.lifecycle.complete_failure
+        {
+            if error.projection().code == RuntimeErrorCode::LedgerFailure {
+                return Err(error.clone());
+            }
+            self.append_lifecycle_failure(
+                stage,
+                match decision_id {
+                    Some(decision_id) => RuntimeLifecycleFailure::PolicyAdmission {
+                        error: &complete.primary,
+                        decision_id,
+                    },
+                    None => RuntimeLifecycleFailure::Host(&complete.primary),
+                },
+                links.clone(),
+                entered_event_id,
+            )?;
+            let reference = complete
+                .primary
+                .lifecycle
+                .recorded_event
+                .get()
+                .copied()
+                .or(entered_event_id);
+            for (_, secondary) in &complete.secondary {
+                self.append_lifecycle_failure(
+                    stage,
+                    match decision_id {
+                        Some(decision_id) => RuntimeLifecycleFailure::PolicyAdmission {
+                            error: secondary,
+                            decision_id,
+                        },
+                        None => RuntimeLifecycleFailure::Host(secondary),
+                    },
+                    links.clone(),
+                    reference,
+                )?;
+            }
+            return Ok(());
+        }
         if let Some(error) = host_error
             && error.lifecycle.recorded_event.get().is_some()
             && error
@@ -148,7 +201,8 @@ impl HostShared {
             )?;
         }
         let (origin, code, operation, fatal, runtime_code) = match failure {
-            RuntimeLifecycleFailure::Host(error) => (
+            RuntimeLifecycleFailure::Host(error)
+            | RuntimeLifecycleFailure::PolicyAdmission { error, .. } => (
                 "runtime_host",
                 error.code(),
                 Some(error.operation()),
@@ -160,6 +214,7 @@ impl HostShared {
                 operation,
                 fatal,
                 runtime_code,
+                message: _,
             } => (
                 "runtime_client",
                 code,
@@ -177,14 +232,17 @@ impl HostShared {
             "runtime_code": runtime_code,
             "owner_epoch": self.owner_epoch,
             "entered_event_id": entered_event_id,
+            "decision_id": decision_id,
         }))
         .map_err(|_| ledger_error("encode_runtime_lifecycle_failure"))?;
         let gate = lock(&self.fact_write_gate, "append_runtime_lifecycle_failure")?;
         let mut persisted = Vec::new();
-        let mut emit = |cause: Option<&actingcommand_contract::LifecycleCauseDraft>, reference| {
+        let mut emit = |cause: Option<&actingcommand_contract::LifecycleCauseDraft>,
+                        reference,
+                        client_part: Option<(&str, usize, usize)>| {
             let lifecycle = actingcommand_contract::RuntimeLifecycleFailureDraft::new(
                 self.owner_epoch,
-                stage.as_str(),
+                failure_stage,
                 origin,
                 code,
             )
@@ -197,7 +255,14 @@ impl HostShared {
                 host_error.and_then(|error| error.lifecycle.adb_recovery.as_deref().cloned()),
             )
             .with_native_detail(
-                host_error.and_then(|error| error.lifecycle.native_detail.as_deref().cloned()),
+                client_part
+                    .map(|(text, _, _)| {
+                        actingcommand_contract::LifecycleNativeDetail::new(text, false)
+                    })
+                    .or_else(|| {
+                        host_error
+                            .and_then(|error| error.lifecycle.native_detail.as_deref().cloned())
+                    }),
             )
             .with_capacity(host_error.and_then(|error| error.lifecycle.capacity.clone()))
             .with_task_timing(host_error.and_then(|error| error.lifecycle.task_timing.clone()))
@@ -219,18 +284,34 @@ impl HostShared {
                     EventActor::Runtime,
                     links.clone(),
                     RuntimePayloadDraft::failed_with_lifecycle(
-                        if runtime_code == Some(RuntimeErrorCode::ProtocolInvalid) {
+                        if decision_id.is_some() {
+                            DiagnosticCode::PolicyRejected
+                        } else if runtime_code == Some(RuntimeErrorCode::ProtocolInvalid) {
                             DiagnosticCode::RuntimeProtocolInvalid
                         } else {
                             DiagnosticCode::RuntimeDiagnostic
                         },
-                        EffectDisposition::Indeterminate,
+                        if decision_id.is_some() {
+                            EffectDisposition::NotPerformed
+                        } else {
+                            EffectDisposition::Indeterminate
+                        },
                         DiagnosticDetailDraft::new(
                             "runtime_lifecycle",
-                            stage.as_str(),
+                            failure_stage,
                             origin,
                             operation.unwrap_or("actingd_process"),
-                            message.clone(),
+                            match client_part {
+                                Some((_, index, count)) => {
+                                    let kind = if host_error.is_some() {
+                                        "ppocr_message_part"
+                                    } else {
+                                        "client_message_part"
+                                    };
+                                    format!("{message}; {kind}={index}/{count}")
+                                }
+                                None => message.clone(),
+                            },
                             Sensitivity::Internal,
                         ),
                         lifecycle,
@@ -253,14 +334,37 @@ impl HostShared {
                 cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
             });
             if error.lifecycle.recorded_event.get().is_none() && !phase_close {
-                let id = emit(None, entered_event_id)?;
+                let mut parts = Vec::new();
+                let mut remaining = error.lifecycle.ppocr_message.as_deref().unwrap_or("");
+                while !remaining.is_empty() {
+                    let mut end = remaining.len().min(1024);
+                    while !remaining.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    parts.push(&remaining[..end]);
+                    remaining = &remaining[end..];
+                }
+                let mut first = None;
+                for (index, part) in parts.iter().enumerate() {
+                    let id = emit(
+                        None,
+                        first.or(entered_event_id),
+                        Some((part, index + 1, parts.len())),
+                    )?;
+                    first.get_or_insert(id);
+                }
+                let id = match first {
+                    Some(id) => id,
+                    None => emit(None, entered_event_id, None)?,
+                };
+                // A partial message is not a fully recorded error.
                 let _ = error.lifecycle.recorded_event.set(id);
             }
             let reference =
                 entered_event_id.or_else(|| error.lifecycle.recorded_event.get().copied());
             for cause in &error.lifecycle.causes {
                 if cause.recorded_event.get().is_none() {
-                    let id = emit(Some(&cause.cause), reference)?;
+                    let id = emit(Some(&cause.cause), reference, None)?;
                     let _ = cause.recorded_event.set(id);
                 }
             }
@@ -273,8 +377,29 @@ impl HostShared {
             {
                 let _ = error.lifecycle.recorded_event.set(*id);
             }
+        } else if let Some(text) = client_message {
+            // Each original detail retains its 1024-byte schema limit. Ordered,
+            // linked parts preserve the complete client display without truncation.
+            let mut parts = Vec::new();
+            let mut remaining = text;
+            while !remaining.is_empty() {
+                let mut end = remaining.len().min(1024);
+                while !remaining.is_char_boundary(end) {
+                    end -= 1;
+                }
+                parts.push(&remaining[..end]);
+                remaining = &remaining[end..];
+            }
+            let mut reference = entered_event_id;
+            for (index, part) in parts.iter().enumerate() {
+                let id = emit(None, reference, Some((part, index + 1, parts.len())))?;
+                reference.get_or_insert(id);
+            }
+            if parts.is_empty() {
+                emit(None, entered_event_id, None)?;
+            }
         } else {
-            emit(None, entered_event_id)?;
+            emit(None, entered_event_id, None)?;
         }
         if !persisted.is_empty() {
             self.synchronize_fact_store_under_gate()?;
@@ -293,9 +418,14 @@ impl HostShared {
         result: RuntimeHostResult<()>,
     ) {
         if let Err(error) = result {
+            let error = error.with_failure_stage(stage.as_str());
             let writer_failed = slot.as_ref().is_some_and(|failure| {
                 failure.projection().code == RuntimeErrorCode::LedgerFailure
-            });
+            }) || error.projection().code == RuntimeErrorCode::LedgerFailure
+                || self.lifecycle_append_failed.load(Ordering::Acquire);
+            if writer_failed {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+            }
             if !writer_failed
                 && let Err(append_error) = self.append_lifecycle_failure(
                     stage,
@@ -304,7 +434,14 @@ impl HostShared {
                     None,
                 )
             {
-                *slot = Some(append_error);
+                if append_error.projection().code == RuntimeErrorCode::LedgerFailure {
+                    self.lifecycle_append_failed.store(true, Ordering::Release);
+                }
+                let complete = error.with_complete_failure(
+                    crate::error::RuntimeFailureRelation::LifecycleRecord,
+                    append_error.with_failure_stage(stage.as_str()),
+                );
+                record_failure(slot, Err(complete));
                 return;
             }
             record_failure(slot, Err(error));
@@ -317,7 +454,27 @@ impl HostShared {
         outcome: &PersistedEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
-        if error.lifecycle.native_detail.is_none() && error.lifecycle.capacity.is_none() {
+        // These original failure builders copy this error's primary and cleanup
+        // details into their outcome. Extra native details still need lifecycle facts.
+        let (primary_detail_recorded, cleanup_cause_recorded) = match outcome.payload() {
+            EventPayload::Capture(CapturePayload::Failed(payload))
+            | EventPayload::Input(InputPayload::Failed(payload)) => (
+                payload.detail().is_some(),
+                payload.cleanup_cause().is_some(),
+            ),
+            _ => (false, false),
+        };
+        if error.lifecycle.native_detail.is_none()
+            && error.lifecycle.capacity.is_none()
+            && (error.diagnostic_detail().is_none() || primary_detail_recorded)
+            && (error.cleanup_cause().is_none() || cleanup_cause_recorded)
+            && error.lifecycle.raw_os_error.is_none()
+            && error.lifecycle.adb_recovery.is_none()
+            && error.lifecycle.complete_failure.is_none()
+            && error.lifecycle.ppocr_message.is_none()
+        {
+            // This marks only the primary outcome. append_lifecycle_failure still
+            // records every cause and stdio observation with its own identity.
             let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
         }
         self.append_lifecycle_failure(
@@ -472,9 +629,13 @@ pub(super) fn append_instance_binding_events(
 }
 
 pub(super) fn record_failure(slot: &mut Option<RuntimeHostError>, result: RuntimeHostResult<()>) {
-    if let Err(error) = result
-        && slot.is_none()
-    {
-        *slot = Some(error);
+    if let Err(error) = result {
+        *slot = Some(match slot.take() {
+            Some(prior) => prior.with_complete_failure(
+                crate::error::RuntimeFailureRelation::LifecycleRecord,
+                error,
+            ),
+            None => error,
+        });
     }
 }

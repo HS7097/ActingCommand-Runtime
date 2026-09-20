@@ -14,6 +14,35 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub type RuntimeHostResult<T> = Result<T, RuntimeHostError>;
 
+/// The fixed B7 failure joins. Each join retains both original errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeFailureRelation {
+    AdmissionRecord,
+    DiagnosticArchive,
+    LifecycleRecord,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeCompleteFailure {
+    pub(crate) primary: RuntimeHostError,
+    pub(crate) secondary: Vec<(RuntimeFailureRelation, RuntimeHostError)>,
+}
+
+/// Original values held only while returning a B7 archive/recording failure.
+#[derive(Clone, PartialEq, serde::Serialize)]
+pub(crate) enum PpocrFailureSource {
+    Pages(Box<actingcommand_page_detector::PageBatchResult>),
+    Recognition(Box<actingcommand_recognition_pack::RecognitionPackError>),
+    Observation {
+        status: actingcommand_contract::PageObservationStatus,
+        facts: actingcommand_contract::ObservationFacts,
+    },
+    Saved {
+        message: String,
+        conflicting_pages: Option<Vec<String>>,
+    },
+}
+
 #[derive(Clone)]
 pub struct RuntimeHostError {
     code: &'static str,
@@ -24,6 +53,13 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) failure_stage: Option<&'static str>,
+    pub(crate) ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
+    pub(crate) ppocr_message: Option<String>,
+    pub(crate) ppocr_source: Option<Arc<PpocrFailureSource>>,
+    pub(crate) ppocr_artifact_failure:
+        Option<Arc<actingcommand_artifact_store::ArtifactStoreError>>,
+    pub(crate) complete_failure: Option<Box<RuntimeCompleteFailure>>,
     pub(crate) vendor_stdio: Vec<actingcommand_execution_kernel::ExecutionStdioObservation>,
     pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
@@ -48,6 +84,12 @@ impl PartialEq for RuntimeHostError {
         self.code == other.code
             && self.operation == other.operation
             && self.projection == other.projection
+            && self.lifecycle.complete_failure == other.lifecycle.complete_failure
+            && self.lifecycle.failure_stage == other.lifecycle.failure_stage
+            && self.lifecycle.ppocr_message == other.lifecycle.ppocr_message
+            && self.lifecycle.ppocr_source == other.lifecycle.ppocr_source
+            && self.lifecycle.ppocr_diagnostics == other.lifecycle.ppocr_diagnostics
+            && self.lifecycle.ppocr_artifact_failure == other.lifecycle.ppocr_artifact_failure
             && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
             && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
             && self.lifecycle.policy_rejection == other.lifecycle.policy_rejection
@@ -71,6 +113,83 @@ impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
 }
 
 impl RuntimeHostError {
+    pub(crate) fn with_failure_stage(mut self, stage: &'static str) -> Self {
+        self.lifecycle.failure_stage.get_or_insert(stage);
+        if let Some(complete) = &mut self.lifecycle.complete_failure {
+            complete
+                .primary
+                .lifecycle
+                .failure_stage
+                .get_or_insert(stage);
+        }
+        self
+    }
+
+    pub(crate) fn has_ppocr_diagnostics(&self) -> bool {
+        !self.lifecycle.ppocr_diagnostics.is_empty()
+            || self
+                .lifecycle
+                .complete_failure
+                .as_ref()
+                .is_some_and(|complete| {
+                    complete.primary.has_ppocr_diagnostics()
+                        || complete
+                            .secondary
+                            .iter()
+                            .any(|(_, error)| error.has_ppocr_diagnostics())
+                })
+    }
+
+    /// Joins one of B7's original admission/archive/recording boundaries. Callers
+    /// join once per boundary; this is not a retry or an input-driven error queue.
+    pub(crate) fn with_complete_failure(
+        mut self,
+        relation: RuntimeFailureRelation,
+        mut secondary: Self,
+    ) -> Self {
+        let mut projection = self.projection.clone();
+        projection.fatal |= secondary.is_fatal();
+        if secondary.projection.code == RuntimeErrorCode::LedgerFailure {
+            projection = secondary.projection.clone();
+        }
+        let mut complete = self
+            .lifecycle
+            .complete_failure
+            .take()
+            .map(|value| *value)
+            .unwrap_or_else(|| RuntimeCompleteFailure {
+                primary: self.clone(),
+                secondary: Vec::new(),
+            });
+        match secondary.lifecycle.complete_failure.take() {
+            Some(other) => {
+                complete.secondary.push((relation, other.primary));
+                complete.secondary.extend(other.secondary);
+            }
+            None => complete.secondary.push((relation, secondary)),
+        }
+        let mut combined = self;
+        combined.projection = projection;
+        combined.lifecycle.complete_failure = Some(Box::new(complete));
+        combined
+    }
+
+    /// Complete original public displays for the process shell. Native details
+    /// remain in the original typed errors and the Ledger's privacy projection.
+    pub fn complete_message(&self) -> String {
+        if let Some(complete) = &self.lifecycle.complete_failure {
+            let mut message = complete.primary.complete_message();
+            for (relation, error) in &complete.secondary {
+                message.push_str(&format!("; {relation:?}: {}", error.complete_message()));
+            }
+            return message;
+        }
+        match self.lifecycle.failure_stage {
+            Some(stage) => format!("{self} [stage={stage}]"),
+            None => self.to_string(),
+        }
+    }
+
     pub(crate) fn policy_rejection(&self) -> actingcommand_contract::PolicyDispatchRejection {
         let mut rejection = self
             .lifecycle
@@ -218,6 +337,12 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                failure_stage: None,
+                complete_failure: None,
+                ppocr_diagnostics: Vec::new(),
+                ppocr_message: None,
+                ppocr_source: None,
+                ppocr_artifact_failure: None,
                 vendor_stdio: error.vendor_stdio().to_vec(),
                 task_timing: None,
                 capacity: None,
@@ -271,6 +396,10 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn with_related_failure(mut self, relation: &'static str, other: &Self) -> Self {
+        if self.has_ppocr_diagnostics() || other.has_ppocr_diagnostics() {
+            return self
+                .with_complete_failure(RuntimeFailureRelation::DiagnosticArchive, other.clone());
+        }
         for observation in &other.lifecycle.vendor_stdio {
             if !self
                 .lifecycle

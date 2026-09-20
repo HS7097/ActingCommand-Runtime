@@ -138,31 +138,27 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let evaluated = prepared
-            .evaluate(
-                &png,
-                FrameIdentity {
-                    kind: FrameKind::Artifact,
-                    sha256: completed
-                        .observation
-                        .artifact()
-                        .sha256
-                        .strip_prefix("sha256:")
-                        .ok_or_else(|| {
-                            observation_integrity_failure("observation_frame_hash_invalid")
-                        })?
-                        .to_string(),
-                    width: completed.observation.width(),
-                    height: completed.observation.height(),
-                },
-            )
-            .map_err(|error| {
-                self.observation_failure(
-                    observation_kernel_error(error),
-                    links.clone(),
-                    RuntimeReceiptState::Failed,
-                )
-            })?;
+        let evaluated = prepared.evaluate(
+            &png,
+            FrameIdentity {
+                kind: FrameKind::Artifact,
+                sha256: completed
+                    .observation
+                    .artifact()
+                    .sha256
+                    .strip_prefix("sha256:")
+                    .ok_or_else(|| observation_integrity_failure("observation_frame_hash_invalid"))?
+                    .to_string(),
+                width: completed.observation.width(),
+                height: completed.observation.height(),
+            },
+        );
+        let evaluated = self.archive_online_ppocr_result(
+            evaluated,
+            links.clone(),
+            completed.artifact_links.clone(),
+            "online_page",
+        )?;
         let evidence = ContainedObservationEvidence {
             schema_version: ONLINE_OBSERVATION_SCHEMA.to_string(),
             request_id: original.request_id(),
@@ -302,6 +298,10 @@ impl HostShared {
         links: EventLinksDraft,
         state: RuntimeReceiptState,
     ) -> RequestFailure {
+        let ppocr = error.has_ppocr_diagnostics();
+        if ppocr && error.projection().code == RuntimeErrorCode::LedgerFailure {
+            return RequestFailure::poison_without_terminal(error);
+        }
         let event = self.append_event(
             EventSeverity::Error,
             EventSource::Runtime,
@@ -324,9 +324,24 @@ impl HostShared {
         );
         match event {
             Ok(event) => match self.record_required_failure(&error, &event, links) {
+                Ok(()) if ppocr && error.is_fatal() => {
+                    RequestFailure::poison(error, Some(terminal(&event)))
+                }
                 Ok(()) => RequestFailure::request(error, state, Some(terminal(&event))),
+                Err(writer) if ppocr => {
+                    RequestFailure::poison_without_terminal(error.with_complete_failure(
+                        crate::error::RuntimeFailureRelation::LifecycleRecord,
+                        writer,
+                    ))
+                }
                 Err(error) => RequestFailure::poison_without_terminal(error),
             },
+            Err(failure) if ppocr => {
+                RequestFailure::poison_without_terminal(error.with_complete_failure(
+                    crate::error::RuntimeFailureRelation::LifecycleRecord,
+                    *failure.error,
+                ))
+            }
             Err(failure) => failure,
         }
     }

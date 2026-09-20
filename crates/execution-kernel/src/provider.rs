@@ -189,7 +189,8 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             timeout_ms: request.timeout_ms,
         };
         let result = invoke_ocr(capability, ffi_request)?;
-        validate_ocr_backend(&result)?;
+        validate_ocr_backend(&result)
+            .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
         Ok(map_ocr_result(result))
     }
 
@@ -212,14 +213,24 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             timeout_ms: request.timeout_ms,
         };
         let output = invoke_ocr_with_attestation(capability, ffi_request)?;
-        validate_ocr_backend(&output.result)?;
-        let attestation = output.execution_attestation.ok_or_else(|| {
-            VisionProviderError::new(
-                VisionProviderErrorCode::InvalidResponse,
-                "OCR engine did not return execution attestation",
-            )
+        validate_ocr_backend(&output.result).map_err(|error| {
+            error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
         })?;
-        let execution = map_ocr_execution_evidence(&attestation, &capability.identity)?;
+        let attestation = output
+            .execution_attestation
+            .ok_or_else(|| {
+                VisionProviderError::new(
+                    VisionProviderErrorCode::InvalidResponse,
+                    "OCR engine did not return execution attestation",
+                )
+            })
+            .map_err(|error| {
+                error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
+            })?;
+        let execution =
+            map_ocr_execution_evidence(&attestation, &capability.identity).map_err(|error| {
+                error.with_ppocr_diagnostics(output.result.ppocr_diagnostics.clone())
+            })?;
         Ok(OcrProviderObservation {
             result: map_ocr_result(output.result),
             execution: Some(execution),
@@ -368,6 +379,7 @@ fn invoke_ocr_with_attestation(
 
 fn map_ocr_result(result: OcrInferenceResult) -> OcrProviderResult {
     OcrProviderResult {
+        ppocr_diagnostics: result.ppocr_diagnostics,
         text: result.text,
         blocks: result
             .blocks
@@ -546,6 +558,7 @@ fn map_ffi_error(error: VisionFfiError) -> VisionProviderError {
         | VisionFfiErrorCode::Internal => VisionProviderErrorCode::Internal,
     };
     VisionProviderError::new(code, error.to_string())
+        .with_ppocr_diagnostics(error.ppocr_diagnostics().clone())
 }
 
 fn unavailable(capability: &str) -> VisionProviderError {
@@ -1400,6 +1413,7 @@ mod tests {
 
     fn attested_result(request: OcrInferenceRequest) -> OcrInferenceResult {
         OcrInferenceResult {
+            ppocr_diagnostics: Vec::new(),
             text: "home".to_string(),
             blocks: vec![OcrTextBlock {
                 text: "home".to_string(),
@@ -1418,6 +1432,7 @@ mod tests {
             request: OcrInferenceRequest,
         ) -> actingcommand_vision_ffi::VisionFfiResult<OcrInferenceResult> {
             Ok(OcrInferenceResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "home".to_string(),
                 blocks: vec![OcrTextBlock {
                     text: "home".to_string(),

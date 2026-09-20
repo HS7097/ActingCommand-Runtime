@@ -86,17 +86,19 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let initial_policy_cycle = match initial_policy_cycle {
         Ok(Some(cycle)) => cycle,
         Ok(None) => return host.close().map_err(ActingdError::runtime),
-        Err(error) => {
+        Err(mut error) => {
+            error.stage = Some("policy_initialization");
             let recorded = error.record_lifecycle_failure(
                 &host,
                 RuntimeLifecycleFailureStage::PolicyInitialization,
             );
             let closed = host.close();
-            recorded?;
-            return match closed {
-                Ok(()) => Err(error),
-                Err(close_error) => Err(ActingdError::runtime(close_error)),
-            };
+            return combine_monitor_results(
+                Err(error.with_recording_result(recorded)),
+                Ok(()),
+                Ok(()),
+                closed.map_err(ActingdError::runtime),
+            );
         }
     };
     println!(
@@ -109,15 +111,17 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
         (None, None) => monitor(host),
         _ => {
-            let error = ActingdError::process("policy_bootstrap_state_invalid");
+            let mut error = ActingdError::process("policy_bootstrap_state_invalid");
+            error.stage = Some("policy_bootstrap");
             let recorded = error
                 .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
             let closed = host.close();
-            recorded?;
-            match closed {
-                Ok(()) => Err(error),
-                Err(close_error) => Err(ActingdError::runtime(close_error)),
-            }
+            combine_monitor_results(
+                Err(error.with_recording_result(recorded)),
+                Ok(()),
+                Ok(()),
+                closed.map_err(ActingdError::runtime),
+            )
         }
     }
 }
@@ -251,15 +255,9 @@ fn execute_policy_cycle(
         };
         let admission = match admission {
             Ok(admission) => admission,
-            Err(error) if !error.is_fatal() => {
-                eprintln!(
-                    "WARNING actingd policy admission refused decision={} code={} operation={}",
-                    intent.decision_id,
-                    error.code(),
-                    error.operation()
-                );
-                continue;
-            }
+            // Host returns a nonfatal refusal only after its admission fact and
+            // any original error details have been committed.
+            Err(error) if !error.is_fatal() => continue,
             Err(error) => return Err(ActingdError::runtime(error)),
         };
         let PolicyDispatchAdmission::Granted { context } = admission else {
@@ -381,9 +379,13 @@ fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
                 let error = ActingdError::runtime(error);
                 let recorded = error
                     .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
-                let close_error = host.close().err();
-                recorded?;
-                return Err(close_error.map_or(error, ActingdError::runtime));
+                let closed = host.close().map_err(ActingdError::runtime);
+                return combine_monitor_results(
+                    Err(error.with_recording_result(recorded)),
+                    Ok(()),
+                    Ok(()),
+                    closed,
+                );
             }
             Ok(None) => {
                 if host
@@ -440,13 +442,17 @@ fn monitor_policy(
         Ok(Some(setup)) => setup,
         Ok(None) => return close_policy_host(host),
         Err(error) => {
-            let error: ActingdError = error;
+            let mut error: ActingdError = error;
+            error.stage = Some("policy_monitor_setup");
             let recorded =
                 error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
             let closed = close_policy_host(host);
-            recorded?;
-            closed?;
-            return Err(error);
+            return combine_monitor_results(
+                Err(error.with_recording_result(recorded)),
+                Ok(()),
+                Ok(()),
+                closed,
+            );
         }
     };
 
@@ -546,17 +552,10 @@ fn finish_policy_closeout(
         }
     }
     let close_result = close_policy_host(host);
-    let result = if close_result.as_ref().err().is_some_and(|error| {
-        error
-            .runtime
-            .as_ref()
-            .is_some_and(|error| error.operation() == "append_runtime_lifecycle_observed")
-    }) {
-        close_result
-    } else {
-        combine_monitor_results(monitor_result, shutdown_result, driver_result, close_result)
-    };
-    recorded.and(result)
+    match combine_monitor_results(monitor_result, shutdown_result, driver_result, close_result) {
+        Err(error) => Err(error.with_recording_result(recorded)),
+        Ok(()) => recorded,
+    }
 }
 
 fn close_policy_host(host: Arc<RuntimeHost>) -> Result<(), ActingdError> {
@@ -567,8 +566,7 @@ fn close_policy_host(host: Arc<RuntimeHost>) -> Result<(), ActingdError> {
             let recorded = error
                 .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::RetainedReference);
             drop(host);
-            recorded?;
-            Err(error)
+            Err(error.with_recording_result(recorded))
         }
     }
 }
@@ -579,18 +577,23 @@ fn combine_monitor_results(
     driver: Result<(), ActingdError>,
     close: Result<(), ActingdError>,
 ) -> Result<(), ActingdError> {
-    let mut failure = None;
+    let mut failure: Option<ActingdError> = None;
+    let mut secondary_index = 0;
     for (stage, result) in [
         ("driver", driver),
         ("monitor", monitor),
         ("shutdown", shutdown),
         ("close", close),
     ] {
-        if let Err(error) = result {
-            if failure.is_none() {
-                failure = Some(error);
-            } else {
-                eprintln!("ERROR actingd secondary failure during {stage}: {error}");
+        if let Err(mut error) = result {
+            error.stage.get_or_insert(stage);
+            match &mut failure {
+                None => failure = Some(error),
+                Some(primary) => {
+                    // Four fixed inputs yield at most three complete secondary errors.
+                    primary.secondary[secondary_index] = Some(Box::new(error));
+                    secondary_index += 1;
+                }
             }
         }
     }
@@ -1256,6 +1259,9 @@ fn parse_arguments(arguments: Vec<std::ffi::OsString>) -> Result<PathBuf, Acting
 #[derive(Debug)]
 struct ActingdError {
     code: &'static str,
+    stage: Option<&'static str>,
+    secondary: [Option<Box<ActingdError>>; 3],
+    recording_failure: Option<Box<ActingdError>>,
     runtime: Option<Box<RuntimeHostError>>,
     client: Option<Box<RuntimeClientError>>,
     maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
@@ -1263,6 +1269,16 @@ struct ActingdError {
 }
 
 impl ActingdError {
+    fn with_recording_result(mut self, recorded: Result<(), Self>) -> Self {
+        if let Err(error) = recorded {
+            self.recording_failure = Some(Box::new(match self.recording_failure.take() {
+                Some(prior) => prior.with_recording_result(Err(error)),
+                None => error,
+            }));
+        }
+        self
+    }
+
     fn maintenance(error: actingcommand_runtime_host::LedgerMaintenanceFailure) -> Self {
         let mut result = Self::process("ledger_maintenance_failed");
         result.maintenance = Some(Box::new(error));
@@ -1277,6 +1293,7 @@ impl ActingdError {
         if self.recorded.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
+        let client_message = self.to_string();
         let failure = if let Some(error) = &self.runtime {
             RuntimeLifecycleFailure::Host(error)
         } else if let Some(error) = &self.client {
@@ -1285,6 +1302,7 @@ impl ActingdError {
                 operation: error.operation(),
                 fatal: error.is_fatal(),
                 runtime_code: error.projection().map(|projection| projection.code),
+                message: &client_message,
             }
         } else {
             RuntimeLifecycleFailure::Process { code: self.code }
@@ -1299,6 +1317,9 @@ impl ActingdError {
     const fn config(code: &'static str) -> Self {
         Self {
             code,
+            stage: None,
+            secondary: [None, None, None],
+            recording_failure: None,
             runtime: None,
             client: None,
             maintenance: None,
@@ -1309,6 +1330,9 @@ impl ActingdError {
     const fn process(code: &'static str) -> Self {
         Self {
             code,
+            stage: None,
+            secondary: [None, None, None],
+            recording_failure: None,
             runtime: None,
             client: None,
             maintenance: None,
@@ -1319,6 +1343,9 @@ impl ActingdError {
     fn runtime(error: RuntimeHostError) -> Self {
         Self {
             code: error.code(),
+            stage: None,
+            secondary: [None, None, None],
+            recording_failure: None,
             runtime: Some(Box::new(error)),
             client: None,
             maintenance: None,
@@ -1329,6 +1356,9 @@ impl ActingdError {
     fn client(error: RuntimeClientError) -> Self {
         Self {
             code: error.code(),
+            stage: None,
+            secondary: [None, None, None],
+            recording_failure: None,
             runtime: None,
             client: Some(Box::new(error)),
             maintenance: None,
@@ -1339,16 +1369,25 @@ impl ActingdError {
 
 impl fmt::Display for ActingdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(stage) = self.stage {
+            write!(formatter, "{stage}: ")?;
+        }
         if let Some(error) = &self.maintenance {
-            return error.fmt(formatter);
+            error.fmt(formatter)?;
+        } else if let Some(error) = &self.runtime {
+            formatter.write_str(&error.complete_message())?;
+        } else if let Some(error) = &self.client {
+            error.fmt(formatter)?;
+        } else {
+            formatter.write_str(self.code)?;
         }
-        match &self.runtime {
-            Some(error) => error.fmt(formatter),
-            None => match &self.client {
-                Some(error) => error.fmt(formatter),
-                None => formatter.write_str(self.code),
-            },
+        for secondary in self.secondary.iter().flatten() {
+            write!(formatter, "; secondary {secondary}")?;
         }
+        if let Some(error) = &self.recording_failure {
+            write!(formatter, "; lifecycle recording failure: {error}")?;
+        }
+        Ok(())
     }
 }
 

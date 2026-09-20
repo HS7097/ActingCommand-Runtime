@@ -170,6 +170,7 @@ mod planning;
 mod policy_catalog;
 mod policy_dispatch;
 mod policy_outcome;
+mod ppocr_diagnostic;
 mod read_events;
 mod requests;
 mod resource_close;
@@ -246,11 +247,16 @@ pub enum RuntimeLifecycleFailureStage {
 
 pub enum RuntimeLifecycleFailure<'a> {
     Host(&'a RuntimeHostError),
+    PolicyAdmission {
+        error: &'a RuntimeHostError,
+        decision_id: &'a str,
+    },
     Client {
         code: &'static str,
         operation: &'static str,
         fatal: bool,
         runtime_code: Option<RuntimeErrorCode>,
+        message: &'a str,
     },
     Process {
         code: &'static str,
@@ -1414,8 +1420,12 @@ impl RuntimeHost {
         reason_chain: &DecisionReasonChain,
         context: &PolicyAdmissionContext,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        self.work_ref("admit_policy_dispatch")?
-            .admit_policy_dispatch(intent, reason_chain, context, None)
+        match self.work_ref("admit_policy_dispatch") {
+            Ok(work) => work.admit_policy_dispatch(intent, reason_chain, context, None),
+            Err(error) => self
+                .shared_ref("record_policy_admission_failure")?
+                .record_policy_admission_result(intent, Err(error), None),
+        }
     }
 
     /// Admits a contained policy run using its bounded request budget for the lease.
@@ -1426,8 +1436,14 @@ impl RuntimeHost {
         context: &PolicyAdmissionContext,
         task_request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        self.work_ref("admit_policy_dispatch")?
-            .admit_policy_dispatch(intent, reason_chain, context, Some(task_request))
+        match self.work_ref("admit_policy_dispatch") {
+            Ok(work) => {
+                work.admit_policy_dispatch(intent, reason_chain, context, Some(task_request))
+            }
+            Err(error) => self
+                .shared_ref("record_policy_admission_failure")?
+                .record_policy_admission_result(intent, Err(error), None),
+        }
     }
 
     pub fn pinned_policy_catalog(
@@ -2181,15 +2197,27 @@ impl RuntimeHost {
             Ok(failure) => failure,
             Err(error) => Some(error),
         };
-        record_failure(
-            &mut failure,
+        if failure
+            .as_ref()
+            .is_some_and(|error| error.projection().code == RuntimeErrorCode::LedgerFailure)
+        {
             shared
-                .append_lifecycle_observed(
-                    RuntimeLifecyclePhase::ShutdownRequested,
-                    EventLinksDraft::default(),
-                )
-                .map(|_| ()),
-        );
+                .lifecycle_append_failed
+                .store(true, Ordering::Release);
+        } else if !shared.lifecycle_append_failed.load(Ordering::Acquire) {
+            record_failure(
+                &mut failure,
+                shared
+                    .append_lifecycle_observed(
+                        RuntimeLifecyclePhase::ShutdownRequested,
+                        EventLinksDraft::default(),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        error.with_failure_stage("runtime.lifecycle.shutdown_requested")
+                    }),
+            );
+        }
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
@@ -2875,30 +2903,22 @@ impl HostShared {
                     let mut session_error =
                         RuntimeHostError::execution("close_execution_kernel", &session_error);
                     session_error.lifecycle.instance_id = Some(instance_id);
-                    if !failure.as_ref().is_some_and(|error| {
-                        error.projection().code == RuntimeErrorCode::LedgerFailure
-                    }) && let Err(append_error) = self.append_lifecycle_failure(
+                    self.record_lifecycle_result(
                         RuntimeLifecycleFailureStage::SessionClose,
-                        RuntimeLifecycleFailure::Host(&session_error),
-                        EventLinksDraft::default(),
-                        None,
-                    ) {
-                        failure = Some(append_error);
-                    }
-                }
-                if !failure
-                    .as_ref()
-                    .is_some_and(|error| error.projection().code == RuntimeErrorCode::LedgerFailure)
-                {
-                    // Session facts are separate; the returned error retains the kernel's reduction.
-                    record_failure(
                         &mut failure,
-                        Err(RuntimeHostError::execution(
-                            "close_execution_kernel",
-                            &error,
-                        )),
+                        Err(session_error),
                     );
                 }
+                // Keep the kernel reduction after the original per-session errors.
+                record_failure(
+                    &mut failure,
+                    Err(
+                        RuntimeHostError::execution("close_execution_kernel", &error)
+                            .with_failure_stage(
+                                RuntimeLifecycleFailureStage::SessionClose.as_str(),
+                            ),
+                    ),
+                );
             }
             if unconfirmed {
                 self.record_lifecycle_result(
@@ -3043,22 +3063,21 @@ fn accept_loop(
         }
     }
     for connection in connections {
-        let result = connection.join().map_err(|_| {
-            let error = RuntimeHostError::fatal(
-                "runtime_connection_panicked",
-                "join_runtime_connection",
-                RuntimeErrorCode::RuntimeFatal,
-            );
-            shared
-                .append_lifecycle_failure(
+        let result = match connection.join() {
+            Ok(result) => result,
+            Err(_) => {
+                shared.record_lifecycle_result(
                     RuntimeLifecycleFailureStage::ShutdownJoin,
-                    RuntimeLifecycleFailure::Host(&error),
-                    EventLinksDraft::default(),
-                    None,
-                )
-                .err()
-                .unwrap_or(error)
-        })?;
+                    &mut failure,
+                    Err(RuntimeHostError::fatal(
+                        "runtime_connection_panicked",
+                        "join_runtime_connection",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )),
+                );
+                return failure.map_or(Ok(()), Err);
+            }
+        };
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,

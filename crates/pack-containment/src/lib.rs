@@ -2829,6 +2829,7 @@ mod tests {
             _request: OcrProviderRequest<'_>,
         ) -> Result<OcrProviderResult, VisionProviderError> {
             Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "home".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(0.99),

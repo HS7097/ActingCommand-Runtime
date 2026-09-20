@@ -9,7 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
 libloading = "0.8"
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = { workspace = true }

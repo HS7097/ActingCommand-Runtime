@@ -789,29 +789,27 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let evaluated = observer
-            .evaluate(
-                &png,
-                FrameIdentity {
-                    kind: FrameKind::Artifact,
-                    sha256: captured
-                        .observation
-                        .artifact()
-                        .sha256
-                        .strip_prefix("sha256:")
-                        .ok_or_else(|| observation_integrity_failure("lab_frame_hash_invalid"))?
-                        .to_string(),
-                    width: captured.observation.width(),
-                    height: captured.observation.height(),
-                },
-            )
-            .map_err(|error| {
-                self.observation_failure(
-                    observation_kernel_error(error),
-                    links.clone(),
-                    RuntimeReceiptState::Failed,
-                )
-            })?;
+        let evaluated = observer.evaluate(
+            &png,
+            FrameIdentity {
+                kind: FrameKind::Artifact,
+                sha256: captured
+                    .observation
+                    .artifact()
+                    .sha256
+                    .strip_prefix("sha256:")
+                    .ok_or_else(|| observation_integrity_failure("lab_frame_hash_invalid"))?
+                    .to_string(),
+                width: captured.observation.width(),
+                height: captured.observation.height(),
+            },
+        );
+        let evaluated = self.archive_online_ppocr_result(
+            evaluated,
+            links.clone(),
+            captured.artifact_links.clone(),
+            "lab_page",
+        )?;
         let evidence = ContainedObservationEvidence {
             schema_version: ONLINE_OBSERVATION_SCHEMA.to_string(),
             request_id: original.request_id(),

@@ -11,9 +11,11 @@
 
 pub mod artifacts;
 pub mod ffi;
+mod ppocr_result;
 
 pub use artifacts::*;
 pub use ffi::*;
+pub use ppocr_result::*;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -53,6 +55,8 @@ pub struct VisionFfiError {
     code: VisionFfiErrorCode,
     module: &'static str,
     message: String,
+    #[serde(skip)]
+    ppocr_diagnostics: PpocrDiagnostics,
 }
 
 impl VisionFfiError {
@@ -70,6 +74,7 @@ impl VisionFfiError {
             code,
             module,
             message: message.into(),
+            ppocr_diagnostics: Vec::new(),
         }
     }
 
@@ -87,6 +92,15 @@ impl VisionFfiError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn ppocr_diagnostics(&self) -> &PpocrDiagnostics {
+        &self.ppocr_diagnostics
+    }
+
+    pub fn with_ppocr_diagnostics(mut self, diagnostics: PpocrDiagnostics) -> Self {
+        self.ppocr_diagnostics.extend(diagnostics);
+        self
     }
 }
 
@@ -247,6 +261,8 @@ pub struct OcrInferenceResult {
     pub confidence: Option<f32>,
     pub backend: VisionBackendKind,
     pub warnings: Vec<String>,
+    #[serde(skip)]
+    pub ppocr_diagnostics: PpocrDiagnostics,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -880,6 +896,7 @@ mod tests {
             timeout_ms: 1_000,
         };
         let result = OcrInferenceResult {
+            ppocr_diagnostics: Vec::new(),
             text: "invalid".to_string(),
             blocks: vec![OcrTextBlock {
                 text: "invalid".to_string(),
@@ -1273,6 +1290,7 @@ mod tests {
         write_ffi_response(
             response_out,
             &OcrInferenceResult {
+                ppocr_diagnostics: Vec::new(),
                 text: "公开招募 09:00".to_string(),
                 blocks: vec![OcrTextBlock {
                     text: "公开招募".to_string(),
@@ -1558,6 +1576,7 @@ mod tests {
     ) -> i32 {
         let envelope = read_ffi_request::<FastDeployPpocrInvokeRequest>(request_ptr, request_len);
         let result = OcrInferenceResult {
+            ppocr_diagnostics: Vec::new(),
             text: format!(
                 "artifact envelope: {}",
                 envelope.artifacts.provider_library_path.display()

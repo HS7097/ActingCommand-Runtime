@@ -341,23 +341,58 @@ impl RuntimeContainedTask<'_> {
         phase: &'static str,
         results: &PageBatchResult,
     ) -> Result<(), RequestFailure> {
-        let outcomes = match results {
-            Ok(outcomes) => outcomes,
-            Err(error) => &error.completed,
+        let reports = match results {
+            Ok(outcomes) => outcomes
+                .iter()
+                .flat_map(|outcome| match &outcome.result {
+                    Ok(page) => page.ppocr_diagnostics(),
+                    Err(error) => error.ppocr_diagnostics(),
+                })
+                .collect(),
+            Err(error) => error.ppocr_diagnostics(),
         };
-        for outcome in outcomes {
-            self.diagnostic_page(phase, outcome)?;
-        }
-        if let Err(error) = results {
-            self.diagnostic(
-                None,
-                Payload::Error(Box::new(TaskDiagnosticErrorData::Page {
-                    phase: phase.to_owned(),
-                    message: error.cause.message().to_owned(),
-                })),
-            )?;
-            for page in &error.unexecuted {
+        let original_error = match results {
+            Ok(outcomes) => outcomes
+                .iter()
+                .find_map(|outcome| outcome.result.as_ref().err()),
+            Err(error) => Some(error.cause.as_ref()),
+        };
+        let primary = original_error.map(|error| {
+            ppocr_diagnostic::task_ppocr_failure(
+                "contained_task_recognition_failed",
+                error.to_string(),
+                &reports,
+            )
+        });
+        let preserve = |mut failure: RequestFailure| {
+            if !reports.is_empty() {
+                failure.error = Box::new(ppocr_diagnostic::attach_ppocr_source(
+                    *failure.error,
+                    crate::error::PpocrFailureSource::Pages(Box::new(results.clone())),
+                ));
+            }
+            failure
+        };
+        self.archive_task_ppocr_diagnostics(&reports, phase, None, primary.clone())
+            .map_err(preserve)?;
+        let recorded = (|| {
+            let outcomes = match results {
+                Ok(outcomes) => outcomes,
+                Err(error) => &error.completed,
+            };
+            for outcome in outcomes {
+                self.diagnostic_page(phase, outcome)?;
+            }
+            if let Err(error) = results {
                 self.diagnostic(
+                    None,
+                    Payload::Error(Box::new(TaskDiagnosticErrorData::Page {
+                        phase: phase.to_owned(),
+                        message: error.cause.message().to_owned(),
+                    })),
+                )?;
+                for page in &error.unexecuted {
+                    self.diagnostic(
                     None,
                     Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
                         phase: phase.to_owned(),
@@ -371,9 +406,11 @@ impl RuntimeContainedTask<'_> {
                         },
                     }),
                 )?;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })();
+        ppocr_diagnostic::finish_task_ppocr_record(recorded, &reports, primary).map_err(preserve)
     }
 
     fn diagnostic_page(
@@ -454,7 +491,25 @@ impl RuntimeContainedTask<'_> {
         result: Option<&RecognitionPackResult<TargetEvaluation>>,
         reason: &'static str,
     ) -> Result<(), RequestFailure> {
-        match result {
+        let reports = match result {
+            Some(Ok(value)) => value.ppocr_diagnostics().to_vec(),
+            Some(Err(error)) => error.ppocr_diagnostics().clone(),
+            None => Vec::new(),
+        };
+        let primary = result
+            .and_then(|result| result.as_ref().err())
+            .map(|error| {
+                ppocr_diagnostic::attach_ppocr_source(
+                    ppocr_diagnostic::task_ppocr_failure(
+                        "contained_task_guard_evaluation_failed",
+                        error.to_string(),
+                        &reports,
+                    ),
+                    crate::error::PpocrFailureSource::Recognition(Box::new(error.clone())),
+                )
+            });
+        self.archive_task_ppocr_diagnostics(&reports, "guard", target, primary.clone())?;
+        let recorded = match result {
             Some(Ok(value)) => self.diagnostic_target(
                 None,
                 value,
@@ -482,7 +537,8 @@ impl RuntimeContainedTask<'_> {
                     }),
                 )
                 .map(|_| ()),
-        }
+        };
+        ppocr_diagnostic::finish_task_ppocr_record(recorded, &reports, primary)
     }
 
     fn diagnostic_target(
@@ -613,7 +669,27 @@ impl RuntimeContainedTask<'_> {
         target: &str,
         result: &RecognitionPackResult<OcrObservationEvaluation>,
     ) -> Result<(), RequestFailure> {
-        match result {
+        let reports = match result {
+            Ok(ocr) => &ocr.ppocr_diagnostics,
+            Err(error) => error.ppocr_diagnostics(),
+        };
+        let primary = result.as_ref().err().map(|error| {
+            ppocr_diagnostic::attach_ppocr_source(
+                ppocr_diagnostic::task_ppocr_failure(
+                    "contained_task_post_admission_ocr_failed",
+                    error.to_string(),
+                    reports,
+                ),
+                crate::error::PpocrFailureSource::Recognition(Box::new(error.clone())),
+            )
+        });
+        self.archive_task_ppocr_diagnostics(
+            reports,
+            "post_admission",
+            Some(target),
+            primary.clone(),
+        )?;
+        let recorded = (|| match result {
             Ok(ocr) => {
                 let index = self.diagnostic(
                     None,
@@ -640,7 +716,8 @@ impl RuntimeContainedTask<'_> {
                     })),
                 )
                 .map(|_| ()),
-        }
+        })();
+        ppocr_diagnostic::finish_task_ppocr_record(recorded, reports, primary)
     }
 
     pub(super) fn finish_diagnostic(
