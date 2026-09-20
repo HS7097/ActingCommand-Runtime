@@ -257,6 +257,7 @@ pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
 pub struct GlobalLedgerMetadata {
     sqlite: Option<sqlite::SqliteViewSnapshot>,
     events: Vec<LedgerEventMetadata>,
+    repair_count: Option<usize>,
     indexes: projection::EventIndexes,
     through_sequence: u64,
     writer: GlobalLedgerWriterMetadataObservation,
@@ -312,6 +313,20 @@ impl GlobalLedgerMetadata {
             self.through_sequence.into(),
         )
     }
+    /// Counts this opening's authenticated, unfiltered events without further I/O.
+    /// An incomplete read counts only the verified prefix; inspect `read_complete`,
+    /// `corrupt_tail` and `latest_sequence` for its boundary.
+    pub fn event_count(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Counts the segment opening's repair records, including incomplete repairs.
+    /// SQLite has no repair-log source and returns `None`. The repair log does not
+    /// share the event snapshot's sequence boundary.
+    pub fn repair_count(&self) -> Option<usize> {
+        self.repair_count
+    }
+
     pub fn latest_sequence(&self) -> u64 {
         self.through_sequence
     }
@@ -385,6 +400,7 @@ impl GlobalLedger {
                     sqlite: Some(sqlite),
                     indexes: projection::EventIndexes::from_events(&events),
                     events,
+                    repair_count: None,
                     through_sequence,
                     writer,
                     backend: "sqlite",
@@ -405,6 +421,7 @@ impl GlobalLedger {
                 .map_or(0, LedgerEventMetadata::sequence),
             indexes: projection::EventIndexes::from_events(&source.events),
             events: source.events,
+            repair_count: Some(source.repairs.len()),
             writer: source.writer_metadata,
             backend: "segment",
             read_complete: source.storage_snapshot.read_complete && source.corrupt_tail.is_none(),

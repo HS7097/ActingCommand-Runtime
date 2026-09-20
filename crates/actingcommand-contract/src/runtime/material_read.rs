@@ -34,11 +34,13 @@ pub struct RuntimeMaterialReadRequest {
 
 impl RuntimeMaterialReadRequest {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        if self.event.sequence == 0
-            || self.event.sequence > self.snapshot_position
-            || self.byte_count == 0
-            || !material_hash(&self.sha256)
-            || self.offset >= self.byte_count
+        validate_material_read_selection(
+            self.event,
+            self.snapshot_position,
+            self.byte_count,
+            &self.sha256,
+        )?;
+        if self.offset >= self.byte_count
             || !(1..=MAX_RUNTIME_MATERIAL_CHUNK_BYTES).contains(&self.requested_length)
             || self
                 .offset
@@ -50,6 +52,23 @@ impl RuntimeMaterialReadRequest {
         }
         Ok(())
     }
+}
+
+/// Validates the shared selection fields before Ledger authenticates the event, reference and links.
+pub fn validate_material_read_selection(
+    event: LedgerEventPosition,
+    snapshot_position: u64,
+    byte_count: u64,
+    sha256: &str,
+) -> RuntimeContractResult<()> {
+    if event.sequence == 0
+        || event.sequence > snapshot_position
+        || byte_count == 0
+        || !material_hash(sha256)
+    {
+        return Err(RuntimeContractError::new("invalid_material_read_request"));
+    }
+    Ok(())
 }
 
 impl fmt::Debug for RuntimeMaterialReadRequest {
