@@ -587,7 +587,7 @@ fn append(
             RuntimeErrorCode::LedgerFailure,
         );
         if let Some(detail) = error.detail() {
-            result.lifecycle.native_detail = Some(Box::new(bounded_native(detail)));
+            result = result.with_native_failure_detail(bounded_native(detail));
         }
         result
     })
@@ -600,8 +600,7 @@ fn failure(code: &'static str) -> RuntimeHostError {
 fn native_failure(code: &'static str, error: std::io::Error) -> RuntimeHostError {
     let mut result = failure(code);
     result.lifecycle.raw_os_error = error.raw_os_error();
-    result.lifecycle.native_detail = Some(Box::new(bounded_native(&error.to_string())));
-    result
+    result.with_native_failure_detail(bounded_native(&error.to_string()))
 }
 
 fn bounded_native(detail: &str) -> LifecycleNativeDetail {

@@ -480,7 +480,7 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     let runtime_error = RuntimeHostError::execution("execute_input_backend", &kernel_error);
     assert!(kernel_error.adb_recovery().is_some());
     assert_eq!(
-        runtime_error.lifecycle.adb_recovery.as_deref(),
+        runtime_error.diagnostics().adb_recovery(),
         kernel_error.adb_recovery()
     );
     assert_eq!(runtime_error.diagnostic_detail(), Some(detail));

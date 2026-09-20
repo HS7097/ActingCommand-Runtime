@@ -175,7 +175,7 @@ impl HostShared {
                     .issue_registered_instance(pending.instance_id),
             )
             .with_causation_id(pending.causation_id);
-        if error.lifecycle.recorded_event.get().is_some() {
+        if error.diagnostics().recorded_event().get().is_some() {
             return self.append_lifecycle_failure(
                 RuntimeLifecycleFailureStage::OperationCleanup,
                 RuntimeLifecycleFailure::Host(error),

@@ -87,7 +87,10 @@ impl MonitorRegistry {
                     let recorded = ledger
                         .append(events.sanitize(draft)?)
                         .map_err(|_| monitor_ledger_error("record_monitor_restore_failure"))?;
-                    let _ = error.lifecycle.recorded_event.set(*recorded.event_id());
+                    let _ = error
+                        .diagnostics()
+                        .recorded_event()
+                        .set(*recorded.event_id());
                 }
                 Err(error)
             }

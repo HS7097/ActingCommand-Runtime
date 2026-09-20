@@ -54,9 +54,8 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
     let fatal = host.fatal_error().expect("health").expect("fatal");
     assert_eq!(fatal.operation(), "store_artifact");
     let native = fatal
-        .lifecycle
-        .native_detail
-        .as_ref()
+        .diagnostics()
+        .native_detail()
         .expect("Host native I/O");
     assert!(native.text().contains(failure.primary.native_detail.text()));
     assert!(!format!("{fatal} {fatal:?}").contains(failure.primary.native_detail.text()));
@@ -64,8 +63,8 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
         .clone()
         .with_related_failure("diagnostic_cleanup", &fatal);
     assert_eq!(
-        repeated.lifecycle.native_detail,
-        fatal.lifecycle.native_detail
+        repeated.diagnostics().native_detail(),
+        fatal.diagnostics().native_detail()
     );
     let cleanup_dir = root.path().join("diagnostic-cleanup");
     fs::create_dir(&cleanup_dir).expect("cleanup target");
@@ -81,11 +80,7 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
         .with_related_failure("diagnostic_cleanup", &cleanup);
     assert_eq!(combined.code(), fatal.code());
     assert_eq!(combined.operation(), fatal.operation());
-    let combined_native = combined
-        .lifecycle
-        .native_detail
-        .as_ref()
-        .expect("both causes");
+    let combined_native = combined.diagnostics().native_detail().expect("both causes");
     assert!(
         combined_native
             .text()
@@ -108,7 +103,7 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
             ..EventQuery::default()
         })
         .expect("native lifecycle failures");
-    assert!(recorded.iter().any(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome)) if outcome.lifecycle_failure().and_then(|value| value.native_detail()) == Some(combined_native.as_ref()))));
+    assert!(recorded.iter().any(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome)) if outcome.lifecycle_failure().and_then(|value| value.native_detail()) == Some(combined_native))));
     for event in recorded {
         assert!(event.artifacts().is_empty());
         let public = serde_json::to_string(&event.payload().public_projection())

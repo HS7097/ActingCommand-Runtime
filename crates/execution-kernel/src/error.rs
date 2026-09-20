@@ -59,22 +59,111 @@ pub struct ExecutionKernelError {
     code: &'static str,
     secondary_code: Option<&'static str>,
     device_severity: Option<DeviceErrorSeverity>,
-    diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
-    cleanup_cause: Option<Box<CleanupCauseDraft>>,
     lifecycle: Box<ExecutionFailureContext>,
+    closed_sessions: Vec<(InstanceId, ExecutionKernelError)>,
+    instance_id: Option<InstanceId>,
+    resource_quiescence: Option<ResourceQuiescence>,
+    resource_count: u16,
 }
 
+/// Diagnostics and committed-fact identities shared by the kernel and its consumers.
+/// Clones retain the identities of the original failure, causes and stdio observations.
 #[derive(Clone, Default)]
-struct ExecutionFailureContext {
+pub struct ExecutionFailureContext {
+    diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
+    cleanup_cause: Option<Box<CleanupCauseDraft>>,
     vendor_stdio: Vec<ExecutionStdioObservation>,
     adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     recorded_event: Arc<OnceLock<EventId>>,
     native_detail: Option<Box<LifecycleNativeDetail>>,
     causes: Vec<ExecutionLifecycleCause>,
-    closed_sessions: Vec<(InstanceId, ExecutionKernelError)>,
-    instance_id: Option<InstanceId>,
-    resource_quiescence: Option<ResourceQuiescence>,
-    resource_count: u16,
+}
+
+impl ExecutionFailureContext {
+    pub fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
+        self.diagnostic_detail.as_deref()
+    }
+
+    pub fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
+        self.cleanup_cause.as_deref()
+    }
+
+    pub fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.native_detail.as_deref()
+    }
+
+    pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
+        self.adb_recovery.as_deref()
+    }
+
+    pub fn lifecycle_causes(&self) -> &[ExecutionLifecycleCause] {
+        &self.causes
+    }
+
+    pub fn vendor_stdio(&self) -> &[ExecutionStdioObservation] {
+        &self.vendor_stdio
+    }
+
+    pub fn recorded_event(&self) -> &Arc<OnceLock<EventId>> {
+        &self.recorded_event
+    }
+
+    pub fn with_diagnostic_detail(mut self, detail: DiagnosticDetailDraft) -> Self {
+        if self.diagnostic_detail.is_none() {
+            self.diagnostic_detail = Some(Box::new(detail));
+        }
+        self
+    }
+
+    pub fn with_native_detail(mut self, detail: LifecycleNativeDetail) -> Self {
+        self.native_detail = Some(Box::new(detail));
+        self
+    }
+
+    pub fn with_related_stdio(mut self, related: &Self) -> Self {
+        merge_stdio_observations(&mut self.vendor_stdio, &related.vendor_stdio);
+        self
+    }
+
+    /// Retains each cause and its receipt when preserving a related close boundary.
+    pub fn with_related_causes(mut self, related: &Self) -> Self {
+        self.causes.extend(related.causes.iter().cloned());
+        self
+    }
+
+    /// A newly combined message has its own receipt; shared receipts are untouched.
+    pub fn with_fresh_recording(mut self) -> Self {
+        self.recorded_event = Arc::new(OnceLock::new());
+        self
+    }
+
+    /// Reuses the original failure's receipt after adding return-path context.
+    pub fn with_recording_from(mut self, source: &Self) -> Self {
+        self.recorded_event = Arc::clone(&source.recorded_event);
+        self
+    }
+
+    fn merge(&mut self, secondary: &mut Self) -> bool {
+        merge_stdio_observations(&mut self.vendor_stdio, &secondary.vendor_stdio);
+        let mut added_resource_cause = false;
+        for cause in std::mem::take(&mut secondary.causes) {
+            if self.causes.iter().any(|current| {
+                Arc::ptr_eq(&current.recorded_event, &cause.recorded_event)
+                    || match (&current.source_occurrence, &cause.source_occurrence) {
+                        (Some(current), Some(incoming)) => Arc::ptr_eq(current, incoming),
+                        _ => false,
+                    }
+            }) {
+                continue;
+            }
+            added_resource_cause |= cause.cause.resource().is_some();
+            self.causes.push(cause);
+        }
+        if self.cleanup_cause.is_none() {
+            self.cleanup_cause = secondary.cleanup_cause.take();
+        }
+        added_resource_cause
+    }
 }
 
 impl PartialEq for ExecutionKernelError {
@@ -82,15 +171,19 @@ impl PartialEq for ExecutionKernelError {
         self.code == other.code
             && self.secondary_code == other.secondary_code
             && self.device_severity == other.device_severity
-            && self.diagnostic_detail == other.diagnostic_detail
-            && self.cleanup_cause == other.cleanup_cause
+            && self.diagnostic_detail() == other.diagnostic_detail()
+            && self.cleanup_cause() == other.cleanup_cause()
     }
 }
 impl Eq for ExecutionKernelError {}
 
 impl ExecutionKernelError {
+    pub fn failure_context(&self) -> &ExecutionFailureContext {
+        &self.lifecycle
+    }
+
     pub fn vendor_stdio(&self) -> &[ExecutionStdioObservation] {
-        &self.lifecycle.vendor_stdio
+        self.lifecycle.vendor_stdio()
     }
 
     pub(crate) fn with_stdio_observations(
@@ -102,16 +195,18 @@ impl ExecutionKernelError {
     }
 
     pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
-        self.lifecycle.adb_recovery.as_deref()
+        self.lifecycle.adb_recovery()
     }
     pub(crate) fn fatal(code: &'static str) -> Self {
         Self {
             code,
             secondary_code: None,
             device_severity: None,
-            diagnostic_detail: None,
-            cleanup_cause: None,
             lifecycle: Box::default(),
+            closed_sessions: Vec::new(),
+            instance_id: None,
+            resource_quiescence: None,
+            resource_count: 0,
         }
     }
 
@@ -185,9 +280,8 @@ impl ExecutionKernelError {
             code,
             secondary_code: None,
             device_severity: Some(error.severity()),
-            diagnostic_detail: device_diagnostic_detail(error),
-            cleanup_cause: None,
             lifecycle: Box::new(ExecutionFailureContext {
+                diagnostic_detail: device_diagnostic_detail(error),
                 vendor_stdio: error
                     .vendor_stdio()
                     .iter()
@@ -196,69 +290,43 @@ impl ExecutionKernelError {
                 adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
                 causes,
-                resource_quiescence: error.resource_quiescence().map(runtime_quiescence),
-                resource_count: error.resource_count(),
                 ..ExecutionFailureContext::default()
             }),
+            closed_sessions: Vec::new(),
+            instance_id: None,
+            resource_quiescence: error.resource_quiescence().map(runtime_quiescence),
+            resource_count: error.resource_count(),
         }
     }
 
     pub(crate) fn merge(mut primary: Self, mut secondary: Self) -> Self {
-        merge_stdio_observations(
-            &mut primary.lifecycle.vendor_stdio,
-            &secondary.lifecycle.vendor_stdio,
-        );
-        let mut added_resource_cause = false;
-        for cause in std::mem::take(&mut secondary.lifecycle.causes) {
-            if primary.lifecycle.causes.iter().any(|current| {
-                Arc::ptr_eq(&current.recorded_event, &cause.recorded_event)
-                    || match (&current.source_occurrence, &cause.source_occurrence) {
-                        (Some(current), Some(incoming)) => Arc::ptr_eq(current, incoming),
-                        _ => false,
-                    }
-            }) {
-                continue;
-            }
-            added_resource_cause |= cause.cause.resource().is_some();
-            primary.lifecycle.causes.push(cause);
-        }
-        primary.lifecycle.resource_quiescence = merge_quiescence(
-            primary.lifecycle.resource_quiescence,
-            secondary.lifecycle.resource_quiescence,
-        );
-        if added_resource_cause || primary.lifecycle.resource_count == 0 {
-            primary.lifecycle.resource_count = primary
-                .lifecycle
+        let added_resource_cause = primary.lifecycle.merge(&mut secondary.lifecycle);
+        primary.resource_quiescence =
+            merge_quiescence(primary.resource_quiescence, secondary.resource_quiescence);
+        if added_resource_cause || primary.resource_count == 0 {
+            primary.resource_count = primary
                 .resource_count
-                .saturating_add(secondary.lifecycle.resource_count);
+                .saturating_add(secondary.resource_count);
         }
         primary
-            .lifecycle
             .closed_sessions
-            .append(&mut secondary.lifecycle.closed_sessions);
-        if primary.cleanup_cause.is_none() {
-            primary.cleanup_cause = secondary.cleanup_cause.take();
-        }
+            .append(&mut secondary.closed_sessions);
         if primary.code == secondary.code
             && primary.secondary_code == secondary.secondary_code
             && primary.device_severity == secondary.device_severity
         {
             return primary;
         }
-        Self {
-            code: primary.code,
-            secondary_code: Some(secondary.code),
-            device_severity: merge_severity(primary.device_severity, secondary.device_severity),
-            diagnostic_detail: primary.diagnostic_detail,
-            cleanup_cause: primary.cleanup_cause,
-            lifecycle: primary.lifecycle,
-        }
+        primary.secondary_code = Some(secondary.code);
+        primary.device_severity =
+            merge_severity(primary.device_severity, secondary.device_severity);
+        primary
     }
 
     /// Retains the primary operation and the real result of its owner-led cleanup.
     pub fn merge_cleanup(mut primary: Self, secondary: Self) -> Self {
-        if primary.cleanup_cause.is_none() {
-            primary.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
+        if primary.lifecycle.cleanup_cause.is_none() {
+            primary.lifecycle.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
                 secondary.code,
                 if secondary.is_fatal() {
                     CleanupCauseSeverity::Fatal
@@ -291,35 +359,35 @@ impl ExecutionKernelError {
     }
 
     pub fn recorded_event(&self) -> &Arc<OnceLock<EventId>> {
-        &self.lifecycle.recorded_event
+        self.lifecycle.recorded_event()
     }
     pub const fn instance_id(&self) -> Option<InstanceId> {
-        self.lifecycle.instance_id
+        self.instance_id
     }
     pub(crate) fn with_instance_id(mut self, instance_id: InstanceId) -> Self {
-        self.lifecycle.instance_id = Some(instance_id);
+        self.instance_id = Some(instance_id);
         self
     }
     pub fn lifecycle_causes(&self) -> &[ExecutionLifecycleCause] {
-        &self.lifecycle.causes
+        self.lifecycle.lifecycle_causes()
     }
     pub fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
-        self.lifecycle.native_detail.as_deref()
+        self.lifecycle.native_detail()
     }
     pub const fn resource_quiescence(&self) -> Option<ResourceQuiescence> {
-        self.lifecycle.resource_quiescence
+        self.resource_quiescence
     }
     pub const fn resource_count(&self) -> u16 {
-        self.lifecycle.resource_count
+        self.resource_count
     }
     pub fn take_closed_sessions(&mut self) -> Vec<(InstanceId, ExecutionKernelError)> {
-        std::mem::take(&mut self.lifecycle.closed_sessions)
+        std::mem::take(&mut self.closed_sessions)
     }
     pub(crate) fn with_closed_sessions(
         mut self,
         sessions: Vec<(InstanceId, ExecutionKernelError)>,
     ) -> Self {
-        self.lifecycle.closed_sessions = sessions;
+        self.closed_sessions = sessions;
         self
     }
 
@@ -336,11 +404,11 @@ impl ExecutionKernelError {
     }
 
     pub fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
-        self.diagnostic_detail.as_deref()
+        self.lifecycle.diagnostic_detail()
     }
 
     pub fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
-        self.cleanup_cause.as_deref()
+        self.lifecycle.cleanup_cause()
     }
 
     pub const fn is_fatal(&self) -> bool {

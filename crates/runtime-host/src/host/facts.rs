@@ -352,7 +352,10 @@ impl HostShared {
                     })
                     .inspect_err(|error| {
                         self.lifecycle_append_failed.store(true, Ordering::Release);
-                        let _ = error.lifecycle.recorded_event.set(*persisted.event_id());
+                        let _ = error
+                            .diagnostics()
+                            .recorded_event()
+                            .set(*persisted.event_id());
                     })?;
             }
             Ok(())

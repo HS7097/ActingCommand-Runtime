@@ -499,7 +499,7 @@ impl HostShared {
             return Err(error.clone());
         }
         let links = self.policy_run_event_links(context)?;
-        if error.lifecycle.recorded_event.get().is_some() {
+        if error.diagnostics().recorded_event().get().is_some() {
             return self.append_lifecycle_failure(
                 RuntimeLifecycleFailureStage::OperationCleanup,
                 RuntimeLifecycleFailure::Host(error),

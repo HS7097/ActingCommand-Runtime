@@ -1926,8 +1926,8 @@ impl HostShared {
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
                 let _ = error
                     .error
-                    .lifecycle
-                    .recorded_event
+                    .diagnostics()
+                    .recorded_event()
                     .set(*outcome.event_id());
                 if error.poison_runtime {
                     self.fatal.mark(error.error.clone())?;
