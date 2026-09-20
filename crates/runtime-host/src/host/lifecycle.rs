@@ -468,12 +468,13 @@ impl HostShared {
             && error.lifecycle.capacity.is_none()
             && (error.diagnostic_detail().is_none() || primary_detail_recorded)
             && (error.cleanup_cause().is_none() || cleanup_cause_recorded)
-            && error.lifecycle.causes.is_empty()
             && error.lifecycle.raw_os_error.is_none()
             && error.lifecycle.adb_recovery.is_none()
             && error.lifecycle.complete_failure.is_none()
             && error.lifecycle.ppocr_message.is_none()
         {
+            // This marks only the primary outcome. append_lifecycle_failure still
+            // records every cause and stdio observation with its own identity.
             let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
         }
         self.append_lifecycle_failure(
