@@ -89,6 +89,16 @@ impl ArtifactStoreError {
         error
     }
 
+    pub(crate) fn read_material_limit_exceeded() -> Self {
+        let mut error = Self::fatal(
+            "artifact_read_material_limit",
+            "read_projected_artifact_complete",
+            "complete material exceeds its explicit owned-buffer bound",
+        );
+        error.fatal = false;
+        error
+    }
+
     pub fn with_capacity(
         mut self,
         capacity: Option<actingcommand_contract::CapacityDecision>,
