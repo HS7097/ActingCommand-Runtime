@@ -1114,6 +1114,70 @@ impl ArtifactReader {
         })
     }
 
+    /// Returns all bytes only after verified EOF, within the caller's allocation and time bounds.
+    /// The deadline is cooperative around synchronous reads; it does not cancel system I/O.
+    pub fn read_verified_complete(
+        mut self,
+        max_material_bytes: usize,
+        deadline: Instant,
+    ) -> ArtifactStoreResult<(VerifiedArtifactReference, Vec<u8>)> {
+        material_read_deadline(deadline)?;
+        let limit_error = ArtifactStoreError::read_material_limit_exceeded;
+        let expected_length = usize::try_from(self.reference.byte_count)
+            .ok()
+            .filter(|length| {
+                max_material_bytes > 0
+                    && max_material_bytes <= isize::MAX as usize
+                    && *length <= max_material_bytes
+            })
+            .ok_or_else(limit_error)?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 65_536];
+        loop {
+            material_read_deadline(deadline)?;
+            let count = self.read_chunk(&mut buffer)?;
+            material_read_deadline(deadline)?;
+            if count == 0 {
+                break;
+            }
+            let next_length = bytes
+                .len()
+                .checked_add(count)
+                .filter(|length| *length <= expected_length)
+                .ok_or_else(limit_error)?;
+            if next_length > bytes.capacity() {
+                let capacity = bytes
+                    .capacity()
+                    .checked_mul(2)
+                    .unwrap_or(max_material_bytes)
+                    .clamp(next_length, max_material_bytes);
+                bytes
+                    .try_reserve_exact(capacity - bytes.len())
+                    .map_err(|error| {
+                        ArtifactStoreError::fatal(
+                            "artifact_read_allocation_failed",
+                            "read_projected_artifact_complete",
+                            error.to_string(),
+                        )
+                    })?;
+                if bytes.capacity() > max_material_bytes {
+                    return Err(limit_error());
+                }
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let verified = self.finish()?;
+        material_read_deadline(deadline)?;
+        if bytes.len() != expected_length {
+            return Err(ArtifactStoreError::fatal(
+                "artifact_verify_failed",
+                "read_projected_artifact_complete",
+                "complete material length differs from its verified reference",
+            ));
+        }
+        Ok((verified, bytes))
+    }
+
     /// Retains only the selected range. No byte leaves this reader before verified EOF.
     pub fn read_verified_range(
         mut self,
