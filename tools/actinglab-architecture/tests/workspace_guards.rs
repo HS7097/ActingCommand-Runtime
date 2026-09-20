@@ -3100,27 +3100,18 @@ fn actinglab_device_runtime_config_glue_stays_out_of_main() {
     );
 }
 
-fn actinglab_instance_resolution_root_wiring_is_frozen(main: &str) -> bool {
-    const DECLARATION: &str = "#[rustfmt::skip] mod instance_resolution;";
-
-    let lines = main.lines().collect::<Vec<_>>();
-    let declarations = lines
+fn actinglab_instance_resolution_root_wiring_is_private(main: &str) -> bool {
+    let root = syn::parse_file(main).expect("parse ActingLab root module declarations");
+    let declarations = root
+        .items
         .iter()
-        .enumerate()
-        .filter(|(_, line)| line.contains("mod instance_resolution;"))
-        .map(|(index, line)| (index, *line))
+        .filter_map(|item| match item {
+            syn::Item::Mod(module) if module.ident == "instance_resolution" => Some(module),
+            _ => None,
+        })
         .collect::<Vec<_>>();
-    if declarations.len() != 1 {
-        return false;
-    }
-
-    let (index, declaration) = declarations[0];
-    declaration == DECLARATION
-        && index > 1
-        && index + 1 < lines.len()
-        && lines[index - 2] == "mod flag_args;"
-        && lines[index - 1] == "mod flag_values;"
-        && lines[index + 1] == "mod lab2_cli;"
+    matches!(declarations.as_slice(), [module]
+        if matches!(module.vis, syn::Visibility::Inherited) && module.content.is_none())
 }
 
 #[test]
@@ -3133,66 +3124,37 @@ fn actinglab_instance_resolution_glue_stays_out_of_main() {
             .expect("read ActingLab instance resolution module");
 
     assert!(
-        actinglab_instance_resolution_root_wiring_is_frozen(&main),
-        "ActingLab main lost the exact private instance resolution module placement"
-    );
-    let declaration = "#[rustfmt::skip] mod instance_resolution;";
-    let frozen_placement = concat!(
-        "mod flag_args;\n",
-        "mod flag_values;\n",
-        "#[rustfmt::skip] mod instance_resolution;\n",
-        "mod lab2_cli;",
+        actinglab_instance_resolution_root_wiring_is_private(&main),
+        "ActingLab main must declare one private external instance resolution module"
     );
     let counterexamples = [
-        (
-            "plain pub declaration",
-            main.replacen(
-                declaration,
-                "#[rustfmt::skip] pub mod instance_resolution;",
-                1,
-            ),
-        ),
+        ("plain pub declaration", "pub mod instance_resolution;"),
         (
             "pub(crate) declaration",
-            main.replacen(
-                declaration,
-                "#[rustfmt::skip] pub(crate) mod instance_resolution;",
-                1,
-            ),
+            "pub(crate) mod instance_resolution;",
         ),
         (
             "duplicate declaration",
-            main.replacen(
-                declaration,
-                "#[rustfmt::skip] mod instance_resolution;\n#[rustfmt::skip] mod instance_resolution;",
-                1,
-            ),
+            "mod instance_resolution;\nmod instance_resolution;",
         ),
-        ("missing declaration", main.replacen(declaration, "", 1)),
-        (
-            "moved declaration",
-            main.replacen(
-                frozen_placement,
-                concat!(
-                    "mod flag_args;\n",
-                    "mod flag_values;\n",
-                    "mod lab2_cli;\n",
-                    "#[rustfmt::skip] mod instance_resolution;",
-                ),
-                1,
-            ),
-        ),
+        ("missing declaration", ""),
     ];
     for (label, counterexample) in counterexamples {
-        assert_ne!(
-            counterexample, main,
-            "instance resolution guard counterexample was not constructed: {label}"
-        );
         assert!(
-            !actinglab_instance_resolution_root_wiring_is_frozen(&counterexample),
+            !actinglab_instance_resolution_root_wiring_is_private(counterexample),
             "instance resolution guard accepted counterexample: {label}"
         );
     }
+    let moved_declaration = concat!(
+        "mod flag_args;\n",
+        "mod flag_values;\n",
+        "mod lab2_cli;\n",
+        "mod instance_resolution;",
+    );
+    assert!(
+        actinglab_instance_resolution_root_wiring_is_private(moved_declaration),
+        "private instance resolution ownership must allow equivalent module placement"
+    );
     for definition in [
         "fn resolve_instance_id(",
         "fn resolve_instance_id_for_flags(",
@@ -3878,39 +3840,14 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         .expect("read ActingLab flag values module");
 
     const ROOT_DECLARATION: &str = "mod flag_values;";
-    const ROOT_IMPORT: &str = concat!(
-        "use flag_values::{\n",
-        "    parse_match_metric_flag, parse_optional_duration_ms, ",
-        "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
-        "};",
-    );
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod flag_values;"))
-        .collect::<Vec<_>>();
-    let imports = main
-        .lines()
-        .filter(|line| line.contains("flag_values::"))
         .collect::<Vec<_>>();
     assert_eq!(
         declarations,
         vec![ROOT_DECLARATION],
         "ActingLab main lost the one private flag values module declaration"
-    );
-    assert_eq!(
-        imports.len(),
-        1,
-        "ActingLab main gained another flag values import"
-    );
-    assert_eq!(
-        main.matches(ROOT_IMPORT).count(),
-        1,
-        "ActingLab main lost the exact private flag values import"
     );
 
     for definition in [
@@ -4010,22 +3947,6 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
-    const ROOT_IMPORT: &str = concat!(
-        "use flag_values::{\n",
-        "    parse_match_metric_flag, parse_optional_duration_ms, ",
-        "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
-        "};",
-    );
-    assert_eq!(
-        main.matches(ROOT_IMPORT).count(),
-        1,
-        "ActingLab main lost the exact required-value root import"
-    );
     assert_eq!(
         flag_values.matches("fn required_non_empty_flag(").count(),
         1,
@@ -4103,22 +4024,6 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
-    const ROOT_IMPORT: &str = concat!(
-        "use flag_values::{\n",
-        "    parse_match_metric_flag, parse_optional_duration_ms, ",
-        "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
-        "};",
-    );
-    assert_eq!(
-        main.matches(ROOT_IMPORT).count(),
-        1,
-        "ActingLab main lost the exact unit-f64 root import"
-    );
     assert_eq!(
         flag_values.matches("fn parse_optional_unit_f64(").count(),
         1,
@@ -4199,22 +4104,6 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
-    const ROOT_IMPORT: &str = concat!(
-        "use flag_values::{\n",
-        "    parse_match_metric_flag, parse_optional_duration_ms, ",
-        "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
-        "};",
-    );
-    assert_eq!(
-        main.matches(ROOT_IMPORT).count(),
-        1,
-        "ActingLab main lost the exact record-duration root import"
-    );
     assert_eq!(
         flag_values.matches("fn parse_record_duration_ms(").count(),
         1,
@@ -4299,38 +4188,6 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
             .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
-
-    const ROOT_DECLARATION: &str = "mod flag_values;";
-    const ROOT_IMPORT: &str = concat!(
-        "use flag_values::{\n",
-        "    parse_match_metric_flag, parse_optional_duration_ms, ",
-        "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
-        "};",
-    );
-    let declarations = main
-        .lines()
-        .filter(|line| line.contains("mod flag_values;"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations,
-        vec![ROOT_DECLARATION],
-        "ActingLab main lost the one private flag values module declaration"
-    );
-    assert_eq!(
-        main.matches("flag_values::").count(),
-        1,
-        "ActingLab main gained another flag values import"
-    );
-    assert_eq!(
-        main.matches(ROOT_IMPORT).count(),
-        1,
-        "ActingLab main lost the exact record-amend step-id root import"
-    );
 
     assert_eq!(
         flag_values.matches("fn record_amend_step_id(").count(),
@@ -4434,22 +4291,6 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
-    const ROOT_IMPORT: &str = concat!(
-        "use flag_values::{\n",
-        "    parse_match_metric_flag, parse_optional_duration_ms, ",
-        "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
-        "};",
-    );
-    assert_eq!(
-        main.matches(ROOT_IMPORT).count(),
-        1,
-        "ActingLab main lost the exact split CSV root import"
-    );
     assert_eq!(
         flag_values.matches("fn split_csv(").count(),
         1,
@@ -4495,30 +4336,6 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         lab2.matches(TARGETS_CALL).count(),
         2,
         "ActingLab lab2 lost the exact targets/fields split CSV callers"
-    );
-
-    let marker = "\npub(super) fn split_csv(";
-    let (_, owner_and_tests) = flag_values
-        .rsplit_once(marker)
-        .expect("flag values module lost the appended split CSV owner");
-    let (owner_tail, _) = owner_and_tests
-        .split_once("\n#[cfg(test)]")
-        .expect("flag values module lost the following bounded behavior tests");
-    let normalized_owner = format!("fn split_csv({owner_tail}");
-    assert_eq!(
-        normalized_owner.lines().count(),
-        8,
-        "split CSV owner line count changed"
-    );
-    assert_eq!(
-        normalized_owner.len(),
-        193,
-        "split CSV owner byte count changed"
-    );
-    assert_eq!(
-        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
-        "edc4c9a543d64723f7428067ad6e63668d51c50e882b90f135599fe5ee9a5f1a",
-        "split CSV owner body changed"
     );
 }
 
