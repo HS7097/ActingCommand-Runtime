@@ -846,6 +846,16 @@ impl ArtifactStore {
         }
 
         if let Err(error) = verify_file(&prepared.path, prepared.issued.reference()) {
+            // Both callers still hold the writer and publication guards. Only a
+            // successful rename gives this attempt ownership of the temporary path.
+            let rollback = temporary_path(&prepared.path).and_then(|temp_path| {
+                publish_temp(&prepared.path, &temp_path)?;
+                Ok(temp_path)
+            });
+            let error = match rollback {
+                Ok(temp_path) => cleanup_temp(&temp_path, error),
+                Err(rollback_error) => error.with_secondary(&rollback_error),
+            };
             return Err(self.report_failure(
                 error,
                 sink,
@@ -2026,7 +2036,9 @@ mod tests {
             .finish_publication(prepared, &mut sink)
             .expect_err("post-publication verification");
         assert_eq!(error.code(), "artifact_hash_mismatch");
-        assert!(published.exists());
+        assert!(error.is_fatal());
+        assert!(!published.exists());
+        assert_eq!(material_files(temp.path()), [path]);
         assert_eq!(
             sink.event_types,
             [
