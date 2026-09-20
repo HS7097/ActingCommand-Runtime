@@ -454,17 +454,20 @@ impl HostShared {
         outcome: &PersistedEvent,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
-        // These original failure builders copy this error's primary detail into
-        // their durable outcome. Extra native details still need lifecycle facts.
-        let primary_detail_recorded = match outcome.payload() {
+        // These original failure builders copy this error's primary and cleanup
+        // details into their outcome. Extra native details still need lifecycle facts.
+        let (primary_detail_recorded, cleanup_cause_recorded) = match outcome.payload() {
             EventPayload::Capture(CapturePayload::Failed(payload))
-            | EventPayload::Input(InputPayload::Failed(payload)) => payload.detail().is_some(),
-            _ => false,
+            | EventPayload::Input(InputPayload::Failed(payload)) => (
+                payload.detail().is_some(),
+                payload.cleanup_cause().is_some(),
+            ),
+            _ => (false, false),
         };
         if error.lifecycle.native_detail.is_none()
             && error.lifecycle.capacity.is_none()
             && (error.diagnostic_detail().is_none() || primary_detail_recorded)
-            && error.cleanup_cause().is_none()
+            && (error.cleanup_cause().is_none() || cleanup_cause_recorded)
             && error.lifecycle.causes.is_empty()
             && error.lifecycle.raw_os_error.is_none()
             && error.lifecycle.adb_recovery.is_none()
