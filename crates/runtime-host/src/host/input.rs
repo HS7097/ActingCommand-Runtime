@@ -106,6 +106,9 @@ impl HostShared {
                     )
                 })?;
         }
+        // Slice #316-B3: the foreground gate sits after the frame resolution and before the
+        // input is prepared, so both touch backends pass the same check.
+        self.require_foreground_application(request, token, &resolved, action, run_links)?;
         let before_frame_id = input_frame.map(|frame| frame.frame_id).or(before_frame_id);
         let prepared_action = self
             .execution
@@ -385,12 +388,16 @@ impl HostShared {
         }
     }
 
-    fn application_control(
+    /// Drives the assigned application under an existing lease. `run_links` carries the task
+    /// and run ids when the action is a task package's `application` effect (slice #316-B3),
+    /// so the `application.*` events sit inside the run's chain.
+    pub(super) fn application_control(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         token: &LeaseToken,
         action: ApplicationLifecycleAction,
         connection_id: ConnectionId,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         self.require_physical_instance_id(token.instance_id())?;
         let (resolved, transferred) = {
@@ -418,12 +425,15 @@ impl HostShared {
             .events
             .action_id()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let links = self.events.request_links(
+        let mut links = self.events.request_links(
             request,
             Some(token.instance_id()),
             Some(token.lease_id()),
             Some(action_id),
         );
+        if let Some(run_links) = run_links {
+            links = run_links.apply(links);
+        }
         let event_action = action.event_action();
         let intent = self
             .events
@@ -540,16 +550,16 @@ impl HostShared {
                 })
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
-                self.record_required_failure(
-                    &error.error,
-                    &outcome,
-                    self.events.request_links(
-                        request,
-                        Some(token.instance_id()),
-                        Some(token.lease_id()),
-                        Some(action_id),
-                    ),
-                )?;
+                let mut failure_links = self.events.request_links(
+                    request,
+                    Some(token.instance_id()),
+                    Some(token.lease_id()),
+                    Some(action_id),
+                );
+                if let Some(run_links) = run_links {
+                    failure_links = run_links.apply(failure_links);
+                }
+                self.record_required_failure(&error.error, &outcome, failure_links)?;
                 if self
                     .retain_unconfirmed_resources(&error.error, EventLinksDraft::default())
                     .map_err(RequestFailure::poison_without_terminal)?
@@ -574,11 +584,14 @@ impl HostShared {
                     terminal: Some(terminal(&outcome)),
                     error: Box::new(error.error),
                     poison_runtime: error.poison_runtime,
-                    task_failure: None,
+                    task_failure: error.task_failure.map(|evidence| *evidence),
                 };
-                if release_after {
-                    self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
-                        .map_err(RequestFailure::poison_without_terminal)?;
+                if release_after
+                    && run_links.is_none()
+                    && let Err(error) =
+                        self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
+                {
+                    return Err(failure.replace_with_poison(error));
                 }
                 Err(failure)
             }
@@ -859,7 +872,8 @@ impl HostShared {
                 ),
             ));
         };
-        let executed = match self.application_control(request, &token, action, connection_id) {
+        let executed = match self.application_control(request, &token, action, connection_id, None)
+        {
             Ok(success) => success,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure(token, connection_id, failure));

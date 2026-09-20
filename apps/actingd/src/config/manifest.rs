@@ -36,6 +36,7 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) vision_provider_configured: bool,
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
+    pub(super) instances_startup_package_count: usize,
     pub(super) policy_cadence: &'a PolicyCadence,
     pub(super) io_timeout: Duration,
     pub(super) maximum_frame_bytes: usize,
@@ -170,6 +171,10 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         explicit(
             "instances_deferred_count",
             integer(inputs.instances_deferred_count)?,
+        ),
+        explicit(
+            "instances_startup_package_count",
+            integer(inputs.instances_startup_package_count)?,
         ),
         default(
             "scheduler.maximum_client_heartbeat_interval_ms",

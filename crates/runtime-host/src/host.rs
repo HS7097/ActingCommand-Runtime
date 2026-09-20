@@ -79,7 +79,7 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, Sensitivity, TaskEntryRecognitionPhase,
+    SchedulingOutcomeProjection, Sensitivity, StartupPackageDisposition, TaskEntryRecognitionPhase,
     TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
     TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
     TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
@@ -142,6 +142,8 @@ const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_AUTHORITATIVE_POLICY_OUTCOMES: usize = 16_384;
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
+/// Synthesized connection of the host's own startup-package scheduling thread (#316-B3).
+const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
 
 mod agent_control;
 mod client_events;
@@ -150,6 +152,7 @@ mod device_diagnostic;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
+mod foreground_gate;
 mod frame_retention;
 mod governance;
 mod input;
@@ -175,6 +178,7 @@ mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
 mod signatures;
+mod startup_package;
 mod state_control;
 mod task_diagnostic;
 mod task_timing;
@@ -327,6 +331,10 @@ pub struct RuntimeHostConfig {
     policy_inputs: Option<PolicyInputSnapshot>,
     procedure_manifest: Option<ProcedureManifest>,
     config_manifest: Option<RuntimeConfigManifest>,
+    /// Per instance alias: the contained task the host schedules by itself after a successful
+    /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
+    /// `actingctl task-run --package / --expected-sha256`.
+    startup_packages: BTreeMap<String, ContainedTaskRequest>,
 }
 
 impl RuntimeHostConfig {
@@ -351,6 +359,7 @@ impl RuntimeHostConfig {
             policy_inputs: None,
             procedure_manifest: None,
             config_manifest: None,
+            startup_packages: BTreeMap::new(),
         }
     }
 
@@ -457,6 +466,23 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Installs the startup packages, keyed by instance alias (slice #316-B3). An alias that
+    /// is not a registered physical instance fails startup with
+    /// `startup_package_instance_unknown`; the package itself is admitted (hash-checked) only
+    /// when it runs, exactly like `task-run`.
+    pub fn with_startup_packages(
+        mut self,
+        startup_packages: BTreeMap<String, ContainedTaskRequest>,
+    ) -> Self {
+        self.startup_packages = startup_packages;
+        self
+    }
+
+    /// The configured startup packages, keyed by instance alias.
+    pub const fn startup_packages(&self) -> &BTreeMap<String, ContainedTaskRequest> {
+        &self.startup_packages
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -498,6 +524,17 @@ impl RuntimeHostConfig {
                 )
                 .with_native_detail(error.code().to_owned())
             })?;
+        }
+        for (alias, request) in &self.startup_packages {
+            if actingcommand_contract::validate_instance_alias(alias).is_err()
+                || request.validate().is_err()
+            {
+                return Err(RuntimeHostError::fatal(
+                    "invalid_startup_package",
+                    "validate_runtime_config",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
         }
         if self.state_root.as_os_str().is_empty()
             || !self.bind_address.ip().is_loopback()
@@ -550,6 +587,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.procedure_manifest.as_ref().map(|_| "<runtime-owned>"),
             )
             .field("config_manifest", &self.config_manifest)
+            .field(
+                "startup_packages",
+                &self.startup_packages.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -562,6 +603,7 @@ pub struct RuntimeHost {
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    startup_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 }
 
@@ -813,6 +855,10 @@ impl RuntimeHost {
             }
         };
         let registered_instances = initial_registered_instances(provider.as_ref())?;
+        let startup_packages = startup_package::resolve_startup_packages(
+            &config.startup_packages,
+            &registered_instances,
+        )?;
         let monitor_registry = MonitorRegistry::open(
             &config.state_root,
             registered_instances
@@ -1020,6 +1066,8 @@ impl RuntimeHost {
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeMap::new()),
+            startup_packages,
+            pending_startup_packages: Mutex::new(VecDeque::new()),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -1036,17 +1084,17 @@ impl RuntimeHost {
             fatal,
         });
         if let Err(original) = shared.synchronize_fact_store() {
-            failed_start_cleanup(shared, &info_path, None, None, None)?;
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
         if let Some(config_manifest) = &config.config_manifest
             && let Err(original) = shared.record_config_manifest(config_manifest)
         {
-            failed_start_cleanup(shared, &info_path, None, None, None)?;
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
         if let Err(original) = shared.expire_agent_sessions() {
-            failed_start_cleanup(shared, &info_path, None, None, None)?;
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
         let sweep_shared = Arc::clone(&shared);
@@ -1061,7 +1109,7 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, None, None, None)?;
+                failed_start_cleanup(shared, &info_path, None, None, None, None)?;
                 return Err(original);
             }
         };
@@ -1077,7 +1125,32 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, Some(sweep_thread), None, None)?;
+                failed_start_cleanup(shared, &info_path, Some(sweep_thread), None, None, None)?;
+                return Err(original);
+            }
+        };
+        // Slice #316-B3: the host's own scheduling point for startup packages, a peer of the
+        // monitor thread; a start request never runs the package on its connection thread.
+        let startup_shared = Arc::clone(&shared);
+        let startup_thread = match thread::Builder::new()
+            .name("actingcommand-runtime-startup".to_string())
+            .spawn(move || startup_package::startup_package_loop(startup_shared))
+        {
+            Ok(thread) => thread,
+            Err(_) => {
+                let original = RuntimeHostError::fatal(
+                    "runtime_startup_spawn_failed",
+                    "start_runtime_host",
+                    RuntimeErrorCode::RuntimeFatal,
+                );
+                failed_start_cleanup(
+                    shared,
+                    &info_path,
+                    Some(sweep_thread),
+                    Some(monitor_thread),
+                    None,
+                    None,
+                )?;
                 return Err(original);
             }
         };
@@ -1099,6 +1172,7 @@ impl RuntimeHost {
                         &info_path,
                         Some(sweep_thread),
                         Some(monitor_thread),
+                        Some(startup_thread),
                         None,
                     )?;
                     return Err(original);
@@ -1132,6 +1206,7 @@ impl RuntimeHost {
                     &info_path,
                     Some(sweep_thread),
                     Some(monitor_thread),
+                    Some(startup_thread),
                     performance_thread,
                 )?;
                 return Err(original);
@@ -1144,6 +1219,7 @@ impl RuntimeHost {
             accept_thread: Some(accept_thread),
             sweep_thread: Some(sweep_thread),
             monitor_thread: Some(monitor_thread),
+            startup_thread: Some(startup_thread),
             performance_thread,
         })
     }
@@ -2160,6 +2236,11 @@ impl RuntimeHost {
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
+            join_runtime_thread(self.startup_thread.take(), "join_runtime_startup"),
+        );
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
             join_runtime_thread(self.performance_thread.take(), "join_runtime_performance"),
         );
         if let Err(error) = fs::remove_file(&self.info_path)
@@ -2502,6 +2583,10 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
+    // Slice #316-B3: startup packages by registered instance, and the ones emulator control
+    // handed to the host's own scheduling thread.
+    startup_packages: BTreeMap<InstanceId, ContainedTaskRequest>,
+    pending_startup_packages: Mutex<VecDeque<startup_package::PendingStartupPackage>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
@@ -3216,6 +3301,7 @@ fn failed_start_cleanup(
     info_path: &Path,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    startup_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 ) -> RuntimeHostResult<()> {
     shared.fatal.request_shutdown();
@@ -3229,6 +3315,11 @@ fn failed_start_cleanup(
         RuntimeLifecycleFailureStage::ShutdownJoin,
         &mut failure,
         join_runtime_thread(monitor_thread, "join_runtime_monitor"),
+    );
+    shared.record_lifecycle_result(
+        RuntimeLifecycleFailureStage::ShutdownJoin,
+        &mut failure,
+        join_runtime_thread(startup_thread, "join_runtime_startup"),
     );
     shared.record_lifecycle_result(
         RuntimeLifecycleFailureStage::ShutdownJoin,

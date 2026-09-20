@@ -1448,6 +1448,20 @@ impl ExecutionBackendProvider for GoldenRuntimeProvider {
         Ok(Box::new(GoldenCapture))
     }
 
+    // Slice #316-B3: the fake device always reports its assigned application in the
+    // foreground, so the foreground gate passes exactly as before the gate existed.
+    fn observe_foreground_application(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
+        Ok(
+            actingcommand_runtime_host::ForegroundApplicationObservation {
+                foreground: Some("neutral.application".to_owned()),
+                assigned: "neutral.application".to_owned(),
+            },
+        )
+    }
+
     fn control_application(
         &self,
         _instance_alias: &str,

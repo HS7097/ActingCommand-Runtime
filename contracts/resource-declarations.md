@@ -14,7 +14,7 @@ and `operation explain` keep their existing behavior.
 
 | Declaration | Existing rule owner |
 | --- | --- |
-| `operations/*/task.json`, `operations/resources.json` | `pack-containment::source` declaration APIs |
+| `operations/*/task.json`, `operations/resources.json` | `pack-containment::source` declaration APIs (an operation carries exactly one effect: `click`, or the `application { action }` effect of `contracts/application-lifecycle.md`) |
 | Task truth-set and dictionary JSON | The task owner's `declaration_file_requests` and declaration validation |
 | `recognition/*.pack.json` | `load_pack_from_json_str` |
 | `recognition/*.pages.json` | `load_page_set_from_json_str` |

@@ -33,7 +33,8 @@ fn test_operation(to: Option<&str>, verify_template: Option<&str>) -> Operation 
         _purpose: "test".to_string(),
         from: "home".to_string(),
         to: to.map(|page| NormalizedPageSet(vec![page.to_string()])),
-        click: OperationClick {
+        application: None,
+        click: Some(OperationClick {
             kind: "point".to_string(),
             x: Some(100),
             y: Some(100),
@@ -45,7 +46,7 @@ fn test_operation(to: Option<&str>, verify_template: Option<&str>) -> Operation 
             offset: None,
             target_id: None,
             extra: BTreeMap::new(),
-        },
+        }),
         verify_template: verify_template.map(str::to_string),
         expect_after: None,
         timeout_ms: None,

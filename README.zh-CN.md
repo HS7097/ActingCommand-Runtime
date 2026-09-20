@@ -169,7 +169,7 @@ actingctl stream --state-root <state-root> --instance <alias> --max-frames 8 --i
 actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms 30000 --expect home --recover
 actingctl monitor-clear --state-root <state-root> --instance <alias>
 actingctl emulator status --state-root <state-root> --instance <alias>
-actingctl emulator start --state-root <state-root> --instance <alias>     # 另有 stop | restart（仅显式请求；按实例围栏）
+actingctl emulator start --state-root <state-root> --instance <alias>     # 另有 stop | restart（仅显式请求；按实例围栏；配置了 startup_package 则随后以受控任务排程）
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>
 actingctl request-shutdown --state-root <state-root>
 
