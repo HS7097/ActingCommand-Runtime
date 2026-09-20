@@ -820,6 +820,16 @@ impl fmt::Debug for ResolvedExecutionInstance {
 ///     let _ = provider.outcomes();
 /// }
 /// ```
+/// One read-only foreground observation of a running instance (slice #316-B3): what Android
+/// reported as the resumed package, next to the application the instance is assigned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForegroundApplicationObservation {
+    /// The resumed package, or `None` when the device reported no resumed activity.
+    pub foreground: Option<String>,
+    /// The instance's configured `application_id`.
+    pub assigned: String,
+}
+
 pub trait ExecutionBackendProvider: Send + Sync + 'static {
     fn instance_aliases(&self) -> Vec<String>;
 
@@ -841,6 +851,59 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()>;
+
+    /// One ADB baseline probe of a bound instance (slice #316-B3): `ensure_device` with a
+    /// connect attempt allowed, nothing else. `Ok` means adbd answered `device`; an error is
+    /// the ADB failure. Opens no device session. Providers without an ADB baseline have
+    /// nothing to wait for and keep this `Ok`.
+    fn probe_adb_baseline(&self, _instance_alias: &str) -> DeviceResult<()> {
+        Ok(())
+    }
+
+    fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: std::time::Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> DeviceResult<()> {
+        if stopped() || std::time::Instant::now() >= deadline {
+            return Err(DeviceError::fatal(
+                "ADB baseline stopped or deadline expired",
+            ));
+        }
+        let result = self.probe_adb_baseline(instance_alias);
+        if stopped() || std::time::Instant::now() >= deadline {
+            return match result {
+                Err(error) => Err(error),
+                Ok(()) => Err(DeviceError::fatal(
+                    "ADB baseline stopped or deadline expired",
+                )),
+            };
+        }
+        result
+    }
+
+    /// Read-only: the package the instance reports in the foreground, next to the application
+    /// assigned to the instance (slice #316-B3). Goes through the ADB baseline only and opens
+    /// no device session; a failure is an ADB failure. Providers without an ADB baseline keep
+    /// this typed refusal.
+    fn observe_foreground_application(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<ForegroundApplicationObservation> {
+        Err(
+            DeviceError::fatal("foreground application observation unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "application.foreground_unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "observe_foreground_application",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        )
+    }
 
     /// Starts, stops or restarts the emulator instance itself through its provider. Opens no
     /// device session. Providers without an instance-control surface keep this typed refusal.

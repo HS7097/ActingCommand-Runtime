@@ -84,9 +84,19 @@ impl HostShared {
         policy: LeaseQueuePolicy,
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let resolved = self.resolve_instance(instance_alias)?;
-        let instance_guard = self.instance_guard(resolved.instance_id())?;
+        let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let resolved = self.resolve_instance(instance_alias)?;
+        if resolved.instance_id() != instance_id {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "runtime_instance_identity_mismatch",
+                    "queue_lease",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         self.expire_instance_if_due(resolved.instance_id())?;
         self.require_bound_endpoint(
             &resolved,
@@ -968,9 +978,19 @@ impl HostShared {
             run_links,
             lease_ttl_ms,
         } = acquisition;
-        let resolved = self.resolve_instance(instance_alias)?;
-        let instance_guard = self.instance_guard(resolved.instance_id())?;
+        let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        let instance_guard = self.instance_guard(instance_id)?;
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
+        let resolved = self.resolve_instance(instance_alias)?;
+        if resolved.instance_id() != instance_id {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "runtime_instance_identity_mismatch",
+                    "acquire_lease",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         self.expire_instance_if_due(resolved.instance_id())?;
         self.require_bound_endpoint(
             &resolved,

@@ -429,8 +429,7 @@ impl OperationConverter {
             };
             let normalized_expect_after =
                 normalized_expect_after(&bundle.task_json_path(), operation)?;
-            let guard = self.operation_guard(bundle, operation)?;
-            let click = self.operation_click(bundle, operation, &guard)?;
+            let (click, guard, application) = self.operation_effect(bundle, operation)?;
             let trusted_coordinate = operation
                 .get("unguarded_trusted_coordinate")
                 .and_then(Value::as_bool)
@@ -438,7 +437,13 @@ impl OperationConverter {
             let object = operation.as_object_mut().ok_or_else(|| {
                 CliError::package_invalid(format!("task '{task_id}' operation must be an object"))
             })?;
-            object.insert("click".to_string(), click);
+            if application.is_null() {
+                object.insert("click".to_string(), click);
+            } else {
+                // The application effect stays as declared; no click and no guard are inferred.
+                object.remove("click");
+                object.insert("application".to_string(), application);
+            }
             object.insert("guard".to_string(), guard);
             object.insert(
                 "unguarded_trusted_coordinate".to_string(),
@@ -1048,7 +1053,8 @@ impl OperationConverter {
         let mut edge_order = Vec::<String>::new();
         for bundle in &self.bundles {
             for operation in array_field(&bundle.data, "operations") {
-                if !is_page_change(operation) {
+                // An application effect is not a tap: it never becomes a navigation edge.
+                if !is_page_change(operation) || is_application_effect(operation) {
                     continue;
                 }
                 let edge_id = required_string(operation, "id")?;
@@ -1109,7 +1115,7 @@ impl OperationConverter {
         let mut page_operations = Vec::new();
         for bundle in &self.bundles {
             for operation in array_field(&bundle.data, "operations") {
-                if operation.get("to") != Some(&Value::Null) {
+                if operation.get("to") != Some(&Value::Null) || is_application_effect(operation) {
                     continue;
                 }
                 let verify_template = operation
@@ -1247,9 +1253,8 @@ impl OperationConverter {
                     .map(template_target_id)
                     .map(Value::String)
                     .unwrap_or(Value::Null);
-                let guard = self.operation_guard(bundle, operation)?;
-                let click = self.operation_click(bundle, operation, &guard)?;
-                primitives.push(ordered_object([
+                let (click, guard, application) = self.operation_effect(bundle, operation)?;
+                let mut primitive = ordered_map([
                     ("id", Value::String(operation_id)),
                     ("task_id", Value::String(bundle.task_id.clone())),
                     (
@@ -1292,7 +1297,13 @@ impl OperationConverter {
                             .cloned()
                             .unwrap_or_else(|| Value::Array(Vec::new())),
                     ),
-                ]));
+                ]);
+                // Click primitives keep their exact shape; only an application effect adds
+                // its field (slice #316-B3).
+                if !application.is_null() {
+                    primitive.insert("application".to_string(), application);
+                }
+                primitives.push(Value::Object(primitive));
             }
         }
         Ok(ordered_object([
@@ -1310,6 +1321,49 @@ impl OperationConverter {
             ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("primitives", Value::Array(primitives)),
         ]))
+    }
+
+    /// The canonical `(click, guard, application)` of one operation: a click operation gets
+    /// its inferred guard and canonical click with `application` null; an `application`
+    /// effect (slice #316-B3) carries no click and no guard, and refuses one that was declared.
+    fn operation_effect(
+        &self,
+        bundle: &Bundle,
+        operation: &Value,
+    ) -> CliOutcome<(Value, Value, Value)> {
+        let Some(application) = operation
+            .get("application")
+            .filter(|value| !value.is_null())
+        else {
+            let guard = self.operation_guard(bundle, operation)?;
+            let click = self.operation_click(bundle, operation, &guard)?;
+            return Ok((click, guard, Value::Null));
+        };
+        let operation_id = required_string(operation, "id")?;
+        if operation.get("click").is_some_and(|value| !value.is_null()) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' carries both click and application effects"
+            )));
+        }
+        if operation.get("guard").is_some_and(|value| !value.is_null())
+            || operation
+                .get("unguarded_trusted_coordinate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' application effect cannot carry guard metadata"
+            )));
+        }
+        if !matches!(
+            application.get("action").and_then(Value::as_str),
+            Some("launch" | "restart" | "stop")
+        ) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' application.action must be launch, restart or stop"
+            )));
+        }
+        Ok((Value::Null, Value::Null, application.clone()))
     }
 
     fn operation_click(
@@ -1661,9 +1715,44 @@ pub fn resource_ids(resources: &Value) -> CliOutcome<HashSet<String>> {
     Ok(ids)
 }
 
+/// Whether the operation declares the `application` effect (slice #316-B3) instead of a click.
+fn is_application_effect(operation: &Value) -> bool {
+    operation
+        .get("application")
+        .is_some_and(|value| !value.is_null())
+}
+
 fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<String>) {
     let task_json_path = bundle.task_json_path();
     let path = task_json_path.as_path();
+    if let Some(application) = operation
+        .get("application")
+        .filter(|value| !value.is_null())
+    {
+        let operation_id = operation.get("id").and_then(Value::as_str);
+        if operation.get("click").is_some_and(|value| !value.is_null()) {
+            errors.push(format!(
+                "{}: op {operation_id:?} carries both click and application effects",
+                path.display()
+            ));
+        }
+        let keys = application
+            .as_object()
+            .map(|object| object.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if keys != ["action"]
+            || !matches!(
+                application.get("action").and_then(Value::as_str),
+                Some("launch" | "restart" | "stop")
+            )
+        {
+            errors.push(format!(
+                "{}: op {operation_id:?} application must be {{\"action\": launch | restart | stop}}",
+                path.display()
+            ));
+        }
+        return;
+    }
     let Some(click) = operation.get("click").and_then(Value::as_object) else {
         errors.push(format!(
             "{}: op {:?} missing click object",

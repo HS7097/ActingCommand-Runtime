@@ -9,16 +9,16 @@ use crate::{
     decide_run_operation_failure, select_run_operation,
 };
 use actingcommand_contract::{
-    EffectiveOperationTiming, EffectiveTaskTiming, EffectiveTimingSource, EffectiveTimingValue,
-    InputAction, InputSamplingEvidence, InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA,
-    OcrFieldDictionary, OcrFieldReason, OcrFieldRecord, OcrFieldResult, OcrFieldType,
-    OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, PHASED_CONTROL_SCHEMA,
-    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
-    SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase, TaskPhaseEvidence,
-    TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
-    validate_task_phases,
+    ApplicationLifecycleAction, EffectiveOperationTiming, EffectiveTaskTiming,
+    EffectiveTimingSource, EffectiveTimingValue, InputAction, InputSamplingEvidence,
+    InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA, OcrFieldDictionary, OcrFieldReason,
+    OcrFieldRecord, OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration,
+    OcrFieldsReport, PHASED_CONTROL_SCHEMA, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
+    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase,
+    TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
+    TaskTimingStage, validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -1511,6 +1511,15 @@ pub enum ContainedTaskRuntimeErrorClass {
     Unknown,
 }
 
+/// Whether a runtime boundary performed an `application` effect (slice #316-B3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplicationEffectSupport {
+    /// The assigned application was driven through the runtime's application lifecycle path.
+    Performed,
+    /// The runtime has no assigned application to drive.
+    Unsupported,
+}
+
 /// Runtime boundary used by the semantic engine for device effects and durable facts.
 pub trait ContainedTaskRuntime {
     type Error;
@@ -1558,6 +1567,21 @@ pub trait ContainedTaskRuntime {
         action: InputAction,
         frame: Option<InputFrameContext>,
     ) -> Result<(), Self::Error>;
+
+    /// Slice #316-B3: launches, restarts or stops the application the instance is assigned,
+    /// through the runtime's own application lifecycle path. A runtime without that surface
+    /// (fixtures, offline runs, recovery entries) reports `Unsupported` and the interpreter
+    /// fails the task with `application_effect_requires_assigned_application`.
+    fn supports_application_effect(&self) -> bool {
+        false
+    }
+
+    fn control_application(
+        &mut self,
+        _action: ApplicationLifecycleAction,
+    ) -> Result<ApplicationEffectSupport, Self::Error> {
+        Ok(ApplicationEffectSupport::Unsupported)
+    }
 
     /// Transports the already computed results; implementations must not evaluate them again.
     fn record_page_evaluations(
@@ -1995,24 +2019,46 @@ impl PreparedContainedTask {
             },
         );
         runtime.observe_task_timing(observation_timing);
+        if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.application.is_some())
+            && self.control.execution_mode != "recognize_only"
+            && !runtime.supports_application_effect()
+        {
+            return Err(ContainedTaskError::new(
+                "application_effect_requires_assigned_application",
+            )
+            .into());
+        }
+        let initial_application = self.program.operations.first().filter(|operation| {
+            operation.from == "any"
+                && operation.application.is_some()
+                && self.control.execution_mode != "recognize_only"
+        });
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
-            self.capture_page(
-                runtime,
-                ocr_collector,
-                Some(required_page),
-                observation_timing,
-            )?
-            .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
+            Some(
+                self.capture_page(
+                    runtime,
+                    ocr_collector,
+                    Some(required_page),
+                    observation_timing,
+                )?
+                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?,
+            )
+        } else if initial_application.is_some() {
+            self.capture_page(runtime, ocr_collector, None, observation_timing)?
         } else {
-            self.capture_until_page(
+            Some(self.capture_until_page(
                 runtime,
                 ocr_collector,
                 step_timeout,
                 capture_interval,
                 observation_timing,
-            )?
+            )?)
         };
         if Instant::now() >= task_deadline {
             return Err(self
@@ -2027,7 +2073,7 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Ok(ContainedTaskOutcome {
                 outcome: TaskOutcome::Success,
-                final_page: Some(observation.page_label),
+                final_page: observation.map(|observed| observed.page_label),
                 executed_steps: 0,
                 selected_scheduling_outcome: None,
             });
@@ -2061,7 +2107,11 @@ impl PreparedContainedTask {
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         machine
-            .observe_page(Some(observation.page_label.clone()))
+            .observe_page(
+                observation
+                    .as_ref()
+                    .map(|observed| observed.page_label.clone()),
+            )
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         let mut stability_tracker = StabilityTracker::default();
         let mut recovery_timing = None;
@@ -2072,20 +2122,33 @@ impl PreparedContainedTask {
                     .task_timeout_error(TaskTimingStage::Dispatch, task_deadline, None)
                     .into());
             }
-            match machine
-                .next_directive(&candidates)
-                .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?
+            let directive = if observation.is_none()
+                && machine.completed_steps() == 0
+                && let Some(application) = initial_application
             {
+                let candidate = candidates
+                    .iter()
+                    .find(|candidate| candidate.id() == application.id)
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_missing"))?;
+                machine.initial_application_directive(candidate)
+            } else {
+                machine.next_directive(&candidates)
+            };
+            match directive.map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))? {
                 RunDirective::AwaitPage => {
-                    observation = self.capture_until_page(
+                    observation = Some(self.capture_until_page(
                         runtime,
                         ocr_collector,
                         step_timeout,
                         capture_interval,
                         observation_timing,
-                    )?;
+                    )?);
                     machine
-                        .observe_page(Some(observation.page_label.clone()))
+                        .observe_page(
+                            observation
+                                .as_ref()
+                                .map(|observed| observed.page_label.clone()),
+                        )
                         .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
                 }
                 RunDirective::ExecuteOperation {
@@ -2121,76 +2184,109 @@ impl PreparedContainedTask {
                                 phase: machine.phase_evidence(None),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
-                        let (guard, target) = match operation.guard_outcome(
-                            &self.control,
-                            &observation,
-                            &self.evaluator,
-                            runtime,
-                        ) {
-                            Ok(outcome) => outcome,
-                            Err(ContainedTaskRunError::Task(error)) => {
-                                let Some(policy) = retry_policy.as_ref() else {
-                                    return Err(error.into());
-                                };
-                                match operation.failure_decision(
-                                    policy,
-                                    attempt,
-                                    error.code(),
-                                    Some(observation.page_label.clone()),
-                                    RunFailureStage::PreExecutionGuard,
-                                )? {
-                                    RunOperationFailureDecision::RequestRecovery(trigger) => {
-                                        machine.operation_needs_recovery(trigger).map_err(
-                                            |_| {
-                                                ContainedTaskError::new(
-                                                    "contained_task_state_invalid",
-                                                )
-                                            },
-                                        )?;
-                                        break;
-                                    }
-                                    RunOperationFailureDecision::Fail(_) => {
-                                        return Err(error.into());
-                                    }
-                                    RunOperationFailureDecision::Retry { .. } => {
-                                        return Err(ContainedTaskError::new(
-                                            "contained_task_state_invalid",
-                                        )
-                                        .into());
-                                    }
+                        if let Some(effect) = operation.application {
+                            // Slice #316-B3: no guard, no coordinate, no `task.effect_intent`;
+                            // the runtime boundary records the `application.*` chain itself.
+                            if started.elapsed() >= task_timeout {
+                                return Err(self
+                                    .task_timeout_error(
+                                        TaskTimingStage::BeforeInput,
+                                        task_deadline,
+                                        None,
+                                    )
+                                    .into());
+                            }
+                            match runtime
+                                .control_application(effect.action)
+                                .map_err(ContainedTaskRunError::operation::<R>)?
+                            {
+                                ApplicationEffectSupport::Performed => {}
+                                ApplicationEffectSupport::Unsupported => {
+                                    return Err(ContainedTaskError::with_detail(
+                                        "application_effect_requires_assigned_application",
+                                        format!("operation={}", operation.id),
+                                    )
+                                    .into());
                                 }
                             }
-                            Err(error) => return Err(error),
-                        };
-                        let action_seed = runtime
-                            .action_seed(step_index, &operation_id)
-                            .map_err(ContainedTaskRunError::operation::<R>)?;
-                        let (action, sampling) = operation.click.input_action(
-                            &self.control.resolution,
-                            target.as_ref(),
-                            action_seed,
-                        )?;
-                        runtime
-                            .record(ContainedTaskTrace::EffectIntent {
-                                step_index,
-                                operation_label: operation_id.clone(),
-                                action: action.clone(),
-                                sampling,
-                                guard,
-                            })
-                            .map_err(ContainedTaskRunError::Boundary)?;
-                        if started.elapsed() >= task_timeout {
-                            return Err(self
-                                .task_timeout_error(
-                                    TaskTimingStage::BeforeInput,
-                                    task_deadline,
-                                    None,
-                                )
-                                .into());
+                        } else {
+                            let observation = observation.as_ref().ok_or_else(|| {
+                                ContainedTaskError::new("contained_task_page_unknown")
+                            })?;
+                            let (guard, target) = match operation.guard_outcome(
+                                &self.control,
+                                observation,
+                                &self.evaluator,
+                                runtime,
+                            ) {
+                                Ok(outcome) => outcome,
+                                Err(ContainedTaskRunError::Task(error)) => {
+                                    let Some(policy) = retry_policy.as_ref() else {
+                                        return Err(error.into());
+                                    };
+                                    match operation.failure_decision(
+                                        policy,
+                                        attempt,
+                                        error.code(),
+                                        Some(observation.page_label.clone()),
+                                        RunFailureStage::PreExecutionGuard,
+                                    )? {
+                                        RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                            machine.operation_needs_recovery(trigger).map_err(
+                                                |_| {
+                                                    ContainedTaskError::new(
+                                                        "contained_task_state_invalid",
+                                                    )
+                                                },
+                                            )?;
+                                            break;
+                                        }
+                                        RunOperationFailureDecision::Fail(_) => {
+                                            return Err(error.into());
+                                        }
+                                        RunOperationFailureDecision::Retry { .. } => {
+                                            return Err(ContainedTaskError::new(
+                                                "contained_task_state_invalid",
+                                            )
+                                            .into());
+                                        }
+                                    }
+                                }
+                                Err(error) => return Err(error),
+                            };
+                            let action_seed = runtime
+                                .action_seed(step_index, &operation_id)
+                                .map_err(ContainedTaskRunError::operation::<R>)?;
+                            let click = operation.click.as_ref().ok_or_else(|| {
+                                ContainedTaskError::new("contained_task_operation_invalid")
+                            })?;
+                            let (action, sampling) = click.input_action(
+                                &self.control.resolution,
+                                target.as_ref(),
+                                action_seed,
+                            )?;
+                            runtime
+                                .record(ContainedTaskTrace::EffectIntent {
+                                    step_index,
+                                    operation_label: operation_id.clone(),
+                                    action: action.clone(),
+                                    sampling,
+                                    guard,
+                                })
+                                .map_err(ContainedTaskRunError::Boundary)?;
+                            if started.elapsed() >= task_timeout {
+                                return Err(self
+                                    .task_timeout_error(
+                                        TaskTimingStage::BeforeInput,
+                                        task_deadline,
+                                        None,
+                                    )
+                                    .into());
+                            }
+                            runtime
+                                .input(action, observation.input_context.clone())
+                                .map_err(ContainedTaskRunError::operation::<R>)?;
                         }
-                        runtime
-                            .input(action, observation.input_context.clone())
-                            .map_err(ContainedTaskRunError::operation::<R>)?;
                         let boundary =
                             actingcommand_contract::TaskTimingBoundary::EffectCompletedRecord;
                         let identity = runtime.task_boundary_identity(boundary);
@@ -2228,26 +2324,30 @@ impl PreparedContainedTask {
                         waited?;
                         let destination_pages = operation.destination_pages()?;
                         if destination_pages.is_empty() {
-                            observation = self.capture_until_page(
+                            observation = Some(self.capture_until_page(
                                 runtime,
                                 ocr_collector,
                                 step_timeout,
                                 capture_interval,
                                 observation_timing,
-                            )?;
+                            )?);
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
                                 &mut machine,
                                 &mut stability_tracker,
                                 step_index,
                                 &operation_id,
-                                &observation,
+                                observation.as_ref().ok_or_else(|| {
+                                    ContainedTaskError::new("contained_task_page_unknown")
+                                })?,
                             )? {
                                 return self.finish_stability_termination(
                                     runtime,
                                     ocr_collector,
                                     &machine,
-                                    &observation,
+                                    observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new("contained_task_page_unknown")
+                                    })?,
                                     reason,
                                 );
                             }
@@ -2269,20 +2369,24 @@ impl PreparedContainedTask {
                         let (failed_observation, hit_error_page, timing_failure) = match resolution
                         {
                             PostconditionResolution::Reached(reached) => {
-                                observation = reached;
+                                observation = Some(reached);
                                 if let Some(reason) = self.complete_successful_step(
                                     runtime,
                                     &mut machine,
                                     &mut stability_tracker,
                                     step_index,
                                     &operation_id,
-                                    &observation,
+                                    observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new("contained_task_page_unknown")
+                                    })?,
                                 )? {
                                     return self.finish_stability_termination(
                                         runtime,
                                         ocr_collector,
                                         &machine,
-                                        &observation,
+                                        observation.as_ref().ok_or_else(|| {
+                                            ContainedTaskError::new("contained_task_page_unknown")
+                                        })?,
                                         reason,
                                     );
                                 }
@@ -2361,20 +2465,28 @@ impl PreparedContainedTask {
                                     observation_timing,
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
-                                        observation = reached;
+                                        observation = Some(reached);
                                         if let Some(reason) = self.complete_successful_step(
                                             runtime,
                                             &mut machine,
                                             &mut stability_tracker,
                                             step_index,
                                             &operation_id,
-                                            &observation,
+                                            observation.as_ref().ok_or_else(|| {
+                                                ContainedTaskError::new(
+                                                    "contained_task_page_unknown",
+                                                )
+                                            })?,
                                         )? {
                                             return self.finish_stability_termination(
                                                 runtime,
                                                 ocr_collector,
                                                 &machine,
-                                                &observation,
+                                                observation.as_ref().ok_or_else(|| {
+                                                    ContainedTaskError::new(
+                                                        "contained_task_page_unknown",
+                                                    )
+                                                })?,
                                                 reason,
                                             );
                                         }
@@ -2443,7 +2555,7 @@ impl PreparedContainedTask {
                                             &operation_id,
                                             Some(&fresh),
                                         )?;
-                                        observation = fresh;
+                                        observation = Some(fresh);
                                     }
                                     PostconditionResolution::Failed {
                                         observation: None,
@@ -4564,6 +4676,15 @@ impl TaskRecovery {
     }
 }
 
+/// The `application` effect of an operation (slice #316-B3): launch, restart or stop the
+/// application the instance is assigned. No coordinate and no package name: the pointer is the
+/// instance's `application_id`, resolved by the runtime boundary.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskApplicationEffect {
+    action: ApplicationLifecycleAction,
+}
+
 #[derive(Debug, Deserialize)]
 struct TaskOperation {
     id: String,
@@ -4572,7 +4693,11 @@ struct TaskOperation {
     to: Option<PageDeclaration>,
     #[serde(default)]
     expect_after: Option<TaskOperationExpectation>,
-    click: TaskClick,
+    /// Exactly one of `click` and `application` carries the effect.
+    #[serde(default)]
+    click: Option<TaskClick>,
+    #[serde(default)]
+    application: Option<TaskApplicationEffect>,
     #[serde(default)]
     on_error: Option<String>,
     #[serde(default)]
@@ -4657,15 +4782,21 @@ impl TaskOperation {
         {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
         }
-        match (&self.guard, self.unguarded_trusted_coordinate) {
-            (Some(_), true) | (None, false) => {
-                return Err(ContainedTaskError::new("contained_task_guard_missing"));
+        match (&self.click, &self.application) {
+            (Some(click), None) => {
+                match (&self.guard, self.unguarded_trusted_coordinate) {
+                    (Some(_), true) | (None, false) => {
+                        return Err(ContainedTaskError::new("contained_task_guard_missing"));
+                    }
+                    (Some(guard), false) => guard.validate(self, control)?,
+                    (None, true) => {}
+                }
+                click.validate(&control.resolution, self.guard.as_ref(), schema_version)
             }
-            (Some(guard), false) => guard.validate(self, control)?,
-            (None, true) => {}
+            // An application effect has no coordinate: nothing to guard, nothing to trust.
+            (None, Some(_)) if self.guard.is_none() && !self.unguarded_trusted_coordinate => Ok(()),
+            _ => Err(ContainedTaskError::new("contained_task_operation_invalid")),
         }
-        self.click
-            .validate(&control.resolution, self.guard.as_ref(), schema_version)
     }
 
     fn retry_policy(

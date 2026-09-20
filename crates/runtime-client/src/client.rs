@@ -58,9 +58,10 @@ const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Receipt wait for `ControlEmulatorInstance`: the host bounds the provider `control` command
 /// at 60 s and the readiness wait at 120 s for start, restart and stop alike
 /// (`MUMU_MANAGER_STATE_WAIT_START` = `MUMU_MANAGER_STATE_WAIT_STOP` = 120 s); the last 1 s
-/// poll may straddle the deadline by its own 10 s bound, so the worst case is
-/// 60 + 120 + 10 = 190 s; 200 s covers it plus the IO margin.
-const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(200);
+/// poll may straddle the deadline by its own 10 s bound, and after `start` / `restart` the
+/// host waits up to 30 s more for the ADB baseline (#316-B3), so the worst case is
+/// 60 + 120 + 10 + 30 = 220 s; 230 s covers it plus the IO margin.
+const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(230);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);

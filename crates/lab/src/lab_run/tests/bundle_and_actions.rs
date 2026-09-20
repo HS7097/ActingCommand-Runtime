@@ -228,7 +228,7 @@ fn offset_click_rejects_color_probe_guard() {
         verify_template: None,
         color_probe: Some("target/button".to_string()),
     });
-    operation.click = OperationClick {
+    operation.click = Some(OperationClick {
         kind: "offset".to_string(),
         x: None,
         y: None,
@@ -245,7 +245,7 @@ fn offset_click_rejects_color_probe_guard() {
         }),
         target_id: Some("target/button".to_string()),
         extra: BTreeMap::new(),
-    };
+    });
 
     let err = operation
         .validate(&control)
@@ -259,7 +259,7 @@ fn target_click_rejects_color_probe_guard() {
     let mut operation = test_operation(Some("terminal"), None);
     operation.unguarded_trusted_coordinate = false;
     operation.guard = Some(test_color_guard());
-    operation.click = OperationClick {
+    operation.click = Some(OperationClick {
         kind: "target".to_string(),
         x: None,
         y: None,
@@ -271,7 +271,7 @@ fn target_click_rejects_color_probe_guard() {
         offset: None,
         target_id: Some("target/button".to_string()),
         extra: BTreeMap::new(),
-    };
+    });
 
     let err = operation
         .validate(&control)

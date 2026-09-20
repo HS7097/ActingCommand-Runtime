@@ -34,7 +34,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -42,7 +42,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 one entry per group; the real object carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":false,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":false},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":false,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":false},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 - `config_path` is the path as given; `state_root` is the configured value,
@@ -56,7 +56,17 @@ one entry per group; the real object carries every key listed below):
   `instance_name`, which echoes that key (the other key is `null`) and carries
   no ADB fields: the target is completed by one `MuMuManager` discovery inside
   host startup (see `contracts/provider-startup.md`), which this command never
-  runs. Nothing is probed and no serial is parsed.
+  runs. Nothing is probed and no serial is parsed. `startup_package` is the
+  instance's `startup_package { package, expected_sha256 }` declaration as
+  assembled (slice #316-B3, `contracts/application-lifecycle.md`): the locator
+  with a relative path resolved against the configuration file's directory and
+  the bare hex digest, or `null` when none is declared. The file is neither
+  opened nor hashed here; admission happens when the package runs. A
+  `startup_package` on a fixture instance fails assembly with
+  `instance_config_invalid`; a non-absolute locator, a digest that is not 64
+  lowercase hex digits or a request the contract refuses fail with
+  `startup_package_path_invalid`, `startup_package_digest_invalid`,
+  `startup_package_invalid`.
 - `policy_configured` states whether a `policy` section was assembled.
 - `config_manifest` is the in-memory runtime configuration manifest exactly
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
@@ -78,7 +88,8 @@ one entry per group; the real object carries every key listed below):
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
     `frame_retention_enabled`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `mumu_root` (only when
-    set), `instances_count`, `instances_deferred_count`, the
+    set), `instances_count`, `instances_deferred_count`,
+    `instances_startup_package_count` (instances declaring a startup package), the
     `capacity_thresholds.*` bytes and, when the section is present, the
     `agent_dispatcher.*` budget; plus the library defaults the daemon applies
     without a file field: `scheduler.*`, `policy_cadence.*`, `io_timeout_ms`,

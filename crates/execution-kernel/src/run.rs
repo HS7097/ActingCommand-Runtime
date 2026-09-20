@@ -572,6 +572,37 @@ impl RunStateMachine {
         })
     }
 
+    /// Dispatches the first application effect after a real, unrecognized entry frame.
+    /// The interpreter supplies only its declared `from:any` application candidate.
+    pub(crate) fn initial_application_directive(
+        &mut self,
+        operation: &RunOperationCandidate,
+    ) -> Result<RunDirective, RunDecisionError> {
+        if self.current_page.is_some()
+            || self.terminal.is_some()
+            || self.executing_operation.is_some()
+            || self.completed_steps != 0
+            || self.config.max_steps == 0
+            || operation.from_page() != "any"
+            || self.config.phases.as_ref().is_some_and(|phases| {
+                phases
+                    .first()
+                    .is_none_or(|phase| !phase.operations.contains(&operation.id))
+            })
+        {
+            return Err(RunDecisionError::invalid_transition(
+                "initial application dispatch is not available",
+            ));
+        }
+        self.completed_steps = 1;
+        self.executing_operation = Some(operation.id.clone());
+        Ok(RunDirective::ExecuteOperation {
+            operation_id: operation.id.clone(),
+            current_page: "<unrecognized>".to_string(),
+            step_index: 0,
+        })
+    }
+
     pub fn operation_succeeded(
         &mut self,
         operation_id: &str,

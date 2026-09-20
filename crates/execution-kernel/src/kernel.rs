@@ -342,6 +342,39 @@ impl ExecutionKernel {
         self.finish_session_operation(&session, result)
     }
 
+    /// One ADB baseline probe (slice #316-B3), driven on the provider directly like
+    /// `control_instance`, outside any session; the device error comes back untyped.
+    pub fn probe_adb_baseline(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<()> {
+        self.provider.probe_adb_baseline(instance_alias)
+    }
+
+    pub fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> ExecutionKernelResult<()> {
+        self.provider
+            .probe_adb_baseline_until(instance_alias, deadline, stopped)
+            .map_err(|error| {
+                ExecutionKernelError::device("application_adb_baseline_failed", &error)
+            })
+    }
+
+    /// Read-only: what the provider reports in the foreground of the instance next to its
+    /// assigned application (slice #316-B3). Drives the provider directly like
+    /// `control_instance`, outside any session; the device error comes back untyped so the
+    /// host can classify it as an ADB failure itself.
+    pub fn observe_foreground_application(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<crate::ForegroundApplicationObservation> {
+        self.provider.observe_foreground_application(instance_alias)
+    }
+
     /// Drives the provider's instance control surface directly: no session is opened, touched
     /// or closed here. The host closes the instance's device session first and does not
     /// reopen it afterwards (it opens lazily on the next lease).

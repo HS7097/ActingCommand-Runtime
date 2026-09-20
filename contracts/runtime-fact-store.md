@@ -21,8 +21,8 @@ slices.
 
 - `scope` — `runtime` (the whole process) or `instance { instance_id }`.
 - `key` — at most 128 bytes, no whitespace or control characters, and inside
-  exactly one of eight families: `device.`, `backend.`, `task.`, `host.`,
-  `lease.`, `config.`, `provider.`, `eligible.`.
+  exactly one of nine families: `device.`, `backend.`, `task.`, `host.`,
+  `lease.`, `config.`, `provider.`, `eligible.`, `application.`.
 - `value` — the existing `FactValue` variants; a `record_list` value holds at
   most 256 rows of at most 64 fields.
 - `observed_at_unix_ms` — when the producing module observed the value.
@@ -32,7 +32,8 @@ slices.
   invalidated, and consumers decide what an expired value means.
 
 `RuntimeFactInvalidation` records a drop with a reason (`runtime_takeover`,
-`device_closed`, `expired`, `operator`); its `validate` checks the key.
+`device_closed`, `adb_unreachable`, `expired`, `operator`); its `validate` checks
+the key.
 `RuntimeFactSnapshot` is the sealed image of every live record bound to one
 ledger position and carries schema version `actingcommand.runtime-fact.v1`.
 Its `validate` rejects a foreign schema version
@@ -134,7 +135,8 @@ holds.
 When the owner guard reports a takeover (a new owner epoch over an existing
 state root), device-bound facts of the previous epoch are stale until the
 post-connect self-check writes them again. After replay, every instance-scoped
-record whose key starts with `device.` or `backend.` is dropped, ledger first:
+record whose key starts with `device.`, `backend.` or `application.` is
+dropped, ledger first:
 one `runtime.fact_invalidated` with reason `runtime_takeover` per record
 (`at_unix_ms` = the host clock now, instance link from the record's scope),
 then `invalidate_instance` per distinct instance with the same time. The
@@ -178,12 +180,24 @@ usage error; the command takes no `--instance`.
 
 ## Producers
 
-Two producers write the store today; both go through the append-first rule
+Three producers write the store today; all go through the append-first rule
 above with source `runtime`.
 
 - `device.connected` (slice #316-B) — instance scope, `boolean`: the running
   state emulator instance control observed after `status` / `start` / `stop` /
   `restart`. After `stop` the key is also invalidated with `device_closed`.
+  Slice #316-B3 adds a second invalidation path: an ADB failure inside the
+  foreground gate (below) invalidates the key with `adb_unreachable`, even while
+  a Nemu session still delivers frames, because ADB is the only health anchor.
+- `application.foreground` (slice #316-B3) — instance scope, `string`: the
+  package name Android reported as the resumed activity, read through ADB
+  (`dumpsys activity activities`) by the foreground gate before every pointer
+  input (`contracts/application-lifecycle.md`). The gate records the fact only
+  when the observed value differs from the stored one, so a run that stays in
+  one application appends one record; two observations inside one millisecond
+  keep the first. Invalidated with `device_closed` after emulator `stop`, with
+  `adb_unreachable` on an ADB failure, and with `runtime_takeover` like every
+  device-bound family. Never written for a fixture instance.
 - `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module

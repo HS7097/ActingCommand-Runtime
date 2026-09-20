@@ -20,9 +20,9 @@ use actingcommand_policy::{
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
     ExecutionBackendProvider, ExecutionBackendRegistration, ExecutionBackendRegistry,
-    PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
-    ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance, RuntimeHostConfig,
-    VisionFfiProvider, VisionModelIdentity,
+    ForegroundApplicationObservation, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
+    ProcedureBinding, ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance,
+    RuntimeHostConfig, VisionFfiProvider, VisionModelIdentity,
 };
 use actingcommand_vision_ffi::{
     NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
@@ -150,8 +150,48 @@ struct InstanceConfig {
     shutdown_timeout_ms: Option<u64>,
     #[serde(default)]
     tap_hold_ms: Option<u64>,
+    /// Slice #316-B3: the contained task the host runs by itself after a successful
+    /// `emulator start` / `restart` of this instance; absent means nothing is pulled.
+    #[serde(default)]
+    startup_package: Option<StartupPackageConfigFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
+}
+
+/// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
+/// locator (relative paths resolve against the configuration file's directory) and the
+/// bare lowercase hex digest. The file is neither opened nor hashed at assembly.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartupPackageConfigFile {
+    package: PathBuf,
+    expected_sha256: String,
+}
+
+impl StartupPackageConfigFile {
+    fn request(self, source_root: &Path) -> Result<ContainedTaskRequest, &'static str> {
+        let path = if self.package.is_absolute() {
+            self.package
+        } else {
+            source_root.join(self.package)
+        };
+        if !path.is_absolute() {
+            return Err("startup_package_path_invalid");
+        }
+        let digest = actingcommand_contract::PackageRef::from(self.expected_sha256);
+        if !matches!(
+            digest,
+            actingcommand_contract::PackageRef::LegacyZipSha256(_)
+        ) || digest.validate().is_err()
+        {
+            return Err("startup_package_digest_invalid");
+        }
+        ContainedTaskRequest::new(path.to_string_lossy().into_owned(), digest)
+            .and_then(|request| {
+                request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+            })
+            .map_err(|_| "startup_package_invalid")
+    }
 }
 
 #[derive(Deserialize)]
@@ -336,8 +376,20 @@ impl ActingdConfigFile {
         {
             return Err("mumu_root_invalid");
         }
-        let registrations = self
-            .instances
+        let mut instances = self.instances;
+        let mut startup_packages = BTreeMap::new();
+        for instance in &mut instances {
+            if let Some(startup_package) = instance.startup_package.take() {
+                if instance.fixture_backend.is_some() {
+                    return Err("instance_config_invalid");
+                }
+                startup_packages.insert(
+                    instance.alias.clone(),
+                    startup_package.request(&self.source_root)?,
+                );
+            }
+        }
+        let registrations = instances
             .into_iter()
             .map(InstanceConfig::backend)
             .collect::<Result<Vec<_>, _>>()?;
@@ -374,6 +426,8 @@ impl ActingdConfigFile {
                 ))
                 .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());
+        let instances_startup_package_count = startup_packages.len();
+        host = host.with_startup_packages(startup_packages);
         let manifest = manifest::build(&manifest::ManifestInputs {
             bind_host,
             bind_port: self.bind_port,
@@ -388,6 +442,7 @@ impl ActingdConfigFile {
             vision_provider_configured: registry.pending_vision.is_some(),
             instances_count: registry.modes.len(),
             instances_deferred_count: registry.deferred.len(),
+            instances_startup_package_count,
             policy_cadence: &policy_cadence,
             io_timeout: host.io_timeout(),
             maximum_frame_bytes: host.maximum_frame_bytes(),
@@ -885,6 +940,7 @@ impl InstanceConfig {
 
     fn fixture_backend(self) -> Result<ConfiguredInstanceBackend, &'static str> {
         if self.application_id.is_some()
+            || self.startup_package.is_some()
             || self.nemu_app_index.is_some()
             || self.instance_index.is_some()
             || self.instance_name.is_some()
@@ -1207,6 +1263,70 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                 .as_ref()
                 .ok_or_else(|| DeviceError::fatal("fixture registry is unavailable"))?
                 .control_application(instance_alias, action),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
+
+    fn probe_adb_baseline(&self, instance_alias: &str) -> DeviceResult<()> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .probe_adb_baseline(instance_alias),
+            // A fixture has no ADB baseline to wait for.
+            Some(ScheduledExecutionMode::FixtureSimulation) => Ok(()),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
+
+    fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: std::time::Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> DeviceResult<()> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .probe_adb_baseline_until(instance_alias, deadline, stopped),
+            Some(ScheduledExecutionMode::FixtureSimulation) => {
+                if stopped() || std::time::Instant::now() >= deadline {
+                    Err(DeviceError::fatal(
+                        "ADB baseline stopped or deadline expired",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
+
+    fn observe_foreground_application(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<ForegroundApplicationObservation> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .observe_foreground_application(instance_alias),
+            // A fixture has no ADB baseline; the host never asks for one.
+            Some(ScheduledExecutionMode::FixtureSimulation) => self
+                .fixtures
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("fixture registry is unavailable"))?
+                .observe_foreground_application(instance_alias),
             None => Err(DeviceError::fatal(
                 "execution backend instance is not registered",
             )),
