@@ -5,7 +5,10 @@
 mod evidence;
 mod migration;
 mod planning;
-pub use evidence::{GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
+pub use evidence::{
+    GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
+    LedgerArtifactSelection, ResolvedLedgerArtifact,
+};
 pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;
 mod read_only;
@@ -127,6 +130,7 @@ impl LedgerAppendSpan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerWriterCommandKind {
+    ResolveArtifact,
     RetentionCandidates,
     AdmitArtifactEviction,
     FinishArtifactEviction,
@@ -659,6 +663,11 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 }
 
 enum WriterCommand {
+    ResolveArtifact {
+        selection: Box<LedgerArtifactSelection>,
+        deadline: Instant,
+        response: SyncSender<GlobalLedgerResult<ResolvedLedgerArtifact>>,
+    },
     RetentionCandidates {
         after: Option<actingcommand_contract::ArtifactId>,
         response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
@@ -1276,9 +1285,9 @@ impl GlobalLedger {
     }
 
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "query_events")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "query_events"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1299,9 +1308,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "query_event_page")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "query_event_page"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1327,8 +1336,8 @@ impl GlobalLedger {
         profile: ProjectionProfile,
         request: RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "project_ledger_view_page")
+        query.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), "project_ledger_view_page")
         })?;
         request.validate().map_err(|error| {
             GlobalLedgerError::request(error.code(), "project_ledger_view_page")
@@ -1424,9 +1433,9 @@ impl GlobalLedger {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "project_events")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "project_events"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1452,9 +1461,9 @@ impl GlobalLedger {
         through_sequence: u64,
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
-        query.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_event_query_bounds", "project_event_page")
-        })?;
+        query
+            .validate()
+            .map_err(|error| GlobalLedgerError::request(error.code(), "project_event_page"))?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1548,6 +1557,7 @@ fn writer_loop<S: LedgerStore>(
     while let Ok(command) = receiver.recv() {
         let started = Instant::now();
         let kind = match &command {
+            WriterCommand::ResolveArtifact { .. } => LedgerWriterCommandKind::ResolveArtifact,
             WriterCommand::RetentionCandidates { .. } => {
                 LedgerWriterCommandKind::RetentionCandidates
             }
@@ -1590,6 +1600,21 @@ fn writer_loop<S: LedgerStore>(
         command_observation.processing.begin(started);
         let command_succeeded;
         match command {
+            WriterCommand::ResolveArtifact {
+                selection,
+                deadline,
+                response,
+            } => {
+                let result = store.resolve_artifact(&selection, deadline);
+                command_succeeded = result.is_ok();
+                if result.as_ref().is_err_and(GlobalLedgerError::terminal) {
+                    let error = result.expect_err("terminal artifact resolution must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
+                command_observation.replied(response.send(result).is_ok());
+            }
             WriterCommand::RetentionCandidates { after, response } => {
                 command_observation
                     .replied(response.send(Ok(store.retention_candidates(after))).is_ok());

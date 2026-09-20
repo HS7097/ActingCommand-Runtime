@@ -2,8 +2,16 @@
 
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
-use actingcommand_contract::{ApplicationLifecycleAction, InstanceId, MonitorObservation};
-use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, EmulatorInstanceAction, InstanceId, MonitorObservation,
+};
+use actingcommand_device::{
+    CaptureBackend, DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, Frame,
+    InputBackend,
+};
+pub use actingcommand_device::{
+    EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+};
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
 use actingcommand_recognition_pack::{
     NnProviderLabel, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
@@ -19,6 +27,7 @@ use actingcommand_vision_ffi::{
 };
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const MAX_MODEL_REF_BYTES: usize = 4_096;
@@ -566,11 +575,153 @@ fn invalid_region() -> VisionProviderError {
     )
 }
 
+/// Facts of a MuMu instance the endpoint was discovered from (`MuMuManager info -v all`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredInstanceBinding {
+    instance_index: u16,
+    instance_name: String,
+    provider_version: String,
+    mumu_manager_path: PathBuf,
+}
+
+impl DiscoveredInstanceBinding {
+    pub fn new(
+        instance_index: u16,
+        instance_name: impl Into<String>,
+        provider_version: impl Into<String>,
+        mumu_manager_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            instance_index,
+            instance_name: instance_name.into(),
+            provider_version: provider_version.into(),
+            mumu_manager_path: mumu_manager_path.into(),
+        }
+    }
+
+    pub const fn instance_index(&self) -> u16 {
+        self.instance_index
+    }
+
+    pub fn instance_name(&self) -> &str {
+        &self.instance_name
+    }
+
+    pub fn provider_version(&self) -> &str {
+        &self.provider_version
+    }
+
+    /// The `MuMuManager.exe` the instance was discovered through; the emulator control
+    /// operation dispatches `control` against exactly this executable.
+    pub fn mumu_manager_path(&self) -> &Path {
+        &self.mumu_manager_path
+    }
+}
+
+/// The structured ADB target a registered instance was configured with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedAdbEndpoint {
+    host: String,
+    port: u16,
+    serial_configured: bool,
+    discovered: Option<DiscoveredInstanceBinding>,
+}
+
+impl ResolvedAdbEndpoint {
+    pub fn new(host: impl Into<String>, port: u16, serial_configured: bool) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            serial_configured,
+            discovered: None,
+        }
+    }
+
+    pub fn with_discovered_binding(mut self, discovered: DiscoveredInstanceBinding) -> Self {
+        self.discovered = Some(discovered);
+        self
+    }
+
+    /// Present only when the endpoint was bound through instance discovery.
+    pub const fn discovered_binding(&self) -> Option<&DiscoveredInstanceBinding> {
+        self.discovered.as_ref()
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub const fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// True when the registration carried an explicit serial instead of HOST:PORT.
+    pub const fn serial_configured(&self) -> bool {
+        self.serial_configured
+    }
+}
+
+/// A discovery binding whose ADB port is not known yet: discovery reported the instance
+/// stopped. Emulator control resolves the port when it starts the instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingAdbEndpoint {
+    host: String,
+    discovered: DiscoveredInstanceBinding,
+}
+
+impl PendingAdbEndpoint {
+    pub fn new(host: impl Into<String>, discovered: DiscoveredInstanceBinding) -> Self {
+        Self {
+            host: host.into(),
+            discovered,
+        }
+    }
+
+    /// The host the instance is bound with once its port is reported.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub const fn discovered_binding(&self) -> &DiscoveredInstanceBinding {
+        &self.discovered
+    }
+}
+
+/// The ADB endpoint state of a registered instance: bound to a HOST:PORT target, or pending
+/// until emulator control starts the discovered instance and reports its port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedInstanceEndpoint {
+    Bound(ResolvedAdbEndpoint),
+    Pending(PendingAdbEndpoint),
+}
+
+impl ResolvedInstanceEndpoint {
+    pub const fn bound(&self) -> Option<&ResolvedAdbEndpoint> {
+        match self {
+            Self::Bound(endpoint) => Some(endpoint),
+            Self::Pending(_) => None,
+        }
+    }
+
+    pub const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending(_))
+    }
+
+    /// Present for both states of a discovery-bound instance, absent for an explicit one.
+    pub const fn discovered_binding(&self) -> Option<&DiscoveredInstanceBinding> {
+        match self {
+            Self::Bound(endpoint) => endpoint.discovered_binding(),
+            Self::Pending(pending) => Some(pending.discovered_binding()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ResolvedExecutionInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
     provenance: ExecutionBackendProvenance,
+    adb_endpoint: Option<ResolvedInstanceEndpoint>,
     configuration: Option<actingcommand_contract::EffectiveDeviceConfiguration>,
     capabilities: Option<actingcommand_contract::EmulatorCapabilityProfile>,
 }
@@ -591,6 +742,7 @@ impl ResolvedExecutionInstance {
             instance_id,
             audit_endpoint: audit_endpoint.into(),
             provenance: ExecutionBackendProvenance::PhysicalDevice,
+            adb_endpoint: None,
             configuration: None,
             capabilities: None,
         }
@@ -601,6 +753,7 @@ impl ResolvedExecutionInstance {
             instance_id,
             audit_endpoint: "fixture-simulation".to_owned(),
             provenance: ExecutionBackendProvenance::FixtureSimulation,
+            adb_endpoint: None,
             configuration: None,
             capabilities: None,
         }
@@ -616,6 +769,20 @@ impl ResolvedExecutionInstance {
 
     pub const fn provenance(&self) -> ExecutionBackendProvenance {
         self.provenance
+    }
+
+    pub fn with_adb_endpoint(mut self, adb_endpoint: ResolvedAdbEndpoint) -> Self {
+        self.adb_endpoint = Some(ResolvedInstanceEndpoint::Bound(adb_endpoint));
+        self
+    }
+
+    pub fn with_pending_endpoint(mut self, pending: PendingAdbEndpoint) -> Self {
+        self.adb_endpoint = Some(ResolvedInstanceEndpoint::Pending(pending));
+        self
+    }
+
+    pub const fn adb_endpoint(&self) -> Option<&ResolvedInstanceEndpoint> {
+        self.adb_endpoint.as_ref()
     }
 
     pub fn with_configuration(
@@ -675,11 +842,64 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>>;
 
+    fn open_nemu_session(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<Option<actingcommand_device::NemuSessionBackends>> {
+        Ok(None)
+    }
+
     fn control_application(
         &self,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()>;
+
+    /// Starts, stops or restarts the emulator instance itself through its provider. Opens no
+    /// device session. Providers without an instance-control surface keep this typed refusal.
+    fn control_instance(
+        &self,
+        _instance_alias: &str,
+        _action: EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        Err(EmulatorControlFailure::without_output(
+            DeviceError::fatal("emulator control unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "emulator_control.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "control_instance",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+            0,
+        ))
+    }
+
+    /// Completes or reverts the discovery binding of an instance after emulator control:
+    /// `Some(port)` binds the discovered host with the port the started instance reported
+    /// (`start` / `restart`), `None` returns the entry to pending (`stop`). Opens no device
+    /// session; the caller holds the instance's admission guard and has closed its session.
+    /// Providers without an instance-control surface keep this typed refusal.
+    fn rebind_discovered_endpoint(
+        &self,
+        _instance_alias: &str,
+        _adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        Err(
+            DeviceError::fatal("emulator control unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "emulator_control.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "rebind_discovered_endpoint",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        )
+    }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
         None

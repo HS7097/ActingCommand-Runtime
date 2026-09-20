@@ -18,6 +18,35 @@ pub(crate) use adb_recovery::adb_recovery_record;
 
 pub type ExecutionKernelResult<T> = Result<T, ExecutionKernelError>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionStdioObservation {
+    pub facts: Arc<actingcommand_contract::VendorStdioFacts>,
+    pub recorded_event: Arc<OnceLock<EventId>>,
+}
+
+impl ExecutionStdioObservation {
+    pub(crate) fn from_device(value: &actingcommand_device::DeviceStdioObservation) -> Self {
+        Self {
+            facts: Arc::new(vendor_stdio::convert(&value.facts)),
+            recorded_event: value.occurrence.recorded_event::<EventId>(),
+        }
+    }
+}
+
+pub(crate) fn merge_stdio_observations(
+    target: &mut Vec<ExecutionStdioObservation>,
+    incoming: &[ExecutionStdioObservation],
+) {
+    for observation in incoming {
+        if !target
+            .iter()
+            .any(|current| Arc::ptr_eq(&current.recorded_event, &observation.recorded_event))
+        {
+            target.push(observation.clone());
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecutionLifecycleCause {
     pub cause: LifecycleCauseDraft,
@@ -37,6 +66,7 @@ pub struct ExecutionKernelError {
 
 #[derive(Clone, Default)]
 struct ExecutionFailureContext {
+    vendor_stdio: Vec<ExecutionStdioObservation>,
     adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     recorded_event: Arc<OnceLock<EventId>>,
     native_detail: Option<Box<LifecycleNativeDetail>>,
@@ -59,6 +89,18 @@ impl PartialEq for ExecutionKernelError {
 impl Eq for ExecutionKernelError {}
 
 impl ExecutionKernelError {
+    pub fn vendor_stdio(&self) -> &[ExecutionStdioObservation] {
+        &self.lifecycle.vendor_stdio
+    }
+
+    pub(crate) fn with_stdio_observations(
+        mut self,
+        observations: &[ExecutionStdioObservation],
+    ) -> Self {
+        merge_stdio_observations(&mut self.lifecycle.vendor_stdio, observations);
+        self
+    }
+
     pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
         self.lifecycle.adb_recovery.as_deref()
     }
@@ -146,6 +188,11 @@ impl ExecutionKernelError {
             diagnostic_detail: device_diagnostic_detail(error),
             cleanup_cause: None,
             lifecycle: Box::new(ExecutionFailureContext {
+                vendor_stdio: error
+                    .vendor_stdio()
+                    .iter()
+                    .map(ExecutionStdioObservation::from_device)
+                    .collect(),
                 adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
                 causes,
@@ -157,6 +204,10 @@ impl ExecutionKernelError {
     }
 
     pub(crate) fn merge(mut primary: Self, mut secondary: Self) -> Self {
+        merge_stdio_observations(
+            &mut primary.lifecycle.vendor_stdio,
+            &secondary.lifecycle.vendor_stdio,
+        );
         let mut added_resource_cause = false;
         for cause in std::mem::take(&mut secondary.lifecycle.causes) {
             if primary.lifecycle.causes.iter().any(|current| {

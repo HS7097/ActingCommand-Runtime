@@ -276,6 +276,19 @@ impl HostShared {
                         .before_frame
                         .as_ref()
                         .and_then(|frame| frame.observation.artifact().frame_id().copied()),
+                    input_frame: record.prepared.before_frame.as_ref().and_then(|frame| {
+                        frame
+                            .observation
+                            .artifact()
+                            .frame_id()
+                            .copied()
+                            .map(|frame_id| actingcommand_contract::InputFrameReference {
+                                frame_id,
+                                width: frame.observation.width(),
+                                height: frame.observation.height(),
+                            })
+                    }),
+                    ..RuntimeInputContext::default()
                 },
             ) {
                 Ok((success, _)) => (success.terminal, None),

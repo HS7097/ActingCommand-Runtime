@@ -102,7 +102,7 @@ impl MonitorRegistry {
         events: &RuntimeEvents,
     ) -> RuntimeHostResult<Self> {
         let allowed_aliases = allowed_aliases.into_iter().collect::<BTreeSet<_>>();
-        if allowed_aliases.is_empty() || allowed_aliases.len() > MAX_RUNTIME_OBSERVED_INSTANCES {
+        if allowed_aliases.len() > MAX_RUNTIME_OBSERVED_INSTANCES {
             return Err(monitor_error(
                 "invalid_monitor_instance_registry",
                 "open_monitor_registry",

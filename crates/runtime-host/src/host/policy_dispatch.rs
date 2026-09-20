@@ -1053,7 +1053,7 @@ impl HostShared {
         &self,
         intent: &DispatchIntent,
         result: RuntimeHostResult<PolicyDispatchAdmission>,
-        rejection: Option<(PersistedEvent, EventLinksDraft)>,
+        rejection: Option<(Box<PersistedEvent>, EventLinksDraft)>,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
         match result {
             Err(error) if !error.is_fatal() || rejection.is_some() => {

@@ -57,6 +57,7 @@ pub struct RuntimeClientError {
     projection: Option<RuntimeErrorProjection>,
     related: Option<Box<RuntimeClientError>>,
     committed_receipt: Option<Box<RuntimeReceipt>>,
+    received_receipt: Option<Box<RuntimeReceipt>>,
     receipt_header_io: Option<Box<RuntimeReceiptHeaderIo>>,
 }
 
@@ -92,6 +93,14 @@ impl RuntimeClientError {
 
     pub fn committed_receipt(&self) -> Option<&RuntimeReceipt> {
         self.committed_receipt.as_deref()
+    }
+
+    /// A validated reply actually received from this Runtime, including refusals without a terminal.
+    /// Receiving a reply alone does not establish Ledger commitment or execution.
+    pub fn received_receipt(&self) -> Option<&RuntimeReceipt> {
+        self.received_receipt
+            .as_deref()
+            .or_else(|| self.committed_receipt())
     }
 
     pub fn receipt_header_io(&self) -> Option<&RuntimeReceiptHeaderIo> {
@@ -138,6 +147,7 @@ impl RuntimeClientError {
             projection: None,
             related: None,
             committed_receipt: None,
+            received_receipt: None,
             receipt_header_io: None,
         }
     }
@@ -152,6 +162,7 @@ impl RuntimeClientError {
             projection: Some(projection),
             related: None,
             committed_receipt: None,
+            received_receipt: None,
             receipt_header_io: None,
         }
     }
@@ -168,6 +179,7 @@ impl RuntimeClientError {
             projection: None,
             related: Some(Box::new(related)),
             committed_receipt: Some(Box::new(receipt)),
+            received_receipt: None,
             receipt_header_io: None,
         }
     }
@@ -182,6 +194,11 @@ impl RuntimeClientError {
 
     pub(crate) fn with_committed_receipt(mut self, receipt: RuntimeReceipt) -> Self {
         self.committed_receipt = Some(Box::new(receipt));
+        self
+    }
+
+    pub(crate) fn with_received_receipt(mut self, receipt: RuntimeReceipt) -> Self {
+        self.received_receipt = Some(Box::new(receipt));
         self
     }
 }
@@ -200,6 +217,7 @@ impl fmt::Debug for RuntimeClientError {
             .field("related", &self.related)
             .field("receipt_header_io", &self.receipt_header_io)
             .field("committed_receipt", &self.committed_receipt.is_some())
+            .field("received_receipt", &self.received_receipt().is_some())
             .finish()
     }
 }

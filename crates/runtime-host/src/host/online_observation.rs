@@ -115,6 +115,12 @@ impl HostShared {
                 RuntimeReceiptState::Denied,
             )
         })?;
+        self.require_bound_endpoint(
+            &resolved,
+            self.events
+                .request_links(request, Some(resolved.instance_id()), None, None),
+            EventAction::RuntimeReadonlyObserve,
+        )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let completed =
             self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;

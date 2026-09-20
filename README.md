@@ -1,175 +1,175 @@
+<p align="right">🌐 <b>English</b> · <a href="./README.zh-CN.md">简体中文</a></p>
+
 <div align="center">
 
-<img src="docs/assets/readme/actingcommand-icon.png" width="112" alt="ActingCommand 图标">
+<img src="docs/assets/readme/actingcommand-icon.png" width="112" alt="ActingCommand icon">
 
-**首席执行官 兼 董事长** — HS7097<br/>
-**首席技术官 兼 首席架构师** — GPT‑6 Astra<br/>
-**董事会秘书 兼 首席审计官** — Fable 5.1<br/>
-**首席技术工程师** — GPT‑6 Astra<br/>
-**正在面试** — DeepSeek
+**Chief Executive Officer & Chairman** — HS7097<br/>
+**Chief Technology Officer & Chief Architect** — GPT‑6 Astra<br/>
+**Board Secretary & Chief Audit Officer** — Fable 5.1<br/>
+**Principal Engineer** — GPT‑6 Astra<br/>
+**Interviewing** — DeepSeek
 
 </div>
 
-**🌐 语言 / Language:** 简体中文 · [English](./README.en.md)
+**⚠️ This program is still iterating rapidly; expect it to be complete within 2–5 weeks.**
 
 # ActingCommand Runtime
 
-ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上执行多目标自动化。内核不含任何具体目标的身份：合约、默认值、基准与夹具都由守卫测试扫描，保证其保持中立（`tools/actinglab-architecture/tests/workspace_guards.rs:161`、`:212`）。全部目标知识以声明式资源包的形式存在于独立的资源仓，运行时只接受带哈希校验的密封包（`actingctl task-run` 要求 `--package`，并要求 `--expected-sha256` 或 `--package-ref` 二者之一）。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。所有边界失败关闭：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级。
+ActingCommand Runtime is a resident Rust runtime for running multi-target automation on emulators. The kernel carries no identity of any concrete target: contracts, defaults, benchmarks and fixtures are all scanned by guard tests that keep them neutral (`tools/actinglab-architecture/tests/workspace_guards.rs:161`, `:212`). All target knowledge lives as declarative resource packs in separate resource repositories, and the runtime accepts only sealed, hash-verified packs (`actingctl task-run` requires `--package`, plus either `--expected-sha256` or `--package-ref`). The GlobalLedger is the single source of truth, and only runtime-host holds a writable handle to it; a fact must be sanitized by the contract layer into `actingcommand.event.v2` before it may enter the ledger. Device access always goes through a lease granted by the scheduler, and every write revalidates the fence. Every boundary fails closed: invalid configuration, a non-loopback bind, stale evidence and incomplete exports all end in an explicit error or a nonzero exit rather than a silent downgrade.
 
-[CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / test） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · 许可 `AGPL-3.0-only` · [协作看板](https://github.com/HS7097/ActingCommand-Workflow) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI) · [历史归档](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
+[CI main status](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain) (Windows: fmt / clippy `-D warnings` / test) · [Exact-SHA Windows build](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · License `AGPL-3.0-only` · [Coordination board](https://github.com/HS7097/ActingCommand-Workflow) · [UI console](https://github.com/HS7097/ActingCommand-UI) · [Legacy archive](https://github.com/HS7097/ActingCommand-Legacy-Runtime)
 
-## 架构总览
+## Architecture overview
 
-![ActingCommand Runtime 分层与归属总览](docs/assets/readme/architecture-overview.zh.png)
+![ActingCommand Runtime layering and ownership overview](docs/assets/readme/architecture-overview.en.png)
 
-`actingcommand-contract` 是整个工作区的汇点：17 个包依赖它，它不依赖任何工作区包，只用 serde、serde_json、sha2。它定义协议、设备与引擎边界的词汇，不含目标逻辑。
+`actingcommand-contract` is where the whole workspace converges: 17 packages depend on it, it depends on no workspace package, and it uses only serde, serde_json and sha2. It defines the vocabulary of the protocol, device and engine boundaries, and contains no target logic.
 
-`actingcommand-runtime-client` 是唯一的客户端类型化 IPC 路径。客户端从不构造也不拥有生产设备后端，关闭一个 UI 或 CLI 客户端不会停止运行时。
+`actingcommand-runtime-client` is the only typed IPC path available to clients. A client never constructs and never owns a production device backend, and closing a UI or CLI client does not stop the runtime.
 
-`actingcommand-runtime-host` 是常驻进程的所有者，出度 13，是图中最宽的节点。它独占本地 IPC、租约门控的 DeviceProxy 与生命周期控制，并且在正常依赖（不计 dev-dependencies）中是 `actingcommand-scheduler`、`actingcommand-runtime-state`、`actingcommand-host-metrics` 的唯一消费者。
+`actingcommand-runtime-host` owns the resident process. With an out-degree of 13 it is the widest node in the graph. It exclusively holds local IPC, the lease-gated DeviceProxy and lifecycle control, and, among normal (non-dev) dependencies, it is the sole consumer of `actingcommand-scheduler`, `actingcommand-runtime-state` and `actingcommand-host-metrics`.
 
-`actingcommand-scheduler` 拥有按实例的写入准入、租约生命周期与围栏权限，其依赖只有合约一个。`actingcommand-policy` 是纯调度策略合约，由目录编译器与求值器共享。`actingcommand-execution-kernel` 持有守护进程侧的执行会话与纯粹的任务/探测决策规划，只有在调度器准入并完成围栏之后才被调用；客户端永远拿不到后端对象。
+`actingcommand-scheduler` owns per-instance write admission, lease lifetime and fencing authority, and its only dependency is the contract. `actingcommand-policy` is a pure scheduling-policy contract shared by the catalog compiler and the evaluator. `actingcommand-execution-kernel` holds the daemon-side execution session and pure task/probe decision planning; it is invoked only after the scheduler has admitted the work and fencing has completed, and a client never obtains a backend object.
 
-设备层 `actingcommand-device` 通过显式后端链选择输入，使单后端失败可见且有界。识别栈严格分层且无环：`recognition` ← `recognition-pack` ← `page-detector` ← `pack-containment`。`actingcommand-vision-ffi` 是 OCR/NN 引擎的安全边界，使调用方无法用模拟识别悄悄替换生产结果。
+The device layer `actingcommand-device` selects input through an explicit backend chain, which keeps a single backend failure visible and bounded. The recognition stack is strictly layered and acyclic: `recognition` ← `recognition-pack` ← `page-detector` ← `pack-containment`. `actingcommand-vision-ffi` is the safety boundary for the OCR/NN engines, making it impossible for a caller to quietly substitute a simulated recognition for a production result.
 
-`actingcommand-ledger` 提供全局事件账本的可恢复单写者存储；`actingcommand-artifact-store` 拥有工件字节、哈希、保留元数据、帧缓冲与证据归档，但从不拥有账本写者、调度器、运行时生命周期或设备后端。`actingcommand-runtime-database` 拥有 SQLite 连接、文件与完整性密钥的生命周期，业务模式由各自的类型化所有者提供；`actingcommand-runtime-state` 是权威运行时状态与不可变发布代次的所有者。
+`actingcommand-ledger` provides recoverable single-writer storage for the global event ledger. `actingcommand-artifact-store` owns artifact bytes, hashes, retention metadata, frame buffers and evidence archives, but never owns the ledger writer, the scheduler, the runtime lifecycle or a device backend. `actingcommand-runtime-database` owns the lifetime of the SQLite connection, file and integrity key, while the business schemas are supplied by their own typed owners; `actingcommand-runtime-state` owns the authoritative runtime state and the immutable release generations.
 
-创作侧是可移除的：`crates/lab` 只有 `apps/actinglab` 一个消费者，`crates/resource-tooling` 只能从 lab 与 actinglab 到达，两条规则都有具名守卫测试。`tools/actinglab-architecture` 是仅限开发的包，从源码推导架构守卫，不链接进任何运行时二进制。
+The authoring side is removable: `crates/lab` has exactly one consumer, `apps/actinglab`, and `crates/resource-tooling` is reachable only from lab and actinglab. Both rules have named guard tests. `tools/actinglab-architecture` is a development-only package that derives the architecture guards from source and is linked into no runtime binary.
 
-## 一次请求怎么走
+## How one request travels
 
-![一次运行时请求的完整生命周期](docs/assets/readme/request-lifecycle.zh.png)
+![The complete lifecycle of one runtime request](docs/assets/readme/request-lifecycle.en.png)
 
-1. **组装**（`runtime-client`）：调用方从 47 个类型化 `RuntimeOperation` 变体中选一个，客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v3` 请求。
-2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。
-3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
-4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
-5. **校验**（`actingcommand-contract`）：`RuntimeRequest::validate()` 依次拒绝错误 schema、零时间戳、不在允许表内的 actor/source 组合，再施加按族的来源门：关机必须 Cli/Cli，Lab 与调试必须 Lab/Lab，治理必须 User/Ui，事实与规划必须 Agent/Adapter。失败产出 Denied + InvalidRequest 回执。
-6. **授权**（`runtime-host`）：治理类操作还要求该连接此前通过 `AuthenticateGovernance`，凭据以常数时间比较 SHA-256 摘要，成功后按 ConnectionId 记录。
-7. **分派**（`runtime-host`）：`process_validated` 是从操作族到处理器的唯一穷尽匹配；带租约的族先断言目标别名/ID 是物理实例。
-8. **容量准入**（`runtime-host`）：授权新业务前先查容量投影。该投影读取进程内缓存的最后一条已提交容量样本（缓存项带有指回账本事件的引用），遇到无样本、owner epoch 变化、超出新鲜度窗口、卷绑定变化、卷不可读或硬阈值压力时拒绝；拒绝会追加一条 Scheduler `denied` 事件并随回执返回。请求侧的四个业务入口受此保护（同一投影另有非请求路径的调用点）：授予租约、采集观测、运行受限任务、运行已调度的受限任务。
-9. **租约**（`scheduler`）：在按实例的准入锁下两阶段准备并提交租约；受限任务的 TTL 由请求自身的期限推导，任务期限再被夹到「租约到期减心跳预留」。
-10. **逐次围栏**（`scheduler`）：每一次触碰设备的调用都重新校验令牌——owner epoch、冷却、租约位置、实例/租约/持有者身份、拥有连接、到期时间、令牌整体相等，以及 resource_close_only 状态。
-11. **执行**（`execution-kernel`）：内核在守护进程拥有的会话下运行受限任务，按名称选择采集与输入后端，按固定 model_ref 与 model_sha256 调用视觉提供者；每次采集、输入与追踪都经 `ContainedTaskRuntime` 回调宿主，由宿主而非内核记录事实。
-12. **记录并回执**（`runtime-host` + `ledger`）：宿主取 fact_write_gate，起草并脱敏事件，交给账本的单写者线程追加，同步事实存储，再喂给性能监视。结果成为一份带状态（Admitted / Observed / Queued / Denied / Completed / Failed / Cancelled）的 `RuntimeReceipt`，按 request_id 缓存后成帧回传。拒绝也是回执，从不以沉默代替。
+1. **Assemble** (`runtime-client`): the caller picks one of 47 typed `RuntimeOperation` variants; the client mints a request_id and a correlation_id and writes the actor, source and submission time, forming an `actingcommand.runtime.request.v3` request.
+2. **Discover** (`runtime-client`): the client reads `<state_root>/runtime-info.json` and requires its host to be a loopback address and pid/port/start time to be nonzero; after connecting over TCP it sends Health first, and if the owner epoch no longer matches the one seen at discovery the session is refused with `runtime_owner_epoch_changed`.
+3. **Frame** (`runtime-client`): a request goes out as a 4-byte big-endian length prefix plus JSON, with a 1 MiB default cap on both ends, and the receipt read deadline is loaded according to the operation category.
+4. **Accept** (`runtime-host`): the accept loop assigns each connection an increasing ConnectionId and serves it on its own named thread; the connection is wrapped in catch_unwind and, on exit, releases that connection's leases under either Disconnect or HostShutdown.
+5. **Validate** (`actingcommand-contract`): `RuntimeRequest::validate()` rejects, in order, a wrong schema, a zero timestamp and an actor/source combination outside the allow table, then applies the per-family origin gates: shutdown must be Cli/Cli, Lab and debug must be Lab/Lab, governance must be User/Ui, and facts and planning must be Agent/Adapter. A failure produces a Denied + InvalidRequest receipt.
+6. **Authorize** (`runtime-host`): a governance operation additionally requires that the connection has previously passed `AuthenticateGovernance`; the credential is compared as a SHA-256 digest in constant time and, on success, recorded per ConnectionId.
+7. **Dispatch** (`runtime-host`): `process_validated` is the single exhaustive match from operation family to handler; a lease-bearing family first asserts that the target alias/ID is a physical instance.
+8. **Capacity admission** (`runtime-host`): before authorizing new work the host consults the capacity projection. The projection reads the last committed capacity sample from an in-process cache (each entry carries a reference back to the ledger event), and refuses on a missing sample, an owner epoch change, a sample outside the freshness window, a volume binding change, an unreadable volume or hard-threshold pressure; a refusal appends a Scheduler `denied` event and comes back with the receipt. Four request-side work entry points are protected this way (the same projection also has call sites on non-request paths): granting a lease, collecting an observation, running a contained task and running a scheduled contained task.
+9. **Lease** (`scheduler`): the lease is prepared and committed in two phases under the per-instance admission lock; the TTL of a contained task is derived from the deadline of the request itself, and the task deadline is then clamped to lease expiry minus the heartbeat reserve.
+10. **Fence every call** (`scheduler`): every single call that touches the device revalidates the token — owner epoch, cooldown, lease position, instance/lease/holder identity, owning connection, expiry, whole-token equality and the resource_close_only state.
+11. **Execute** (`execution-kernel`): the kernel runs the contained task under a daemon-owned session, selects the capture and input backends by name and calls the vision provider with a fixed model_ref and model_sha256; every capture, input and trace calls back into the host through `ContainedTaskRuntime`, so the host records the facts, not the kernel.
+12. **Record and receipt** (`runtime-host` + `ledger`): the host takes the fact_write_gate, drafts and sanitizes the event, hands it to the ledger's single writer thread to append, synchronizes the fact store and then feeds the performance monitor. The result becomes a `RuntimeReceipt` carrying a status (Admitted / Observed / Queued / Denied / Completed / Failed / Cancelled), cached by request_id and framed back. A refusal is a receipt too; silence is never used in its place.
 
-## 证据面
+## The evidence plane
 
-![证据面：单写者账本与只读读者](docs/assets/readme/evidence-plane.zh.png)
+![The evidence plane: a single-writer ledger and read-only readers](docs/assets/readme/evidence-plane.en.png)
 
-**GlobalLedger** 是唯一的事实来源，runtime-host 是唯一写者：可写句柄只在 `RuntimeHost::start_with_provider` 中打开，并作为私有字段持有。生产者提交 `EventDraft`，必须经 `sanitize()` 得到不可变更、不可反序列化的 `SanitizedEventDraft`（`actingcommand.event.v2`）才能进入账本；字段敏感度与脱敏策略由合约而非生产者决定。序列号只由账本分配，从 1 开始并跨重开继续。重复 EventId 是不致命的 `duplicate_event_id`，不消耗序列号；而追加失败不等于「事件不存在」——写者在致命错误上终止并通知订阅者。今天主机写入的介质是 SQLite：schema `actingcommand.sqlite-ledger.v1`，表与 `runtime-state.sqlite` 同库。全新状态根由 `initialize_empty` 直接写入 `ready` 标记，`open_writer` 拒绝任何非 `ready` 标记，因此新装的实例一开始就跑在 SQLite 上。段存储 `<state_root>/ledger/segments/segment-NNNNNN.jsonl`（默认 16 MiB 轮转，先写整行并 fsync 再发布到内存索引）是旧的落盘形态，由离线 `ledger-maintenance` 路径冻结并导入；`candidate` 或未认证的标记不会启用生产写者，切换在一次 Immediate 事务内完成。只读一侧不同：`open_evidence` 按状态根里实际存在的材料选择后端，并在快照里报告后端是 segment 还是 sqlite。
+**GlobalLedger** is the single source of truth and runtime-host is its only writer: the writable handle is opened only in `RuntimeHost::start_with_provider` and is held as a private field. A producer submits an `EventDraft`, which must pass `sanitize()` into an immutable, non-deserializable `SanitizedEventDraft` (`actingcommand.event.v2`) before it may enter the ledger; field sensitivity and the redaction policy are decided by the contract, not by the producer. Sequence numbers are assigned by the ledger alone, start at 1 and continue across a reopen. A duplicate EventId is the nonfatal `duplicate_event_id` and consumes no sequence number, whereas a failed append does not mean "the event does not exist" — the writer terminates on a fatal error and notifies its subscribers. The medium the host writes to today is SQLite: schema `actingcommand.sqlite-ledger.v1`, with its tables in the same database as `runtime-state.sqlite`. A brand-new state root has the `ready` marker written directly by `initialize_empty`, and `open_writer` refuses any marker that is not `ready`, so a freshly installed instance runs on SQLite from the start. The segment storage `<state_root>/ledger/segments/segment-NNNNNN.jsonl` (16 MiB rotation by default, whole lines written and fsynced before being published to the in-memory index) is the legacy on-disk form, frozen and imported by the offline `ledger-maintenance` path; a `candidate` or unauthenticated marker never enables the production writer, and the cutover completes inside a single Immediate transaction. The read-only side differs: `open_evidence` picks its backend from the material actually present in the state root and reports in the snapshot whether that backend is segment or sqlite.
 
-**ArtifactStore** 拥有工件字节与哈希。对象键由内容推导而非调用方指定：`artifacts/{shard}/{artifact_id}.{ext}`。发布顺序是「不覆盖的原子重命名 → ArtifactCreated → 校验 → ArtifactVerified」；发布即保留边界——两个必需事件任一失败都会追加一条失败事件并返回致命错误，但已发布的文件不会被回收，只有未发布的临时文件会被清理。流式工件在封口重算长度与 SHA-256 之前不发布任何内容。
+**ArtifactStore** owns artifact bytes and hashes. The object key is derived from content rather than specified by the caller: `artifacts/{shard}/{artifact_id}.{ext}`. The publication order is no-overwrite atomic rename → ArtifactCreated → verification → ArtifactVerified; publication is the retention boundary — a failure of either required event appends a failure event and returns a fatal error, but an already published file is not reclaimed and only unpublished temporary files are cleaned up. A streaming artifact publishes nothing until sealing has recomputed its length and SHA-256.
 
-**runtime-state / runtime-database** 是权威可变状态与不可变发布代次的所有者，落在 `runtime-state.sqlite`，完整性密钥在 `runtime-state.key`。宿主启动时恰好探测五种状态根材料来判断全新与既有存储：`runtime-state.sqlite`、`runtime-state.key`、`ledger`、`release-blobs`、`artifacts`。
+**runtime-state / runtime-database** own the authoritative mutable state and the immutable release generations, landing in `runtime-state.sqlite`, with the integrity key in `runtime-state.key`. At startup the host probes exactly five state-root materials to tell a fresh store from an existing one: `runtime-state.sqlite`, `runtime-state.key`, `ledger`, `release-blobs` and `artifacts`.
 
-**InstanceFactStore** 是由账本重建的事实投影，对 runtime-host 私有，启动时重放全部事件恢复，之后从 last_sequence+1 增量同步；它还能按精确账本位置重放历史，位置为 0 或超出最新序列号会被拒绝。
+**InstanceFactStore** is a fact projection rebuilt from the ledger and private to runtime-host; it recovers at startup by replaying every event and afterwards synchronizes incrementally from last_sequence+1. It can also replay history at an exact ledger position; a position of 0 or one beyond the latest sequence number is refused.
 
-**离线读取**由 `actingledger` 提供，它只开只读证据快照，从不写入。子命令为：`open`、`events`、`chain --req <request-id>`、`tail`、`repairs`、`export`（可加 `--performance` / `--stability` / `--task-evidence`）、`signatures`、`replay`。除裸 `export` 输出人类可读的多行文本报告外，其余报告都是单行 JSON；证据存在缺口时先打印报告再以 `signature_replay_incomplete`、`stability_export_incomplete` 或 `task_evidence_export_incomplete` 非零退出。
+**Offline reads** are served by `actingledger`, which opens only a read-only evidence snapshot and never writes. Its subcommands are `open`, `events`, `chain --req <request-id>`, `tail`, `repairs`, `export` (optionally with `--performance` / `--stability` / `--task-evidence`), `signatures` and `replay`. Except for bare `export`, which prints a human-readable multi-line text report, every report is single-line JSON; when evidence has gaps the report is printed first and the tool then exits nonzero with `signature_replay_incomplete`, `stability_export_incomplete` or `task_evidence_export_incomplete`.
 
-## 不变式与守卫
+## Invariants and guards
 
-`docs/architecture/runtime-completion-invariants.md` 列出九条完成不变式，原文为英文，要点为：确定性重放；重放没有第二次副作用；循环有预算；时钟跳变强制完全重算；崩溃恢复重建同一待定集合；可执行工作不会饥饿；非法输入大声失败；未知不被静默当作假；每次派发都有完整理由链。该文档同时明确划定证据范围：使用中立数据、假后端、加速时钟、真实子进程与持久化本地状态，**不**主张真机、目标客户端、UI 或 48 小时墙钟验证。
+`docs/architecture/runtime-completion-invariants.md` lists nine completion invariants; in short: deterministic replay; replay has no second side effect; loops are budgeted; a clock jump forces a full recomputation; crash recovery rebuilds the same pending set; eligible work does not starve; invalid input fails loudly; unknown is not silently treated as false; every dispatch has a complete reason chain. The same document also draws its evidence scope explicitly: it uses neutral data, fake backends, an accelerated clock, real subprocesses and persistent local state, and does **not** claim real-device, target-client, UI or 48-hour wall-clock validation.
 
-守卫套件位于 `tools/actinglab-architecture/tests/workspace_guards.rs`，共 79 个 `#[test]`，6062 行。具名守卫包括 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral`、`r2f_product_and_authoring_paths_have_no_builtin_game_identity`（中立性扫描）、`workspace_packages_do_not_depend_on_apps`、`contract_dependencies_stay_within_budget`、`actingcommand_contract_has_no_dependency_path_to_actingcommand_ledger`、`all_non_lab_packages_remain_lab_free_with_all_features`、`production_packages_cannot_reach_resource_tooling`、`dependency_metadata_requests_all_features`、`feature_gated_forbidden_dependency_paths_are_detected`。
+The guard suite lives in `tools/actinglab-architecture/tests/workspace_guards.rs`: 79 `#[test]` functions across 6062 lines. The named guards include `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral`, `r2f_product_and_authoring_paths_have_no_builtin_game_identity` (the neutrality scans), `workspace_packages_do_not_depend_on_apps`, `contract_dependencies_stay_within_budget`, `actingcommand_contract_has_no_dependency_path_to_actingcommand_ledger`, `all_non_lab_packages_remain_lab_free_with_all_features`, `production_packages_cannot_reach_resource_tooling`, `dependency_metadata_requests_all_features` and `feature_gated_forbidden_dependency_paths_are_detected`.
 
-三个棘轮文件在仓库根的 `ratchet/`：`actinglab_commands.json`（schema `actingcommand.command-inventory.v1`，47 个顶层分派臂 / 131 条命令 / 8 项流水线豁免）、`main_rs_lines.txt`（`418`）、`ledger_forensics_main_rs_lines.txt`（`8`）。守卫测试 `command_inventory_matches_checked_in_snapshot`、`main_rs_line_ratchet_matches_checked_in_baseline` 与 `forensic_leaf_dependency_boundary_is_narrow_and_production_free` 分别读取它们。
+Three ratchet files sit in `ratchet/` at the repository root: `actinglab_commands.json` (schema `actingcommand.command-inventory.v1`, 47 top-level dispatch arms / 131 commands / 8 pipeline exemptions), `main_rs_lines.txt` (`418`) and `ledger_forensics_main_rs_lines.txt` (`8`). The guard tests `command_inventory_matches_checked_in_snapshot`, `main_rs_line_ratchet_matches_checked_in_baseline` and `forensic_leaf_dependency_boundary_is_narrow_and_production_free` read them respectively.
 
-CI 共三个工作流：`ci.yml` 在 windows-latest 上跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --keep-going -- -D warnings`、`cargo test --workspace --no-fail-fast`；`commit-identity-guard.yml` 在 ubuntu-latest 上要求推送或 PR 范围内每个提交的 author **与** committer 邮箱都落在一份八项精确白名单内（HS7097 / HS7097Agt / HS7097ViW 三个账号各两种 noreply 形式、一个注册邮箱地址，以及 GitHub 网页端提交者 `noreply@github.com`），否则失败；`windows-remote-build.yml` 解析并复核一个 40 位小写 SHA，随后 `cargo build --locked --release --target x86_64-pc-windows-msvc`，产出两份带 `BUILD-MANIFEST.json` 的构件。
+There are three CI workflows in total. `ci.yml` runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --keep-going -- -D warnings` and `cargo test --workspace --no-fail-fast` on windows-latest. `commit-identity-guard.yml` runs on ubuntu-latest and requires the author **and** committer email of every commit in the pushed or PR range to fall inside an exact eight-entry allowlist (two noreply forms for each of the three accounts HS7097 / HS7097Agt / HS7097ViW, one registered mailbox address, and the GitHub web committer `noreply@github.com`), failing otherwise. `windows-remote-build.yml` parses and re-checks a 40-character lowercase SHA and then runs `cargo build --locked --release --target x86_64-pc-windows-msvc`, producing two artifacts, each with a `BUILD-MANIFEST.json`.
 
-## Workspace 成员
+## Workspace members
 
-工作区声明 31 个成员，resolver `3`，工作区声明 edition 2024（`benchmarks/rust` 自行钉为 2021），全部 `publish = false`。
+The workspace declares 30 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
-### apps（6）
+### apps (6)
 
-| 路径 | 包 | 产物 | 职责 |
+| Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
-| apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产 CLI |
-| apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
-| apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧 CLI，47 个顶层分派臂、131 条命令 |
-| apps/device-test | actingcommand-device-test | bin `actingcommand-device-test` | 设备后端探测与离线 dry-run 规划、页面/识别求值 |
-| apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
-| apps/vision-provider-check | actingcommand-vision-provider-check | bin | 校验视觉提供者工件清单、产出工件锁与导出审计 |
+| apps/actingctl | actingcommand-actingctl | bin `actingctl` | Lean production CLI for correlation-scoped runtime flows |
+| apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | Lean process adapter for the resident runtime |
+| apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 47 top-level dispatch arms, 131 commands |
+| apps/device-test | actingcommand-device-test | bin `actingcommand-device-test` | Device backend probing, offline dry-run planning, page/recognition evaluation |
+| apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
+| apps/vision-provider-check | actingcommand-vision-provider-check | bin | Verifies vision provider artifact manifests, emits artifact locks and export audits |
 
-### crates（21）
+### crates (21)
 
-| 路径 | 包 | 职责 |
+| Path | Package | Responsibility |
 | --- | --- | --- |
-| crates/actingcommand-contract | actingcommand-contract | 协议、设备与引擎边界的合约定义，不含目标逻辑 |
-| crates/artifact-store | actingcommand-artifact-store | 工件字节、哈希、保留元数据、帧缓冲与证据归档 |
-| crates/device | actingcommand-device | 设备层原语；输入经显式后端链选择 |
-| crates/execution-kernel | actingcommand-execution-kernel | 守护进程拥有的执行会话与纯任务/探测决策规划 |
-| crates/host-metrics | actingcommand-host-metrics | 平台性能计数器的安全边界（仅 cfg(windows) 依赖 windows-sys） |
-| crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
-| crates/ledger | actingcommand-ledger | 全局运行时事件账本的可恢复单写者存储 |
-| crates/ledger-forensics | actingcommand-ledger-forensics | 基于 GlobalLedger 与已验证证据归档的只读取证 |
-| crates/onnx-provider-support | actingcommand-onnx-provider-support | 提供者侧 ORT 生命周期：幂等初始化、可取消看门狗、会话缓存 |
-| crates/pack-containment | actingcommand-pack-containment | 加载与校验密封资源包，含投影与识别元数据校验 |
-| crates/page-detector | actingcommand-page-detector | 以识别结果求值声明式页面集合 |
-| crates/policy | actingcommand-policy | 目录编译器与求值器共享的纯调度策略合约 |
-| crates/recognition | actingcommand-recognition | 底层图像与模板匹配原语；无工作区依赖 |
-| crates/recognition-pack | actingcommand-recognition-pack | 解析声明式识别包并把目标分派给视觉提供者 |
-| crates/resource-tooling | actingcommand-resource-tooling | 确定性资源编译与包校验；无设备/调度器/运行时权限 |
-| crates/runtime-client | actingcommand-runtime-client | 类型化本地 IPC 客户端；不拥有生产设备后端 |
-| crates/runtime-database | actingcommand-runtime-database | 运行时自有的 SQLite 连接、文件与完整性密钥生命周期 |
-| crates/runtime-host | actingcommand-runtime-host | 常驻运行时归属、本地 IPC、租约门控 DeviceProxy 与生命周期 |
-| crates/runtime-state | actingcommand-runtime-state | SQLite 支撑的权威运行时状态与不可变发布代次 |
-| crates/scheduler | actingcommand-scheduler | 按实例的写入准入、租约生命周期与围栏权限 |
-| crates/vision-ffi | actingcommand-vision-ffi | OCR/NN 引擎的安全 FFI 边界 |
+| crates/actingcommand-contract | actingcommand-contract | Contract definitions for the protocol, device and engine boundaries; no target logic |
+| crates/artifact-store | actingcommand-artifact-store | Artifact bytes, hashes, retention metadata, frame buffers and evidence archives |
+| crates/device | actingcommand-device | Device-layer primitives; input selected through an explicit backend chain |
+| crates/execution-kernel | actingcommand-execution-kernel | Daemon-owned execution sessions and pure task/probe decision planning |
+| crates/host-metrics | actingcommand-host-metrics | Safe boundary for platform performance counters (windows-sys only under cfg(windows)) |
+| crates/lab | actingcommand-lab | Optional authoring and debugging adapter layer; production still builds and runs without it |
+| crates/ledger | actingcommand-ledger | Recoverable single-writer storage for the global runtime event ledger |
+| crates/ledger-forensics | actingcommand-ledger-forensics | Read-only forensics over the GlobalLedger and verified evidence archives |
+| crates/onnx-provider-support | actingcommand-onnx-provider-support | Provider-side ORT lifetime: idempotent init, cancellable watchdog, session cache |
+| crates/pack-containment | actingcommand-pack-containment | Loads and verifies sealed resource packs, including projection and recognition metadata checks |
+| crates/page-detector | actingcommand-page-detector | Evaluates declarative page sets against recognition results |
+| crates/policy | actingcommand-policy | Pure scheduling-policy contract shared by the catalog compiler and the evaluator |
+| crates/recognition | actingcommand-recognition | Low-level image and template matching primitives; no workspace dependency |
+| crates/recognition-pack | actingcommand-recognition-pack | Parses declarative recognition packs and dispatches targets to vision providers |
+| crates/resource-tooling | actingcommand-resource-tooling | Deterministic resource compilation and pack validation; no device/scheduler/runtime authority |
+| crates/runtime-client | actingcommand-runtime-client | Typed local IPC client; owns no production device backend |
+| crates/runtime-database | actingcommand-runtime-database | Runtime-owned lifetime of the SQLite connection, file and integrity key |
+| crates/runtime-host | actingcommand-runtime-host | Resident runtime ownership, local IPC, lease-gated DeviceProxy and lifecycle |
+| crates/runtime-state | actingcommand-runtime-state | SQLite-backed authoritative runtime state and immutable release generations |
+| crates/scheduler | actingcommand-scheduler | Per-instance write admission, lease lifetime and fencing authority |
+| crates/vision-ffi | actingcommand-vision-ffi | Safe FFI boundary for OCR/NN engines |
 
-### providers（2）
+### providers (2)
 
-| 路径 | 包 | 产物 | 职责 |
+| Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
-| providers/onnxruntime-json | actingcommand-onnxruntime-json-provider | cdylib + rlib | ONNXRuntime 支撑的 NN JSON ABI 提供者，导出 `ac_onnxruntime_classify_json` |
-| providers/ppocr-onnx-json | actingcommand-ppocr-onnx-json-provider | cdylib + rlib | ONNXRuntime 支撑的 PPOCR ROI 识别器，导出 `ac_fastdeploy_ppocr_read_text_json`；不打包模型与运行时 DLL |
+| providers/onnxruntime-json | actingcommand-onnxruntime-json-provider | cdylib + rlib | ONNXRuntime-backed NN JSON ABI provider, exports `ac_onnxruntime_classify_json` |
+| providers/ppocr-onnx-json | actingcommand-ppocr-onnx-json-provider | cdylib + rlib | ONNXRuntime-backed PPOCR ROI recognizer, exports `ac_fastdeploy_ppocr_read_text_json`; ships no models or runtime DLLs |
 
-### tools（1）与 benchmarks（1）
+### tools (1) and benchmarks (1)
 
-| 路径 | 包 | 产物 | 职责 |
+| Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
-| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib + bin `actinglab-command-inventory` | 从源码推导的架构守卫；仅限开发，不链接进运行时二进制 |
-| benchmarks/rust | actingcommand-runtime-bench | bin | JSON 解析与本地 TCP 环回基准；无工作区依赖，edition 2021 |
+| tools/actinglab-architecture | actingcommand-actinglab-architecture | lib | Source-derived architecture guards; development only, linked into no runtime binary |
 
-## 设备与识别
+## Device and recognition
 
-采集后端按名称存在：`fixture_simulation`、`adb_screencap`、`adb_screencap_encode`、`adb_screencap_raw_gzip`、`droidcast_raw`、`nemu_ipc`，可选值为 `auto`、`auto-fastest`、`adb`、`droidcast_raw`、`nemu_ipc`。输入后端为 `maatouch`、`minitouch`、`adb_shell_input`，可选值为 `auto`、`auto-fastest`、`maatouch`、`minitouch`、`adb_shell_input`。Nemu IPC 采集后端在 crate 内实现并带独立工作线程。厂商 stdio 以有界、显式关闭的会话捕获，并报告资源静默状态。
+Capture backends exist by name: `fixture_simulation`, `adb_screencap`, `adb_screencap_encode`, `adb_screencap_raw_gzip`, `droidcast_raw`, `nemu_ipc`, with selectable values `auto`, `auto-fastest`, `adb`, `droidcast_raw` and `nemu_ipc`. The input backends are `maatouch`, `minitouch` and `adb_shell_input`, with selectable values `auto`, `auto-fastest`, `maatouch`, `minitouch` and `adb_shell_input`. The Nemu IPC capture backend is implemented inside the crate and carries its own worker thread. Vendor stdio is captured in bounded, explicitly closed sessions that report a resource-quiescence state.
 
-识别目标分五类：Template、Color、ClickOnly、Ocr、Nn。模板匹配是 CPU 图像匹配，带 5 秒显式超时与粗匹配/精修两段，超时失败会报告发生在哪一段。生产 OCR 与 NN 只能经 `vision-ffi` 边界到达两个独立 cdylib 提供者，宿主侧适配器强制提供者身份：`model_ref` 必须是不含 `/`、`\` 或 `:` 的有界逻辑标识（不接受主机路径），`model_sha256` 必须是恰好 64 位小写十六进制。页面投影是对单帧已解析事实的无副作用投影，schema `actingcommand.page-projection.v1`，上限 64 条 / 32 KiB，条目按角色（Navigate / PageOp / ControlPoint）、任务 ID、资源 ID 与页面为键，每条携带 Safety 分类且默认值为 Dangerous；操作 schema `0.8` 的 OCR 字段声明走 `post_admission_ocr.mode = fields_v1`，字段声明与旧的真值集合声明不可混用，且本合约不含任何目标专有值（`contracts/ocr-fields.md`、`contracts/page-projection.md`）。
+Recognition targets come in five kinds: Template, Color, ClickOnly, Ocr and Nn. Template matching is CPU image matching with an explicit 5-second timeout and a two-stage coarse-match/refine structure; a timeout failure reports which stage it occurred in. Production OCR and NN are reachable only through the `vision-ffi` boundary into two separate cdylib providers, and the host-side adapter enforces provider identity: `model_ref` must be a bounded logical identifier containing no `/`, `\` or `:` (host paths are not accepted), and `model_sha256` must be exactly 64 lowercase hexadecimal characters. Page projection is a side-effect-free projection of the resolved facts of a single frame, schema `actingcommand.page-projection.v1`, capped at 64 entries / 32 KiB, with entries keyed by role (Navigate / PageOp / ControlPoint), task ID, resource ID and page, each entry carrying a Safety classification that defaults to Dangerous; OCR field declarations under operation schema `0.8` go through `post_admission_ocr.mode = fields_v1`, field declarations cannot be mixed with the older truth-set declarations, and this contract contains no target-proprietary value (`contracts/ocr-fields.md`, `contracts/page-projection.md`).
 
-## 构建与运行
+## Build and run
 
-Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安装说明与未发布候选说明，
-由同一 BUILD-MANIFEST 逐项绑定。见[下载契约](scripts/windows-tools/README.md)与
-[安装说明](distribution/windows/INSTALL.md)；Tools 仍为独立工件。
+The `build.rs` of `apps/actinglab` reads Git metadata to determine HEAD. When Git metadata is available and `ACTINGCOMMAND_RUNTIME_HEAD` is also set, it must be 40 hexadecimal characters and must match the repository HEAD, or the build panics; when Git metadata is unavailable (a source tree with no `.git`, for example), that variable is required.
 
-`apps/actinglab` 的 `build.rs` 会读取 Git 元数据确定 HEAD。当 Git 元数据可用时，若同时设置了 `ACTINGCOMMAND_RUNTIME_HEAD`，它必须是 40 位十六进制且与仓库 HEAD 一致，否则构建 panic；当 Git 元数据不可用（例如无 `.git` 的源码树）时，该变量为必填。
-
-`actingd` 的正常调用只接受 `--config <path>` 两个参数，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
+A normal `actingd` invocation accepts only the two arguments `--config <path>`; the first argument may instead select the `ledger-maintenance` or `check-config` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. At startup `actingd` records its in-memory runtime configuration manifest (the subsystems it runs and every effective parameter with its source; the salt only as a byte length) as the program facts `config.subsystems` / `config.parameters`, readable with `actingctl facts --program` and printed by `check-config`. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
 
 ```bash
-# 本地构建；下面三条门禁与 CI 相同（CI 的发布构建另带 --locked 与显式 MSVC 目标）
+# Local build; the three gate commands below are identical to CI (CI's release build additionally uses --locked and an explicit MSVC target)
 cargo build --release
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --keep-going -- -D warnings
 cargo test --workspace --no-fail-fast
 
-# 启动常驻守护进程；成功时 stdout 打印 actingd ready pid=<pid> host=<host> port=<port>
+# Start the resident daemon; on success stdout prints actingd ready pid=<pid> host=<host> port=<port>
 actingcommand-actingd --config runtime.json
 
-# 客户端（子命令必须是第一个参数，之后才是标志；每条命令都需要 --state-root）
+# Clients (the subcommand must be the first argument, flags come after it; every command needs --state-root)
 actingctl status --state-root <state-root>
+actingctl facts --program --state-root <state-root>
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>
 actingctl reset --state-root <state-root> --instance <alias>
 actingctl stream --state-root <state-root> --instance <alias> --max-frames 8 --interval-ms 250
 actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms 30000 --expect home --recover
 actingctl monitor-clear --state-root <state-root> --instance <alias>
+actingctl emulator status --state-root <state-root> --instance <alias>
+actingctl emulator start --state-root <state-root> --instance <alias>     # also: stop | restart (explicit request only; fenced per instance)
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>
 actingctl request-shutdown --state-root <state-root>
 
-# 只读取证（同一状态根）
+# Read-only forensics (same state root)
 actingledger --state-root <state-root> open
 actingledger --state-root <state-root> events --after 0 --limit 200
 actingledger --state-root <state-root> chain --req <request-id>
@@ -178,42 +178,48 @@ actingledger --state-root <state-root> repairs
 actingledger --state-root <state-root> export --task-evidence --after 0 --limit 1024
 actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
 
-# 离线账本维护（不装配提供者、IPC 与设备）
+# Offline ledger maintenance (assembles no providers, IPC or devices)
 actingcommand-actingd ledger-maintenance backup  --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingcommand-actingd ledger-maintenance verify  --config runtime.json
 
-# 视觉提供者工件检查
+# Side-effect-free configuration check (same load/assemble/validate as startup; touches nothing under state_root)
+actingcommand-actingd check-config --config runtime.json
+
+# Vision provider artifact check
 actingcommand-vision-provider-check --state-root <state-root> --limit 256
 actingcommand-vision-provider-check --manifest provider.json --backend all --require-existing
+
+# Read-only MuMu instance discovery probe (runs only MuMuManager version and info -v all; prints one JSON line)
+actingcommand-device-test mumu-discover [--root <mumu-install-root>]
 ```
 
-注意：cargo 产出的守护进程二进制名为 `actingcommand-actingd`；短名有 `actingctl`、`actinglab`、`actingledger`，以及工具二进制 `actinglab-command-inventory`。
+Note: the daemon binary cargo produces is named `actingcommand-actingd`; the short names are `actingctl`, `actinglab`, `actingledger`.
 
-## 当前边界（2026-09-13）
+## Current boundaries (2026-09-13)
 
-- 完成不变式的证据全部来自 CI 可跑的构造性测试，使用中立数据、假后端、加速时钟与真实子进程。真机验证、目标客户端验证、UI 验证与 48 小时墙钟验证都**不**在其主张范围内。
-- 设备后端按名称存在并可选择，但本仓不携带真机验收证据；任何真机结论需要单独给出后端、资源包与边界。
-- 账本介质迁移进行中：主机的生产写者已经只走 SQLite 介质，段存储保留为导入源——离线 `ledger-maintenance` 负责冻结与导入既有段目录。段读取面与段字节快照仍在代码里，其退役排在后续阶段。
-- 工件保留类只有 DebugFull / Adaptive / Light 三个取值且默认 Adaptive；本仓未见自动清理实现，请勿假定存在自动回收。
-- UI 是外部只读控制台，在独立仓中起步阶段，必须经运行时 API 且不得拥有运行时生命周期。
-- 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`（唤醒记录、会话起停与有界管理），可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。本仓不含任何外部代理客户端，自动唤起、自主探索与完整的自维护回路尚未建成。
+- All evidence for the completion invariants comes from constructive tests runnable in CI, using neutral data, fake backends, an accelerated clock and real subprocesses. Real-device validation, target-client validation, UI validation and 48-hour wall-clock validation are **not** within the scope of those claims.
+- Device backends exist by name and are selectable, but this repository carries no real-device acceptance evidence; any real-device conclusion has to state its backend, resource pack and boundary separately.
+- The ledger medium migration is in flight: the host's production writer already runs on the SQLite medium only, and segment storage is retained as an import source — the offline `ledger-maintenance` path is responsible for freezing and importing an existing segment directory. The segment read face and the segment byte snapshots are still in the code; their retirement is scheduled for a later stage.
+- Artifact retention has exactly three values, DebugFull / Adaptive / Light, and defaults to Adaptive; no automatic cleanup implementation was found in this repository, so do not assume automatic reclamation exists.
+- The UI is an external read-only console, at an early stage in a separate repository; it must go through the runtime API and must not own the runtime lifecycle.
+- Only the daemon side of the agent surface is built: `runtime-host` has an `AgentDispatcher` (wake records, session start/stop and bounded management) that can be enabled from the `agent_dispatcher` section of the `actingd` config, and `actingctl agent-publish-facts` is an existing Agent/Adapter origin entry point. This repository contains no external agent client, and automatic wake-up, autonomous exploration and the complete self-maintenance loop are not built yet.
 
-## 相关仓库与协作
+## Related repositories and collaboration
 
-| 仓库 | 角色 |
+| Repository | Role |
 | --- | --- |
-| [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | 协作看板，工作从这里的 issue 起步 |
-| [HS7097/ActingCommand-Resources-Arknights](https://github.com/HS7097/ActingCommand-Resources-Arknights) | 资源仓 |
-| [HS7097/ActingCommand-Resources-BlueArchive](https://github.com/HS7097/ActingCommand-Resources-BlueArchive) | 资源仓 |
-| [HS7097/ActingCommand-Resources-AzurLane](https://github.com/HS7097/ActingCommand-Resources-AzurLane) | 资源仓 |
-| [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | 外部只读控制台，起步阶段 |
-| [HS7097/ActingCommand-Legacy-Runtime](https://github.com/HS7097/ActingCommand-Legacy-Runtime) | 历史 Go 接口归档 |
+| [HS7097/ActingCommand-Workflow](https://github.com/HS7097/ActingCommand-Workflow) | Coordination board; work starts from an issue here |
+| [HS7097/ActingCommand-Resources-Arknights](https://github.com/HS7097/ActingCommand-Resources-Arknights) | Resource repository |
+| [HS7097/ActingCommand-Resources-BlueArchive](https://github.com/HS7097/ActingCommand-Resources-BlueArchive) | Resource repository |
+| [HS7097/ActingCommand-Resources-AzurLane](https://github.com/HS7097/ActingCommand-Resources-AzurLane) | Resource repository |
+| [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | External read-only console, at an early stage |
+| [HS7097/ActingCommand-Legacy-Runtime](https://github.com/HS7097/ActingCommand-Legacy-Runtime) | Archive of the historical Go interface |
 
-身份：HS7097 是所有者与裁定者；HS7097Agt 是实施账号；HS7097ViW 是验收账号。`commit-identity-guard` 工作流要求每个提交的 author 与 committer 邮箱都落在一份八项精确白名单内：这三个账号各两种 noreply 形式、一个注册邮箱地址，以及 GitHub 网页端提交者 `noreply@github.com`。
+Identities: HS7097 is the owner and arbitrator; HS7097Agt is the implementer account; HS7097ViW is the acceptance account. The `commit-identity-guard` workflow requires the author and committer email of every commit to fall inside an exact eight-entry allowlist: two noreply forms for each of these three accounts, one registered mailbox address, and the GitHub web committer `noreply@github.com`.
 
-主线合并只由所有者执行。提交工作的顺序是：先在看板仓开 issue，再在本仓开分支与 PR，所有必需 CI 通过后停在可合并状态等待所有者。运行时报告、账本、可变状态与发布指针都写在运行时状态根下，绝不写回资源仓。
+Merges to main are performed only by the owner. The order for submitting work is: open an issue on the board repository first, then open a branch and a PR here, and once all required CI passes, stop in a mergeable state and wait for the owner. Runtime reports, the ledger, mutable state and release pointers are all written under the runtime state root, never back into a resource repository.
 
-## 许可
+## License
 
-`AGPL-3.0-only`。完整文本见 [LICENSE](./LICENSE)。第三方材料见 [NOTICE.md](./NOTICE.md)。
+`AGPL-3.0-only`. Full text in [LICENSE](./LICENSE). Third-party material in [NOTICE.md](./NOTICE.md).

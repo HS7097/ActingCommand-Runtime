@@ -355,7 +355,7 @@ impl RuntimeContainedTask<'_> {
             Ok(outcomes) => outcomes
                 .iter()
                 .find_map(|outcome| outcome.result.as_ref().err()),
-            Err(error) => Some(&error.cause),
+            Err(error) => Some(error.cause.as_ref()),
         };
         let primary = original_error.map(|error| {
             ppocr_diagnostic::task_ppocr_failure(

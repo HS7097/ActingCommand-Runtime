@@ -1783,6 +1783,7 @@ fn receipt_eof_error(deadline: Instant) -> RuntimeClientError {
         DEFAULT_RUNTIME_MAX_FRAME_BYTES,
         Some(ReceiptReadDeadline::at(deadline, "runtime_receipt_timeout")),
         None,
+        None,
     )
     .expect_err("peer EOF must fail the receipt exchange");
     server.join().expect("EOF runtime");
@@ -3307,6 +3308,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
         assert_eq!(
             receipt_response_timeout(
                 &RuntimeOperation::Input {
+                    frame: None,
                     token: token.clone(),
                     action
                 },
@@ -3318,6 +3320,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
     }
     for operation in [
         RuntimeOperation::Input {
+            frame: None,
             token: token.clone(),
             action: InputAction::Reset,
         },
@@ -3338,6 +3341,7 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
     assert_eq!(
         receipt_response_timeout(
             &RuntimeOperation::Input {
+                frame: None,
                 token,
                 action: overflow
             },

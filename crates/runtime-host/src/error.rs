@@ -53,12 +53,14 @@ pub struct RuntimeHostError {
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeHostFailureContext {
+    pub(crate) failure_stage: Option<&'static str>,
     pub(crate) ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     pub(crate) ppocr_message: Option<String>,
     pub(crate) ppocr_source: Option<Arc<PpocrFailureSource>>,
     pub(crate) ppocr_artifact_failure:
         Option<Arc<actingcommand_artifact_store::ArtifactStoreError>>,
     pub(crate) complete_failure: Option<Box<RuntimeCompleteFailure>>,
+    pub(crate) vendor_stdio: Vec<actingcommand_execution_kernel::ExecutionStdioObservation>,
     pub(crate) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
     pub(crate) raw_os_error: Option<i32>,
@@ -83,6 +85,7 @@ impl PartialEq for RuntimeHostError {
             && self.operation == other.operation
             && self.projection == other.projection
             && self.lifecycle.complete_failure == other.lifecycle.complete_failure
+            && self.lifecycle.failure_stage == other.lifecycle.failure_stage
             && self.lifecycle.ppocr_message == other.lifecycle.ppocr_message
             && self.lifecycle.ppocr_source == other.lifecycle.ppocr_source
             && self.lifecycle.ppocr_diagnostics == other.lifecycle.ppocr_diagnostics
@@ -110,6 +113,18 @@ impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
 }
 
 impl RuntimeHostError {
+    pub(crate) fn with_failure_stage(mut self, stage: &'static str) -> Self {
+        self.lifecycle.failure_stage.get_or_insert(stage);
+        if let Some(complete) = &mut self.lifecycle.complete_failure {
+            complete
+                .primary
+                .lifecycle
+                .failure_stage
+                .get_or_insert(stage);
+        }
+        self
+    }
+
     pub(crate) fn has_ppocr_diagnostics(&self) -> bool {
         !self.lifecycle.ppocr_diagnostics.is_empty()
             || self
@@ -169,7 +184,10 @@ impl RuntimeHostError {
             }
             return message;
         }
-        self.to_string()
+        match self.lifecycle.failure_stage {
+            Some(stage) => format!("{self} [stage={stage}]"),
+            None => self.to_string(),
+        }
     }
 
     pub(crate) fn policy_rejection(&self) -> actingcommand_contract::PolicyDispatchRejection {
@@ -237,6 +255,13 @@ impl RuntimeHostError {
 
     pub(crate) fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
         self.lifecycle.diagnostic_detail.as_deref()
+    }
+
+    pub(crate) fn with_diagnostic_detail(mut self, detail: DiagnosticDetailDraft) -> Self {
+        if self.lifecycle.diagnostic_detail.is_none() {
+            self.lifecycle.diagnostic_detail = Some(Box::new(detail));
+        }
+        self
     }
 
     pub(crate) fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
@@ -312,11 +337,13 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             lifecycle: Box::new(RuntimeHostFailureContext {
+                failure_stage: None,
                 complete_failure: None,
                 ppocr_diagnostics: Vec::new(),
                 ppocr_message: None,
                 ppocr_source: None,
                 ppocr_artifact_failure: None,
+                vendor_stdio: error.vendor_stdio().to_vec(),
                 task_timing: None,
                 capacity: None,
                 raw_os_error: None,
@@ -372,6 +399,16 @@ impl RuntimeHostError {
         if self.has_ppocr_diagnostics() || other.has_ppocr_diagnostics() {
             return self
                 .with_complete_failure(RuntimeFailureRelation::DiagnosticArchive, other.clone());
+        }
+        for observation in &other.lifecycle.vendor_stdio {
+            if !self
+                .lifecycle
+                .vendor_stdio
+                .iter()
+                .any(|current| Arc::ptr_eq(&current.recorded_event, &observation.recorded_event))
+            {
+                self.lifecycle.vendor_stdio.push(observation.clone());
+            }
         }
         if self.lifecycle.task_timing.is_none() {
             self.lifecycle.task_timing = other.lifecycle.task_timing.clone();

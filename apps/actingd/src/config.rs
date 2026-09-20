@@ -3,7 +3,10 @@
 use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
-use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, InstanceId};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, ContainedTaskRequest, EmulatorInstanceAction, InstanceId,
+    RuntimeConfigManifest,
+};
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
@@ -15,10 +18,11 @@ use actingcommand_policy::{
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
 };
 use actingcommand_runtime_host::{
-    AgentDispatcherConfig, ExecutionBackendProvider, ExecutionBackendRegistration,
-    ExecutionBackendRegistry, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
-    ProcedureBinding, ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance,
-    RuntimeHostConfig, VisionFfiProvider, VisionModelIdentity,
+    AgentDispatcherConfig, EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+    ExecutionBackendProvider, ExecutionBackendRegistration, ExecutionBackendRegistry,
+    PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
+    ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance, RuntimeHostConfig,
+    VisionFfiProvider, VisionModelIdentity,
 };
 use actingcommand_vision_ffi::{
     NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
@@ -31,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod manifest;
 mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
@@ -48,15 +53,17 @@ pub(super) struct ActingdConfigFile {
     schema_version: String,
     state_root: PathBuf,
     bind_host: String,
+    /// The four defaulted scalars stay `Option` so the manifest can tell an explicit value
+    /// from the library default; `assemble` applies the default.
     #[serde(default)]
-    bind_port: u16,
+    bind_port: Option<u16>,
     secret_fingerprint_salt: String,
     #[serde(default)]
-    device_diagnostic_mode: actingcommand_contract::DeviceDiagnosticMode,
+    device_diagnostic_mode: Option<actingcommand_contract::DeviceDiagnosticMode>,
     #[serde(default)]
-    capacity_thresholds: actingcommand_contract::CapacityThresholds,
+    capacity_thresholds: Option<actingcommand_contract::CapacityThresholds>,
     #[serde(default)]
-    frame_retention_enabled: bool,
+    frame_retention_enabled: Option<bool>,
     #[serde(default)]
     governance_capability: Option<String>,
     #[serde(default)]
@@ -65,6 +72,9 @@ pub(super) struct ActingdConfigFile {
     policy: Option<PolicyConfigFile>,
     #[serde(default)]
     vision_provider_manifest: Option<PathBuf>,
+    /// Explicit MuMu install root: the highest-priority `MuMuManager.exe` discovery source.
+    #[serde(default)]
+    mumu_root: Option<PathBuf>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -104,6 +114,14 @@ struct InstanceConfig {
     instance_id: InstanceId,
     #[serde(default)]
     application_id: Option<String>,
+    /// Discovery binding key: the MuMu instance index reported by `MuMuManager info -v all`.
+    #[serde(default)]
+    instance_index: Option<u16>,
+    /// Discovery binding key: the exact MuMu instance name. At most one key may be set.
+    #[serde(default)]
+    instance_name: Option<String>,
+    #[serde(default)]
+    nemu_app_index: Option<u32>,
     #[serde(default)]
     adb_path: Option<String>,
     #[serde(default)]
@@ -155,6 +173,8 @@ pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) registry: ConfiguredExecutionBackendRegistry,
     pub(super) policy: Option<PolicyBootstrap>,
+    /// The manifest handed to `host`; `check-config` prints it.
+    pub(super) manifest: RuntimeConfigManifest,
 }
 
 pub(super) struct PolicyBootstrap {
@@ -174,6 +194,49 @@ pub(super) struct ConfiguredExecutionBackendRegistry {
     device_capture_backends: BTreeMap<String, CaptureBackendChoice>,
     fixtures: Option<FixtureExecutionBackendRegistry>,
     modes: BTreeMap<String, ScheduledExecutionMode>,
+    /// Instances bound by `instance_index`/`instance_name`; registered by provider startup
+    /// after one `MuMuManager` discovery run. `assemble` itself spawns nothing.
+    deferred: Vec<DeferredInstance>,
+    mumu_root: Option<PathBuf>,
+}
+
+/// The discovery binding key of one deferred instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum InstanceBindingKey {
+    Index(u16),
+    Name(String),
+}
+
+impl InstanceBindingKey {
+    pub(super) const fn index(&self) -> Option<u16> {
+        match self {
+            Self::Index(index) => Some(*index),
+            Self::Name(_) => None,
+        }
+    }
+
+    pub(super) fn name(&self) -> Option<&str> {
+        match self {
+            Self::Index(_) => None,
+            Self::Name(name) => Some(name),
+        }
+    }
+}
+
+impl std::fmt::Display for InstanceBindingKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Index(index) => write!(formatter, "instance_index={index}"),
+            Self::Name(name) => write!(formatter, "instance_name={name:?}"),
+        }
+    }
+}
+
+pub(super) struct DeferredInstance {
+    alias: String,
+    key: InstanceBindingKey,
+    /// Validated declaration; its ADB target is completed from discovery at startup.
+    config: InstanceConfig,
 }
 
 pub(super) struct FixtureExecutionBackendRegistry {
@@ -199,6 +262,7 @@ enum ConfiguredInstanceBackend {
         alias: String,
         backend: FixtureExecutionBackend,
     },
+    Deferred(Box<DeferredInstance>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,12 +329,20 @@ impl ActingdConfigFile {
         if !bind_host.is_loopback() {
             return Err("bind_host_not_loopback");
         }
+        if self
+            .mumu_root
+            .as_ref()
+            .is_some_and(|root| root.as_os_str().is_empty() || !root.is_absolute())
+        {
+            return Err("mumu_root_invalid");
+        }
         let registrations = self
             .instances
             .into_iter()
             .map(InstanceConfig::backend)
             .collect::<Result<Vec<_>, _>>()?;
         let mut registry = ConfiguredExecutionBackendRegistry::new(registrations, None)?;
+        registry.mumu_root = self.mumu_root;
         registry.pending_vision = self
             .vision_provider_manifest
             .map(|path| (self.source_root.clone(), path));
@@ -284,14 +356,43 @@ impl ActingdConfigFile {
         let policy_state_root = self.state_root.clone();
         let policy_governance_capability = self.governance_capability.clone();
         let policy_cadence = PolicyCadence::default();
+        let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
+            (
+                dispatcher.max_attempts,
+                dispatcher.max_session_ms,
+                dispatcher.max_projection_events,
+            )
+        });
         let mut host =
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
-                .with_device_diagnostic_mode(self.device_diagnostic_mode)
-                .with_capacity_thresholds(self.capacity_thresholds)
-                .with_frame_retention_enabled(self.frame_retention_enabled)
-                .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
+                .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
+                .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
+                .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or_default())
+                .with_bind_address(SocketAddr::new(
+                    bind_host,
+                    self.bind_port.unwrap_or_default(),
+                ))
                 .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());
+        let manifest = manifest::build(&manifest::ManifestInputs {
+            bind_host,
+            bind_port: self.bind_port,
+            device_diagnostic_mode: self.device_diagnostic_mode,
+            frame_retention_enabled: self.frame_retention_enabled,
+            capacity_thresholds: self.capacity_thresholds,
+            secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
+            mumu_root: registry.mumu_root.as_deref(),
+            governance_configured: self.governance_capability.is_some(),
+            agent_dispatcher: agent_dispatcher_budget,
+            policy_configured: policy.is_some(),
+            vision_provider_configured: registry.pending_vision.is_some(),
+            instances_count: registry.modes.len(),
+            instances_deferred_count: registry.deferred.len(),
+            policy_cadence: &policy_cadence,
+            io_timeout: host.io_timeout(),
+            maximum_frame_bytes: host.maximum_frame_bytes(),
+        })?;
+        host = host.with_config_manifest(manifest.clone());
         if let Some(capability) = self.governance_capability {
             host = host.with_governance_capability(capability);
         }
@@ -320,6 +421,7 @@ impl ActingdConfigFile {
             host,
             registry,
             policy,
+            manifest,
         })
     }
 }
@@ -571,34 +673,85 @@ impl InstanceConfig {
     fn backend(self) -> Result<ConfiguredInstanceBackend, &'static str> {
         if self.fixture_backend.is_some() {
             self.fixture_backend()
+        } else if let Some(key) = self.binding_key()? {
+            self.deferred_backend(key)
         } else {
             self.device_backend()
         }
     }
 
-    fn device_backend(self) -> Result<ConfiguredInstanceBackend, &'static str> {
-        let adb_path = self.adb_path.ok_or("instance_config_invalid")?;
-        let host = self.host.unwrap_or_else(default_device_host);
-        let port = self.port.unwrap_or_else(default_device_port);
-        let connect = self.connect.unwrap_or_else(enabled);
-        let touch_backend = self.touch_backend.ok_or("touch_backend_invalid")?;
-        let capture_backend = self.capture_backend.ok_or("capture_backend_invalid")?;
-        if adb_path.trim().is_empty()
-            || host.trim().is_empty()
-            || port == 0
+    fn binding_key(&self) -> Result<Option<InstanceBindingKey>, &'static str> {
+        match (self.instance_index, self.instance_name.as_deref()) {
+            (None, None) => Ok(None),
+            (Some(_), Some(_)) => Err("instance_binding_key_invalid"),
+            (Some(index), None) => Ok(Some(InstanceBindingKey::Index(index))),
+            (None, Some(name)) => {
+                if name.trim().is_empty()
+                    || name.len() > actingcommand_device::MAX_MUMU_INSTANCE_NAME_BYTES
+                    || name.chars().any(char::is_control)
+                {
+                    return Err("instance_binding_key_invalid");
+                }
+                Ok(Some(InstanceBindingKey::Name(name.to_owned())))
+            }
+        }
+    }
+
+    /// Validates everything that does not need discovery; the ADB target is completed later.
+    /// Declared `adb_path`/`host`/`port` stay declared values to be cross-checked; no default
+    /// host or port applies to a discovery-bound instance.
+    fn deferred_backend(
+        self,
+        key: InstanceBindingKey,
+    ) -> Result<ConfiguredInstanceBackend, &'static str> {
+        if self.serial.is_some() {
+            return Err("instance_binding_key_invalid");
+        }
+        if self
+            .adb_path
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
             || self
-                .serial
+                .host
                 .as_ref()
                 .is_some_and(|value| value.trim().is_empty())
+            || self.port == Some(0)
         {
             return Err("instance_config_invalid");
         }
-        let application_id = self
-            .application_id
+        self.application_id
+            .as_ref()
             .filter(|value| !value.trim().is_empty())
             .ok_or("application_identity_missing")?;
+        self.backend_choices()?;
+        for timeout in [
+            self.command_timeout_ms,
+            self.handshake_timeout_ms,
+            self.shutdown_timeout_ms,
+            self.tap_hold_ms,
+        ] {
+            bounded_duration(timeout)?;
+        }
+        Ok(ConfiguredInstanceBackend::Deferred(Box::new(
+            DeferredInstance {
+                alias: self.alias.clone(),
+                key,
+                config: self,
+            },
+        )))
+    }
+
+    fn backend_choices(&self) -> Result<(TouchBackendChoice, CaptureBackendChoice), &'static str> {
+        let touch_backend = self
+            .touch_backend
+            .as_deref()
+            .ok_or("touch_backend_invalid")?;
+        let capture_backend = self
+            .capture_backend
+            .as_deref()
+            .ok_or("capture_backend_invalid")?;
         let requested =
-            TouchBackendChoice::parse(&touch_backend).map_err(|_| "touch_backend_invalid")?;
+            TouchBackendChoice::parse(touch_backend).map_err(|_| "touch_backend_invalid")?;
         if matches!(
             requested,
             TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
@@ -606,13 +759,64 @@ impl InstanceConfig {
             return Err("touch_backend_must_be_explicit");
         }
         let capture_requested =
-            CaptureBackendChoice::parse(&capture_backend).map_err(|_| "capture_backend_invalid")?;
+            CaptureBackendChoice::parse(capture_backend).map_err(|_| "capture_backend_invalid")?;
         if matches!(
             capture_requested,
             CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
         ) {
             return Err("capture_backend_must_be_explicit");
         }
+        Ok((requested, capture_requested))
+    }
+
+    fn device_backend(self) -> Result<ConfiguredInstanceBackend, &'static str> {
+        let adb_path = self.adb_path.clone().ok_or("instance_config_invalid")?;
+        let host = self.host.clone().unwrap_or_else(default_device_host);
+        let port = self.port.unwrap_or_else(default_device_port);
+        self.device_registration(adb_path, host, Some(port))
+    }
+
+    /// Builds the device registration for one ADB target (explicit or discovered). `None` is
+    /// a discovered instance that is stopped: it registers with a pending endpoint and the
+    /// port placeholder is never dispatched (`ExecutionBackendRegistry` refuses every session
+    /// while pending).
+    fn device_registration(
+        self,
+        adb_path: String,
+        host: String,
+        port: Option<u16>,
+    ) -> Result<ConfiguredInstanceBackend, &'static str> {
+        let connect = self.connect.unwrap_or_else(enabled);
+        if adb_path.trim().is_empty()
+            || host.trim().is_empty()
+            || port == Some(0)
+            || self
+                .serial
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("instance_config_invalid");
+        }
+        let (requested, capture_requested) = self.backend_choices()?;
+        let nemu_app_index = match (requested, self.nemu_app_index) {
+            (TouchBackendChoice::NemuIpc, Some(index))
+                if capture_requested == CaptureBackendChoice::NemuIpc =>
+            {
+                Some(
+                    actingcommand_device::NemuAppIndex::try_from(index)
+                        .map_err(|_| "nemu_app_index_invalid")?,
+                )
+            }
+            (TouchBackendChoice::NemuIpc, _) => {
+                return Err("nemu_paired_input_configuration_missing");
+            }
+            (_, Some(_)) => return Err("nemu_app_index_requires_paired_input"),
+            (_, None) => None,
+        };
+        let application_id = self
+            .application_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("application_identity_missing")?;
         let mut adb = AdbConfig {
             adb_path,
             ..AdbConfig::default()
@@ -623,7 +827,7 @@ impl InstanceConfig {
         let target = DeviceTarget {
             serial: self.serial,
             host,
-            port,
+            port: port.unwrap_or(0),
             connect,
         };
         let mut maatouch = MaaTouchConfig::default();
@@ -664,6 +868,10 @@ impl InstanceConfig {
             touch,
             capture,
         )
+        .and_then(|registration| match nemu_app_index {
+            Some(index) => registration.with_nemu_app_index(index),
+            None => Ok(registration),
+        })
         .map(Box::new)
         .map(|registration| ConfiguredInstanceBackend::Device {
             alias,
@@ -677,6 +885,9 @@ impl InstanceConfig {
 
     fn fixture_backend(self) -> Result<ConfiguredInstanceBackend, &'static str> {
         if self.application_id.is_some()
+            || self.nemu_app_index.is_some()
+            || self.instance_index.is_some()
+            || self.instance_name.is_some()
             || self.adb_path.is_some()
             || self.serial.is_some()
             || self.host.is_some()
@@ -754,15 +965,13 @@ impl ConfiguredExecutionBackendRegistry {
         backends: Vec<ConfiguredInstanceBackend>,
         vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     ) -> Result<Self, &'static str> {
-        if backends.is_empty() {
-            return Err("execution_registry_invalid");
-        }
         let mut devices = Vec::new();
         let mut device_input_backends = BTreeMap::new();
         let mut device_capture_backends = BTreeMap::new();
         let mut fixtures = BTreeMap::new();
         let mut modes = BTreeMap::new();
         let mut instance_ids = BTreeSet::new();
+        let mut deferred = Vec::new();
         for backend in backends {
             match backend {
                 ConfiguredInstanceBackend::Device {
@@ -797,6 +1006,16 @@ impl ConfiguredExecutionBackendRegistry {
                         return Err("execution_registry_invalid");
                     }
                 }
+                ConfiguredInstanceBackend::Deferred(entry) => {
+                    if modes
+                        .insert(entry.alias.clone(), ScheduledExecutionMode::DeviceRegistry)
+                        .is_some()
+                        || !instance_ids.insert(entry.config.instance_id)
+                    {
+                        return Err("execution_registry_invalid");
+                    }
+                    deferred.push(*entry);
+                }
             }
         }
         let devices = (!devices.is_empty())
@@ -818,15 +1037,90 @@ impl ConfiguredExecutionBackendRegistry {
             device_capture_backends,
             fixtures,
             modes,
+            deferred,
+            mumu_root: None,
         })
     }
 
     pub(super) fn mode_for_alias(&self, instance_alias: &str) -> Option<ScheduledExecutionMode> {
         self.modes.get(instance_alias).copied()
     }
+
+    /// The binding key of an instance still waiting for discovery (`check-config` reporting).
+    pub(super) fn deferred_binding(&self, instance_alias: &str) -> Option<&InstanceBindingKey> {
+        self.deferred
+            .iter()
+            .find(|entry| entry.alias == instance_alias)
+            .map(|entry| &entry.key)
+    }
+
+    /// Registers one resolved device entry under the same duplicate rules as `new`.
+    fn register_device(&mut self, backend: ConfiguredInstanceBackend) -> Result<(), &'static str> {
+        let ConfiguredInstanceBackend::Device {
+            alias,
+            input_backend,
+            capture_backend,
+            registration,
+            ..
+        } = backend
+        else {
+            return Err("execution_registry_invalid");
+        };
+        if self.mode_for_alias(&alias) != Some(ScheduledExecutionMode::DeviceRegistry)
+            || self
+                .device_input_backends
+                .insert(alias.clone(), input_backend)
+                .is_some()
+            || self
+                .device_capture_backends
+                .insert(alias, capture_backend)
+                .is_some()
+        {
+            return Err("execution_registry_invalid");
+        }
+        match self.devices.as_mut() {
+            Some(devices) => devices.register(*registration),
+            None => ExecutionBackendRegistry::new([*registration]).map(|devices| {
+                self.devices = Some(devices);
+            }),
+        }
+        .map_err(|_| "execution_registry_invalid")
+    }
 }
 
 impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
+    fn open_nemu_session(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<Option<actingcommand_device::NemuSessionBackends>> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => {
+                let selected = self.device_input_backends.get(instance_alias).copied();
+                if selected != Some(TouchBackendChoice::NemuIpc) {
+                    return Ok(None);
+                }
+                open_device_registry_input_with_diagnostic(selected, || {
+                    let mut pair = self
+                        .devices
+                        .as_ref()
+                        .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                        .open_nemu_session(instance_alias)?
+                        .ok_or_else(|| {
+                            DeviceError::fatal("selected Nemu paired session is unavailable")
+                        })?;
+                    pair.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
+                        pair.input,
+                        TouchBackendChoice::NemuIpc,
+                    ));
+                    Ok(Some(pair))
+                })
+            }
+            Some(ScheduledExecutionMode::FixtureSimulation) => Ok(None),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
     fn instance_aliases(&self) -> Vec<String> {
         self.modes.keys().cloned().collect()
     }
@@ -919,6 +1213,81 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         }
     }
 
+    fn control_instance(
+        &self,
+        instance_alias: &str,
+        action: EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        let refused = |message: &str, stage: &'static str| {
+            EmulatorControlFailure::without_output(
+                DeviceError::fatal(message)
+                    .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                    .with_diagnostic_context(
+                        "configured_execution_backend_registry",
+                        "control_instance",
+                        DeviceErrorSensitivity::Sensitive,
+                    ),
+                0,
+            )
+        };
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| {
+                    refused(
+                        "device registry is unavailable",
+                        "emulator_control.unavailable",
+                    )
+                })?
+                .control_instance(instance_alias, action),
+            Some(ScheduledExecutionMode::FixtureSimulation) => Err(refused(
+                "emulator control unavailable: a fixture simulation instance has no emulator",
+                "emulator_control.unavailable",
+            )),
+            None => Err(refused(
+                "execution backend instance is not registered",
+                "emulator_control.unregistered",
+            )),
+        }
+    }
+
+    fn rebind_discovered_endpoint(
+        &self,
+        instance_alias: &str,
+        adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        let refused = |message: &str, stage: &'static str| {
+            DeviceError::fatal(message)
+                .with_diagnostic(DeviceErrorCategory::Protocol, stage)
+                .with_diagnostic_context(
+                    "configured_execution_backend_registry",
+                    "rebind_discovered_endpoint",
+                    DeviceErrorSensitivity::Sensitive,
+                )
+        };
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| {
+                    refused(
+                        "device registry is unavailable",
+                        "emulator_control.unavailable",
+                    )
+                })?
+                .rebind_discovered_endpoint(instance_alias, adb_port),
+            Some(ScheduledExecutionMode::FixtureSimulation) => Err(refused(
+                "endpoint rebinding unavailable: a fixture simulation instance has no emulator",
+                "emulator_control.unavailable",
+            )),
+            None => Err(refused(
+                "execution backend instance is not registered",
+                "emulator_control.unregistered",
+            )),
+        }
+    }
+
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
         self.devices
             .as_ref()
@@ -986,6 +1355,15 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         self.run("tap", |backend| backend.tap(x, y))
     }
 
+    fn tap_in_frame(
+        &mut self,
+        x: i32,
+        y: i32,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run("tap", |backend| backend.tap_in_frame(x, y, context))
+    }
+
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
         self.run("long_tap", |backend| backend.long_tap(x, y, duration_ms))
     }
@@ -1003,6 +1381,16 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
     fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
         self.run("segmented_swipe", |backend| {
             backend.segmented_swipe_prepared(plan)
+        })
+    }
+
+    fn segmented_swipe_prepared_in_frame(
+        &mut self,
+        plan: &PreparedSegmentedSwipePlan,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run("segmented_swipe", |backend| {
+            backend.segmented_swipe_prepared_in_frame(plan, context)
         })
     }
 

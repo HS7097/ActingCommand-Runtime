@@ -97,6 +97,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let mut text_request = None;
     for action in actions {
         let request = client.request(RuntimeOperation::Input {
+            frame: None,
             token: token.clone(),
             action: action.clone(),
         });
@@ -219,6 +220,7 @@ fn segmented_swipe_intent_records_the_exact_prepared_plan_before_input() {
     let mut client = TestClient::connect(&host);
     let (_, token) = client.acquire("node.a");
     let request = client.request(RuntimeOperation::Input {
+        frame: None,
         token,
         action: InputAction::SingleTouchDragWithVerticalBrakeV1 {
             x1: 1091,

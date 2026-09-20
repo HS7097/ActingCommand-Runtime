@@ -45,12 +45,20 @@ pub(crate) fn write_frame<T: Serialize>(
 ) -> RuntimeHostResult<()> {
     let body =
         serde_json::to_vec(value).map_err(|_| protocol_error("runtime_frame_encode_failed"))?;
+    write_encoded_frame(stream, &body, maximum_frame_bytes)
+}
+
+pub(crate) fn write_encoded_frame(
+    stream: &mut TcpStream,
+    body: &[u8],
+    maximum_frame_bytes: usize,
+) -> RuntimeHostResult<()> {
     if body.is_empty() || body.len() > maximum_frame_bytes || body.len() > u32::MAX as usize {
         return Err(protocol_error("runtime_frame_length_invalid"));
     }
     let mut frame = Vec::with_capacity(body.len() + 4);
     frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    frame.extend_from_slice(&body);
+    frame.extend_from_slice(body);
     stream
         .write_all(&frame)
         .and_then(|()| stream.flush())

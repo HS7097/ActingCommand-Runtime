@@ -335,6 +335,8 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         max_capture_latency_ms: Some(120),
         max_recognition_latency_ms: Some(80),
         max_action_effect_latency_ms: Some(250),
+        max_touch_response_us: Some(4_200),
+        max_capture_acquire_us: Some(38_000),
         related_event_ids: Vec::new(),
     };
     let fact_record = FactRecord {
@@ -1688,6 +1690,98 @@ fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
     assert_eq!(payloads.len(), 93);
 
+    // Timing fields: round trip, legacy wire without them, and family scope.
+    let measured_input = sanitize(
+        InputPayloadDraft::committed_with_touch_response(
+            EventAction::RuntimeAction,
+            EffectDisposition::Performed,
+            Some(4_200),
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let measured_capture = sanitize(
+        CapturePayloadDraft::completed_with_capture_acquire(
+            EventAction::CaptureObserve,
+            EffectDisposition::Performed,
+            1280,
+            720,
+            Some(38_000),
+            AuditInput::new(),
+        )
+        .into(),
+        2,
+    );
+    let input_json = serde_json::to_value(measured_input.payload()).expect("input JSON");
+    let capture_json = serde_json::to_value(measured_capture.payload()).expect("capture JSON");
+    assert_eq!(input_json["payload"]["data"]["touch_response_us"], 4_200);
+    assert_eq!(
+        capture_json["payload"]["data"]["capture_acquire_us"],
+        38_000
+    );
+    let EventPayload::Input(InputPayload::Committed(committed)) =
+        serde_json::from_value::<EventPayload>(input_json.clone()).expect("input round trip")
+    else {
+        panic!("expected input.committed")
+    };
+    assert_eq!(committed.touch_response_us(), Some(4_200));
+    let EventPayload::Capture(CapturePayload::Completed(completed)) =
+        serde_json::from_value::<EventPayload>(capture_json.clone()).expect("capture round trip")
+    else {
+        panic!("expected capture.completed")
+    };
+    assert_eq!(completed.capture_acquire_us(), Some(38_000));
+
+    let mut legacy_input = input_json.clone();
+    legacy_input["payload"]["data"]
+        .as_object_mut()
+        .expect("input data")
+        .remove("touch_response_us");
+    let legacy_input =
+        serde_json::from_value::<EventPayload>(legacy_input).expect("legacy input wire");
+    legacy_input.validate().expect("legacy input validates");
+    let EventPayload::Input(InputPayload::Committed(committed)) = legacy_input else {
+        panic!("expected legacy input.committed")
+    };
+    assert_eq!(committed.touch_response_us(), None);
+    let mut legacy_capture = capture_json.clone();
+    legacy_capture["payload"]["data"]
+        .as_object_mut()
+        .expect("capture data")
+        .remove("capture_acquire_us");
+    let legacy_capture =
+        serde_json::from_value::<EventPayload>(legacy_capture).expect("legacy capture wire");
+    legacy_capture.validate().expect("legacy capture validates");
+    let EventPayload::Capture(CapturePayload::Completed(completed)) = legacy_capture else {
+        panic!("expected legacy capture.completed")
+    };
+    assert_eq!(completed.capture_acquire_us(), None);
+
+    let mut wrong_input_owner = input_json;
+    wrong_input_owner["family"] = serde_json::json!("task");
+    wrong_input_owner["payload"]["kind"] = serde_json::json!("completed");
+    let wrong_input_owner =
+        serde_json::from_value::<EventPayload>(wrong_input_owner).expect("outcome wire shape");
+    assert_eq!(
+        wrong_input_owner
+            .validate()
+            .expect_err("touch response scope")
+            .code(),
+        "invalid_touch_response_scope"
+    );
+    let mut wrong_capture_owner = capture_json;
+    wrong_capture_owner["family"] = serde_json::json!("recognition");
+    let wrong_capture_owner = serde_json::from_value::<EventPayload>(wrong_capture_owner)
+        .expect("observation result wire shape");
+    assert_eq!(
+        wrong_capture_owner
+            .validate()
+            .expect_err("capture acquire scope")
+            .code(),
+        "invalid_capture_acquire_scope"
+    );
+
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
         assert_eq!(sanitized.schema_version(), GLOBAL_EVENT_SCHEMA_VERSION);
@@ -2043,6 +2137,24 @@ fn legacy_policy_failure_defaults_preserve_streak_and_explicitly_mark_context_un
         recovered.perf_context.health,
         PerformanceMonitorHealth::Unavailable
     );
+
+    let mut measured = PerformanceContext::unavailable(1_752_147_201_000);
+    measured.max_touch_response_us = Some(4_200);
+    measured.max_capture_acquire_us = Some(38_000);
+    let measured_json = serde_json::to_value(&measured).expect("context JSON");
+    assert_eq!(measured_json["max_touch_response_us"], 4_200);
+    assert_eq!(measured_json["max_capture_acquire_us"], 38_000);
+    let round_trip: PerformanceContext =
+        serde_json::from_value(measured_json.clone()).expect("context round trip");
+    assert_eq!(round_trip, measured);
+    let mut legacy_context = measured_json;
+    let object = legacy_context.as_object_mut().expect("context object");
+    object.remove("max_touch_response_us");
+    object.remove("max_capture_acquire_us");
+    let legacy_context: PerformanceContext =
+        serde_json::from_value(legacy_context).expect("legacy context without timing maxima");
+    assert_eq!(legacy_context.max_touch_response_us, None);
+    assert_eq!(legacy_context.max_capture_acquire_us, None);
 
     let mut explicit_null = serde_json::to_value(&failure).expect("failure JSON");
     explicit_null["escalation_streak"] = serde_json::Value::Null;

@@ -22,6 +22,8 @@ impl HostShared {
             run_links,
             source_step_action_id,
             before_frame_id,
+            input_frame,
+            input_control,
         } = context;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
@@ -52,6 +54,59 @@ impl HostShared {
                 ),
             )?);
         }
+        let input_check = self
+            .nemu_input_check(
+                &resolved.instance_alias,
+                token,
+                connection_id,
+                input_control,
+                false,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        if input_check.is_some()
+            && !matches!(
+                action,
+                InputAction::Tap { .. } | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+            )
+        {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "nemu_input_capability_unsupported",
+                    "execute_input",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        if input_check.is_some() && input_frame.is_none() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "nemu_input_frame_required",
+                    "execute_input",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        if let Some(reference) = input_frame {
+            self.execution
+                .resolve_input_frame(&resolved.instance_alias, reference)
+                .map_err(|error| {
+                    RequestFailure::request(
+                        RuntimeHostError::request(
+                            "input_frame_unavailable",
+                            "resolve_input_frame",
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                        .with_native_detail(error.to_string()),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    )
+                })?;
+        }
+        let before_frame_id = input_frame.map(|frame| frame.frame_id).or(before_frame_id);
         let prepared_action = self
             .execution
             .prepare_input(action.clone())
@@ -148,13 +203,23 @@ impl HostShared {
                         };
                     }
                 };
-                match self
-                    .execution
-                    .input_prepared_retained_with_registration_guard(
-                        &instance_alias,
-                        action_for_worker,
-                        registration,
-                    ) {
+                // Host-side span until the kernel-level backend span lands: it includes the
+                // host→kernel channel round-trip on top of the backend write itself.
+                let backend_started = Instant::now();
+                let backend_result = self.execution.input_prepared_in_frame(
+                    &instance_alias,
+                    action_for_worker,
+                    input_frame,
+                    input_check,
+                    registration,
+                );
+                let touch_response_us = performance::measured_microseconds(
+                    actingcommand_execution_kernel::observe_instant_span(
+                        backend_started,
+                        Instant::now(),
+                    ),
+                );
+                match backend_result {
                     Ok(outcome) => {
                         if let Some(recovery) = outcome.recovery
                             && let Err(error) = self.append_event_raw(
@@ -175,7 +240,7 @@ impl HostShared {
                             };
                         }
                         CriticalActionReport::Succeeded {
-                            value: outcome.selection,
+                            value: (outcome.selection, touch_response_us),
                             effect: success_effect,
                         }
                     }
@@ -222,7 +287,7 @@ impl HostShared {
                     }
                 }
             },
-            |_, effect| {
+            |(_, touch_response_us), effect| {
                 self.events
                     .draft(
                         EventSeverity::Info,
@@ -230,9 +295,10 @@ impl HostShared {
                         module,
                         EventActor::Runtime,
                         outcome_links,
-                        InputPayloadDraft::committed(
+                        InputPayloadDraft::committed_with_touch_response(
                             event_action,
                             effect.into(),
+                            *touch_response_us,
                             execution_audit(execution_provenance, &endpoint),
                         ),
                     )
@@ -264,7 +330,9 @@ impl HostShared {
             Ok(receipt) => {
                 self.finish_destructive_input(token, connection_id)?;
                 self.transfer_preempted_if_ready(token, connection_id)?;
-                let selection = receipt.value().clone();
+                self.observe_pipeline_event(receipt.outcome())
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                let (selection, _) = receipt.value().clone();
                 Ok((
                     OperationSuccess {
                         state: RuntimeReceiptState::Completed,
@@ -407,11 +475,13 @@ impl HostShared {
                         };
                     }
                 };
-                match self.execution.control_application_with_registration_guard(
-                    &instance_alias,
-                    action,
-                    registration,
-                ) {
+                match self
+                    .execution
+                    .control_application_retained_with_registration_guard(
+                        &instance_alias,
+                        action,
+                        registration,
+                    ) {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
                         effect: DefiniteEffectDisposition::Performed,
@@ -845,11 +915,13 @@ fn application_replay_denied(code: &'static str) -> RequestFailure {
     )
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(super) struct RuntimeInputContext {
     pub(super) run_links: Option<RuntimeRunLinks>,
     pub(super) source_step_action_id: Option<ActionId>,
     pub(super) before_frame_id: Option<actingcommand_contract::FrameId>,
+    pub(super) input_frame: Option<actingcommand_contract::InputFrameReference>,
+    pub(super) input_control: Option<Arc<ContainedRunControl>>,
 }
 
 fn input_execution_plan_record(

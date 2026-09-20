@@ -174,6 +174,8 @@ pub struct PipelinePerformanceSignal {
     capture_latency_ms: Option<u64>,
     recognition_latency_ms: Option<u64>,
     action_effect_latency_ms: Option<u64>,
+    touch_response_us: Option<u64>,
+    capture_acquire_us: Option<u64>,
 }
 
 impl PipelinePerformanceSignal {
@@ -189,9 +191,38 @@ impl PipelinePerformanceSignal {
             capture_latency_ms: None,
             recognition_latency_ms: None,
             action_effect_latency_ms: None,
+            touch_response_us: None,
+            capture_acquire_us: None,
         };
         signal.validate()?;
         Ok(signal)
+    }
+
+    /// A signal built only from typed payload spans; `frame_gap_ms` is never forced.
+    /// Recording it without any `with_*` value fails `validate` like every all-`None` signal.
+    pub fn measured(instance_id: impl Into<String>, observed_at_unix_ms: u64) -> Self {
+        Self {
+            instance_id: instance_id.into(),
+            observed_at_unix_ms,
+            frame_gap_ms: None,
+            capture_latency_ms: None,
+            recognition_latency_ms: None,
+            action_effect_latency_ms: None,
+            touch_response_us: None,
+            capture_acquire_us: None,
+        }
+    }
+
+    pub fn with_touch_response(mut self, touch_response_us: u64) -> RuntimeHostResult<Self> {
+        self.touch_response_us = Some(touch_response_us);
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_capture_acquire(mut self, capture_acquire_us: u64) -> RuntimeHostResult<Self> {
+        self.capture_acquire_us = Some(capture_acquire_us);
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn with_capture_latency(mut self, latency_ms: u64) -> RuntimeHostResult<Self> {
@@ -221,7 +252,9 @@ impl PipelinePerformanceSignal {
             || (self.frame_gap_ms.is_none()
                 && self.capture_latency_ms.is_none()
                 && self.recognition_latency_ms.is_none()
-                && self.action_effect_latency_ms.is_none())
+                && self.action_effect_latency_ms.is_none()
+                && self.touch_response_us.is_none()
+                && self.capture_acquire_us.is_none())
         {
             return Err(performance_fatal(
                 "performance_pipeline_signal_invalid",
@@ -246,6 +279,8 @@ impl PipelinePerformanceSignal {
             capture_latency_ms,
             recognition_latency_ms,
             action_effect_latency_ms,
+            touch_response_us: None,
+            capture_acquire_us: None,
         };
         signal.validate()?;
         Ok(signal)
@@ -259,6 +294,10 @@ pub(crate) struct PipelineEventObservation {
     pub(crate) frame_id: Option<FrameId>,
     pub(crate) recognition_id: Option<RecognitionId>,
     pub(crate) action_id: Option<ActionId>,
+    /// Typed `input.committed` span in microseconds; `None` when the event carries none.
+    pub(crate) touch_response_us: Option<u64>,
+    /// Typed `capture.completed` span in microseconds; `None` when the event carries none.
+    pub(crate) capture_acquire_us: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -398,6 +437,11 @@ pub(crate) struct PerformanceMonitor {
 }
 
 impl PerformanceMonitor {
+    #[cfg(test)]
+    pub(crate) fn replace_capacity_sampler_for_test(&mut self, sampler: Box<dyn HostSampler>) {
+        self.sampler = Some(sampler);
+    }
+
     pub(crate) fn disabled() -> Self {
         Self {
             capacity: None,
@@ -655,14 +699,16 @@ impl PerformanceMonitor {
                         "observe_performance_pipeline_event",
                     ));
                 }
-                self.record_pipeline_signal(PipelinePerformanceSignal::observed(
+                let mut signal = PipelinePerformanceSignal::observed(
                     observation.instance_id,
                     observation.observed_at_unix_ms,
                     frame_gap_ms,
                     Some(capture_latency_ms),
                     None,
                     None,
-                )?)
+                )?;
+                signal.capture_acquire_us = observation.capture_acquire_us;
+                self.record_pipeline_signal(signal)
             }
             EventType::CaptureFailed => {
                 let frame_id = required_frame_id(&observation)?;
@@ -760,6 +806,16 @@ impl PerformanceMonitor {
                     Some(action_effect_latency_ms),
                 )?)
             }
+            EventType::InputCommitted => match observation.touch_response_us {
+                Some(touch_response_us) => self.record_pipeline_signal(
+                    PipelinePerformanceSignal::measured(
+                        observation.instance_id,
+                        observation.observed_at_unix_ms,
+                    )
+                    .with_touch_response(touch_response_us)?,
+                ),
+                None => Ok(Vec::new()),
+            },
             EventType::TaskStepFinished => {
                 if let Some(action_id) = observation.action_id {
                     self.action_starts.remove(&action_id);
@@ -790,6 +846,15 @@ impl PerformanceMonitor {
                 "read_performance_context",
             ));
         }
+        self.context_for(Some(instance_id), window_end_unix_ms)
+    }
+
+    /// `None` folds the pipeline samples of every instance alias: the host-level summary.
+    fn context_for(
+        &self,
+        instance_id: Option<&str>,
+        window_end_unix_ms: u64,
+    ) -> RuntimeHostResult<PerformanceContext> {
         let Some(config) = self.config.as_ref() else {
             return Ok(PerformanceContext::unavailable(window_end_unix_ms));
         };
@@ -806,7 +871,7 @@ impl PerformanceMonitor {
             .pipeline_samples
             .iter()
             .filter(|sample| {
-                sample.instance_id == instance_id
+                instance_id.is_none_or(|instance_id| sample.instance_id == instance_id)
                     && (window_start_unix_ms..=window_end_unix_ms)
                         .contains(&sample.observed_at_unix_ms)
             })
@@ -897,6 +962,14 @@ impl PerformanceMonitor {
             max_action_effect_latency_ms: pipeline
                 .iter()
                 .filter_map(|sample| sample.action_effect_latency_ms)
+                .max(),
+            max_touch_response_us: pipeline
+                .iter()
+                .filter_map(|sample| sample.touch_response_us)
+                .max(),
+            max_capture_acquire_us: pipeline
+                .iter()
+                .filter_map(|sample| sample.capture_acquire_us)
                 .max(),
             related_event_ids,
         };
@@ -1161,8 +1234,8 @@ impl PerformanceMonitor {
             sample.observed_at_unix_ms.saturating_sub(previous) >= summary_interval_ms
         });
         if summary_due {
-            let instance_id = "runtime";
-            let context = self.context(instance_id, sample.observed_at_unix_ms)?;
+            // Host-level summary: pipeline maxima fold over every instance alias in the window.
+            let context = self.context_for(None, sample.observed_at_unix_ms)?;
             events.push(PerformanceSemanticEvent::Summary(Box::new(
                 PerformanceSummaryEventData {
                     context,
@@ -1547,6 +1620,18 @@ fn pipeline_responsiveness_basis_points(signal: &PipelinePerformanceSignal) -> O
         signal
             .action_effect_latency_ms
             .map(|value| latency_score(value, 1_500)),
+        // Typed payload spans in microseconds (`latency_score` only compares like units).
+        // Touch response is the host-side input backend call: MaaTouch/Minitouch write+flush,
+        // AdbShellInput child exit, plus the host→kernel round-trip until the kernel span lands;
+        // 100 ms keeps a shell-input ack healthy while a stalled bridge scores down.
+        // Capture acquire is one backend frame acquisition alone, so 250 ms sits under the
+        // 500 ms event-to-event capture latency target above.
+        signal
+            .touch_response_us
+            .map(|value| latency_score(value, 100_000)),
+        signal
+            .capture_acquire_us
+            .map(|value| latency_score(value, 250_000)),
     ]
     .into_iter()
     .flatten()
@@ -2619,6 +2704,8 @@ mod tests {
                 frame_id: Some(first_frame),
                 recognition_id: None,
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
             PipelineEventObservation {
                 event_type: EventType::CaptureCompleted,
@@ -2627,6 +2714,8 @@ mod tests {
                 frame_id: Some(first_frame),
                 recognition_id: None,
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
             PipelineEventObservation {
                 event_type: EventType::CaptureRequested,
@@ -2635,6 +2724,8 @@ mod tests {
                 frame_id: Some(second_frame),
                 recognition_id: None,
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
         ] {
             assert!(
@@ -2652,6 +2743,8 @@ mod tests {
                 frame_id: Some(second_frame),
                 recognition_id: None,
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             })
             .expect("capture complete");
         assert!(matches!(
@@ -2667,6 +2760,8 @@ mod tests {
                 frame_id: Some(second_frame),
                 recognition_id: Some(recognition_id),
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
             PipelineEventObservation {
                 event_type: EventType::RecognitionCompleted,
@@ -2675,6 +2770,8 @@ mod tests {
                 frame_id: Some(second_frame),
                 recognition_id: Some(recognition_id),
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
             PipelineEventObservation {
                 event_type: EventType::TaskEffectIntent,
@@ -2683,6 +2780,8 @@ mod tests {
                 frame_id: Some(second_frame),
                 recognition_id: None,
                 action_id: Some(action_id),
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
             PipelineEventObservation {
                 event_type: EventType::TaskEffectCompleted,
@@ -2691,6 +2790,8 @@ mod tests {
                 frame_id: Some(second_frame),
                 recognition_id: None,
                 action_id: Some(action_id),
+                touch_response_us: None,
+                capture_acquire_us: None,
             },
         ] {
             assert!(
@@ -2774,6 +2875,8 @@ mod tests {
                 frame_id: Some(frame_id),
                 recognition_id: None,
                 action_id: None,
+                touch_response_us: None,
+                capture_acquire_us: None,
             })
             .expect_err("missing capture start");
         let degraded = monitor

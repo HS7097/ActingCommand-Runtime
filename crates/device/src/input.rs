@@ -145,6 +145,15 @@ pub trait InputBackend {
 
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()>;
 
+    fn tap_in_frame(
+        &mut self,
+        x: i32,
+        y: i32,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.tap(x, y)
+    }
+
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()>;
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()>;
@@ -162,6 +171,14 @@ pub trait InputBackend {
         Err(DeviceError::fatal(
             "selected input backend does not support single_touch_drag_with_vertical_brake_v1",
         ))
+    }
+
+    fn segmented_swipe_prepared_in_frame(
+        &mut self,
+        plan: &PreparedSegmentedSwipePlan,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.segmented_swipe_prepared(plan)
     }
 
     fn key(&mut self, key: &str) -> DeviceResult<()>;

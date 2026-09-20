@@ -41,6 +41,8 @@ mod lab_operation_evidence;
 pub use lab_operation_evidence::*;
 mod saved_artifact_ocr;
 pub use saved_artifact_ocr::*;
+mod material_read;
+pub use material_read::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
@@ -568,6 +570,28 @@ fn validate_planning_documents(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Request data identifying the actual source frame; the Runtime resolves its committed binding.
+pub struct InputFrameReference {
+    pub frame_id: FrameId,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl InputFrameReference {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.width == 0
+            || self.height == 0
+            || self.width > i32::MAX as u32
+            || self.height > i32::MAX as u32
+        {
+            return Err(RuntimeContractError::new("input_frame_dimensions_invalid"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputAction {
@@ -716,6 +740,26 @@ impl ApplicationLifecycleAction {
             Self::Launch => crate::EventAction::ApplicationLaunch,
             Self::Stop => crate::EventAction::ApplicationStop,
             Self::Restart => crate::EventAction::ApplicationRestart,
+        }
+    }
+}
+
+/// One lifecycle action on the emulator instance itself (the provider's `control` surface),
+/// distinct from the application lifecycle inside a running instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmulatorInstanceAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl EmulatorInstanceAction {
+    pub const fn event_action(self) -> crate::EventAction {
+        match self {
+            Self::Start => crate::EventAction::EmulatorInstanceStart,
+            Self::Stop => crate::EventAction::EmulatorInstanceStop,
+            Self::Restart => crate::EventAction::EmulatorInstanceRestart,
         }
     }
 }
@@ -1118,6 +1162,10 @@ pub struct RuntimeInstanceStatus {
     backend_provenance: Option<crate::ExecutionBackendProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capabilities: Option<crate::EmulatorCapabilityProfile>,
+    /// The configured ADB port that identifies the emulator instance in the ledger;
+    /// absent for a serial-configured instance or one without an ADB target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adb_port: Option<u16>,
 }
 
 impl RuntimeInstanceStatus {
@@ -1140,6 +1188,7 @@ impl RuntimeInstanceStatus {
             preempt_requested,
             backend_provenance: None,
             capabilities: None,
+            adb_port: None,
         };
         status.validate()?;
         Ok(status)
@@ -1205,6 +1254,15 @@ impl RuntimeInstanceStatus {
 
     pub fn capabilities(&self) -> Option<&crate::EmulatorCapabilityProfile> {
         self.capabilities.as_ref()
+    }
+
+    pub const fn with_adb_port(mut self, adb_port: Option<u16>) -> Self {
+        self.adb_port = adb_port;
+        self
+    }
+
+    pub const fn adb_port(&self) -> Option<u16> {
+        self.adb_port
     }
 }
 
@@ -2405,7 +2463,7 @@ fn event_query_fingerprint(
 ) -> RuntimeContractResult<String> {
     query
         .validate()
-        .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
+        .map_err(|error| RuntimeContractError::new(error.code()))?;
     let bytes = serde_json::to_vec(&(query, profile))
         .map_err(|_| RuntimeContractError::new("runtime_event_query_fingerprint_failed"))?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
@@ -2470,6 +2528,7 @@ pub enum RuntimeOperation {
         as_of_ledger_position: u64,
     },
     MonitorStatus,
+    RuntimeFactSnapshot,
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -2529,6 +2588,13 @@ pub enum RuntimeOperation {
         holder_id: HolderId,
         action: ApplicationLifecycleAction,
     },
+    /// Start, stop or restart the emulator instance through its discovered provider. Only an
+    /// explicit User+Ui or Cli+Cli request may issue it; no lease is held, the per-instance
+    /// fence is checked and the device session is closed before the provider is driven.
+    ControlEmulatorInstance {
+        instance_alias: String,
+        action: EmulatorInstanceAction,
+    },
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -2537,6 +2603,8 @@ pub enum RuntimeOperation {
     Input {
         token: LeaseToken,
         action: InputAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<InputFrameReference>,
     },
     PublishFact {
         record: FactRecord,
@@ -2548,6 +2616,9 @@ pub enum RuntimeOperation {
         query: EventQuery,
         profile: ProjectionProfile,
         page: RuntimeEventQueryPageRequest,
+    },
+    ReadMaterial {
+        request: Box<RuntimeMaterialReadRequest>,
     },
     SubscribeEvents {
         request: RuntimeSubscriptionRequest,
@@ -2668,6 +2739,7 @@ impl RuntimeOperation {
             Self::Health
             | Self::Status
             | Self::MonitorStatus
+            | Self::RuntimeFactSnapshot
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::CancelContainedTask { .. } => Ok(()),
@@ -2677,6 +2749,7 @@ impl RuntimeOperation {
                     .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
                 page.validate()
             }
+            Self::ReadMaterial { request } => request.validate(),
             Self::ProjectInterface { request } => request
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
@@ -2739,6 +2812,7 @@ impl RuntimeOperation {
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
+            | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => validate_instance_alias(instance_alias),
             Self::ConfigureMonitor {
                 instance_alias,
@@ -2766,7 +2840,14 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 spec.validate()
             }
-            Self::Input { token, action } => {
+            Self::Input {
+                token,
+                action,
+                frame,
+            } => {
+                if let Some(frame) = frame {
+                    frame.validate()?;
+                }
                 token.validate()?;
                 action.validate()
             }
@@ -2806,6 +2887,7 @@ impl RuntimeOperation {
             | Self::RunContainedLabOperation { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
+            | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
@@ -2837,6 +2919,7 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::ProjectPolicyInputIdentity(<ledger-position>)"
             }
             Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
+            Self::RuntimeFactSnapshot => "RuntimeOperation::RuntimeFactSnapshot",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -2863,11 +2946,15 @@ impl fmt::Debug for RuntimeOperation {
             Self::ApplicationLifecycle { .. } => {
                 "RuntimeOperation::ApplicationLifecycle(<redacted>)"
             }
+            Self::ControlEmulatorInstance { .. } => {
+                "RuntimeOperation::ControlEmulatorInstance(<redacted>)"
+            }
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
             Self::PublishFacts { .. } => "RuntimeOperation::PublishFacts(<typed-observation>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
+            Self::ReadMaterial { .. } => "RuntimeOperation::ReadMaterial(<committed-reference>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
             Self::RegisterDiagnosticSignature { .. } => {
                 "RuntimeOperation::RegisterDiagnosticSignature(<typed-definition>)"
@@ -3014,6 +3101,17 @@ impl RuntimeRequest {
         ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
         {
             return Err(RuntimeContractError::new("invalid_governance_origin"));
+        }
+        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator;
+        // Adapter/Agent origins are excluded so no scheduler or agent path can restart it.
+        if matches!(
+            self.operation,
+            RuntimeOperation::ControlEmulatorInstance { .. }
+        ) && !matches!(
+            (self.actor, self.source),
+            (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+        ) {
+            return Err(RuntimeContractError::new("invalid_emulator_control_origin"));
         }
         if matches!(
             self.operation,
@@ -3412,6 +3510,9 @@ pub enum RuntimeResult {
     MonitorStatus {
         status: RuntimeMonitorRegistryStatus,
     },
+    RuntimeFactSnapshot {
+        snapshot: crate::RuntimeFactSnapshot,
+    },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
     },
@@ -3460,6 +3561,16 @@ pub enum RuntimeResult {
         action_id: ActionId,
         action: ApplicationLifecycleAction,
     },
+    /// The provider `control` dispatch completed and the readiness wait met its criterion.
+    EmulatorInstanceControlled {
+        instance_alias: String,
+        action: EmulatorInstanceAction,
+        instance_index: u16,
+        running: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adb_port: Option<u16>,
+        elapsed_ms: u64,
+    },
     ContainedTaskCompleted {
         run_id: RunId,
         task_id: crate::TaskId,
@@ -3492,6 +3603,9 @@ pub enum RuntimeResult {
     },
     EventPage {
         page: RuntimeEventQueryPage,
+    },
+    MaterialRead {
+        result: Box<RuntimeMaterialReadResult>,
     },
     EventBatch {
         batch: RuntimeEventBatch,
@@ -3569,6 +3683,53 @@ pub struct RuntimeReceipt {
 }
 
 impl RuntimeReceipt {
+    pub fn fail_material_read(
+        &mut self,
+        state: RuntimeMaterialReadState,
+        limit: Option<RuntimeMaterialReadLimit>,
+        failure: RuntimeMaterialReadFailure,
+    ) -> RuntimeContractResult<()> {
+        let Some(RuntimeResult::MaterialRead { result }) = &mut self.result else {
+            return Err(RuntimeContractError::new("material_read_result_missing"));
+        };
+        if result.failure.is_some() {
+            return Err(RuntimeContractError::new(
+                "material_read_failure_already_recorded",
+            ));
+        }
+        result.chunk = None;
+        result.state = state;
+        result.limit = limit;
+        result.failure = Some(failure.clone());
+        self.state = result.receipt_state();
+        self.error = Some(failure.error);
+        self.validate()
+    }
+
+    pub fn material_read(
+        request: &RuntimeRequest,
+        terminal: Option<TerminalEvent>,
+        result: Box<RuntimeMaterialReadResult>,
+    ) -> RuntimeContractResult<Self> {
+        if !matches!(request.operation(), RuntimeOperation::ReadMaterial { request } if request.as_ref() == &result.request)
+        {
+            return Err(RuntimeContractError::new("material_read_request_mismatch"));
+        }
+        let receipt = Self {
+            schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
+            request_id: request.request_id,
+            correlation_id: request.correlation_id,
+            state: result.receipt_state(),
+            terminal,
+            error: result.failure.as_ref().map(|failure| failure.error.clone()),
+            result: Some(RuntimeResult::MaterialRead { result }),
+            resource_declaration: None,
+            resource_declaration_event: None,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
     pub fn contained_lab_operation(
         request: &RuntimeRequest,
         terminal: TerminalEvent,
@@ -3675,11 +3836,19 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ContainedLabOperation { operation })
                 if self.state == RuntimeReceiptState::Failed
                     && operation.record.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
-        if !recorded_lab_failure && success_state != (self.result.is_some() && self.error.is_none())
+        let recorded_material_failure = matches!(&self.result,
+            Some(RuntimeResult::MaterialRead { result })
+                if matches!(self.state, RuntimeReceiptState::Denied | RuntimeReceiptState::Failed)
+                    && self.state == result.receipt_state()
+                    && result.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
+        if !recorded_lab_failure
+            && !recorded_material_failure
+            && success_state != (self.result.is_some() && self.error.is_none())
         {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));
         }
         if !recorded_lab_failure
+            && !recorded_material_failure
             && !success_state
             && (self.error.is_none() || self.result.is_some())
         {
@@ -3730,6 +3899,14 @@ impl RuntimeReceipt {
             token.validate()?;
         }
         match &self.result {
+            Some(RuntimeResult::MaterialRead { result }) => {
+                result.validate()?;
+                if self.state != result.receipt_state()
+                    || result.failure.as_ref().map(|failure| &failure.error) != self.error.as_ref()
+                {
+                    return Err(RuntimeContractError::new("invalid_material_read_receipt"));
+                }
+            }
             Some(
                 RuntimeResult::SignatureRegistered { registration }
                 | RuntimeResult::SignatureRetired { registration },

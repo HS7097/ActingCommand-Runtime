@@ -187,8 +187,11 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             before: None,
             after: None,
             related: None,
+            target_retirement: None,
         }],
         dropped_count: 0,
+        paths: Vec::new(),
+        restart_manager: None,
     });
     for close_error in [
         DeviceError::fatal("injected unconfirmed capture close"),
@@ -378,6 +381,7 @@ fn required_failure_events_preserve_cleanup_detail() {
             let (_, token) = client.acquire("node.a");
             if capture {
                 let prime = client.request(RuntimeOperation::Input {
+                    frame: None,
                     token: token.clone(),
                     action: InputAction::Reset,
                 });
@@ -429,6 +433,7 @@ fn required_failure_events_preserve_cleanup_detail() {
                     }
                 } else {
                     RuntimeOperation::Input {
+                        frame: None,
                         token,
                         action: InputAction::Reset,
                     }

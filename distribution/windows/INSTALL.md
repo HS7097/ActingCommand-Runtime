@@ -67,8 +67,34 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
 - Populate `instances` with your already authorized instance configuration.
   Each entry requires `alias` and the existing typed `instance_id`; device entries
   also need the explicit backend and connection fields required by the same
-  config schema. The empty array supplies no device targets. Retain the existing
-  identity, unique-registration, path, backend and timeout rules.
+  config schema. The template's `"instances": []` starts a control-plane-only
+  daemon with no device targets; instances are added later by editing the
+  configuration and restarting the daemon. Retain the existing identity,
+  unique-registration, path, backend and timeout rules.
+- A MuMu instance may instead be bound by discovery: give the entry exactly one
+  of `instance_index` (the index `MuMuManager info -v all` reports) or
+  `instance_name` (the exact instance name) and omit `serial`. `adb_path`,
+  `host` and `port` may then be omitted; no default host or port applies, and
+  any of them you do declare is cross-checked against the discovered value.
+  The optional top-level `mumu_root` names the MuMu install root explicitly and
+  must be absolute. At startup the daemon runs `MuMuManager.exe version` and
+  `info -v all` once (read-only, 10 s timeout, never any mutating subcommand),
+  resolving `MuMuManager.exe` in this order: `mumu_root`,
+  `ACTINGCOMMAND_NEMU_FOLDER`, the install root of a running MuMu process, the
+  Windows uninstall entry (`MuMuPlayer*` under the standard `Uninstall` keys of
+  `HKLM`, `HKLM\...\WOW6432Node` and `HKCU`; only `InstallLocation`,
+  `DisplayIcon` and `DisplayVersion` are read), then the vendor folders under
+  Program Files. `MuMuManager` must report at least `6.3.2.0`, a Runtime policy
+  floor. Startup refuses with `instance_discovery_unavailable`,
+  `mumu_manager_version_unsupported`, `instance_discovery_no_match`,
+  `instance_discovery_ambiguous` or `instance_discovery_conflict`, and
+  `check-config` reports such entries as `"binding":"discovery_pending"`
+  without running discovery; see `contracts/provider-startup.md`. A configured
+  instance that is stopped when the daemon starts is bound pending (no port,
+  `status` shows `adb_port: null`, device requests are denied with
+  `instance_not_running`) and is started with
+  `.\actingctl.exe emulator start --state-root <private-state-root> --instance <alias>`;
+  declare no `port` for such an instance.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
 The blank state root and salt must be filled before startup. Use your existing
@@ -77,6 +103,18 @@ required; optional fields must follow the same source schema. Provider models,
 SDKs, drivers, device tools and private connection data are separate dependencies
 and are not installed by this Runtime artifact. Nothing in the template creates
 an instance, chooses a device or supplies credentials.
+
+Before starting, validate the filled copy without side effects:
+
+```powershell
+.\actingcommand-actingd.exe check-config --config <private-config-path>
+```
+
+It prints one JSON result line and exits 0 only when the configuration loads,
+assembles and validates exactly as startup would. It creates, reads or locks
+nothing under `state_root`, does not read the vision provider manifest, and
+resolves relative policy package paths against the current directory exactly as
+startup does; see `contracts/actingd-check-config.md`.
 
 ## Start, inspect and close
 
@@ -87,8 +125,11 @@ From the verified Runtime directory, using your filled private configuration:
 ```
 
 The daemon remains in that process. Its normal startup line is
-`actingd ready pid=<pid> host=<host> port=<port>`. From a second terminal, use the
-same private state root for the existing control commands:
+`actingd ready pid=<pid> host=<host> port=<port>`. With `"instances": []`
+the daemon starts control-plane-only: it records `runtime.started` and no
+instance binding, `actingctl status` reports no instances, and instances are
+added by editing the configuration and restarting the daemon. From a second
+terminal, use the same private state root for the existing control commands:
 
 ```powershell
 .\actingctl.exe status --state-root <private-state-root>

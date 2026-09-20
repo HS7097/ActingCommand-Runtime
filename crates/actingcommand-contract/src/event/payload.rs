@@ -1602,6 +1602,9 @@ pub struct OutcomePayload {
     effect_disposition: EffectDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
+    /// Microseconds spent in the input backend call; only `input.committed` may carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    touch_response_us: Option<u64>,
     audit: SanitizedAudit,
 }
 
@@ -1683,6 +1686,9 @@ impl ArtifactFailureRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
+    VendorStdioClose {
+        instance_id: Option<InstanceId>,
+    },
     AdbTargetRecovery,
     DeviceDiagnosticDetail,
     DeviceDiagnosticSummary,
@@ -1711,6 +1717,8 @@ pub enum RuntimeLifecyclePhase {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecyclePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     action: EventAction,
     owner_epoch: OwnerEpoch,
@@ -1721,6 +1729,10 @@ pub struct RuntimeLifecyclePayload {
 }
 
 impl RuntimeLifecyclePayload {
+    pub fn vendor_stdio(&self) -> Option<&VendorStdioFacts> {
+        self.vendor_stdio.as_deref()
+    }
+
     pub fn adb_recovery(&self) -> Option<&AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
@@ -1733,6 +1745,122 @@ impl RuntimeLifecyclePayload {
 
     pub const fn phase(&self) -> RuntimeLifecyclePhase {
         self.phase
+    }
+}
+
+/// How the Runtime obtained the recorded instance binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceBindingSource {
+    Explicit,
+    Discovered,
+}
+
+pub const MAX_DISCOVERED_INSTANCE_NAME_BYTES: usize = 256;
+/// Same bound as `EmulatorVersionEvidence` provider versions.
+pub const MAX_PROVIDER_VERSION_BYTES: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInstanceBindingPayload {
+    action: EventAction,
+    instance_alias: String,
+    provenance: crate::ExecutionBackendProvenance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adb_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adb_port: Option<u16>,
+    serial_configured: bool,
+    binding_source: InstanceBindingSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovered_instance_index: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovered_instance_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_version: Option<String>,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeInstanceBindingPayload {
+    pub fn instance_alias(&self) -> &str {
+        &self.instance_alias
+    }
+
+    pub const fn provenance(&self) -> crate::ExecutionBackendProvenance {
+        self.provenance
+    }
+
+    pub fn adb_host(&self) -> Option<&str> {
+        self.adb_host.as_deref()
+    }
+
+    pub const fn adb_port(&self) -> Option<u16> {
+        self.adb_port
+    }
+
+    pub const fn serial_configured(&self) -> bool {
+        self.serial_configured
+    }
+
+    pub const fn binding_source(&self) -> InstanceBindingSource {
+        self.binding_source
+    }
+
+    pub const fn discovered_instance_index(&self) -> Option<u16> {
+        self.discovered_instance_index
+    }
+
+    pub fn discovered_instance_name(&self) -> Option<&str> {
+        self.discovered_instance_name.as_deref()
+    }
+
+    pub fn provider_version(&self) -> Option<&str> {
+        self.provider_version.as_deref()
+    }
+}
+
+/// One runtime fact accepted into the Runtime's own fact store (Workflow #313).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFactRecordedPayload {
+    action: EventAction,
+    record: crate::RuntimeFactRecord,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeFactRecordedPayload {
+    pub const fn record(&self) -> &crate::RuntimeFactRecord {
+        &self.record
+    }
+}
+
+/// One runtime fact dropped from the Runtime's own fact store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFactInvalidatedPayload {
+    action: EventAction,
+    invalidation: crate::RuntimeFactInvalidation,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeFactInvalidatedPayload {
+    pub const fn invalidation(&self) -> &crate::RuntimeFactInvalidation {
+        &self.invalidation
+    }
+}
+
+/// The sealed image of the Runtime's own fact store at one ledger position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFactSnapshotPayload {
+    action: EventAction,
+    snapshot: Box<crate::RuntimeFactSnapshot>,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeFactSnapshotPayload {
+    pub fn snapshot(&self) -> &crate::RuntimeFactSnapshot {
+        &self.snapshot
     }
 }
 
@@ -1915,6 +2043,9 @@ pub struct ObservationResultPayload {
     frame_height: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     recognition_verdict: Option<RecognitionVerdict>,
+    /// Microseconds spent acquiring the frame from the backend; only `capture.completed` may carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_acquire_us: Option<u64>,
     audit: SanitizedAudit,
 }
 
@@ -4127,6 +4258,12 @@ trait PayloadDetail {
     fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         None
     }
+    fn touch_response_us(&self) -> Option<u64> {
+        None
+    }
+    fn capture_acquire_us(&self) -> Option<u64> {
+        None
+    }
     fn action(&self) -> EventAction;
     fn diagnostic_code(&self) -> Option<DiagnosticCode>;
     fn effect_disposition(&self) -> Option<EffectDisposition>;
@@ -4168,6 +4305,10 @@ common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(RuntimeLifecyclePayload);
+common_detail_accessors!(RuntimeInstanceBindingPayload);
+common_detail_accessors!(RuntimeFactRecordedPayload);
+common_detail_accessors!(RuntimeFactInvalidatedPayload);
+common_detail_accessors!(RuntimeFactSnapshotPayload);
 common_detail_accessors!(MonitorOutcomePayload);
 common_detail_accessors!(MonitorRecoveryCoordinationPayload);
 common_detail_accessors!(PerformancePressurePayload);
@@ -4216,6 +4357,10 @@ macro_rules! plain_payload_detail {
 
 plain_payload_detail!(
     RuntimeLifecyclePayload,
+    RuntimeInstanceBindingPayload,
+    RuntimeFactRecordedPayload,
+    RuntimeFactInvalidatedPayload,
+    RuntimeFactSnapshotPayload,
     PerformancePressurePayload,
     PerformanceStutterPayload,
     PerformanceSummaryPayload,
@@ -4404,6 +4549,10 @@ impl OutcomePayload {
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
     }
+
+    pub const fn touch_response_us(&self) -> Option<u64> {
+        self.touch_response_us
+    }
 }
 
 impl DiagnosticOutcomePayload {
@@ -4546,6 +4695,10 @@ impl ObservationResultPayload {
 
     pub const fn recognition_verdict(&self) -> Option<RecognitionVerdict> {
         self.recognition_verdict
+    }
+
+    pub const fn capture_acquire_us(&self) -> Option<u64> {
+        self.capture_acquire_us
     }
 }
 
@@ -4692,6 +4845,9 @@ impl PayloadDetail for OutcomePayload {
     fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         self.runtime_state.as_deref()
     }
+    fn touch_response_us(&self) -> Option<u64> {
+        self.touch_response_us
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -4787,6 +4943,9 @@ impl PayloadDetail for MonitorRecoveryCoordinationPayload {
 }
 
 impl PayloadDetail for ObservationResultPayload {
+    fn capture_acquire_us(&self) -> Option<u64> {
+        self.capture_acquire_us
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -5133,6 +5292,7 @@ struct OutcomeDraft {
     action: EventAction,
     effect_disposition: EffectDisposition,
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
+    touch_response_us: Option<u64>,
     audit: AuditInput,
 }
 
@@ -5202,6 +5362,7 @@ struct ObservationResultDraft {
     frame_width: u32,
     frame_height: u32,
     recognition_verdict: Option<RecognitionVerdict>,
+    capture_acquire_us: Option<u64>,
     audit: AuditInput,
 }
 
@@ -6033,6 +6194,95 @@ fn validate_policy_planning_signal_data(
     Ok(())
 }
 
+fn validate_runtime_instance_binding(
+    payload: &RuntimeInstanceBindingPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::RuntimeAction {
+        return Err(SanitizationError::new(
+            "invalid_runtime_instance_binding_action",
+            "runtime_payload",
+        ));
+    }
+    crate::validate_instance_alias(&payload.instance_alias)
+        .map_err(|_| SanitizationError::new("invalid_instance_alias", "instance_alias"))?;
+    if payload.adb_port == Some(0) {
+        return Err(SanitizationError::new("invalid_adb_port", "adb_port"));
+    }
+    if payload.adb_port.is_some()
+        && !payload
+            .adb_host
+            .as_ref()
+            .is_some_and(|host| !host.trim().is_empty())
+    {
+        return Err(SanitizationError::new("invalid_adb_host", "adb_host"));
+    }
+    let bounded = |value: &Option<String>, max_bytes: usize| {
+        value.as_ref().is_none_or(|text| {
+            !text.is_empty() && text.len() <= max_bytes && !text.chars().any(char::is_control)
+        })
+    };
+    let discovery_consistent = match payload.binding_source {
+        InstanceBindingSource::Explicit => {
+            payload.discovered_instance_index.is_none()
+                && payload.discovered_instance_name.is_none()
+                && payload.provider_version.is_none()
+        }
+        InstanceBindingSource::Discovered => {
+            payload.discovered_instance_index.is_some()
+                && payload.discovered_instance_name.is_some()
+        }
+    };
+    if !discovery_consistent
+        || !bounded(
+            &payload.discovered_instance_name,
+            MAX_DISCOVERED_INSTANCE_NAME_BYTES,
+        )
+        || !bounded(&payload.provider_version, MAX_PROVIDER_VERSION_BYTES)
+    {
+        return Err(SanitizationError::new(
+            "invalid_instance_binding_discovery",
+            "binding_source",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_fact_recorded(
+    payload: &RuntimeFactRecordedPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::FactPublish {
+        return Err(SanitizationError::new(
+            "invalid_runtime_fact_recorded_action",
+            "runtime_payload",
+        ));
+    }
+    payload.record.validate()
+}
+
+fn validate_runtime_fact_invalidated(
+    payload: &RuntimeFactInvalidatedPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::FactInvalidate {
+        return Err(SanitizationError::new(
+            "invalid_runtime_fact_invalidated_action",
+            "runtime_payload",
+        ));
+    }
+    payload.invalidation.validate()
+}
+
+fn validate_runtime_fact_snapshot(
+    payload: &RuntimeFactSnapshotPayload,
+) -> Result<(), SanitizationError> {
+    if payload.action != EventAction::FactSnapshot {
+        return Err(SanitizationError::new(
+            "invalid_runtime_fact_snapshot_action",
+            "runtime_payload",
+        ));
+    }
+    payload.snapshot.validate()
+}
+
 fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), SanitizationError> {
     match payload {
         PerformancePayload::PressureStarted(value)
@@ -6628,6 +6878,7 @@ impl OutcomeDraft {
             action,
             effect_disposition,
             runtime_state: None,
+            touch_response_us: None,
             audit,
         }
     }
@@ -6640,6 +6891,7 @@ impl OutcomeDraft {
             action: self.action,
             effect_disposition: self.effect_disposition,
             runtime_state: self.runtime_state,
+            touch_response_us: self.touch_response_us,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6857,6 +7109,7 @@ impl ObservationResultDraft {
         frame_width: u32,
         frame_height: u32,
         recognition_verdict: Option<RecognitionVerdict>,
+        capture_acquire_us: Option<u64>,
         audit: AuditInput,
     ) -> Self {
         Self {
@@ -6865,6 +7118,7 @@ impl ObservationResultDraft {
             frame_width,
             frame_height,
             recognition_verdict,
+            capture_acquire_us,
             audit,
         }
     }
@@ -6885,6 +7139,7 @@ impl ObservationResultDraft {
             frame_width: self.frame_width,
             frame_height: self.frame_height,
             recognition_verdict: self.recognition_verdict,
+            capture_acquire_us: self.capture_acquire_us,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7038,9 +7293,102 @@ enum RuntimeDraftKind {
     Takeover(ObservationDraft),
     Failed(DiagnosticOutcomeDraft),
     LifecycleObserved(RuntimeLifecycleDraft),
+    InstanceBound(RuntimeInstanceBindingDraft),
+    FactRecorded(RuntimeFactRecordedDraft),
+    FactInvalidated(RuntimeFactInvalidatedDraft),
+    FactSnapshot(RuntimeFactSnapshotDraft),
+}
+
+struct RuntimeFactRecordedDraft {
+    record: crate::RuntimeFactRecord,
+    audit: AuditInput,
+}
+
+impl RuntimeFactRecordedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeFactRecordedPayload, SanitizationError> {
+        Ok(RuntimeFactRecordedPayload {
+            action: EventAction::FactPublish,
+            record: self.record,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+struct RuntimeFactInvalidatedDraft {
+    invalidation: crate::RuntimeFactInvalidation,
+    audit: AuditInput,
+}
+
+impl RuntimeFactInvalidatedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeFactInvalidatedPayload, SanitizationError> {
+        Ok(RuntimeFactInvalidatedPayload {
+            action: EventAction::FactInvalidate,
+            invalidation: self.invalidation,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+struct RuntimeFactSnapshotDraft {
+    snapshot: Box<crate::RuntimeFactSnapshot>,
+    audit: AuditInput,
+}
+
+impl RuntimeFactSnapshotDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeFactSnapshotPayload, SanitizationError> {
+        Ok(RuntimeFactSnapshotPayload {
+            action: EventAction::FactSnapshot,
+            snapshot: self.snapshot,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+struct RuntimeInstanceBindingDraft {
+    instance_alias: String,
+    provenance: crate::ExecutionBackendProvenance,
+    adb_host: Option<String>,
+    adb_port: Option<u16>,
+    serial_configured: bool,
+    binding_source: InstanceBindingSource,
+    discovered_instance_index: Option<u16>,
+    discovered_instance_name: Option<String>,
+    provider_version: Option<String>,
+    audit: AuditInput,
+}
+
+impl RuntimeInstanceBindingDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeInstanceBindingPayload, SanitizationError> {
+        Ok(RuntimeInstanceBindingPayload {
+            action: EventAction::RuntimeAction,
+            instance_alias: self.instance_alias,
+            provenance: self.provenance,
+            adb_host: self.adb_host,
+            adb_port: self.adb_port,
+            serial_configured: self.serial_configured,
+            binding_source: self.binding_source,
+            discovered_instance_index: self.discovered_instance_index,
+            discovered_instance_name: self.discovered_instance_name,
+            provider_version: self.provider_version,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
 }
 
 struct RuntimeLifecycleDraft {
+    vendor_stdio: Option<Box<VendorStdioFacts>>,
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
@@ -7053,7 +7401,11 @@ impl RuntimeLifecycleDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<RuntimeLifecyclePayload, SanitizationError> {
+        if let Some(facts) = &self.vendor_stdio {
+            facts.validate()?;
+        }
         Ok(RuntimeLifecyclePayload {
+            vendor_stdio: self.vendor_stdio,
             adb_recovery: self.adb_recovery,
             action: EventAction::RuntimeAction,
             owner_epoch: self.owner_epoch,
@@ -7111,6 +7463,7 @@ impl RuntimePayloadDraft {
         summary: bool,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
             phase: if summary {
@@ -7145,10 +7498,66 @@ impl RuntimePayloadDraft {
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
             phase,
             device_diagnostics: None,
+            audit,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn instance_bound(
+        instance_alias: impl Into<String>,
+        provenance: crate::ExecutionBackendProvenance,
+        adb_host: Option<String>,
+        adb_port: Option<u16>,
+        serial_configured: bool,
+        binding_source: InstanceBindingSource,
+        discovered_instance_index: Option<u16>,
+        discovered_instance_name: Option<String>,
+        provider_version: Option<String>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::InstanceBound(
+            RuntimeInstanceBindingDraft {
+                instance_alias: instance_alias.into(),
+                provenance,
+                adb_host,
+                adb_port,
+                serial_configured,
+                binding_source,
+                discovered_instance_index,
+                discovered_instance_name,
+                provider_version,
+                audit,
+            },
+        ))
+    }
+
+    pub fn fact_recorded(record: crate::RuntimeFactRecord, audit: AuditInput) -> Self {
+        Self(RuntimeDraftKind::FactRecorded(RuntimeFactRecordedDraft {
+            record,
+            audit,
+        }))
+    }
+
+    pub fn fact_invalidated(
+        invalidation: crate::RuntimeFactInvalidation,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::FactInvalidated(
+            RuntimeFactInvalidatedDraft {
+                invalidation,
+                audit,
+            },
+        ))
+    }
+
+    pub fn fact_snapshot(snapshot: crate::RuntimeFactSnapshot, audit: AuditInput) -> Self {
+        Self(RuntimeDraftKind::FactSnapshot(RuntimeFactSnapshotDraft {
+            snapshot: Box::new(snapshot),
             audit,
         }))
     }
@@ -7161,9 +7570,25 @@ impl RuntimePayloadDraft {
 
     pub fn adb_target_recovery(owner_epoch: OwnerEpoch, recovery: AdbTargetRecovery) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: None,
             owner_epoch,
             phase: RuntimeLifecyclePhase::AdbTargetRecovery,
             adb_recovery: Some(Box::new(recovery)),
+            device_diagnostics: None,
+            audit: AuditInput::new(),
+        }))
+    }
+
+    pub fn vendor_stdio_close(
+        owner_epoch: OwnerEpoch,
+        instance_id: Option<InstanceId>,
+        facts: VendorStdioFacts,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            vendor_stdio: Some(Box::new(facts)),
+            owner_epoch,
+            phase: RuntimeLifecyclePhase::VendorStdioClose { instance_id },
+            adb_recovery: None,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -7652,6 +8077,18 @@ impl InputPayloadDraft {
         )))
     }
 
+    /// `input.committed` carrying the measured backend response in microseconds (`None` = unmeasured).
+    pub fn committed_with_touch_response(
+        action: EventAction,
+        effect: EffectDisposition,
+        touch_response_us: Option<u64>,
+        audit: AuditInput,
+    ) -> Self {
+        let mut detail = OutcomeDraft::new(action, effect, audit);
+        detail.touch_response_us = touch_response_us;
+        Self(InputDraftKind::Committed(detail))
+    }
+
     pub fn completed(action: EventAction, audit: AuditInput) -> Self {
         Self(InputDraftKind::Completed(ObservationDraft::new(
             action, audit,
@@ -7773,6 +8210,27 @@ impl CapturePayloadDraft {
             frame_width,
             frame_height,
             None,
+            None,
+            audit,
+        )))
+    }
+
+    /// `capture.completed` carrying the measured frame acquisition in microseconds (`None` = unmeasured).
+    pub fn completed_with_capture_acquire(
+        action: EventAction,
+        effect: EffectDisposition,
+        frame_width: u32,
+        frame_height: u32,
+        capture_acquire_us: Option<u64>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Completed(ObservationResultDraft::new(
+            action,
+            effect,
+            frame_width,
+            frame_height,
+            None,
+            capture_acquire_us,
             audit,
         )))
     }
@@ -7917,6 +8375,7 @@ impl RecognitionPayloadDraft {
                 frame_width,
                 frame_height,
                 Some(verdict),
+                None,
                 audit,
             ),
         ))
@@ -8646,6 +9105,10 @@ pub enum RuntimePayload {
     Takeover(ObservationPayload),
     Failed(DiagnosticOutcomePayload),
     LifecycleObserved(RuntimeLifecyclePayload),
+    InstanceBound(RuntimeInstanceBindingPayload),
+    FactRecorded(RuntimeFactRecordedPayload),
+    FactInvalidated(RuntimeFactInvalidatedPayload),
+    FactSnapshot(RuntimeFactSnapshotPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -8978,6 +9441,10 @@ family_payload!(RuntimePayload, {
     Takeover => EventType::RuntimeTakeover,
     Failed => EventType::RuntimeFailed,
     LifecycleObserved => EventType::RuntimeLifecycleObserved,
+    InstanceBound => EventType::RuntimeInstanceBound,
+    FactRecorded => EventType::RuntimeFactRecorded,
+    FactInvalidated => EventType::RuntimeFactInvalidated,
+    FactSnapshot => EventType::RuntimeFactSnapshot,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -9214,6 +9681,18 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::LifecycleObserved(detail) => {
                     RuntimePayload::LifecycleObserved(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::InstanceBound(detail) => {
+                    RuntimePayload::InstanceBound(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::FactRecorded(detail) => {
+                    RuntimePayload::FactRecorded(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::FactInvalidated(detail) => {
+                    RuntimePayload::FactInvalidated(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::FactSnapshot(detail) => {
+                    RuntimePayload::FactSnapshot(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {
@@ -9610,7 +10089,7 @@ impl EventPayload {
         if let Self::Artifact(ArtifactPayload::Retention(value)) = self {
             sensitivity = sensitivity.max(value.sensitivity());
         }
-        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some())
+        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some() || value.vendor_stdio.is_some())
         {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -9652,7 +10131,13 @@ impl EventPayload {
         if matches!(
             self,
             Self::Performance(_)
-                | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+                | Self::Runtime(
+                    RuntimePayload::LifecycleObserved(_)
+                        | RuntimePayload::InstanceBound(_)
+                        | RuntimePayload::FactRecorded(_)
+                        | RuntimePayload::FactInvalidated(_)
+                        | RuntimePayload::FactSnapshot(_)
+                )
                 | Self::Ledger(LedgerPayload::Signature(_))
         ) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
@@ -9791,6 +10276,22 @@ impl EventPayload {
         if let Self::Ledger(LedgerPayload::Signature(payload)) = self {
             payload.record().validate()?;
         }
+        if detail.touch_response_us().is_some()
+            && !matches!(self, Self::Input(InputPayload::Committed(_)))
+        {
+            return Err(SanitizationError::new(
+                "invalid_touch_response_scope",
+                "touch_response_us",
+            ));
+        }
+        if detail.capture_acquire_us().is_some()
+            && !matches!(self, Self::Capture(CapturePayload::Completed(_)))
+        {
+            return Err(SanitizationError::new(
+                "invalid_capture_acquire_scope",
+                "capture_acquire_us",
+            ));
+        }
         if let Some(config) = detail.device_diagnostic_config() {
             if !matches!(
                 self.event_type(),
@@ -9804,6 +10305,17 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            if matches!(value.phase, RuntimeLifecyclePhase::VendorStdioClose { .. })
+                != value.vendor_stdio.is_some()
+            {
+                return Err(SanitizationError::new(
+                    "invalid_vendor_stdio_phase",
+                    "runtime_payload",
+                ));
+            }
+            if let Some(facts) = &value.vendor_stdio {
+                facts.validate()?;
+            }
             if (value.phase == RuntimeLifecyclePhase::AdbTargetRecovery)
                 != value.adb_recovery.is_some()
             {
@@ -9881,6 +10393,18 @@ impl EventPayload {
                 "invalid_runtime_lifecycle_action",
                 "runtime_payload",
             ));
+        }
+        if let Self::Runtime(RuntimePayload::InstanceBound(value)) = self {
+            validate_runtime_instance_binding(value)?;
+        }
+        if let Self::Runtime(RuntimePayload::FactRecorded(value)) = self {
+            validate_runtime_fact_recorded(value)?;
+        }
+        if let Self::Runtime(RuntimePayload::FactInvalidated(value)) = self {
+            validate_runtime_fact_invalidated(value)?;
+        }
+        if let Self::Runtime(RuntimePayload::FactSnapshot(value)) = self {
+            validate_runtime_fact_snapshot(value)?;
         }
         if let Self::ResourceAuthoring(value) = self {
             validate_resource_authoring_fields(

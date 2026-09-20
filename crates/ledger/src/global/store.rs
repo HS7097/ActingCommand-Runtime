@@ -15,9 +15,15 @@ use std::sync::Arc;
 
 /// One opened, recovered store moves to the existing GlobalLedger writer.
 /// Opening (including artifact verification) finishes before this transfer.
-/// Reads address the verified committed snapshot and do no fallible storage I/O.
+/// Reads address committed facts. SQLite view and artifact-reference reads authenticate
+/// their physical snapshot through the existing database owner before returning.
 /// Projection, subscriptions and public request validation belong to GlobalLedger.
 pub(super) trait LedgerStore: Send + 'static {
+    fn resolve_artifact(
+        &self,
+        selection: &super::LedgerArtifactSelection,
+        deadline: std::time::Instant,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact>;
     fn retention_candidates(
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
@@ -80,6 +86,13 @@ pub(super) trait LedgerStore: Send + 'static {
 }
 
 impl<B: DurableStorage> LedgerStore for EventStore<B> {
+    fn resolve_artifact(
+        &self,
+        selection: &super::LedgerArtifactSelection,
+        deadline: std::time::Instant,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+        Self::resolve_artifact(self, selection, deadline)
+    }
     fn retention_candidates(
         &self,
         after: Option<actingcommand_contract::ArtifactId>,

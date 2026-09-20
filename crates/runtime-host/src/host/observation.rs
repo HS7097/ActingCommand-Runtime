@@ -42,6 +42,12 @@ impl HostShared {
             EventAction::RuntimeReadonlyObserve,
             None,
         )?;
+        self.require_bound_endpoint(
+            &resolved,
+            self.events
+                .request_links(request, Some(resolved.instance_id()), None, None),
+            EventAction::RuntimeReadonlyObserve,
+        )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let completed =
             self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
@@ -79,6 +85,12 @@ impl HostShared {
             resolved.instance_id(),
             EventAction::RuntimeCaptureSequence,
             None,
+        )?;
+        self.require_bound_endpoint(
+            &resolved,
+            self.events
+                .request_links(request, Some(resolved.instance_id()), None, None),
+            EventAction::RuntimeCaptureSequence,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let mut observations = Vec::with_capacity(usize::from(spec.frame_count()));
@@ -176,10 +188,18 @@ impl HostShared {
         let registration = self
             .mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let frame = match self
+        let capture_started = Instant::now();
+        let captured = self
             .execution
-            .capture_retained_with_registration_guard(instance_alias, registration)
-        {
+            .capture_frame_retained_with_registration_guard(
+                instance_alias,
+                links.frame_id().copied(),
+                registration,
+            );
+        let capture_acquire_us = performance::measured_microseconds(
+            actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
+        );
+        let frame = match captured {
             Ok(frame) => frame,
             Err(error) => {
                 let error = self
@@ -355,7 +375,12 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        self.append_capture_completed(links.clone(), observation.width(), observation.height())?;
+        self.append_capture_completed(
+            links.clone(),
+            observation.width(),
+            observation.height(),
+            capture_acquire_us,
+        )?;
         let event = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -371,14 +396,28 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
+        let verified = terminal(&sink.verified.ok_or_else(|| {
+            online_observation::observation_integrity_failure("observation_verified_event_missing")
+        })?);
+        self.execution
+            .commit_input_frame(
+                instance_alias,
+                actingcommand_contract::InputFrameReference {
+                    frame_id: *frame_id,
+                    width: observation.width(),
+                    height: observation.height(),
+                },
+            )
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "commit_capture_input_frame",
+                    &error,
+                ))
+            })?;
         Ok(CompletedReadonlyObservation {
             observation,
             terminal: event,
-            verified: terminal(&sink.verified.ok_or_else(|| {
-                online_observation::observation_integrity_failure(
-                    "observation_verified_event_missing",
-                )
-            })?),
+            verified,
             links,
             artifact_links,
         })
@@ -405,6 +444,7 @@ impl HostShared {
         links: EventLinksDraft,
         width: u32,
         height: u32,
+        capture_acquire_us: Option<u64>,
     ) -> Result<PersistedEvent, RequestFailure> {
         self.append_event(
             EventSeverity::Info,
@@ -412,11 +452,12 @@ impl HostShared {
             OriginModule::Capture,
             EventActor::Runtime,
             links,
-            CapturePayloadDraft::completed(
+            CapturePayloadDraft::completed_with_capture_acquire(
                 EventAction::CaptureObserve,
                 EffectDisposition::Performed,
                 width,
                 height,
+                capture_acquire_us,
                 AuditInput::new(),
             ),
         )

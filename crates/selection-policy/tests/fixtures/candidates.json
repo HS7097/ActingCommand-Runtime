@@ -1,0 +1,36 @@
+{
+  "candidates": [
+    {
+      "candidate_id": "slot-1",
+      "fields": {
+        "value_milli": { "type": "integer", "value": 1200 },
+        "ready": { "type": "boolean", "value": true },
+        "grade": { "type": "string", "value": "grade-high" }
+      }
+    },
+    {
+      "candidate_id": "slot-2",
+      "fields": {
+        "value_milli": { "type": "integer", "value": 900 },
+        "ready": { "type": "boolean", "value": true },
+        "grade": { "type": "string", "value": "grade-mid" }
+      }
+    },
+    {
+      "candidate_id": "slot-3",
+      "fields": {
+        "value_milli": { "type": "integer", "value": 2000 },
+        "ready": { "type": "boolean", "value": false },
+        "grade": { "type": "string", "value": "grade-high" }
+      }
+    },
+    {
+      "candidate_id": "slot-4",
+      "fields": {
+        "value_milli": { "type": "integer", "value": 900 },
+        "ready": { "type": "boolean", "value": true },
+        "grade": { "type": "string", "value": "grade-mid" }
+      }
+    }
+  ]
+}

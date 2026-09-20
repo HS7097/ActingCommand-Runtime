@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::planning::collect_maintenance_evidence;
+use actingcommand_policy::assess_predictive_maintenance;
 
 pub(super) enum CapacityUse {
     Business,
@@ -8,6 +10,59 @@ pub(super) enum CapacityUse {
 }
 
 impl HostShared {
+    pub(super) fn assess_and_publish_predictive_maintenance(
+        &self,
+        query: &MaintenanceLedgerQuery,
+    ) -> RuntimeHostResult<MaintenanceAssessment> {
+        let result: RuntimeHostResult<MaintenanceAssessment> = (|| {
+            let evidence = collect_maintenance_evidence(&self.ledger, query)?;
+            let assessment = assess_predictive_maintenance(&evidence, query.trend_policy())
+                .map_err(|error| {
+                    RuntimeHostError::request(
+                        error.code(),
+                        "assess_predictive_maintenance",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                })?;
+            if assessment.recheck_suggested() {
+                let observed_at_unix_ms = evidence
+                    .durations
+                    .iter()
+                    .map(|sample| sample.observed_at_unix_ms)
+                    .chain(
+                        evidence
+                            .confidences
+                            .iter()
+                            .map(|sample| sample.observed_at_unix_ms),
+                    )
+                    .max()
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            "maintenance_evidence_timestamp_missing",
+                            "assess_predictive_maintenance",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+                self.record_policy_planning_signal(PolicyPlanningSignalEventData {
+                    signal_id: format!("signal:{}", assessment.assessment_id),
+                    instance_id: query.instance_id().to_owned(),
+                    task_id: Some(query.task_id().to_owned()),
+                    kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
+                    fact_code: "maintenance_recheck_suggested".to_owned(),
+                    observed_at_unix_ms,
+                    detection_budget: None,
+                })?;
+            }
+            Ok(assessment)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
@@ -214,6 +269,15 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
+            let (touch_response_us, capture_acquire_us) = match event.payload() {
+                EventPayload::Input(InputPayload::Committed(payload)) => {
+                    (payload.touch_response_us(), None)
+                }
+                EventPayload::Capture(CapturePayload::Completed(payload)) => {
+                    (None, payload.capture_acquire_us())
+                }
+                _ => (None, None),
+            };
             let observation = PipelineEventObservation {
                 event_type: event.event_type(),
                 instance_id: instance_alias,
@@ -221,6 +285,8 @@ impl HostShared {
                 frame_id: event.links().frame_id().copied(),
                 recognition_id: event.links().recognition_id().copied(),
                 action_id: event.links().action_id().copied(),
+                touch_response_us,
+                capture_acquire_us,
             };
             lock(&self.performance, "observe_performance_pipeline_event")?
                 .observe_pipeline_event(observation)
@@ -247,10 +313,19 @@ impl HostShared {
     }
 }
 
+/// `Unavailable` spans never become a zero; they leave the typed field unset.
+pub(super) const fn measured_microseconds(observed: ObservedMicroseconds) -> Option<u64> {
+    match observed {
+        ObservedMicroseconds::Measured { value } => Some(value),
+        ObservedMicroseconds::Unavailable { .. } => None,
+    }
+}
+
 const fn is_pipeline_event(event_type: EventType) -> bool {
     matches!(
         event_type,
-        EventType::CaptureRequested
+        EventType::InputCommitted
+            | EventType::CaptureRequested
             | EventType::CaptureCompleted
             | EventType::CaptureFailed
             | EventType::RecognitionRequested
@@ -269,6 +344,8 @@ pub(super) fn performance_monitor_loop(
     shared: Arc<HostShared>,
     sample_interval: Duration,
 ) -> RuntimeHostResult<()> {
+    let snapshot_interval = Duration::from_millis(RUNTIME_FACT_SNAPSHOT_INTERVAL_MS);
+    let mut since_runtime_fact_snapshot = Duration::ZERO;
     while !shared.fatal.is_shutdown_requested() {
         thread::sleep(sample_interval);
         if shared.fatal.is_shutdown_requested() {
@@ -286,6 +363,15 @@ pub(super) fn performance_monitor_loop(
             }
         };
         let retention_enabled = shared.maintain_frame_retention()?;
+        // Sealed at most once per RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, whatever the sample interval.
+        since_runtime_fact_snapshot = since_runtime_fact_snapshot.saturating_add(sample_interval);
+        if since_runtime_fact_snapshot >= snapshot_interval {
+            since_runtime_fact_snapshot = Duration::ZERO;
+            if let Err(error) = shared.append_runtime_fact_snapshot_if_dirty() {
+                shared.fatal.mark(error.clone())?;
+                return Err(error);
+            }
+        }
         if stop_sampling && !retention_enabled {
             break;
         }

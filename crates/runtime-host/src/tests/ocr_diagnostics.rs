@@ -525,7 +525,20 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             document["records"].as_array().unwrap().len() as u64,
             "one measured call per original record, including its terminal"
         );
-        assert!(observed.execution.recognition_evaluate.attempts.unwrap() > 0);
+        if case == "task-timeout" {
+            // The delayed first capture spends the budget, so the geometry
+            // prerequisite fails closed before any recognition.
+            assert_eq!(
+                observed.execution.recognition_evaluate.attempts,
+                Some(0),
+                "{case}"
+            );
+        } else {
+            assert!(
+                observed.execution.recognition_evaluate.attempts.unwrap() > 0,
+                "{case}"
+            );
+        }
         for phase in [
             &observed.preflight,
             &observed.execution,
@@ -581,7 +594,40 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             assert!(last_bytes > 0);
             assert!(subphases.file_write.successful_returned_bytes.unwrap() >= last_bytes);
         }
-        if case != "success" {
+        if case == "task-timeout" {
+            // The delayed first capture spends the budget, so the geometry
+            // prerequisite fails closed as a Runtime operation error before
+            // any recognition or input.
+            let actingcommand_contract::TaskDiagnosticPayload::Terminal(
+                actingcommand_contract::TaskDiagnosticTerminalData::OperationError {
+                    code,
+                    executed_steps,
+                },
+            ) = &terminal.payload
+            else {
+                panic!(
+                    "original geometry prerequisite failure: {:?}",
+                    terminal.payload
+                )
+            };
+            assert_eq!(code, "contained_task_geometry_budget_unavailable");
+            assert_eq!(*executed_steps, Some(0));
+            assert!(observed.task_failure.is_none());
+            assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+            assert!(terminal.step_action_id.is_none());
+            let failed = events
+                .iter()
+                .find(|event| event.event_type == EventType::TaskFailed)
+                .unwrap();
+            assert!(matches!(
+                projected_task_semantic_fact(failed),
+                Some(TaskSemanticFact::TerminalCommitted {
+                    executed_steps: Some(0),
+                    failure_code: Some(code),
+                    ..
+                }) if code == "contained_task_geometry_budget_unavailable"
+            ));
+        } else if case != "success" {
             let actingcommand_contract::TaskDiagnosticPayload::Terminal(
                 actingcommand_contract::TaskDiagnosticTerminalData::TaskError {
                     code,
@@ -616,14 +662,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                     .expect("original step event");
                 assert_eq!(step.links.action_id(), terminal.step_action_id.as_ref());
             } else {
-                assert_eq!(
-                    code,
-                    if case == "task-timeout" {
-                        "contained_task_timeout"
-                    } else {
-                        "contained_task_page_unknown"
-                    }
-                );
+                assert_eq!(code, "contained_task_page_unknown");
                 assert_eq!(
                     timing.stage,
                     actingcommand_contract::TaskTimingStage::PageRecognition

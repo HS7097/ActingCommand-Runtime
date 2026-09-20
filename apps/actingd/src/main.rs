@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod check_config;
 mod config;
 mod ledger_maintenance;
 
@@ -54,11 +55,18 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     {
         return ledger_maintenance::run(arguments);
     }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "check-config")
+    {
+        return check_config::run(arguments);
+    }
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {
         host,
         registry,
         policy,
+        ..
     } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
@@ -1996,22 +2004,8 @@ mod tests {
             Ok(Box::new(RecordingCapture {
                 count: Arc::clone(&self.capture_count),
                 frames: VecDeque::from([
-                    Frame::from_pixels(
-                        2,
-                        1,
-                        vec![255, 0, 0, 0, 255, 0],
-                        PixelFormat::Rgb8,
-                        CaptureBackendName::AdbScreencap,
-                    )
-                    .expect("home frame"),
-                    Frame::from_pixels(
-                        2,
-                        1,
-                        vec![0, 0, 255, 0, 255, 0],
-                        PixelFormat::Rgb8,
-                        CaptureBackendName::AdbScreencap,
-                    )
-                    .expect("terminal frame"),
+                    recording_frame([255, 0, 0]).expect("home frame"),
+                    recording_frame([0, 0, 255]).expect("terminal frame"),
                 ]),
             }))
         }
@@ -2027,6 +2021,19 @@ mod tests {
         }
     }
 
+    /// Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
+    fn recording_frame(page_pixel: [u8; 3]) -> DeviceResult<Frame> {
+        let mut pixels = vec![page_pixel[0], page_pixel[1], page_pixel[2], 0, 255, 0];
+        pixels.resize(16 * 9 * 3, 0);
+        Frame::from_pixels(
+            16,
+            9,
+            pixels,
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+    }
+
     struct RecordingCapture {
         count: Arc<AtomicUsize>,
         frames: VecDeque<Frame>,
@@ -2040,6 +2047,33 @@ mod tests {
                 .ok_or_else(|| DeviceError::fatal("recording capture exhausted"))?;
             self.count.fetch_add(1, Ordering::SeqCst);
             Ok(frame)
+        }
+        fn observe_geometry(
+            &mut self,
+            _deadline: std::time::Instant,
+        ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
+            use actingcommand_contract::{
+                CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
+                CaptureRotation, CaptureRotationObservation, CaptureRotationSource,
+                CaptureWmSizeKind,
+            };
+            // The same 16x9 extent of the recorded frames; no device is queried.
+            let extent = CaptureExtent::new(16, 9).expect("positive recording extent");
+            Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+                backend: CaptureBackendName::AdbScreencap,
+                source: CaptureGeometrySource::AdbDefaultDisplay {
+                    serial: "recording-device".to_string(),
+                    wm_extent: extent,
+                    wm_size_kind: CaptureWmSizeKind::Physical,
+                },
+                logical_display_extent: extent,
+                rotation: CaptureRotationObservation::Observed {
+                    rotation: CaptureRotation::R0,
+                    source: CaptureRotationSource::DumpsysDisplayOrientation,
+                },
+                sampled_at: std::time::SystemTime::now(),
+                frame_transform: None,
+            }))
         }
         fn close_once(
             &mut self,
@@ -2258,7 +2292,7 @@ mod tests {
                     "execution_mode":"navigable_route",
                     "game":"neutral",
                     "server":"test",
-                    "resolution":{"width":2,"height":1},
+                    "resolution":{"width":16,"height":9},
                     "entry_task_id":"task",
                     "capture_interval_ms":50,
                     "step_timeout_ms":50,
@@ -2277,7 +2311,7 @@ mod tests {
                     "task_id":"task",
                     "game":"neutral",
                     "server_scope":["test"],
-                    "coordinate_space":{"width":2,"height":1},
+                    "coordinate_space":{"width":16,"height":9},
                     "entry_page":"home",
                     "target_page":"terminal",
                     "scheduling_outcome":{
@@ -2310,7 +2344,7 @@ mod tests {
                     "schema_version":"0.3",
                     "game":"neutral",
                     "server":"test",
-                    "coordinate_space":{"width":2,"height":1},
+                    "coordinate_space":{"width":16,"height":9},
                     "defaults":{"color_max_distance":0.0},
                     "targets":[
                         {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},

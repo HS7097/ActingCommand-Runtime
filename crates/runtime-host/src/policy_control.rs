@@ -770,6 +770,8 @@ mod tests {
             max_capture_latency_ms: None,
             max_recognition_latency_ms: None,
             max_action_effect_latency_ms: None,
+            max_touch_response_us: None,
+            max_capture_acquire_us: None,
             related_event_ids: Vec::new(),
         }
     }

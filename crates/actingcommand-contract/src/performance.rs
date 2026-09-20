@@ -188,6 +188,12 @@ pub struct PerformanceContext {
     pub max_capture_latency_ms: Option<u64>,
     pub max_recognition_latency_ms: Option<u64>,
     pub max_action_effect_latency_ms: Option<u64>,
+    /// Window maximum of `input.committed` `touch_response_us`; absent on the legacy wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_touch_response_us: Option<u64>,
+    /// Window maximum of `capture.completed` `capture_acquire_us`; absent on the legacy wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_capture_acquire_us: Option<u64>,
     pub related_event_ids: Vec<EventId>,
 }
 
@@ -209,6 +215,8 @@ impl PerformanceContext {
             max_capture_latency_ms: None,
             max_recognition_latency_ms: None,
             max_action_effect_latency_ms: None,
+            max_touch_response_us: None,
+            max_capture_acquire_us: None,
             related_event_ids: Vec::new(),
         }
     }

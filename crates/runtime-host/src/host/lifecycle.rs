@@ -41,6 +41,71 @@ impl HostShared {
         .map_err(|_| ledger_error("append_runtime_lifecycle_observed"))
     }
 
+    pub(super) fn append_stdio_close_observations(
+        &self,
+        observations: &[actingcommand_execution_kernel::ExecutionStdioObservation],
+        instance_id: Option<InstanceId>,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
+        if observations.is_empty() {
+            return Ok(());
+        }
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(ledger_error("append_vendor_stdio_close"));
+        }
+        let gate = lock(&self.fact_write_gate, "append_vendor_stdio_close")?;
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(ledger_error("append_vendor_stdio_close"));
+        }
+        let mut persisted = Vec::new();
+        for observation in observations {
+            if observation.recorded_event.get().is_some() {
+                continue;
+            }
+            let residual = observation.facts.paths.iter().any(|path| {
+                matches!(
+                    path.removal,
+                    actingcommand_contract::StdioPathRemoval::Residual(_)
+                )
+            });
+            let event = self
+                .append_event_under_fact_gate(
+                    if residual {
+                        EventSeverity::Warning
+                    } else {
+                        EventSeverity::Info
+                    },
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links.clone(),
+                    RuntimePayloadDraft::vendor_stdio_close(
+                        self.owner_epoch,
+                        instance_id,
+                        (*observation.facts).clone(),
+                    ),
+                )
+                .map_err(|_| {
+                    self.lifecycle_append_failed.store(true, Ordering::Release);
+                    ledger_error("append_vendor_stdio_close")
+                })?;
+            persisted.push((observation, event));
+        }
+        if !persisted.is_empty() {
+            self.synchronize_fact_store_under_gate().inspect_err(|_| {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+            })?;
+            for (observation, event) in &persisted {
+                let _ = observation.recorded_event.set(*event.event_id());
+            }
+        }
+        drop(gate);
+        for (_, event) in persisted {
+            self.observe_pipeline_event(&event)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn append_lifecycle_failure(
         &self,
         stage: RuntimeLifecycleFailureStage,
@@ -61,6 +126,9 @@ impl HostShared {
             | RuntimeLifecycleFailure::PolicyAdmission { error, .. } => Some(*error),
             _ => None,
         };
+        let failure_stage = host_error
+            .and_then(|error| error.lifecycle.failure_stage)
+            .unwrap_or_else(|| stage.as_str());
         if let Some(error) = host_error
             && let Some(complete) = &error.lifecycle.complete_failure
         {
@@ -109,6 +177,11 @@ impl HostShared {
                 .causes
                 .iter()
                 .all(|cause| cause.recorded_event.get().is_some())
+            && error
+                .lifecycle
+                .vendor_stdio
+                .iter()
+                .all(|observation| observation.recorded_event.get().is_some())
         {
             return Ok(());
         }
@@ -119,6 +192,13 @@ impl HostShared {
             && error.projection().code == RuntimeErrorCode::LedgerFailure
         {
             return Err(error.clone());
+        }
+        if let Some(error) = host_error {
+            self.append_stdio_close_observations(
+                &error.lifecycle.vendor_stdio,
+                error.lifecycle.instance_id,
+                links.clone(),
+            )?;
         }
         let (origin, code, operation, fatal, runtime_code) = match failure {
             RuntimeLifecycleFailure::Host(error)
@@ -162,7 +242,7 @@ impl HostShared {
                         client_part: Option<(&str, usize, usize)>| {
             let lifecycle = actingcommand_contract::RuntimeLifecycleFailureDraft::new(
                 self.owner_epoch,
-                stage.as_str(),
+                failure_stage,
                 origin,
                 code,
             )
@@ -218,7 +298,7 @@ impl HostShared {
                         },
                         DiagnosticDetailDraft::new(
                             "runtime_lifecycle",
-                            stage.as_str(),
+                            failure_stage,
                             origin,
                             operation.unwrap_or("actingd_process"),
                             match client_part {
@@ -338,9 +418,14 @@ impl HostShared {
         result: RuntimeHostResult<()>,
     ) {
         if let Err(error) = result {
+            let error = error.with_failure_stage(stage.as_str());
             let writer_failed = slot.as_ref().is_some_and(|failure| {
                 failure.projection().code == RuntimeErrorCode::LedgerFailure
-            }) || error.projection().code == RuntimeErrorCode::LedgerFailure;
+            }) || error.projection().code == RuntimeErrorCode::LedgerFailure
+                || self.lifecycle_append_failed.load(Ordering::Acquire);
+            if writer_failed {
+                self.lifecycle_append_failed.store(true, Ordering::Release);
+            }
             if !writer_failed
                 && let Err(append_error) = self.append_lifecycle_failure(
                     stage,
@@ -349,17 +434,14 @@ impl HostShared {
                     None,
                 )
             {
+                if append_error.projection().code == RuntimeErrorCode::LedgerFailure {
+                    self.lifecycle_append_failed.store(true, Ordering::Release);
+                }
                 let complete = error.with_complete_failure(
                     crate::error::RuntimeFailureRelation::LifecycleRecord,
-                    append_error,
+                    append_error.with_failure_stage(stage.as_str()),
                 );
-                *slot = Some(match slot.take() {
-                    Some(prior) => prior.with_complete_failure(
-                        crate::error::RuntimeFailureRelation::LifecycleRecord,
-                        complete,
-                    ),
-                    None => complete,
-                });
+                record_failure(slot, Err(complete));
                 return;
             }
             record_failure(slot, Err(error));
@@ -481,10 +563,68 @@ pub(super) fn append_runtime_start_event(
         .map_err(|_| ledger_error("append_runtime_start"))
 }
 
+/// The `runtime.instance_bound` payload of one registered instance: a pending discovery
+/// binding carries the discovered facts without host and port.
+pub(super) fn instance_bound_payload(instance: &RegisteredInstance) -> RuntimePayloadDraft {
+    let endpoint = instance.bound_adb_endpoint();
+    let discovered = instance
+        .adb_endpoint
+        .as_ref()
+        .and_then(ResolvedInstanceEndpoint::discovered_binding);
+    RuntimePayloadDraft::instance_bound(
+        instance.instance_alias.clone(),
+        instance.provenance,
+        endpoint.map(|endpoint| endpoint.host().to_owned()),
+        endpoint.map(ResolvedAdbEndpoint::port),
+        endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured),
+        if discovered.is_some() {
+            InstanceBindingSource::Discovered
+        } else {
+            InstanceBindingSource::Explicit
+        },
+        discovered.map(DiscoveredInstanceBinding::instance_index),
+        discovered.map(|binding| binding.instance_name().to_owned()),
+        discovered.map(|binding| binding.provider_version().to_owned()),
+        AuditInput::new(),
+    )
+}
+
+/// Records one `runtime.instance_bound` fact per registered instance, in instance_id order.
+pub(super) fn append_instance_binding_events(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    instances: &BTreeMap<InstanceId, RegisteredInstance>,
+) -> RuntimeHostResult<()> {
+    for instance in instances.values() {
+        let links = events.system_links()?.with_instance_id(
+            events
+                .issuer()
+                .issue_registered_instance(instance.instance_id),
+        );
+        let draft = events.draft(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            instance_bound_payload(instance),
+        )?;
+        let draft = events.sanitize(draft)?;
+        ledger
+            .append(draft)
+            .map_err(|_| ledger_error("append_runtime_instance_bound"))?;
+    }
+    Ok(())
+}
+
 pub(super) fn record_failure(slot: &mut Option<RuntimeHostError>, result: RuntimeHostResult<()>) {
-    if let Err(error) = result
-        && slot.is_none()
-    {
-        *slot = Some(error);
+    if let Err(error) = result {
+        *slot = Some(match slot.take() {
+            Some(prior) => prior.with_complete_failure(
+                crate::error::RuntimeFailureRelation::LifecycleRecord,
+                error,
+            ),
+            None => error,
+        });
     }
 }

@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod facts;
+
 use actingcommand_contract::{
     ContainedTaskRequest, HolderId, IdentifierIssuer, InstanceId, LeaseId, LeasePriority,
     LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch, RequestId,
@@ -1412,6 +1414,20 @@ impl SeedScheduler {
         let lease = self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
         if lease.resource_close_only {
             return Err(SchedulerError::ResourceCloseOnly);
+        }
+        Ok(())
+    }
+
+    /// Rechecks the existing in-progress boundary without granting a new operation.
+    pub fn validate_destructive_step(
+        &self,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<()> {
+        let lease = self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
+        if !lease.destructive_step_active {
+            return Err(SchedulerError::DestructiveStateMismatch);
         }
         Ok(())
     }

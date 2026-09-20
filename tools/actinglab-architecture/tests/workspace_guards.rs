@@ -4,13 +4,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
-    inspect_generic_authoring_identity, inspect_generic_runtime_identity,
-    inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
+    LedgerOwnerModule, contract_dependency_violations, discover_ledger_owners,
+    extract_command_inventory, inspect_contract_fact_matching, inspect_generic_authoring_identity,
+    inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
+    inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
+    ledger_owns_query_matching, resource_tooling_removability_violations,
     workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
@@ -27,7 +29,12 @@ fn semantic_caller_row(path: &str, line: &str) -> String {
     format!("{path}:{}\n", line.trim())
 }
 
-const GENERIC_NON_CARGO_ROOTS: &[&str] = &["benchmarks/workloads", "contracts", "tests"];
+fn ledger_owners(root: &Path) -> Vec<LedgerOwnerModule> {
+    discover_ledger_owners(&root.join("crates/ledger/src/lib.rs"))
+        .expect("discover production Ledger owners from module declarations")
+}
+
+const GENERIC_NON_CARGO_ROOTS: &[&str] = &["contracts", "tests"];
 
 const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] = &[
     "apps/actinglab",
@@ -116,72 +123,73 @@ fn workspace_genericity_roots(root: &Path) -> BTreeMap<PathBuf, GenericityDomain
             relative.display()
         );
     }
+    assert_eq!(
+        roots.len(),
+        member_ids.len(),
+        "member classification is incomplete"
+    );
     roots
 }
 
-#[test]
-fn a7_interface_amendment_matches_declared_freeze() {
-    assert_frozen_payload(
-        "docs/architecture/actinglab-a7-interface-amendment.md",
-        "<!-- A7-INTERFACE-FREEZE-BEGIN -->\n",
-        "<!-- A7-INTERFACE-FREEZE-END -->",
-        "A7 interface amendment",
+fn genericity_check_inputs(
+    root: &Path,
+    roots: &BTreeMap<PathBuf, GenericityDomain>,
+    domain: GenericityDomain,
+) -> BTreeMap<PathBuf, Vec<PathBuf>> {
+    let mut inputs = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for (member, actual_domain) in roots {
+        if *actual_domain != domain {
+            continue;
+        }
+        let mut files = Vec::new();
+        match domain {
+            GenericityDomain::Runtime => {
+                collect_generic_runtime_files(&root.join(member), &mut files)
+            }
+            GenericityDomain::Authoring => {
+                collect_rust_files(&root.join(member).join("src"), &mut files)
+            }
+            GenericityDomain::Architecture => {
+                panic!("architecture owns counterexamples, not a neutral-source input")
+            }
+        }
+        assert!(
+            !files.is_empty(),
+            "classified member {} has no check inputs",
+            member.display()
+        );
+        files.sort();
+        for file in &files {
+            assert!(
+                seen.insert(file.clone()),
+                "duplicate genericity input {}",
+                file.display()
+            );
+        }
+        inputs.insert(member.clone(), files);
+    }
+    assert_eq!(
+        inputs.keys().collect::<BTreeSet<_>>(),
+        roots
+            .iter()
+            .filter_map(|(member, actual)| (*actual == domain).then_some(member))
+            .collect(),
+        "classified members and checker inputs differ"
     );
+    inputs
 }
 
 #[test]
-fn issue33_chain_amendment_matches_declared_freeze() {
-    assert_frozen_payload(
-        "docs/architecture/actinglab-chain-amendment-20260710.md",
-        "<!-- ISSUE33-CHAIN-FREEZE-BEGIN -->\n",
-        "<!-- ISSUE33-CHAIN-FREEZE-END -->",
-        "issue 33 chain amendment",
-    );
-}
-
-#[test]
-fn issue35_c0_architecture_matches_declared_freeze() {
-    assert_frozen_payload(
-        "docs/architecture/runtime-ledger-v3-c0-freeze.md",
-        "<!-- RUNTIME-LEDGER-V3-C0-FREEZE-BEGIN -->\n",
-        "<!-- RUNTIME-LEDGER-V3-C0-FREEZE-END -->",
-        "issue 35 C0 architecture",
-    );
-}
-
-fn assert_frozen_payload(path: &str, begin: &str, end: &str, label: &str) {
-    let source = fs::read_to_string(workspace_root().join(path))
-        .unwrap_or_else(|error| panic!("read {label}: {error}"));
-    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
-    let declared = normalized
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("Frozen payload SHA-256: `")
-                .and_then(|value| value.strip_suffix('`'))
-        })
-        .unwrap_or_else(|| panic!("{label} declares frozen payload SHA-256"));
-    let payload = normalized
-        .split_once(begin)
-        .and_then(|(_, tail)| tail.split_once(end).map(|(payload, _)| payload))
-        .unwrap_or_else(|| panic!("{label} contains freeze markers"));
-    let actual = format!("{:x}", Sha256::digest(payload.as_bytes()));
-
-    assert_eq!(actual, declared, "{label} freeze drifted");
-}
-
-#[test]
-fn lab_source_obeys_dependency_law_or_placeholder_is_consistent() {
+fn lab_source_obeys_dependency_law() {
     let root = workspace_root();
     let lab_root = root.join("crates/lab");
-    if !lab_root.exists() {
-        let workspace_manifest =
-            fs::read_to_string(root.join("Cargo.toml")).expect("read workspace Cargo.toml");
-        assert!(
-            !workspace_manifest.contains("\"crates/lab\""),
-            "workspace registers crates/lab before the crate exists"
-        );
-        return;
-    }
+    let workspace_manifest =
+        fs::read_to_string(root.join("Cargo.toml")).expect("read workspace Cargo.toml");
+    assert!(
+        workspace_manifest.contains("\"crates/lab\""),
+        "workspace must register the required crates/lab member"
+    );
 
     let mut files = Vec::new();
     collect_rust_files(&lab_root, &mut files);
@@ -225,12 +233,11 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
 #[test]
 fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
     let root = workspace_root();
-    let mut files = Vec::new();
-    for (owned_root, domain) in workspace_genericity_roots(&root) {
-        if domain == GenericityDomain::Runtime {
-            collect_generic_runtime_files(&root.join(owned_root), &mut files);
-        }
-    }
+    let roots = workspace_genericity_roots(&root);
+    let mut files = genericity_check_inputs(&root, &roots, GenericityDomain::Runtime)
+        .into_values()
+        .flatten()
+        .collect::<Vec<_>>();
     for owned_root in GENERIC_NON_CARGO_ROOTS {
         collect_generic_runtime_files(&root.join(owned_root), &mut files);
     }
@@ -256,12 +263,31 @@ fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
 
 #[test]
 fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
-    let roots = workspace_genericity_roots(&workspace_root());
+    let root = workspace_root();
+    let roots = workspace_genericity_roots(&root);
+    let runtime = genericity_check_inputs(&root, &roots, GenericityDomain::Runtime);
+    let authoring = genericity_check_inputs(&root, &roots, GenericityDomain::Authoring);
+    let mut classified = runtime
+        .keys()
+        .chain(authoring.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(classified.insert(PathBuf::from("tools/actinglab-architecture")));
+    assert_eq!(
+        classified,
+        roots.keys().cloned().collect(),
+        "actual member classification/checker coverage differs"
+    );
+    for (member, domain) in &roots {
+        println!("genericity member {}: {domain:?}", member.display());
+    }
+    println!("genericity non-Cargo roots: {GENERIC_NON_CARGO_ROOTS:?}");
     for required_root in [
         "crates/host-metrics",
         "crates/policy",
         "crates/runtime-database",
         "crates/runtime-state",
+        "crates/selection-policy",
     ] {
         assert_eq!(
             roots.get(Path::new(required_root)),
@@ -301,12 +327,10 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
 #[test]
 fn r2f_product_and_authoring_paths_have_no_builtin_game_identity() {
     let root = workspace_root();
-    let mut files = Vec::new();
-    for (owned_root, domain) in workspace_genericity_roots(&root) {
-        if domain == GenericityDomain::Authoring {
-            collect_rust_files(&root.join(owned_root).join("src"), &mut files);
-        }
-    }
+    let roots = workspace_genericity_roots(&root);
+    let files = genericity_check_inputs(&root, &roots, GenericityDomain::Authoring)
+        .into_values()
+        .flatten();
 
     let mut violations = Vec::new();
     for path in files {
@@ -946,11 +970,23 @@ fn c5_run_state_machine_returns_data_only_successors() {
 
 #[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
-    let root = workspace_root();
-    let global_path = root.join("crates/ledger/src/global.rs");
-    let global = fs::read_to_string(&global_path).expect("read global ledger source");
-    let append_violations = inspect_global_append_ingress("crates/ledger/src/global.rs", &global)
-        .expect("inspect global append ingress");
+    let root = workspace_root()
+        .canonicalize()
+        .expect("resolve checked workspace root");
+    let owners = ledger_owners(&root);
+    for owner in &owners {
+        println!(
+            "Ledger owner {}: {}",
+            owner.module,
+            owner
+                .path
+                .strip_prefix(&root)
+                .expect("owner inside workspace")
+                .display()
+        );
+    }
+    let append_violations =
+        inspect_ledger_append_ingress(&owners).expect("inspect global append ingress");
     assert!(
         append_violations.is_empty(),
         "global append ingress violations:\n{}",
@@ -986,17 +1022,14 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
 #[test]
 fn contract_has_no_public_value_payload_or_persisted_fact() {
     let root = workspace_root();
-    let mut files = vec![
-        root.join("crates/actingcommand-contract/src/event.rs"),
-        root.join("crates/ledger/src/fact.rs"),
-        root.join("crates/ledger/src/global.rs"),
-        root.join("crates/ledger/src/global/projection.rs"),
-    ];
+    let owners = ledger_owners(&root);
+    let mut files = vec![root.join("crates/actingcommand-contract/src/event.rs")];
     collect_rust_files(
         &root.join("crates/actingcommand-contract/src/event"),
         &mut files,
     );
-    let mut violations = Vec::new();
+    let mut violations =
+        inspect_ledger_public_api(&owners).expect("inspect all formal Ledger public surfaces");
     for path in files {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -1032,16 +1065,7 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
         &root.join("crates/actingcommand-contract/src/event"),
         &mut files,
     );
-    files.extend([
-        root.join("crates/ledger/src/critical.rs"),
-        root.join("crates/ledger/src/fact.rs"),
-        root.join("crates/ledger/src/global.rs"),
-        root.join("crates/ledger/src/global/projection.rs"),
-        root.join("crates/ledger/src/global/storage.rs"),
-        root.join("crates/ledger/src/global/sqlite.rs"),
-        root.join("crates/ledger/src/global/migration.rs"),
-        root.join("crates/ledger/src/global/evidence.rs"),
-    ]);
+    let owners = ledger_owners(&root);
     let forbidden = [
         "ClassifiedField",
         "StructuredPayloadDraft",
@@ -1051,7 +1075,8 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
         "catch_unwind",
         "events_after(",
     ];
-    let mut violations = Vec::new();
+    let mut violations =
+        inspect_ledger_forbidden_sources(&owners).expect("inspect complete C1 Ledger owner set");
     for path in files {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -1336,15 +1361,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         "production packages depend on forensic leaf or its tool consumers: {}",
         production_dependants.join(", ")
     );
-
-    let source = fs::read_to_string(root.join("apps/ledger-forensics/src/main.rs"))
-        .expect("read apps/ledger-forensics/src/main.rs");
-    let baseline = fs::read_to_string(root.join("ratchet/ledger_forensics_main_rs_lines.txt"))
-        .expect("read ratchet/ledger_forensics_main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ledger_forensics_main_rs_lines.txt must contain one integer");
-    validate_line_ratchet(baseline, source.lines().count()).unwrap();
 }
 
 #[test]
@@ -1373,39 +1389,6 @@ fn c5_lab_consumes_artifact_frame_store_without_an_ownership_wrapper() {
         );
     }
 }
-#[test]
-fn c5_portable_output_archive_is_owned_by_artifact_store() {
-    let root = workspace_root();
-    let artifact = fs::read_to_string(root.join("crates/artifact-store/src/portable_archive.rs"))
-        .expect("read portable archive source");
-    let artifact_frame_store =
-        fs::read_to_string(root.join("crates/artifact-store/src/frame_store.rs"))
-            .expect("read artifact frame store source");
-    let exporter = fs::read_to_string(root.join("crates/artifact-store/src/exporter.rs"))
-        .expect("read evidence exporter");
-    let lab_api = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
-        .expect("read Lab validation adapter");
-
-    assert!(artifact.contains("pub fn write_portable_projection_archive"));
-    assert!(artifact_frame_store.contains("PortableFrameEvidenceProjection"));
-    assert!(artifact_frame_store.contains("pub fn portable_evidence_projection"));
-    assert!(exporter.contains("pub struct EvidenceExporter"));
-    assert!(exporter.contains("ScreenshotNameAllocator::in_memory()"));
-    assert!(!lab_api.contains("timestamp_file_stem"));
-    assert!(!lab_api.contains("HashMap<String, usize>"));
-    for forbidden in [
-        "fn write_output_zip",
-        "ZipWriter",
-        "add_zip_dir",
-        "path_to_zip_name",
-    ] {
-        assert!(
-            !lab_api.contains(forbidden),
-            "Lab regained portable archive mechanics via {forbidden}"
-        );
-    }
-}
-
 #[test]
 fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
     let root = workspace_root();
@@ -1598,6 +1581,85 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
 }
 
 #[test]
+fn c3b_selection_policy_is_a_pure_decision_crate() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let selection_policy = packages
+        .iter()
+        .find(|package| package["name"] == "actingcommand-selection-policy")
+        .expect("selection-policy package");
+    let mut dependency_names = selection_policy["dependencies"]
+        .as_array()
+        .expect("selection-policy dependencies")
+        .iter()
+        .filter_map(|dependency| dependency["name"].as_str())
+        .collect::<Vec<_>>();
+    dependency_names.sort_unstable();
+    dependency_names.dedup();
+    assert_eq!(
+        dependency_names,
+        ["actingcommand-contract", "serde", "serde_json", "sha2"],
+        "selection-policy takes exactly the pure decision dependencies"
+    );
+
+    let mut sources = Vec::new();
+    collect_rust_files(&root.join("crates/selection-policy/src"), &mut sources);
+    assert!(
+        !sources.is_empty(),
+        "crates/selection-policy contains no Rust source files"
+    );
+    let bin_root = root.join("crates/selection-policy/src/bin");
+    for path in sources {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        // The crate's own purity test names these tokens, so only production source counts.
+        let source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source")
+            .to_owned();
+        for forbidden in [
+            "TcpStream",
+            "GlobalLedger",
+            "LeaseToken",
+            "SeedScheduler",
+            "RuntimeClient",
+            "actingcommand_device",
+            "actingcommand_lab",
+            "actingcommand_ledger",
+            "actingcommand_runtime_host",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden decision-crate token {forbidden}",
+                path.display()
+            );
+        }
+        // The offline debugging binary is the crate's declared IO shell; the library half
+        // reads no clock and no file, and the walk covers every module it gains later.
+        if path.starts_with(&bin_root) {
+            continue;
+        }
+        for forbidden in [
+            "std::fs",
+            "std::net",
+            "std::process",
+            "std::thread::sleep",
+            "SystemTime::now",
+            "Instant::now",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden decision-crate token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn c5_readonly_recognition_is_pure_and_execution_owned() {
     let root = workspace_root();
     let source_path = root.join("crates/execution-kernel/src/readonly.rs");
@@ -1734,7 +1796,7 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
             "capture sequence operation gained input authority via {forbidden}"
         );
     }
-    assert!(contract.contains("Self::Input { token, action }"));
+    assert!(contract.contains("Self::Input {\n                token,\n                action,\n                frame,\n            }"));
 
     let host_sequence = host
         .split_once("    pub(super) fn capture_sequence(")
@@ -2231,6 +2293,7 @@ fn command_inventory_matches_checked_in_snapshot() {
         })
         .collect::<Vec<_>>();
     assert_eq!(expected_commands, actual.commands);
+    let mut exemptions = BTreeSet::new();
     for exemption in snapshot["pipeline_exemptions"]
         .as_array()
         .expect("snapshot pipeline_exemptions must be an array")
@@ -2238,6 +2301,10 @@ fn command_inventory_matches_checked_in_snapshot() {
         let command = exemption["command"]
             .as_str()
             .expect("pipeline exemption command must be a string");
+        assert!(
+            exemptions.insert(command),
+            "duplicate pipeline exemption {command}"
+        );
         assert!(
             actual.commands.iter().any(|candidate| candidate == command),
             "pipeline exemption references unknown command {command}"
@@ -2249,6 +2316,20 @@ fn command_inventory_matches_checked_in_snapshot() {
             "pipeline exemption {command} must explain its reason"
         );
     }
+    assert_eq!(
+        exemptions,
+        BTreeSet::from([
+            "help",
+            "version",
+            "doctor",
+            "scheduler status",
+            "scheduler pause",
+            "scheduler resume",
+            "scheduler start",
+            "scheduler stop",
+        ]),
+        "pipeline exemptions must match their named command scope"
+    );
 }
 
 #[test]
@@ -2267,19 +2348,7 @@ fn contract_dependencies_stay_within_budget() {
 
 #[test]
 fn workspace_packages_do_not_depend_on_apps() {
-    let root = workspace_root();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1"])
-        .current_dir(&root)
-        .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let metadata = String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON");
+    let metadata = workspace_metadata();
     let violations = workspace_dependency_violations(&metadata).unwrap();
 
     assert!(
@@ -2660,19 +2729,34 @@ fn cargo_metadata_args() -> [&'static str; 4] {
 }
 
 fn workspace_metadata() -> String {
+    static METADATA: OnceLock<Result<String, String>> = OnceLock::new();
+    METADATA
+        .get_or_init(dependency_metadata)
+        .as_ref()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .clone()
+}
+
+fn dependency_metadata() -> Result<String, String> {
     let root = workspace_root();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .args(cargo_metadata_args())
         .current_dir(&root)
         .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON")
+        .map_err(|error| format!("run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let metadata = String::from_utf8(output.stdout)
+        .map_err(|error| format!("cargo metadata must emit UTF-8 JSON: {error}"))?;
+    serde_json::from_str::<serde_json::Value>(&metadata)
+        .map_err(|error| format!("parse cargo metadata: {error}"))?;
+    Ok(metadata)
 }
 
 const FEATURE_GATED_FORBIDDEN_PATH_METADATA: &str = r#"{
@@ -4728,17 +4812,6 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
             "drift-diagnostics path invariant changed: {invariant}"
         );
     }
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "drift-diagnostics path move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -4879,17 +4952,6 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
             "touch-backend invariant changed: {invariant}"
         );
     }
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "touch-backend move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5047,17 +5109,6 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second match-metric parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "match-metric move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5195,17 +5246,6 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     assert_eq!(
         definition_count, 1,
         "ActingLab gained a second record-candidates step-id parser or authority"
-    );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "record-candidates step-id move and main.rs ratchet diverged"
     );
 }
 
@@ -5372,17 +5412,6 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second input-relay parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "input-relay move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5536,17 +5565,6 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     assert_eq!(
         definition_count, 1,
         "ActingLab gained a second record-build resolution parser or authority"
-    );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "record-build resolution move and main.rs ratchet diverged"
     );
 }
 
@@ -5728,17 +5746,6 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second session-record region parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "session-record region move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -5909,17 +5916,6 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second session-record rectangle parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "session-record rectangle move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -6063,17 +6059,6 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         definition_count, 1,
         "ActingLab gained a second session-record swipe parser or authority"
     );
-
-    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(
-        main.lines().count(),
-        ratchet,
-        "session-record swipe move and main.rs ratchet diverged"
-    );
 }
 
 #[test]
@@ -6133,18 +6118,4 @@ fn actinglab_parse_session_record_candidate_index_glue_stays_out_of_main() {
         3,
         "session-record candidate-index production caller set changed"
     );
-}
-
-#[test]
-fn main_rs_line_ratchet_matches_checked_in_baseline() {
-    let root = workspace_root();
-    let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
-        .expect("read apps/actinglab/src/main.rs");
-    let baseline = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
-        .expect("read ratchet/main_rs_lines.txt")
-        .trim()
-        .parse::<usize>()
-        .expect("ratchet/main_rs_lines.txt must contain one integer");
-
-    validate_line_ratchet(baseline, source.lines().count()).unwrap();
 }

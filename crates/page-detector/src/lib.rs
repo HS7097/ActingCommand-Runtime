@@ -185,7 +185,7 @@ pub struct UnexecutedPage {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BatchLevelError {
-    pub cause: PageDetectorError,
+    pub cause: Box<PageDetectorError>,
     pub completed: Vec<PageOutcome>,
     pub unexecuted: Vec<UnexecutedPage>,
 }
@@ -227,7 +227,7 @@ impl fmt::Display for BatchLevelError {
 
 impl Error for BatchLevelError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.cause)
+        Some(self.cause.as_ref())
     }
 }
 
@@ -575,7 +575,7 @@ impl PageDetector {
             })
             .collect();
         BatchLevelError {
-            cause,
+            cause: Box::new(cause),
             completed,
             unexecuted,
         }
@@ -1709,7 +1709,7 @@ mod tests {
                 ),
             ]
         );
-        assert_fatal_contains(error.cause, "coordinate_space");
+        assert_fatal_contains(*error.cause, "coordinate_space");
     }
 
     #[test]
@@ -1768,7 +1768,7 @@ mod tests {
                 PageUnexecutedReason::BatchTerminated,
             ),]
         );
-        assert_fatal_contains(error.cause, "invariant failed");
+        assert_fatal_contains(*error.cause, "invariant failed");
     }
 
     #[test]

@@ -617,6 +617,7 @@ fn fact_snapshot_catches_up_with_critical_ledger_events() {
         let mut input_client = TestClient::connect(&host);
         let (_, token) = input_client.acquire(POLICY_INSTANCE_ALIAS);
         let input = input_client.request(RuntimeOperation::Input {
+            frame: None,
             token: token.clone(),
             action: InputAction::Tap { x: 10, y: 20 },
         });
@@ -651,6 +652,7 @@ fn fact_snapshot_catches_up_with_critical_ledger_events() {
     let mut peer = TestClient::connect(&host);
     let (_, token) = peer.acquire("fixture-instance-b");
     let input = peer.request(RuntimeOperation::Input {
+        frame: None,
         token: token.clone(),
         action: InputAction::Tap { x: 10, y: 20 },
     });

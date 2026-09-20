@@ -7,18 +7,19 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
     ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
-    CorrelationId, EffectDisposition, EventActor, EventId, EventPayload, EventQuery, EventSource,
-    EventType, FactRecord, FactScope, FrameId, IdentifierIssuer, InputAction, InputPayload,
-    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason,
-    OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport,
-    OriginModule, OwnerEpoch, PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest,
-    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionPayload, ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE,
-    RequestId, ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
+    CorrelationId, EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload,
+    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
+    InputAction, InputFrameReference, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA,
+    OcrFieldPrivacy, OcrFieldReason, OcrFieldResult, OcrFieldType, OcrFieldValue,
+    OcrFieldsDeclaration, OcrFieldsReport, OriginModule, OwnerEpoch, PackageDebugRequest,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeEvidenceExportRequest, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
     RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
@@ -54,6 +55,12 @@ use crate::test_observation::{
 };
 
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// Receipt wait for `ControlEmulatorInstance`: the host bounds the provider `control` command
+/// at 60 s and the readiness wait at 120 s for start, restart and stop alike
+/// (`MUMU_MANAGER_STATE_WAIT_START` = `MUMU_MANAGER_STATE_WAIT_STOP` = 120 s); the last 1 s
+/// poll may straddle the deadline by its own 10 s bound, so the worst case is
+/// 60 + 120 + 10 = 190 s; 200 s covers it plus the IO margin.
+const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(200);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -175,6 +182,7 @@ struct RuntimeClientShared {
 #[derive(Clone)]
 pub struct RuntimeClient {
     shared: Arc<RuntimeClientShared>,
+    correlation: Option<IssuedCorrelationId>,
 }
 
 /// Read-only project projection client. It exposes neither device operations nor ledger writes.
@@ -706,6 +714,7 @@ impl RuntimeClient {
                     terminal_error: None,
                 }),
             }),
+            correlation: None,
         };
         let observed_epoch = client.health()?;
         if observed_epoch != client.shared.info.owner_epoch() {
@@ -719,6 +728,22 @@ impl RuntimeClient {
 
     pub fn runtime_info(&self) -> &RuntimeInfo {
         &self.shared.info
+    }
+
+    /// Starts a new local interaction on this same connection. Each operation still has its own request.
+    pub fn begin_interaction(&self) -> RuntimeClientResult<Self> {
+        let correlation = self
+            .connection("begin_interaction")?
+            .issue_correlation("begin_interaction", None)?;
+        Ok(Self {
+            shared: Arc::clone(&self.shared),
+            correlation: Some(correlation),
+        })
+    }
+
+    /// Observes this handle's selected correlation; it grants no additional authority.
+    pub fn correlation_id(&self) -> Option<CorrelationId> {
+        self.correlation.as_ref().map(|value| *value.transport())
     }
 
     pub fn health(&self) -> RuntimeClientResult<OwnerEpoch> {
@@ -759,6 +784,17 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    /// Reads the sealed image of the Runtime's own fact store at the ledger's latest sequence.
+    pub fn runtime_fact_snapshot(&self) -> RuntimeClientResult<RuntimeFactSnapshot> {
+        match self.execute(
+            "runtime_fact_snapshot",
+            RuntimeOperation::RuntimeFactSnapshot,
+        )? {
+            RuntimeResult::RuntimeFactSnapshot { snapshot } => Ok(snapshot),
+            _ => Err(self.unexpected_result("runtime_fact_snapshot")),
         }
     }
 
@@ -839,6 +875,39 @@ impl RuntimeClient {
         )? {
             RuntimeResult::MonitorCleared { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_monitor_clear")),
+        }
+    }
+
+    /// Starts, stops or restarts the emulator instance through the Runtime (no lease is
+    /// acquired; the host fences the instance itself). Returns the
+    /// `RuntimeResult::EmulatorInstanceControlled` result verbatim. The receipt wait is
+    /// `EMULATOR_CONTROL_RESPONSE_TIMEOUT` because the host waits for readiness.
+    pub fn control_emulator_instance(
+        &self,
+        instance_alias: &str,
+        action: EmulatorInstanceAction,
+    ) -> RuntimeClientResult<RuntimeResult> {
+        let correlation = self.issue_correlation("control_emulator_instance")?;
+        let receipt = self.execute_receipt_with_correlation(
+            "control_emulator_instance",
+            RuntimeOperation::ControlEmulatorInstance {
+                instance_alias: instance_alias.to_string(),
+                action,
+            },
+            correlation,
+            Some(EMULATOR_CONTROL_RESPONSE_TIMEOUT),
+        )?;
+        match receipt.result() {
+            Some(
+                result @ RuntimeResult::EmulatorInstanceControlled {
+                    instance_alias: completed_alias,
+                    action: completed_action,
+                    ..
+                },
+            ) if completed_alias == instance_alias && *completed_action == action => {
+                Ok(result.clone())
+            }
+            _ => Err(self.unexpected_result("control_emulator_instance")),
         }
     }
 
@@ -1089,9 +1158,7 @@ impl RuntimeClient {
 
     pub fn safe_reset(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
         let connection = self.connection("safe_reset")?;
-        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "safe_reset")
-        })?;
+        let correlation = connection.issue_correlation("safe_reset", self.correlation)?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
             RuntimeClientError::fatal("runtime_identifier_issue_failed", "safe_reset")
         })?;
@@ -1118,9 +1185,8 @@ impl RuntimeClient {
         action: ApplicationLifecycleAction,
     ) -> RuntimeClientResult<RuntimeFlowOutput> {
         let connection = self.connection("application_lifecycle")?;
-        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "application_lifecycle")
-        })?;
+        let correlation =
+            connection.issue_correlation("application_lifecycle", self.correlation)?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
             RuntimeClientError::fatal("runtime_identifier_issue_failed", "application_lifecycle")
         })?;
@@ -1154,9 +1220,7 @@ impl RuntimeClient {
             connection.io_timeout,
             Duration::from_millis(request.response_deadline_ms()),
         )?;
-        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
-        })?;
+        let correlation = connection.issue_correlation("run_contained_task", self.correlation)?;
         let holder = connection.ids.mint_holder_id().map_err(|_| {
             RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
         })?;
@@ -1351,6 +1415,15 @@ impl RuntimeClient {
         token: &LeaseToken,
         action: InputAction,
     ) -> RuntimeClientResult<RuntimeReceipt> {
+        self.input_with_frame(token, action, None)
+    }
+
+    pub fn input_with_frame(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientInputStart,
@@ -1364,6 +1437,7 @@ impl RuntimeClient {
         let result = match self.execute_receipt(
             "runtime_input",
             RuntimeOperation::Input {
+                frame,
                 token: token.clone(),
                 action,
             },
@@ -1398,6 +1472,16 @@ impl RuntimeClient {
         &self,
         action: ClientActionRecord,
     ) -> RuntimeClientResult<TerminalEvent> {
+        self.record_client_action_receipt(action)?
+            .terminal()
+            .ok_or_else(|| self.unexpected_result("record_client_action"))
+    }
+
+    /// Returns the complete validated receipt for the same single client-action submission.
+    pub fn record_client_action_receipt(
+        &self,
+        action: ClientActionRecord,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         action.validate().map_err(|_| {
             RuntimeClientError::fatal("client_action_invalid", "record_client_action")
         })?;
@@ -1411,13 +1495,24 @@ impl RuntimeClient {
         }
         receipt
             .terminal()
-            .ok_or_else(|| self.unexpected_result("record_client_action"))
+            .ok_or_else(|| self.unexpected_result("record_client_action"))?;
+        Ok(receipt)
     }
 
     pub fn record_approval_decision(
         &self,
         decision: ApprovalDecisionRecord,
     ) -> RuntimeClientResult<TerminalEvent> {
+        self.record_approval_decision_receipt(decision)?
+            .terminal()
+            .ok_or_else(|| self.unexpected_result("record_approval_decision"))
+    }
+
+    /// Returns the complete validated approval receipt without changing its authorization or replay.
+    pub fn record_approval_decision_receipt(
+        &self,
+        decision: ApprovalDecisionRecord,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         decision.validate().map_err(|_| {
             RuntimeClientError::fatal("approval_decision_invalid", "record_approval_decision")
         })?;
@@ -1439,7 +1534,8 @@ impl RuntimeClient {
         }
         receipt
             .terminal()
-            .ok_or_else(|| self.unexpected_result("record_approval_decision"))
+            .ok_or_else(|| self.unexpected_result("record_approval_decision"))?;
+        Ok(receipt)
     }
 
     /// Authenticates this connection for governance writes without extending authority to peers.
@@ -1897,6 +1993,37 @@ impl RuntimeClient {
         self.query_event_page_with_timeout(query, profile, page, None)
     }
 
+    /// Reads one bounded range after the Runtime has verified its entire committed material.
+    /// Failed or unconfirmed reads invalidate an unfinished assembly; no automatic retry occurs.
+    pub fn read_material(
+        &self,
+        mut request: actingcommand_contract::RuntimeMaterialReadRequest,
+    ) -> RuntimeClientResult<actingcommand_contract::RuntimeMaterialReadResult> {
+        request.max_reply_bytes = request.max_reply_bytes.min(
+            self.connection("read_runtime_material")?
+                .maximum_frame_bytes,
+        );
+        request.validate().map_err(|_| {
+            RuntimeClientError::fatal("material_read_request_invalid", "read_runtime_material")
+        })?;
+        let receipt = self.execute_receipt(
+            "read_runtime_material",
+            RuntimeOperation::ReadMaterial {
+                request: Box::new(request.clone()),
+            },
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::MaterialRead { result }) if result.request == request => {
+                result
+                    .validate()
+                    .map_err(|_| self.unexpected_result("read_runtime_material"))?;
+                Ok(result.as_ref().clone())
+            }
+            _ => Err(self.unexpected_result("read_runtime_material")),
+        }
+    }
+
     fn query_event_page_with_timeout(
         &self,
         query: EventQuery,
@@ -2005,12 +2132,8 @@ impl RuntimeClient {
                 "begin_resource_authoring",
             ));
         }
-        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
-            RuntimeClientError::fatal(
-                "runtime_identifier_issue_failed",
-                "begin_resource_authoring",
-            )
-        })?;
+        let correlation =
+            connection.issue_correlation("begin_resource_authoring", self.correlation)?;
         drop(connection);
         Ok(RuntimeAuthoringSession {
             client: self.clone(),
@@ -2026,9 +2149,7 @@ impl RuntimeClient {
                 "begin_runtime_debug",
             ));
         }
-        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", "begin_runtime_debug")
-        })?;
+        let correlation = connection.issue_correlation("begin_runtime_debug", self.correlation)?;
         drop(connection);
         Ok(RuntimeDebugSession {
             client: self.clone(),
@@ -2064,7 +2185,7 @@ impl RuntimeClient {
         response_timeout: Option<Duration>,
     ) -> RuntimeClientResult<RuntimeReceipt> {
         let mut connection = self.connection(operation_name)?;
-        let request = connection.request(operation_name, operation.clone())?;
+        let request = connection.request(operation_name, operation.clone(), self.correlation)?;
         self.exchange_receipt(
             &mut connection,
             operation_name,
@@ -2139,6 +2260,10 @@ impl RuntimeClient {
                 maximum_frame_bytes,
                 receipt_deadline,
                 Some(&request),
+                match &operation {
+                    RuntimeOperation::ReadMaterial { request } => Some(request.max_reply_bytes),
+                    _ => None,
+                },
             )
             .map_err(|error| error.with_receipt_header_context(&request, &self.shared.info));
             if connection
@@ -2200,9 +2325,40 @@ impl RuntimeClient {
             );
             if receipt.request_id() != request.request_id()
                 || receipt.correlation_id() != request.correlation_id()
+                || (matches!(&operation, RuntimeOperation::RunContainedTask { .. })
+                    && matches!(receipt.result(),
+                        Some(RuntimeResult::ContainedTaskCompleted { task_request_id, .. }
+                            | RuntimeResult::ContainedTaskCancelled { task_request_id, .. })
+                            if *task_request_id != request.request_id()))
             {
                 return Err(connection.latch(RuntimeClientError::fatal(
                     "runtime_receipt_identity_mismatch",
+                    operation_name,
+                )));
+            }
+            if matches!(receipt.result(), Some(RuntimeResult::MaterialRead { .. }))
+                && !matches!(&operation, RuntimeOperation::ReadMaterial { .. })
+                || matches!(
+                    receipt.result(),
+                    Some(RuntimeResult::ContainedLabOperation { .. })
+                ) && !matches!(
+                    &operation,
+                    RuntimeOperation::RunContainedLabOperation { .. }
+                )
+            {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "runtime_result_unexpected",
+                    operation_name,
+                )));
+            }
+            if let (
+                RuntimeOperation::ReadMaterial { request: expected },
+                Some(RuntimeResult::MaterialRead { result }),
+            ) = (&operation, receipt.result())
+                && &result.request != expected.as_ref()
+            {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "material_read_receipt_selection_mismatch",
                     operation_name,
                 )));
             }
@@ -2224,8 +2380,12 @@ impl RuntimeClient {
                     RuntimeOperation::RunContainedTask { .. }
                         | RuntimeOperation::RequestShutdown { .. }
                 ) && receipt.terminal().is_some()
+                    || (matches!(operation, RuntimeOperation::ReadMaterial { .. })
+                        && matches!(receipt.result(), Some(RuntimeResult::MaterialRead { .. })))
                 {
                     error = error.with_committed_receipt(receipt.clone());
+                } else {
+                    error = error.with_received_receipt(receipt.clone());
                 }
                 return Err(if error.is_fatal() {
                     connection.latch(error)
@@ -2263,9 +2423,7 @@ impl RuntimeClient {
         operation: &'static str,
     ) -> RuntimeClientResult<IssuedCorrelationId> {
         self.connection(operation)?
-            .ids
-            .mint_correlation_id()
-            .map_err(|_| RuntimeClientError::fatal("runtime_identifier_issue_failed", operation))
+            .issue_correlation(operation, self.correlation)
     }
 
     fn decode_policy_document<T>(
@@ -2292,7 +2450,7 @@ impl RuntimeClient {
         receipt: RuntimeReceipt,
         correlation_id: CorrelationId,
     ) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let events = self
+        let mut events = self
             .query_events(
                 EventQuery {
                     correlation_id: Some(correlation_id),
@@ -2308,6 +2466,19 @@ impl RuntimeClient {
                     error,
                 )
             })?;
+        // Pagination has completed on one snapshot before the shared interaction is partitioned.
+        let interaction_run = if self.correlation.is_some() {
+            validate_interaction_flow_scope(&receipt, correlation_id, &events).map_err(|error| {
+                RuntimeClientError::after_commit(
+                    "runtime_projection_failed_after_terminal",
+                    "query_runtime_flow_projection",
+                    receipt.clone(),
+                    error,
+                )
+            })?
+        } else {
+            None
+        };
         let mut official_ocr_fields_projection = None;
         let official_ocr_projection = resolve_official_ocr_projection(
             &self.shared.state_root,
@@ -2324,6 +2495,13 @@ impl RuntimeClient {
                 error,
             )
         })?;
+        if self.correlation.is_some() {
+            events.retain(|event| {
+                event.links.request_id() == Some(&receipt.request_id())
+                    || interaction_run
+                        .is_some_and(|(run_id, _)| event.links.run_id() == Some(&run_id))
+            });
+        }
         Ok(RuntimeFlowOutput {
             receipt,
             events,
@@ -2431,14 +2609,11 @@ struct OcrProviderEvidence {
     complete: bool,
 }
 
-pub(crate) fn resolve_official_ocr_projection(
-    state_root: &Path,
+fn receipt_ocr_run(
     receipt: &RuntimeReceipt,
     correlation_id: CorrelationId,
     events: &[ProjectedEvent],
-    fields_projection: &mut Option<RuntimeOfficialOcrFieldsProjection>,
-) -> RuntimeClientResult<Option<RuntimeOfficialOcrProjection>> {
-    *fields_projection = None;
+) -> RuntimeClientResult<Option<(RunId, TaskId)>> {
     if receipt.correlation_id() != correlation_id {
         return Err(official_ocr_error(
             "runtime_official_ocr_terminal_identity_mismatch",
@@ -2469,6 +2644,16 @@ pub(crate) fn resolve_official_ocr_projection(
                     "runtime_official_ocr_terminal_identity_mismatch",
                 ));
             };
+            // The validated receipt binds this exact terminal to its request. Event links are optional.
+            if event
+                .links
+                .request_id()
+                .is_some_and(|id| *id != receipt.request_id())
+            {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_terminal_identity_mismatch",
+                ));
+            }
             let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
                 return Err(official_ocr_error(
                     "runtime_official_ocr_terminal_payload_invalid",
@@ -2495,6 +2680,73 @@ pub(crate) fn resolve_official_ocr_projection(
             )
         }
         _ => return Ok(None),
+    };
+    Ok(Some((run_id, task_id)))
+}
+
+fn validate_interaction_flow_scope(
+    receipt: &RuntimeReceipt,
+    correlation_id: CorrelationId,
+    events: &[ProjectedEvent],
+) -> RuntimeClientResult<Option<(RunId, TaskId)>> {
+    let run = receipt_ocr_run(receipt, correlation_id, events)?;
+    let invalid = || {
+        RuntimeClientError::fatal(
+            "runtime_flow_projection_identity_mismatch",
+            "query_runtime_flow_projection",
+        )
+    };
+    let terminal = receipt.terminal().ok_or_else(invalid)?;
+    let mut matching = events
+        .iter()
+        .filter(|event| event.event_id == terminal.event_id && event.sequence == terminal.sequence);
+    let event = matching.next().ok_or_else(invalid)?;
+    if matching.next().is_some()
+        || event
+            .links
+            .request_id()
+            .is_some_and(|id| *id != receipt.request_id())
+        || event.links.correlation_id() != Some(&correlation_id)
+        || run.is_some_and(|(run_id, task_id)| {
+            event.links.run_id() != Some(&run_id) || event.links.task_id() != Some(&task_id)
+        })
+    {
+        return Err(invalid());
+    }
+    for event in events {
+        if event.links.correlation_id() != Some(&correlation_id) {
+            return Err(invalid());
+        }
+        if event.links.request_id().is_none() && event.links.run_id().is_none() {
+            return Err(RuntimeClientError::fatal(
+                "runtime_flow_projection_identity_missing",
+                "query_runtime_flow_projection",
+            ));
+        }
+        if let Some((run_id, task_id)) = run {
+            let current_request = event.links.request_id() == Some(&receipt.request_id());
+            let current_run = event.links.run_id() == Some(&run_id);
+            if (current_request && event.links.run_id().is_some_and(|id| *id != run_id))
+                || ((current_request || current_run)
+                    && event.links.task_id().is_some_and(|id| *id != task_id))
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(run)
+}
+
+pub(crate) fn resolve_official_ocr_projection(
+    state_root: &Path,
+    receipt: &RuntimeReceipt,
+    correlation_id: CorrelationId,
+    events: &[ProjectedEvent],
+    fields_projection: &mut Option<RuntimeOfficialOcrFieldsProjection>,
+) -> RuntimeClientResult<Option<RuntimeOfficialOcrProjection>> {
+    *fields_projection = None;
+    let Some((run_id, task_id)) = receipt_ocr_run(receipt, correlation_id, events)? else {
+        return Ok(None);
     };
     let (run_id, task_id) = (&run_id, &task_id);
     let marker_expected = official_ocr_marker_expected(events, run_id, task_id)?;
@@ -2534,6 +2786,7 @@ pub(crate) fn resolve_official_ocr_projection(
     let mut total_bytes = 0_u64;
     let mut recognized_artifacts = 0_usize;
     let mut lifecycle = BTreeMap::new();
+    let mut run_tasks = BTreeMap::new();
     let mut observations = Vec::new();
     let mut raw_observations = BTreeMap::new();
     let mut provider_evidence = Vec::new();
@@ -2544,33 +2797,68 @@ pub(crate) fn resolve_official_ocr_projection(
         reference
             .validate()
             .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_invalid"))?;
-        if event.links.task_id() != Some(task_id)
-            || event.links.run_id() != Some(run_id)
+        let source_run = event.links.run_id();
+        let source_task = event.links.task_id();
+        if source_run != reference.run_id.as_ref()
             || event.links.correlation_id() != Some(&correlation_id)
             || event.links.frame_id() != reference.frame_id()
-            || reference.run_id.as_ref() != Some(run_id)
             || reference.correlation_id.as_ref() != Some(&correlation_id)
             || reference.retention_class != RetentionClass::DebugFull
             || !matches!(
                 reference.redaction_state,
                 ArtifactRedactionState::NotRequired | ArtifactRedactionState::Pending
             )
+            || (event.links.request_id() == Some(&receipt.request_id())
+                && source_run != Some(run_id))
         {
             return Err(official_ocr_error(
                 "runtime_official_ocr_artifact_identity_mismatch",
             ));
         }
-        let entry = lifecycle
-            .entry(reference.artifact_id)
-            .or_insert((reference, None, None));
-        if entry.0 != reference {
+        let request_scope = match (source_run, source_task) {
+            (Some(source_run), Some(source_task)) => {
+                if (*source_run == *run_id && *source_task != *task_id)
+                    || run_tasks
+                        .insert(*source_run, *source_task)
+                        .is_some_and(|previous| previous != *source_task)
+                {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_artifact_identity_mismatch",
+                    ));
+                }
+                None
+            }
+            // A page observation can have a complete request/frame identity without a debug run.
+            (None, None) if event.links.frame_id().is_some() => {
+                let request_id = event
+                    .links
+                    .request_id()
+                    .filter(|id| **id != receipt.request_id())
+                    .ok_or_else(|| {
+                        official_ocr_error("runtime_official_ocr_artifact_identity_mismatch")
+                    })?;
+                Some(*request_id)
+            }
+            _ => {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_artifact_identity_mismatch",
+                ));
+            }
+        };
+        let entry = lifecycle.entry(reference.artifact_id).or_insert((
+            reference,
+            request_scope,
+            None,
+            None,
+        ));
+        if entry.0 != reference || entry.1 != request_scope {
             return Err(official_ocr_error(
                 "runtime_official_ocr_artifact_identity_conflict",
             ));
         }
         let sequence = match event.event_type {
-            EventType::ArtifactCreated => &mut entry.1,
-            EventType::ArtifactVerified => &mut entry.2,
+            EventType::ArtifactCreated => &mut entry.2,
+            EventType::ArtifactVerified => &mut entry.3,
             _ => unreachable!("candidate event type is filtered above"),
         };
         if sequence.replace((event.sequence, event.event_id)).is_some() {
@@ -2582,7 +2870,9 @@ pub(crate) fn resolve_official_ocr_projection(
 
     let logical_artifacts = lifecycle
         .into_values()
-        .map(|(reference, created, verified)| {
+        // Every scope's identity and duplicate lifecycle facts were checked before partitioning.
+        .filter(|(reference, _, _, _)| reference.run_id.as_ref() == Some(run_id))
+        .map(|(reference, _, created, verified)| {
             let (created_sequence, created_event_id) = created.ok_or_else(|| {
                 official_ocr_error("runtime_official_ocr_artifact_lifecycle_incomplete")
             })?;
@@ -3863,9 +4153,19 @@ impl RuntimeDebugSession {
         token: &LeaseToken,
         action: InputAction,
     ) -> RuntimeClientResult<RuntimeReceipt> {
+        self.input_with_frame(token, action, None)
+    }
+
+    pub fn input_with_frame(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         let receipt = self.client.execute_receipt_with_correlation(
             "debug_runtime_input",
             RuntimeOperation::Input {
+                frame,
                 token: token.clone(),
                 action,
             },
@@ -3960,6 +4260,22 @@ impl fmt::Debug for RuntimeClient {
 }
 
 impl RuntimeConnection {
+    fn issue_correlation(
+        &self,
+        operation: &'static str,
+        selected: Option<IssuedCorrelationId>,
+    ) -> RuntimeClientResult<IssuedCorrelationId> {
+        if let Some(error) = &self.terminal_error {
+            return Err(error.clone());
+        }
+        match selected {
+            Some(correlation) => Ok(correlation),
+            None => self.ids.mint_correlation_id().map_err(|_| {
+                RuntimeClientError::fatal("runtime_identifier_issue_failed", operation)
+            }),
+        }
+    }
+
     fn latch(&mut self, error: RuntimeClientError) -> RuntimeClientError {
         if self.terminal_error.is_none() {
             self.terminal_error = Some(error);
@@ -3973,10 +4289,9 @@ impl RuntimeConnection {
         &self,
         operation_name: &'static str,
         operation: RuntimeOperation,
+        selected: Option<IssuedCorrelationId>,
     ) -> RuntimeClientResult<RuntimeRequest> {
-        let correlation = self.ids.mint_correlation_id().map_err(|_| {
-            RuntimeClientError::fatal("runtime_identifier_issue_failed", operation_name)
-        })?;
+        let correlation = self.issue_correlation(operation_name, selected)?;
         self.request_with_correlation(operation_name, operation, correlation)
     }
 

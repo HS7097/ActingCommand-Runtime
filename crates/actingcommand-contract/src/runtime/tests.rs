@@ -376,8 +376,11 @@ fn resource_quiescence_causes_roundtrip_and_project() {
             }),
             after: None,
             related: None,
+            target_retirement: None,
         }],
         dropped_count: 0,
+        paths: Vec::new(),
+        restart_manager: None,
     };
     let lifecycle = RuntimeLifecycleFailureDraft::new(
         epoch,
@@ -679,12 +682,14 @@ fn runtime_request_debug_redacts_alias_key_and_text() {
         ids.mint_holder_id().expect("holder"),
     ));
     let text = request(RuntimeOperation::Input {
+        frame: None,
         token: token(),
         action: InputAction::Text {
             text: secret_text.to_string(),
         },
     });
     let key = request(RuntimeOperation::Input {
+        frame: None,
         token: token(),
         action: InputAction::Key {
             key: secret_key.to_string(),

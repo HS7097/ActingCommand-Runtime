@@ -666,7 +666,18 @@ fn normalize_value(
                     json!("artifacts/<SHARD>/<ARTIFACT_ID>.json"),
                 );
             }
+            // Geometry observation clocks are wall-clock SystemTime values.
+            if matches!(key, Some("captured_at" | "sampled_at"))
+                && object.get("secs_since_epoch").is_some_and(Value::is_u64)
+                && object.get("nanos_since_epoch").is_some_and(Value::is_u64)
+            {
+                *value = json!("<TIME>");
+                return;
+            }
             object.remove("evaluation_duration_ms");
+            // Host-measured backend spans vary per run like evaluation_duration_ms.
+            object.remove("capture_acquire_us");
+            object.remove("touch_response_us");
             for (field, child) in object {
                 normalize_value(child, root, Some(field), configuration_artifacts);
             }
@@ -1371,12 +1382,38 @@ struct GoldenCapture;
 impl CaptureBackend for GoldenCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         Frame::from_pixels(
-            2,
-            2,
-            vec![255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0],
+            16,
+            9,
+            (0..16 * 9).flat_map(|_| [255, 0, 0]).collect(),
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+    fn observe_geometry(
+        &mut self,
+        _deadline: std::time::Instant,
+    ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
+        use actingcommand_contract::{
+            CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
+            CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+        };
+        // The same 16x9 extent this sealed capture serves; no device is queried.
+        let extent = CaptureExtent::new(16, 9).expect("positive sealed extent");
+        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
+            backend: CaptureBackendName::AdbScreencap,
+            source: CaptureGeometrySource::AdbDefaultDisplay {
+                serial: "<sealed-golden>".to_string(),
+                wm_extent: extent,
+                wm_size_kind: CaptureWmSizeKind::Physical,
+            },
+            logical_display_extent: extent,
+            rotation: CaptureRotationObservation::Observed {
+                rotation: CaptureRotation::R0,
+                source: CaptureRotationSource::DumpsysDisplayOrientation,
+            },
+            sampled_at: std::time::SystemTime::now(),
+            frame_transform: None,
+        }))
     }
     fn close_once(
         &mut self,
@@ -1608,7 +1645,7 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                     "execution_mode":"recognize_only",
                     "game":"arknights",
                     "server":"cn",
-                    "resolution":{"width":2,"height":2},
+                    "resolution":{"width":16,"height":9},
                     "entry_task_id":"task"
                 }"#,
             ),
@@ -1624,7 +1661,7 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                     "game":"arknights",
                     "server_scope":["cn"],
                     "goal":"golden fixture",
-                    "coordinate_space":{"width":2,"height":2},
+                    "coordinate_space":{"width":16,"height":9},
                     "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
                     "anchors":[{"id":"home","template":"assets/HOME.png"}],
                     "entry_page":"home",
@@ -1649,7 +1686,7 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                     "schema_version":"0.3",
                     "game":"arknights",
                     "server":"cn",
-                    "coordinate_space":{"width":2,"height":2},
+                    "coordinate_space":{"width":16,"height":9},
                     "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
                     "targets":[{
                         "type":"template",

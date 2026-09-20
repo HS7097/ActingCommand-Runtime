@@ -132,8 +132,8 @@ fn production_runtime_missing_sampling_seed_fails_before_input() {
     impl ContainedTaskRuntime for MissingSeedRuntime {
         type Error = RuntimeHostError;
 
-        fn capture(&mut self) -> Result<Frame, Self::Error> {
-            Ok(self.frame.clone())
+        fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
+            Ok(self.frame.clone().into())
         }
 
         fn action_seed(
@@ -144,7 +144,11 @@ fn production_runtime_missing_sampling_seed_fails_before_input() {
             crate::host::require_contained_task_sampling_run_seed(None).map(Some)
         }
 
-        fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+        fn input(
+            &mut self,
+            _action: InputAction,
+            _frame: Option<InputFrameContext>,
+        ) -> Result<(), Self::Error> {
             self.input_calls += 1;
             Ok(())
         }
@@ -200,14 +204,19 @@ fn execution_kernel_no_seed_caller_retains_center_fallback() {
     impl ContainedTaskRuntime for NoSeedRuntime {
         type Error = &'static str;
 
-        fn capture(&mut self) -> Result<Frame, Self::Error> {
+        fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
             Ok(self
                 .frames
                 .pop_front()
-                .unwrap_or_else(|| self.last_frame.clone()))
+                .unwrap_or_else(|| self.last_frame.clone())
+                .into())
         }
 
-        fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+        fn input(
+            &mut self,
+            action: InputAction,
+            _frame: Option<InputFrameContext>,
+        ) -> Result<(), Self::Error> {
             self.actions.push(action);
             Ok(())
         }

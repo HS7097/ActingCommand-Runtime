@@ -202,6 +202,14 @@ pub enum EventType {
     RuntimeFailed,
     #[serde(rename = "runtime.lifecycle_observed")]
     RuntimeLifecycleObserved,
+    #[serde(rename = "runtime.instance_bound")]
+    RuntimeInstanceBound,
+    #[serde(rename = "runtime.fact_recorded")]
+    RuntimeFactRecorded,
+    #[serde(rename = "runtime.fact_invalidated")]
+    RuntimeFactInvalidated,
+    #[serde(rename = "runtime.fact_snapshot")]
+    RuntimeFactSnapshot,
     #[serde(rename = "monitor.probe_requested")]
     MonitorProbeRequested,
     #[serde(rename = "monitor.probe_started")]
@@ -433,7 +441,11 @@ impl EventType {
             Self::RuntimeStarted
             | Self::RuntimeTakeover
             | Self::RuntimeFailed
-            | Self::RuntimeLifecycleObserved => EventFamily::Runtime,
+            | Self::RuntimeLifecycleObserved
+            | Self::RuntimeInstanceBound
+            | Self::RuntimeFactRecorded
+            | Self::RuntimeFactInvalidated
+            | Self::RuntimeFactSnapshot => EventFamily::Runtime,
             Self::MonitorProbeRequested
             | Self::MonitorProbeStarted
             | Self::MonitorProbeCompleted
@@ -593,6 +605,10 @@ pub struct EventQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostic_code: Option<DiagnosticCode>,
     pub instance_id: Option<InstanceId>,
+    /// Matches any listed instance: OR within the set, AND with every other condition.
+    /// An empty set is no constraint and leaves the serialized query unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_ids: Vec<InstanceId>,
     pub request_id: Option<RequestId>,
     pub correlation_id: Option<CorrelationId>,
     pub causation_id: Option<CausationId>,
@@ -606,6 +622,12 @@ pub struct EventQuery {
 
 impl EventQuery {
     pub fn validate(&self) -> Result<(), SanitizationError> {
+        if self.instance_id.is_some() && !self.instance_ids.is_empty() {
+            return Err(SanitizationError::new(
+                "invalid_event_query_instance_filter",
+                "query",
+            ));
+        }
         if self
             .from_timestamp_unix_ms
             .zip(self.to_timestamp_unix_ms)

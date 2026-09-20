@@ -443,6 +443,21 @@ impl EmulatorCapabilityProfile {
             .get(&capability)
             .expect("validated profiles contain every closed capability")
     }
+
+    /// The ids of every capability recorded with `availability`, sorted by id.
+    pub fn capability_ids_with(
+        &self,
+        availability: EmulatorCapabilityAvailability,
+    ) -> Vec<&'static str> {
+        let mut ids = self
+            .capabilities
+            .values()
+            .filter(|evidence| evidence.availability() == availability)
+            .map(|evidence| evidence.capability().as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    }
 }
 
 fn validate_provider_id(value: &str) -> EmulatorCapabilityResult<()> {

@@ -23,9 +23,9 @@ name = "actingcommand-actingctl"
 version = "0.1.0"
 dependencies = [
  "actingcommand-artifact-store",
- "actingcommand-ledger",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
@@ -123,6 +123,7 @@ dependencies = [
  "libloading 0.8.9",
  "serde",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]
@@ -251,7 +252,6 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
- "tempfile",
  "trybuild",
  "zip",
 ]
@@ -324,13 +324,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actingcommand-runtime-bench"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "actingcommand-runtime-client"
 version = "0.1.0"
 dependencies = [
@@ -400,6 +393,16 @@ name = "actingcommand-scheduler"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+]
+
+[[package]]
+name = "actingcommand-selection-policy"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

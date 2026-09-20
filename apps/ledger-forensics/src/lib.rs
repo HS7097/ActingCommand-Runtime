@@ -15,6 +15,7 @@ use actingcommand_ledger_forensics::{
 };
 
 enum CliRequest {
+    Material(Box<actingcommand_ledger_forensics::ForensicMaterialRequest>),
     Views(Box<ForensicViewRequest>),
     StateRoot(ForensicRequest),
     Replay(ForensicReplayRequest),
@@ -60,6 +61,11 @@ where
     W: Write,
 {
     let report = match parse_args(args)? {
+        CliRequest::Material(request) => {
+            return actingcommand_ledger_forensics::read_material_to(*request, output).map_err(
+                |error| CliError::new(error.code(), error.operation(), error.to_string()),
+            );
+        }
         CliRequest::Views(request) => actingcommand_ledger_forensics::run_views(*request),
         CliRequest::StateRoot(request) => actingcommand_ledger_forensics::run(request),
         CliRequest::Replay(request) => actingcommand_ledger_forensics::replay(request),
@@ -146,6 +152,24 @@ where
     }
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
+        "material" => {
+            if require_utf8(args.next(), "--request")? != "--request" {
+                return Err(invalid_arguments("material expects --request JSON"));
+            }
+            let json = require_utf8(args.next(), "typed material request")?;
+            if json.len() > 16 * 1024 || args.next().is_some() {
+                return Err(invalid_arguments(
+                    "material request exceeds bound or has extra arguments",
+                ));
+            }
+            let request = serde_json::from_str(&json)
+                .map_err(|_| invalid_arguments("invalid typed material request"))?;
+            return actingcommand_ledger_forensics::ForensicMaterialRequest::new(
+                state_root, request,
+            )
+            .map(|request| CliRequest::Material(Box::new(request)))
+            .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()));
+        }
         "views" => {
             return parse_views(state_root, args)
                 .map(|request| CliRequest::Views(Box::new(request)));
@@ -217,7 +241,14 @@ where
                         .map_err(|_| invalid_arguments("invalid view page limit"))?,
                 )
             }
-            "--query" | "--profile" | "--cursor" | "--snapshot" | "--limit" => {
+            "--instance-port" if options.instance_port.is_none() => {
+                options.instance_port = Some(
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| invalid_arguments("invalid instance port"))?,
+                )
+            }
+            "--query" | "--profile" | "--cursor" | "--snapshot" | "--limit" | "--instance-port" => {
                 return Err(invalid_arguments(format!("duplicate view option {option}")));
             }
             _ => return Err(invalid_arguments(format!("unknown view option {option}"))),
