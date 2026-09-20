@@ -390,7 +390,8 @@ impl Declaration<'_> {
                 ));
             }
             (None, None) => {
-                self.required(object, pointer, "click")?;
+                let click = self.required(object, pointer, "click")?;
+                self.click(click, &child(pointer, "click"), canonical)?;
             }
         }
         for (field, value) in object {

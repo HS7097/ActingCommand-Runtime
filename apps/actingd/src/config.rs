@@ -1284,6 +1284,33 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         }
     }
 
+    fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: std::time::Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> DeviceResult<()> {
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .probe_adb_baseline_until(instance_alias, deadline, stopped),
+            Some(ScheduledExecutionMode::FixtureSimulation) => {
+                if stopped() || std::time::Instant::now() >= deadline {
+                    Err(DeviceError::fatal(
+                        "ADB baseline stopped or deadline expired",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
+    }
+
     fn observe_foreground_application(
         &self,
         instance_alias: &str,

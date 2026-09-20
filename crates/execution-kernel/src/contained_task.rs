@@ -1572,6 +1572,10 @@ pub trait ContainedTaskRuntime {
     /// through the runtime's own application lifecycle path. A runtime without that surface
     /// (fixtures, offline runs, recovery entries) reports `Unsupported` and the interpreter
     /// fails the task with `application_effect_requires_assigned_application`.
+    fn supports_application_effect(&self) -> bool {
+        false
+    }
+
     fn control_application(
         &mut self,
         _action: ApplicationLifecycleAction,
@@ -2015,24 +2019,46 @@ impl PreparedContainedTask {
             },
         );
         runtime.observe_task_timing(observation_timing);
+        if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.application.is_some())
+            && self.control.execution_mode != "recognize_only"
+            && !runtime.supports_application_effect()
+        {
+            return Err(ContainedTaskError::new(
+                "application_effect_requires_assigned_application",
+            )
+            .into());
+        }
+        let initial_application = self.program.operations.first().filter(|operation| {
+            operation.from == "any"
+                && operation.application.is_some()
+                && self.control.execution_mode != "recognize_only"
+        });
         let mut observation = if entry == ContainedTaskEntry::Ordinary
             && let Some(required_page) = self.required_home_entry_page()
         {
-            self.capture_page(
-                runtime,
-                ocr_collector,
-                Some(required_page),
-                observation_timing,
-            )?
-            .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?
+            Some(
+                self.capture_page(
+                    runtime,
+                    ocr_collector,
+                    Some(required_page),
+                    observation_timing,
+                )?
+                .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_matched"))?,
+            )
+        } else if initial_application.is_some() {
+            self.capture_page(runtime, ocr_collector, None, observation_timing)?
         } else {
-            self.capture_until_page(
+            Some(self.capture_until_page(
                 runtime,
                 ocr_collector,
                 step_timeout,
                 capture_interval,
                 observation_timing,
-            )?
+            )?)
         };
         if Instant::now() >= task_deadline {
             return Err(self
@@ -2047,7 +2073,7 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Ok(ContainedTaskOutcome {
                 outcome: TaskOutcome::Success,
-                final_page: Some(observation.page_label),
+                final_page: observation.map(|observed| observed.page_label),
                 executed_steps: 0,
                 selected_scheduling_outcome: None,
             });
@@ -2081,7 +2107,11 @@ impl PreparedContainedTask {
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         machine
-            .observe_page(Some(observation.page_label.clone()))
+            .observe_page(
+                observation
+                    .as_ref()
+                    .map(|observed| observed.page_label.clone()),
+            )
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         let mut stability_tracker = StabilityTracker::default();
         let mut recovery_timing = None;
@@ -2092,20 +2122,33 @@ impl PreparedContainedTask {
                     .task_timeout_error(TaskTimingStage::Dispatch, task_deadline, None)
                     .into());
             }
-            match machine
-                .next_directive(&candidates)
-                .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?
+            let directive = if observation.is_none()
+                && machine.completed_steps() == 0
+                && let Some(application) = initial_application
             {
+                let candidate = candidates
+                    .iter()
+                    .find(|candidate| candidate.id() == application.id)
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_missing"))?;
+                machine.initial_application_directive(candidate)
+            } else {
+                machine.next_directive(&candidates)
+            };
+            match directive.map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))? {
                 RunDirective::AwaitPage => {
-                    observation = self.capture_until_page(
+                    observation = Some(self.capture_until_page(
                         runtime,
                         ocr_collector,
                         step_timeout,
                         capture_interval,
                         observation_timing,
-                    )?;
+                    )?);
                     machine
-                        .observe_page(Some(observation.page_label.clone()))
+                        .observe_page(
+                            observation
+                                .as_ref()
+                                .map(|observed| observed.page_label.clone()),
+                        )
                         .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
                 }
                 RunDirective::ExecuteOperation {
@@ -2167,9 +2210,12 @@ impl PreparedContainedTask {
                                 }
                             }
                         } else {
+                            let observation = observation.as_ref().ok_or_else(|| {
+                                ContainedTaskError::new("contained_task_page_unknown")
+                            })?;
                             let (guard, target) = match operation.guard_outcome(
                                 &self.control,
-                                &observation,
+                                observation,
                                 &self.evaluator,
                                 runtime,
                             ) {
@@ -2278,26 +2324,30 @@ impl PreparedContainedTask {
                         waited?;
                         let destination_pages = operation.destination_pages()?;
                         if destination_pages.is_empty() {
-                            observation = self.capture_until_page(
+                            observation = Some(self.capture_until_page(
                                 runtime,
                                 ocr_collector,
                                 step_timeout,
                                 capture_interval,
                                 observation_timing,
-                            )?;
+                            )?);
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
                                 &mut machine,
                                 &mut stability_tracker,
                                 step_index,
                                 &operation_id,
-                                &observation,
+                                observation.as_ref().ok_or_else(|| {
+                                    ContainedTaskError::new("contained_task_page_unknown")
+                                })?,
                             )? {
                                 return self.finish_stability_termination(
                                     runtime,
                                     ocr_collector,
                                     &machine,
-                                    &observation,
+                                    observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new("contained_task_page_unknown")
+                                    })?,
                                     reason,
                                 );
                             }
@@ -2319,20 +2369,24 @@ impl PreparedContainedTask {
                         let (failed_observation, hit_error_page, timing_failure) = match resolution
                         {
                             PostconditionResolution::Reached(reached) => {
-                                observation = reached;
+                                observation = Some(reached);
                                 if let Some(reason) = self.complete_successful_step(
                                     runtime,
                                     &mut machine,
                                     &mut stability_tracker,
                                     step_index,
                                     &operation_id,
-                                    &observation,
+                                    observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new("contained_task_page_unknown")
+                                    })?,
                                 )? {
                                     return self.finish_stability_termination(
                                         runtime,
                                         ocr_collector,
                                         &machine,
-                                        &observation,
+                                        observation.as_ref().ok_or_else(|| {
+                                            ContainedTaskError::new("contained_task_page_unknown")
+                                        })?,
                                         reason,
                                     );
                                 }
@@ -2411,20 +2465,28 @@ impl PreparedContainedTask {
                                     observation_timing,
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
-                                        observation = reached;
+                                        observation = Some(reached);
                                         if let Some(reason) = self.complete_successful_step(
                                             runtime,
                                             &mut machine,
                                             &mut stability_tracker,
                                             step_index,
                                             &operation_id,
-                                            &observation,
+                                            observation.as_ref().ok_or_else(|| {
+                                                ContainedTaskError::new(
+                                                    "contained_task_page_unknown",
+                                                )
+                                            })?,
                                         )? {
                                             return self.finish_stability_termination(
                                                 runtime,
                                                 ocr_collector,
                                                 &machine,
-                                                &observation,
+                                                observation.as_ref().ok_or_else(|| {
+                                                    ContainedTaskError::new(
+                                                        "contained_task_page_unknown",
+                                                    )
+                                                })?,
                                                 reason,
                                             );
                                         }
@@ -2493,7 +2555,7 @@ impl PreparedContainedTask {
                                             &operation_id,
                                             Some(&fresh),
                                         )?;
-                                        observation = fresh;
+                                        observation = Some(fresh);
                                     }
                                     PostconditionResolution::Failed {
                                         observation: None,

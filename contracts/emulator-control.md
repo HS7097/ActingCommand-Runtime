@@ -138,16 +138,28 @@ outcome that carries no port fails typed with `emulator_control_endpoint_unresol
 (`backend_operation_failed`, receipt state `failed`, effect `indeterminate`); the binding stays as
 it was and the request may be repeated.
 
+Lease queue/acquire uses only the stable instance identity to locate its admission lock.
+After acquiring that lock it resolves the current Host/registry binding again; the endpoint
+check and scheduler preparation, queue context and commit use that same current binding.
+Stop/start cannot admit or reject a waiting lease request using its earlier endpoint snapshot.
+The existing active-lease/queued-request fence and device-registry endpoint gate remain.
+
 ADB baseline (slice #316-B3): the vendor reports `running` a few seconds before adbd answers,
 so a bound `start` / `restart` succeeds only once the ADB baseline answers. Still under the
 admission guard, after the rebinding, the host probes the bound endpoint (`ensure_device`
-with a connect attempt allowed) every 500 ms for at most 30 s; the probes are not recorded,
-the wait is part of the receipt's `elapsed_ms`. A timeout fails typed with
+with a connect attempt allowed) every 500 ms against one absolute 30 s deadline; the probes are not recorded,
+the wait is part of the receipt's `elapsed_ms`. Each get-state/connect/get-state command uses
+only its remaining budget, checks shutdown before spawn, during process polling and before
+success, and the next poll/sleep shares that deadline. The existing bounded process/pipe
+cleanup remains mandatory and can finish after the execution deadline; no late success or
+hard FFI cancellation is claimed. Original command errors and unconfirmed cleanup survive;
+unconfirmed resource closure remains fatal. Other callers retain their default command
+timeouts, and the client receipt budget stays 230 s. A timeout fails typed with
 `emulator_control_adb_not_ready` (`backend_operation_failed`, receipt state `failed`, effect
 `indeterminate`; native detail carries the alias, the port, the milliseconds waited and the
 last ADB error): `command.validated`, the second `runtime.instance_bound`, `device.connected`
 and the startup package are all withheld, the binding keeps the reported port, and the
-request may be repeated. After a successful `stop` the entry returns to pending
+  request may be repeated. After a successful `stop` the entry returns to pending
 and `status` shows `adb_port: null` again; no event beyond the existing `device.connected`
 invalidation records that transition.
 

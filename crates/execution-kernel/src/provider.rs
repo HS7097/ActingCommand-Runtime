@@ -860,6 +860,29 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         Ok(())
     }
 
+    fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: std::time::Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> DeviceResult<()> {
+        if stopped() || std::time::Instant::now() >= deadline {
+            return Err(DeviceError::fatal(
+                "ADB baseline stopped or deadline expired",
+            ));
+        }
+        let result = self.probe_adb_baseline(instance_alias);
+        if stopped() || std::time::Instant::now() >= deadline {
+            return match result {
+                Err(error) => Err(error),
+                Ok(()) => Err(DeviceError::fatal(
+                    "ADB baseline stopped or deadline expired",
+                )),
+            };
+        }
+        result
+    }
+
     /// Read-only: the package the instance reports in the foreground, next to the application
     /// assigned to the instance (slice #316-B3). Goes through the ADB baseline only and opens
     /// no device session; a failure is an ADB failure. Providers without an ADB baseline keep

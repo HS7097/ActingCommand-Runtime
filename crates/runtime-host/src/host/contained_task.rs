@@ -445,6 +445,17 @@ struct EntryRecoveryRuntime<'a, 'host> {
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
 
+    fn supports_application_effect(&self) -> bool {
+        self.inner.supports_application_effect()
+    }
+
+    fn control_application(
+        &mut self,
+        action: ApplicationLifecycleAction,
+    ) -> Result<actingcommand_execution_kernel::ApplicationEffectSupport, Self::Error> {
+        self.inner.control_application(action)
+    }
+
     fn update_run_progress(&mut self, executed_steps: u32) {
         self.inner.update_run_progress(executed_steps);
     }
@@ -2534,13 +2545,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// lifecycle path under the run's lease, with the task and run ids on every
     /// `application.*` event. A fixture run has no assigned application and reports
     /// `Unsupported`, which the interpreter turns into the typed task failure.
+    fn supports_application_effect(&self) -> bool {
+        self.execution_provenance == ExecutionBackendProvenance::PhysicalDevice
+    }
+
     fn control_application(
         &mut self,
         action: ApplicationLifecycleAction,
     ) -> Result<actingcommand_execution_kernel::ApplicationEffectSupport, Self::Error> {
         use actingcommand_execution_kernel::ApplicationEffectSupport;
         self.ensure_active()?;
-        if self.execution_provenance != ExecutionBackendProvenance::PhysicalDevice {
+        if !self.supports_application_effect() {
             return Ok(ApplicationEffectSupport::Unsupported);
         }
         self.host.application_control(
@@ -3966,7 +3981,18 @@ impl HostShared {
         }
         // ADB baseline: the package runs only against an answering adbd; a probe failure is
         // recorded typed and takes no lease.
-        if let Err(error) = self.execution.probe_adb_baseline(instance_alias) {
+        if let Err(error) = self.execution.probe_adb_baseline_until(
+            instance_alias,
+            Instant::now() + Duration::from_secs(30),
+            &|| self.fatal.is_shutdown_requested(),
+        ) {
+            if error.resource_quiescence()
+                == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+            {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::execution("run_startup_package", &error),
+                ));
+            }
             let mut host_error = RuntimeHostError::request(
                 "startup_package_adb_not_ready",
                 "run_startup_package",
@@ -4758,9 +4784,17 @@ impl HostShared {
                     RuntimeHostError::request(
                         error.code(),
                         "run_contained_task",
-                        RuntimeErrorCode::BackendOperationFailed,
+                        if error.code() == "application_effect_requires_assigned_application" {
+                            RuntimeErrorCode::InvalidRequest
+                        } else {
+                            RuntimeErrorCode::BackendOperationFailed
+                        },
                     ),
-                    RuntimeReceiptState::Failed,
+                    if error.code() == "application_effect_requires_assigned_application" {
+                        RuntimeReceiptState::Denied
+                    } else {
+                        RuntimeReceiptState::Failed
+                    },
                     Some(terminal(&event)),
                 );
                 failure.task_failure = failure_severity.map(|severity| TaskFailureEvidence {

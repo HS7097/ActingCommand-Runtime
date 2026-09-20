@@ -584,11 +584,14 @@ impl HostShared {
                     terminal: Some(terminal(&outcome)),
                     error: Box::new(error.error),
                     poison_runtime: error.poison_runtime,
-                    task_failure: None,
+                    task_failure: error.task_failure.map(|evidence| *evidence),
                 };
-                if release_after {
-                    self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
-                        .map_err(RequestFailure::poison_without_terminal)?;
+                if release_after
+                    && run_links.is_none()
+                    && let Err(error) =
+                        self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
+                {
+                    return Err(failure.replace_with_poison(error));
                 }
                 Err(failure)
             }

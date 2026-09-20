@@ -210,19 +210,40 @@ impl HostShared {
     fn await_adb_baseline(&self, rebound: &RegisteredInstance) -> RuntimeHostResult<u64> {
         let started = Instant::now();
         let deadline = started + ADB_BASELINE_WAIT;
-        let last_error = loop {
-            match self.execution.probe_adb_baseline(&rebound.instance_alias) {
+        let stopped = || self.fatal.is_shutdown_requested();
+        let mut last_error = None;
+        loop {
+            if stopped() || Instant::now() >= deadline {
+                break;
+            }
+            match self.execution.probe_adb_baseline_until(
+                &rebound.instance_alias,
+                deadline,
+                &stopped,
+            ) {
                 Ok(()) => {
+                    if stopped() || Instant::now() >= deadline {
+                        break;
+                    }
                     return Ok(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
                 }
                 Err(error) => {
-                    if Instant::now() >= deadline || self.fatal.is_shutdown_requested() {
-                        break error;
+                    if error.resource_quiescence()
+                        == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+                    {
+                        return Err(RuntimeHostError::execution(CONTROL_OPERATION, &error));
                     }
-                    thread::sleep(ADB_BASELINE_POLL_INTERVAL);
+                    last_error = Some(error);
+                    if Instant::now() >= deadline || stopped() {
+                        break;
+                    }
+                    thread::sleep(
+                        ADB_BASELINE_POLL_INTERVAL
+                            .min(deadline.saturating_duration_since(Instant::now())),
+                    );
                 }
             }
-        };
+        }
         let waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut error = RuntimeHostError::request(
             "emulator_control_adb_not_ready",
@@ -230,12 +251,13 @@ impl HostShared {
             RuntimeErrorCode::BackendOperationFailed,
         )
         .with_native_detail(format!(
-            "instance_alias={}; adb_port={}; waited_ms={waited_ms}; last_error={last_error}",
+            "instance_alias={}; adb_port={}; waited_ms={waited_ms}; stopped={}; last_error={last_error:?}",
             rebound.instance_alias,
             rebound.bound_adb_endpoint().map_or_else(
                 || "absent".to_owned(),
                 |endpoint| endpoint.port().to_string()
-            )
+            ),
+            stopped()
         ));
         error.lifecycle.instance_id = Some(rebound.instance_id());
         Err(error)

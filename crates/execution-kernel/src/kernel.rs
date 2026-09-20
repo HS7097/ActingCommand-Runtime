@@ -351,6 +351,19 @@ impl ExecutionKernel {
         self.provider.probe_adb_baseline(instance_alias)
     }
 
+    pub fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> ExecutionKernelResult<()> {
+        self.provider
+            .probe_adb_baseline_until(instance_alias, deadline, stopped)
+            .map_err(|error| {
+                ExecutionKernelError::device("application_adb_baseline_failed", &error)
+            })
+    }
+
     /// Read-only: what the provider reports in the foreground of the instance next to its
     /// assigned application (slice #316-B3). Drives the provider directly like
     /// `control_instance`, outside any session; the device error comes back untyped so the

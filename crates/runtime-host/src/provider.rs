@@ -597,6 +597,31 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .map(|_| ())
     }
 
+    fn probe_adb_baseline_until(
+        &self,
+        instance_alias: &str,
+        deadline: std::time::Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> DeviceResult<()> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        let application_target = {
+            let endpoint = entry.endpoint();
+            endpoint.require_bound("probe_adb_baseline")?;
+            endpoint.application_target.clone()
+        };
+        Adb::new(entry.application_adb.clone())
+            .ensure_device_until(
+                &application_target.resolved_serial(),
+                true,
+                deadline,
+                stopped,
+            )
+            .map(|_| ())
+    }
+
     /// The ADB baseline query behind the foreground gate: same bound-endpoint guard and
     /// `ensure_device` as `control_application`, then one read-only `dumpsys`. No session
     /// is opened; a Nemu paired session, when one is open, is not consulted.

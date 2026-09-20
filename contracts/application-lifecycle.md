@@ -32,6 +32,8 @@ An operation carries exactly one effect: the existing `click` object, or
 - `action` is `launch`, `restart` or `stop` (`ApplicationLifecycleAction`, snake_case). No
   other key is accepted inside `application`; `click` and `application` on one operation, or
   neither, is a declaration error.
+  Null is not an effect: two absent/null effects are rejected at the source declaration
+  entrance with the original structured path/reason, before conversion or packaging.
 - Execution resolves the instance's `application_id` and drives the existing
   `ApplicationLifecycle` path (`control_application`: adb `force-stop` for `stop`, `monkey`
   launch for `launch`, both for `restart`) under the run's lease, with the task and run ids on
@@ -40,6 +42,11 @@ An operation carries exactly one effect: the existing `click` object, or
   `application.failed` -> `task.effect_completed`, then the ordinary post-step observation
   and `task.step_finished`. No guard is evaluated and no foreground gate runs for this step:
   the effect is what brings the assigned application to the foreground.
+- A task-owned application failure keeps its original TaskFailureEvidence and lease until
+  the Task owner closes its resources, commits the real terminal fact and releases the
+  lease. This applies to ordinary, scheduled/startup and entry-recovery execution. The
+  independent ApplicationLifecycle request retains its own failure cleanup/release path.
+  Ledger failures and unconfirmed resource closure retain their fatal boundary.
 - Success is the target page, exactly as for a click: the recognition pack must report the
   operation's `to` page before the step timeout (`step_timeout`, the same default and bound as
   every other step). An application that does not reach the page fails the task with the
@@ -51,6 +58,9 @@ An operation carries exactly one effect: the existing `click` object, or
   device write. Registered device instances always carry one (`application_identity_missing`
   is a configuration error), so this refuses fixture-simulated runs and providers without an
   application surface.
+  Capability is checked before any operation in an application-bearing task; the Task
+  failure code and Runtime `invalid_request` / `denied` receipt agree. Entry recovery uses
+  the same assigned capability and application core as its owning run.
 - Lab (`actinglab package build` / `validate`), `pack-containment` and the execution kernel
   accept the effect in the same declaration slot; the `resource_declaration_invalid` /
   `unknown_field` path treats `application` as a known operation field.
@@ -59,6 +69,15 @@ The minimal "application start" package is therefore one entry (`any`), one step
 (`application.restart`) and one target page (the home page the recognition pack declares).
 It is also the second rung of the recovery ladder (#316-B4, out of this slice): return-home
 package -> this package -> `emulator restart` -> this package again.
+
+For the first `from:any` application effect, a real initial frame with verified geometry,
+provenance, lease and remaining deadline may have no recognized page. Its recognition fact
+remains unmatched and the step's source is `<unrecognized>`; the run state does not invent
+a current page. The same run state machine dispatches that initial application operation,
+then requires the declared target recognition through its existing postcondition path.
+Known pages and already recognized terminal pages keep their original selection/termination
+rules. Coordinate inputs still require a recognized page. No desktop recognition template
+is required solely to start the assigned application.
 
 ## The foreground gate
 

@@ -241,6 +241,75 @@ impl Adb {
         }
     }
 
+    /// One baseline probe; every command shares the caller's deadline and stop condition.
+    pub fn ensure_device_until(
+        &self,
+        serial: &str,
+        connect_allowed: bool,
+        deadline: Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> DeviceResult<String> {
+        let run = |args: &[&str]| {
+            if stopped() || Instant::now() >= deadline {
+                return Err(DeviceError::fatal(
+                    "ADB baseline stopped or deadline expired before command",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let result = run_text_command_until(
+                &self.config.adb_path,
+                args,
+                self.config.command_timeout.min(remaining),
+                None,
+                Some((deadline, stopped)),
+            );
+            if stopped() || Instant::now() >= deadline {
+                return Err(match result {
+                    Err(error) => error,
+                    Ok(output) => DeviceError::fatal(format!(
+                        "ADB baseline stopped or deadline expired after command; command={args:?}; output={output:?}"
+                    )),
+                });
+            }
+            result
+        };
+        let first =
+            run(&["-s", serial, "get-state"]).map(|output| output.stdout.trim().to_string());
+        if let Err(error) = &first
+            && error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+        {
+            return Err(error.clone());
+        }
+        if first.as_ref().is_ok_and(|state| state == "device") {
+            return first;
+        }
+        if !connect_allowed || stopped() || Instant::now() >= deadline {
+            return Err(device_state_error(serial, first, None));
+        }
+        let connected = run(&["connect", serial]).map(|_| ());
+        if let Err(error) = &connected
+            && error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+        {
+            return Err(error.clone());
+        }
+        if stopped() || Instant::now() >= deadline {
+            return Err(device_state_error(serial, first, Some(connected)));
+        }
+        let second =
+            run(&["-s", serial, "get-state"]).map(|output| output.stdout.trim().to_string());
+        match second {
+            Ok(state) if state == "device" => Ok(state),
+            Err(error) => {
+                let detail = format!(
+                    "ADB baseline initial_state={first:?}; connect={connected:?}; final_error={error}"
+                );
+                let severity = error.severity();
+                Err(error.with_severity_and_message(severity, detail))
+            }
+            state => Err(device_state_error(serial, state, Some(connected))),
+        }
+    }
+
     pub fn screen_size(&self, serial: &str) -> DeviceResult<String> {
         let output = self.run(&["-s", serial, "shell", "wm", "size"])?;
         Ok(output.stdout.trim().to_string())
@@ -494,9 +563,18 @@ fn run_text_command(
     timeout: Duration,
     directory: Option<&std::path::Path>,
 ) -> DeviceResult<CommandOutput> {
+    run_text_command_until(adb_path, args, timeout, directory, None)
+}
+
+fn run_text_command_until(
+    adb_path: &str,
+    args: &[&str],
+    timeout: Duration,
+    directory: Option<&std::path::Path>,
+    boundary: Option<(Instant, &dyn Fn() -> bool)>,
+) -> DeviceResult<CommandOutput> {
     validate_adb_path(adb_path)?;
-    let output =
-        run_raw_with_timeout_in_directory(ADB_PROGRAM, adb_path, args, timeout, directory)?;
+    let output = run_raw_with_boundary(ADB_PROGRAM, adb_path, args, timeout, directory, boundary)?;
     let stdout = decode_adb_text(output.stdout, "stdout", args);
     let stderr = decode_adb_text(output.stderr, "stderr", args);
     if output.status.success() {
@@ -576,7 +654,25 @@ fn run_raw_with_timeout_in_directory(
     timeout: Duration,
     directory: Option<&std::path::Path>,
 ) -> DeviceResult<RawCommandOutput> {
+    run_raw_with_boundary(program, program_path, args, timeout, directory, None)
+}
+
+fn run_raw_with_boundary(
+    program: CommandProgram,
+    program_path: &str,
+    args: &[&str],
+    timeout: Duration,
+    directory: Option<&std::path::Path>,
+    boundary: Option<(Instant, &dyn Fn() -> bool)>,
+) -> DeviceResult<RawCommandOutput> {
     let name = program.name;
+    let expired =
+        || boundary.is_some_and(|(deadline, stopped)| stopped() || Instant::now() >= deadline);
+    if expired() {
+        return Err(DeviceError::fatal(format!(
+            "{name} command stopped or deadline expired before spawn"
+        )));
+    }
     let mut command = Command::new(program_path);
     if let Some(directory) = directory {
         command.current_dir(directory);
@@ -607,8 +703,22 @@ fn run_raw_with_timeout_in_directory(
         stderr_thread = Some(spawn_pipe_reader(stderr, name)?);
         let started = Instant::now();
         loop {
+            if expired() {
+                return Err(DeviceError::fatal(format!(
+                    "{name} {} stopped or deadline expired while waiting",
+                    args.join(" ")
+                )));
+            }
             match child.try_wait() {
-                Ok(Some(status)) => return Ok(status),
+                Ok(Some(status)) => {
+                    if expired() {
+                        return Err(DeviceError::fatal(format!(
+                            "{name} {} completed after stop or deadline; status={status}",
+                            args.join(" ")
+                        )));
+                    }
+                    return Ok(status);
+                }
                 Ok(None) => {}
                 Err(error) => {
                     return Err(DeviceError::fatal(format!(
@@ -629,7 +739,9 @@ fn run_raw_with_timeout_in_directory(
                     None => expired,
                 });
             }
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(boundary.map_or(Duration::from_millis(25), |(deadline, _)| {
+                Duration::from_millis(25).min(deadline.saturating_duration_since(Instant::now()))
+            }));
         }
     })();
     let (status, mut failure) = match execution {
