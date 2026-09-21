@@ -394,7 +394,7 @@ impl ArtifactStore {
         &self.root
     }
 
-    /// Installed once before production admission. Detachable offline tooling has no Runtime owner.
+    /// Installed once before new-byte admission. Read-only stores may remain without an owner.
     pub fn install_capacity_admission(
         &self,
         admission: Arc<dyn ArtifactCapacityAdmission>,
@@ -410,10 +410,14 @@ impl ArtifactStore {
 
     #[cfg(feature = "capture")]
     pub(crate) fn inherit_capacity(&self, source: &Self) -> ArtifactStoreResult<()> {
-        if let Some(admission) = source.capacity.get() {
-            self.install_capacity_admission(Arc::clone(admission))?;
-        }
-        Ok(())
+        let admission = source.capacity.get().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "capacity_owner_missing",
+                "admit_artifact_bytes",
+                "artifact writes require the committed capacity owner",
+            )
+        })?;
+        self.install_capacity_admission(Arc::clone(admission))
     }
 
     #[cfg(feature = "capture")]
@@ -572,12 +576,8 @@ impl ArtifactStore {
             ));
         }
         let temp_path = temporary_path(&self.root.join("artifact-stream"))?;
-        admit_bytes(
-            self.capacity.get().map(Arc::as_ref),
-            &mut context,
-            &temp_path,
-            0,
-        )?;
+        let capacity = self.capacity.get().cloned();
+        admit_bytes(capacity.as_deref(), &mut context, &temp_path, 0)?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -601,7 +601,7 @@ impl ArtifactStore {
             policy,
             material: ArtifactMaterialAccumulator::default(),
             failure: None,
-            capacity: self.capacity.get().cloned(),
+            capacity,
             append_timing: None,
         })
     }
@@ -692,15 +692,10 @@ impl ArtifactStore {
                 "artifact writer lock is poisoned",
             ))
         })?;
-        // Sealing is a trusted drain of already-written bytes; retain the current
-        // decision for a real publication error without blocking normal completion.
-        if let Some(admission) = self.capacity.get() {
-            stream.context.capacity = Some(
-                admission
-                    .decide(&path, 0)
-                    .map_err(|error| stream.fail(error))?,
-            );
-        }
+        // Already-written bytes drain through the owner retained when this stream opened.
+        stream.for_drain();
+        admit_bytes(stream.capacity.as_deref(), &mut stream.context, &path, 0)
+            .map_err(|error| stream.fail(error))?;
         stream.file.take();
         let publication = (|| {
             let parent = path.parent().ok_or_else(|| {
@@ -1006,25 +1001,31 @@ fn admit_bytes(
     path: &Path,
     bytes: u64,
 ) -> ArtifactStoreResult<()> {
-    if let Some(admission) = admission {
-        let mut decision = admission.decide(path, bytes)?;
-        if context
-            .bound_volume
-            .as_ref()
-            .is_some_and(|bound| decision.target_volume.as_ref() != Some(bound))
-        {
-            decision.outcome = actingcommand_contract::CapacityAdmissionOutcome::Unknown;
-            decision.reason = actingcommand_contract::CapacityAdmissionReason::BindingChanged;
-        }
-        if context.bound_volume.is_none() {
-            context.bound_volume = decision.target_volume.clone();
-        }
-        let allowed =
-            decision.outcome.allows() || matches!(context.write_class, ArtifactWriteClass::Drain);
-        context.capacity = Some(decision.clone());
-        if !allowed {
-            return Err(ArtifactStoreError::capacity_refused(decision));
-        }
+    let Some(admission) = admission else {
+        context.capacity = None;
+        return Err(ArtifactStoreError::fatal(
+            "capacity_owner_missing",
+            "admit_artifact_bytes",
+            "artifact writes require the committed capacity owner",
+        ));
+    };
+    let mut decision = admission.decide(path, bytes)?;
+    if context
+        .bound_volume
+        .as_ref()
+        .is_some_and(|bound| decision.target_volume.as_ref() != Some(bound))
+    {
+        decision.outcome = actingcommand_contract::CapacityAdmissionOutcome::Unknown;
+        decision.reason = actingcommand_contract::CapacityAdmissionReason::BindingChanged;
+    }
+    if context.bound_volume.is_none() {
+        context.bound_volume = decision.target_volume.clone();
+    }
+    let allowed =
+        decision.outcome.allows() || matches!(context.write_class, ArtifactWriteClass::Drain);
+    context.capacity = Some(decision.clone());
+    if !allowed {
+        return Err(ArtifactStoreError::capacity_refused(decision));
     }
     Ok(())
 }

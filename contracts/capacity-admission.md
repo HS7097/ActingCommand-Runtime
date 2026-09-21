@@ -56,9 +56,18 @@ owner records the failed attempt, unperformed recognition and capacity reference
 then keeps the monitor loop running. Actual Artifact I/O failures remain fatal.
 
 ArtifactStore consumes Runtime's read-only committed projection at stream open,
-each stream write, and prepared-byte commit. Trusted terminal/error/release owners
-select Drain in Rust; there is no client or resource field for it. Sealing already
-written bytes completes as drain. The projection does not reserve storage: an I/O
+each stream write, and prepared-byte commit. These admissions and capacity
+inheritance require an installed owner. Its absence returns fatal
+`capacity_owner_missing` during `admit_artifact_bytes`, without a capacity decision
+or fact reference. Opening a store for reads and verifying material remain valid
+without an admission owner.
+
+Trusted terminal/error/release owners select Drain in Rust; there is no client or
+resource field for it. Drain still requires an owner. A stream retains the owner
+used at its successful open; sealing its already-written bytes uses that same
+owner, including when a store opened for the same root performs the seal.
+Low or stale capacity decisions do not block this trusted completion. The
+projection does not reserve storage: an I/O
 failure can still occur after successful admission. Original error code, operation,
 native detail, optional raw OS code and bounded secondary causes remain intact,
 with capacity fact references as context. A real cleanup or Ledger failure is
@@ -74,4 +83,6 @@ fatality.
 
 Detachable offline resource tools do not construct a production Runtime capacity
 owner. Formal offline Ledger maintenance retains its existing ownership, inactive
-recovery and error rules.
+recovery and error rules. Its recovery-reference restore uses a separate byte-copy
+entry, outside the admission calls described above; this does not establish
+capacity admission for that restore path.
