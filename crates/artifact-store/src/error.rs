@@ -141,6 +141,7 @@ impl ArtifactStoreError {
         Self::fatal("frame_store_device", "frame_store", detail)
     }
 
+    #[cfg(feature = "capture")]
     pub(crate) fn incoming_frame(error: actingcommand_device::DeviceError) -> Self {
         let invalid_layout = error.diagnostic().is_some_and(|diagnostic| {
             diagnostic.category() == actingcommand_device::DeviceErrorCategory::FrameLayout
