@@ -26,6 +26,9 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) bind_port: Option<u16>,
     pub(super) device_diagnostic_mode: Option<DeviceDiagnosticMode>,
     pub(super) frame_retention_enabled: Option<bool>,
+    pub(super) failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy,
+    pub(super) failed_run_successes_explicit: bool,
+    pub(super) failed_run_days_explicit: bool,
     pub(super) capacity_thresholds: Option<CapacityThresholds>,
     pub(super) secret_fingerprint_salt_bytes: usize,
     pub(super) mumu_root: Option<&'a Path>,
@@ -154,6 +157,16 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             key: "frame_retention_enabled".to_owned(),
             value: FactScalar::Boolean(frame_retention_enabled),
             source: explicit_or_default(inputs.frame_retention_enabled.is_some()),
+        },
+        ConfigParameter {
+            key: "frame_retention_failed_run_successes".to_owned(),
+            value: FactScalar::Integer(i64::from(inputs.failed_run_retention.successor_successes)),
+            source: explicit_or_default(inputs.failed_run_successes_explicit),
+        },
+        ConfigParameter {
+            key: "frame_retention_failed_run_days".to_owned(),
+            value: FactScalar::Integer(i64::from(inputs.failed_run_retention.retention_days)),
+            source: explicit_or_default(inputs.failed_run_days_explicit),
         },
         explicit(
             "secret_fingerprint_salt_bytes",

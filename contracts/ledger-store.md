@@ -288,6 +288,39 @@ the registered hash with an evicted-frame state. This requires explicit retentio
 evidence: a missing required artifact must still fail verification. Retention
 cannot silently reinterpret file loss as authorized eviction.
 
+Failed or cancelled runs may satisfy the status condition through the configured
+K/T policy: by default, three later successful runs with distinct RunIds on the
+same InstanceId, or seven days from the original terminal's ledger timestamp.
+The original Ledger writer derives a per-run terminal index and per-instance
+ordered successes from the authenticated prefix; reconstruction spans owner
+epochs without resetting the count. Duplicate/ambiguous terminals and missing
+instance, owner or terminal time do not qualify. Selection and guarded admission
+use the same rule, with a fresh writer-side check before sealing.
+
+An eviction intent contains exactly one of the original `success` source or
+`failed_run` evidence. The latter records the original terminal reference and
+outcome, its timestamp, effective `successor_successes`/`retention_days`, the
+writer evaluation timestamp, and either the ordered successor terminal references
+or `elapsed_time`. K takes precedence when both conditions hold. Day expiry uses
+checked elapsed time; K is ordered by committed sequence. The intent's own ledger
+timestamp equals the frozen evaluation time. Validation and replay reproduce the
+basis from that prefix and those sealed parameters, independently of the current
+configuration. Historical success intents retain their required original proof;
+no missing historical facts are synthesized.
+
+The failed/cancelled branch retains verified material identity, confirmed close,
+capture summary and matching scheduled settlement. Scheduled failures use their
+existing failed execution settlement; the production scheduled-cancellation path
+already commits a failure terminal and settlement. Non-scheduled cancellations
+retain their cancelled terminal. Warning/direct/nearest-frame evidence, input
+before-frames, Lab association, permanent pins and unlinked-warning protections
+remain. K/T eligibility does not imply that every failed frame can be removed.
+The same try-only material guard, intent-before-action/outcome-after-action and
+round limits apply. Recovery consumes sealed pending intents without changing
+their policy or repeating an unknown unlink; disabling periodic retention leaves
+that startup recovery intact. No unpin or synthetic-close permission follows
+from K/T.
+
 The frame owner reuses `frame_store`'s three watermarks, near-duplicate handling and
 pinning. ArtifactStore owns pin/persist/evict actions and file integrity, while the
 ledger owns immutable references and the derived query result. The same design

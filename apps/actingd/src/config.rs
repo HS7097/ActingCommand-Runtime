@@ -53,7 +53,7 @@ pub(super) struct ActingdConfigFile {
     schema_version: String,
     state_root: PathBuf,
     bind_host: String,
-    /// The four defaulted scalars stay `Option` so the manifest can tell an explicit value
+    /// Defaulted scalars stay `Option` so the manifest can tell an explicit value
     /// from the library default; `assemble` applies the default.
     #[serde(default)]
     bind_port: Option<u16>,
@@ -64,6 +64,10 @@ pub(super) struct ActingdConfigFile {
     capacity_thresholds: Option<actingcommand_contract::CapacityThresholds>,
     #[serde(default)]
     frame_retention_enabled: Option<bool>,
+    #[serde(default)]
+    frame_retention_failed_run_successes: Option<u16>,
+    #[serde(default)]
+    frame_retention_failed_run_days: Option<u16>,
     #[serde(default)]
     governance_capability: Option<String>,
     #[serde(default)]
@@ -376,6 +380,18 @@ impl ActingdConfigFile {
         {
             return Err("mumu_root_invalid");
         }
+        let defaults = actingcommand_contract::FailedRunRetentionPolicy::default();
+        let failed_run_retention = actingcommand_contract::FailedRunRetentionPolicy {
+            successor_successes: self
+                .frame_retention_failed_run_successes
+                .unwrap_or(defaults.successor_successes),
+            retention_days: self
+                .frame_retention_failed_run_days
+                .unwrap_or(defaults.retention_days),
+        };
+        failed_run_retention
+            .validate()
+            .map_err(|_| "invalid_failed_run_retention_policy")?;
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         for instance in &mut instances {
@@ -420,6 +436,7 @@ impl ActingdConfigFile {
                 .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
                 .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
                 .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or(true))
+                .with_failed_run_retention(failed_run_retention)
                 .with_bind_address(SocketAddr::new(
                     bind_host,
                     self.bind_port.unwrap_or_default(),
@@ -433,6 +450,9 @@ impl ActingdConfigFile {
             bind_port: self.bind_port,
             device_diagnostic_mode: self.device_diagnostic_mode,
             frame_retention_enabled: self.frame_retention_enabled,
+            failed_run_retention,
+            failed_run_successes_explicit: self.frame_retention_failed_run_successes.is_some(),
+            failed_run_days_explicit: self.frame_retention_failed_run_days.is_some(),
             capacity_thresholds: self.capacity_thresholds,
             secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
             mumu_root: registry.mumu_root.as_deref(),
@@ -2439,6 +2459,8 @@ mod tests {
             let mut value = value.clone();
             if let Some(configured) = configured {
                 value["frame_retention_enabled"] = json!(configured);
+                value["frame_retention_failed_run_successes"] = json!(4);
+                value["frame_retention_failed_run_days"] = json!(9);
             }
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
             assert_eq!(config.frame_retention_enabled, configured);
@@ -2468,6 +2490,39 @@ mod tests {
                 .expect("frame retention parameter");
             assert_eq!(parameter.value, FactScalar::Boolean(enabled));
             assert_eq!(parameter.source, source);
+            for (key, expected) in [
+                (
+                    "frame_retention_failed_run_successes",
+                    if configured.is_some() { 4 } else { 3 },
+                ),
+                (
+                    "frame_retention_failed_run_days",
+                    if configured.is_some() { 9 } else { 7 },
+                ),
+            ] {
+                let parameter = assembly
+                    .manifest
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == key)
+                    .expect("failed-run policy parameter");
+                assert_eq!(parameter.value, FactScalar::Integer(expected));
+                assert_eq!(parameter.source, source);
+            }
+        }
+        for (key, invalid) in [
+            ("frame_retention_failed_run_successes", 0),
+            ("frame_retention_failed_run_successes", 1025),
+            ("frame_retention_failed_run_days", 0),
+            ("frame_retention_failed_run_days", 36501),
+        ] {
+            let mut value = value.clone();
+            value[key] = json!(invalid);
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            assert!(matches!(
+                config.assemble(),
+                Err("invalid_failed_run_retention_policy")
+            ));
         }
     }
 

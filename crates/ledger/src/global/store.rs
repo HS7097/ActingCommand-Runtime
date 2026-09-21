@@ -27,10 +27,12 @@ pub(super) trait LedgerStore: Send + 'static {
     fn retention_candidates(
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
-    ) -> super::ArtifactRetentionCandidates;
+        policy: actingcommand_contract::FailedRunRetentionPolicy,
+    ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
+        policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)>;
     fn finish_artifact_eviction(
         &mut self,
@@ -96,14 +98,16 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     fn retention_candidates(
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
-    ) -> super::ArtifactRetentionCandidates {
-        Self::retention_candidates(self, after)
+        policy: actingcommand_contract::FailedRunRetentionPolicy,
+    ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates> {
+        Self::retention_candidates(self, after, policy)
     }
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
+        policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
-        Self::admit_artifact_eviction(self, guard)
+        Self::admit_artifact_eviction(self, guard, policy)
     }
     fn finish_artifact_eviction(
         &mut self,

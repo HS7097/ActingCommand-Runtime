@@ -322,6 +322,7 @@ pub struct RuntimeHostConfig {
     performance_monitor: Option<PerformanceMonitorConfig>,
     capacity_thresholds: actingcommand_contract::CapacityThresholds,
     frame_retention_enabled: bool,
+    failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy,
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -350,6 +351,7 @@ impl RuntimeHostConfig {
             performance_monitor: None,
             capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
             frame_retention_enabled: true,
+            failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy::default(),
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
@@ -422,6 +424,14 @@ impl RuntimeHostConfig {
 
     pub fn with_frame_retention_enabled(mut self, enabled: bool) -> Self {
         self.frame_retention_enabled = enabled;
+        self
+    }
+
+    pub fn with_failed_run_retention(
+        mut self,
+        policy: actingcommand_contract::FailedRunRetentionPolicy,
+    ) -> Self {
+        self.failed_run_retention = policy;
         self
     }
 
@@ -504,6 +514,13 @@ impl RuntimeHostConfig {
             .validate()
             .map_err(|error| RuntimeHostError::scheduler("validate_runtime_config", &error))?;
         self.policy_cadence.validate()?;
+        self.failed_run_retention.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "invalid_failed_run_retention_policy",
+                "validate_runtime_config",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
         self.capacity_thresholds.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 "invalid_capacity_thresholds",
@@ -568,6 +585,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("performance_monitor", &self.performance_monitor)
             .field("capacity_thresholds", &self.capacity_thresholds)
             .field("frame_retention_enabled", &self.frame_retention_enabled)
+            .field("failed_run_retention", &self.failed_run_retention)
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
@@ -1014,7 +1032,7 @@ impl RuntimeHost {
             frame_retention: Mutex::new(
                 config
                     .frame_retention_enabled
-                    .then(frame_retention::FrameRetention::default),
+                    .then(|| frame_retention::FrameRetention::new(config.failed_run_retention)),
             ),
             governance_write_gate: Mutex::new(()),
             governance_capability_sha256: config.governance_capability_sha256,
