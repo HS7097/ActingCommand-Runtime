@@ -274,6 +274,7 @@ pub enum DeviceErrorCategory {
     Protocol,
     Response,
     Native,
+    FrameLayout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,6 +345,7 @@ impl DeviceErrorCategory {
             Self::Protocol => "protocol",
             Self::Response => "response",
             Self::Native => "native",
+            Self::FrameLayout => "frame_layout",
         }
     }
 }

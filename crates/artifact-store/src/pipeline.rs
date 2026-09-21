@@ -213,6 +213,11 @@ pub struct CapturePipelineOutcome {
     pub evidence_completeness: EvidenceCompleteness,
 }
 
+/// Borrowed synchronous publication under each frame's original context.
+/// Hosts use a fresh single-frame Ledger sink for each invocation.
+pub type FrameArtifactPublisher<'a> =
+    dyn FnMut(&ArtifactStore, ArtifactWriteRequest<'_>) -> ArtifactStoreResult<StoredArtifact> + 'a;
+
 pub struct CapturePipeline {
     frame_store: FrameStore,
     artifact_store: Arc<ArtifactStore>,
@@ -227,6 +232,7 @@ pub struct CapturePipeline {
     artifact_producer: ArtifactProducer,
     redaction_state: ArtifactRedactionState,
     paused: bool,
+    pressure_refusal: Option<crate::FramePersistenceFailure>,
 }
 
 impl CapturePipeline {
@@ -302,6 +308,7 @@ impl CapturePipeline {
             },
             redaction_state: config.redaction_state,
             paused: false,
+            pressure_refusal: None,
         };
         pipeline
             .frame_store
@@ -330,13 +337,39 @@ impl CapturePipeline {
         self.counts
     }
 
+    /// The caller retains the original throughout this synchronous material operation.
+    /// Sample before cloning and keep that original charged through every publication.
+    pub fn with_frame_copy<T>(
+        &mut self,
+        frame: &actingcommand_device::Frame,
+        operation: impl FnOnce(&mut Self, actingcommand_device::Frame) -> T,
+    ) -> ArtifactStoreResult<T> {
+        let previous = self.frame_store.admit_frame_copy(frame)?;
+        let result = operation(self, frame.clone());
+        self.frame_store.release_frame_copy(previous);
+        Ok(result)
+    }
+
     pub fn record_frame(
         &mut self,
         input: FrameStoreFrameInput,
         context: ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<CapturePipelineOutcome> {
+        self.record_frame_with_publisher(input, context, sink, None)
+    }
+
+    pub fn record_frame_with_publisher(
+        &mut self,
+        input: FrameStoreFrameInput,
+        context: ArtifactWriteContext,
+        sink: &mut dyn ArtifactEventSink,
+        mut publisher: Option<&mut FrameArtifactPublisher<'_>>,
+    ) -> ArtifactStoreResult<CapturePipelineOutcome> {
         let frame_index = input.frame_index;
+        if let Some(failure) = &self.pressure_refusal {
+            return Err(failure.error.clone());
+        }
         if self.contexts.contains_key(&frame_index) {
             return Err(ArtifactStoreError::fatal(
                 "duplicate_frame_index",
@@ -363,17 +396,70 @@ impl CapturePipeline {
             )
         })?;
 
-        let frame = match self.frame_store.add_frame(input) {
+        let mut pressure_persisted = Vec::new();
+        let frame_result = self.frame_store.add_frame(input, &mut |candidate| {
+            let artifact = Self::publish_candidate(
+                &self.artifact_store,
+                &self.contexts,
+                ArtifactIssuePolicy::new(
+                    self.artifact_producer,
+                    self.retention_class,
+                    self.redaction_state,
+                ),
+                candidate,
+                sink,
+                &mut publisher,
+            )?;
+            let reference = artifact.reference().clone();
+            pressure_persisted.push((candidate.frame_index, reference.clone()));
+            Ok((Arc::clone(&self.artifact_store), reference))
+        });
+        let mut persisted = Vec::new();
+        for (index, reference) in pressure_persisted {
+            if self.frame_store.persisted_reference(index) != Some(&reference) {
+                // The material owner returns its original commit/identity failure below.
+                continue;
+            }
+            persisted.push(reference.clone());
+            if self.persisted.insert(index, reference).is_none() {
+                self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
+                    ArtifactStoreError::fatal(
+                        "capture_summary_count_overflow",
+                        "persist_capture_frame",
+                        "persisted count exceeds u64",
+                    )
+                })?;
+            }
+        }
+        let frame = match frame_result {
             Ok(frame) => frame,
             Err(error) => {
-                self.contexts.remove(&frame_index);
-                self.pinned.remove(&frame_index);
+                if !error.is_fatal() {
+                    self.paused = true;
+                    self.pressure_refusal = Some(crate::FramePersistenceFailure {
+                        frame_index,
+                        error: error.clone(),
+                    });
+                }
+                if let Err(recording) = self.emit_frame_store_events(&context, sink) {
+                    return Err(error.with_secondary(&recording));
+                }
                 return Err(error);
             }
         };
         self.paused = frame.pause_required;
-        self.emit_frame_store_events(&context, sink)?;
-        let persisted = self.persist_candidates(false, sink)?;
+        if let Some(failure) = frame.frame_failures.first() {
+            self.pressure_refusal = Some(failure.clone());
+        }
+        if let Err(recording) = self.emit_frame_store_events(&context, sink) {
+            return Err(match frame.frame_failures.first() {
+                Some(failure) => failure.error.clone().with_secondary(&recording),
+                None => recording,
+            });
+        }
+        if self.pressure_refusal.is_none() {
+            persisted.extend(self.persist_candidates(false, sink, &mut publisher)?);
+        }
         Ok(CapturePipelineOutcome {
             frame,
             persisted,
@@ -388,10 +474,20 @@ impl CapturePipeline {
         reason: PinnedFrameReason,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<ArtifactReference> {
+        self.pin_frame_with_publisher(frame_index, reason, sink, None)
+    }
+
+    pub fn pin_frame_with_publisher(
+        &mut self,
+        frame_index: usize,
+        reason: PinnedFrameReason,
+        sink: &mut dyn ArtifactEventSink,
+        publisher: Option<&mut FrameArtifactPublisher<'_>>,
+    ) -> ArtifactStoreResult<ArtifactReference> {
         self.frame_store.pin_frame(frame_index, reason)?;
         self.pinned.entry(frame_index).or_insert(reason);
-        let reference = self.persist_frame(frame_index, sink)?;
-        self.artifact_store.read_verified(&reference)?;
+        let reference = self.persist_frame_with_publisher(frame_index, sink, publisher)?;
+        self.frame_store.persistence_candidate(frame_index)?;
         Ok(reference)
     }
 
@@ -401,14 +497,47 @@ impl CapturePipeline {
         frame_index: usize,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<ArtifactReference> {
+        self.persist_frame_with_publisher(frame_index, sink, None)
+    }
+
+    pub fn persist_frame_with_publisher(
+        &mut self,
+        frame_index: usize,
+        sink: &mut dyn ArtifactEventSink,
+        mut publisher: Option<&mut FrameArtifactPublisher<'_>>,
+    ) -> ArtifactStoreResult<ArtifactReference> {
         if let Some(reference) = self.persisted.get(&frame_index) {
             return Ok(reference.clone());
         }
+        if let Some(failure) = &self.pressure_refusal {
+            return Err(failure.error.clone());
+        }
         let candidate = self.frame_store.persistence_candidate(frame_index)?;
-        let artifact = match self.persist_candidate(&candidate, sink) {
+        let pinned = candidate.pinned_reason.is_some();
+        let result = Self::publish_candidate(
+            &self.artifact_store,
+            &self.contexts,
+            ArtifactIssuePolicy::new(
+                self.artifact_producer,
+                self.retention_class,
+                self.redaction_state,
+            ),
+            &candidate,
+            sink,
+            &mut publisher,
+        );
+        drop(candidate);
+        let artifact = match result {
             Ok(artifact) => artifact,
             Err(mut error) => {
-                if candidate.pinned_reason.is_some() {
+                if !error.is_fatal() {
+                    self.pressure_refusal = Some(crate::FramePersistenceFailure {
+                        frame_index,
+                        error: error.clone(),
+                    });
+                    self.paused = true;
+                }
+                if pinned {
                     self.missing_pinned.insert(frame_index);
                     if let Err(event_error) = self.record_pinned_failure(frame_index, sink) {
                         error = error.with_secondary(&event_error);
@@ -480,12 +609,95 @@ impl CapturePipeline {
         context: &ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<bool> {
-        let resumed = self.frame_store.refresh_pressure()?;
-        if resumed {
-            self.paused = false;
-        }
+        self.poll_pressure_with_publisher(context, sink, None)
+    }
+
+    pub fn poll_pressure_with_publisher(
+        &mut self,
+        context: &ArtifactWriteContext,
+        sink: &mut dyn ArtifactEventSink,
+        mut publisher: Option<&mut FrameArtifactPublisher<'_>>,
+    ) -> ArtifactStoreResult<bool> {
+        let was_paused = self.paused;
+        self.frame_store.refresh_pressure()?;
         self.emit_frame_store_events(context, sink)?;
-        Ok(resumed)
+        if let Some(failure) = &self.pressure_refusal {
+            let error = &failure.error;
+            if error.code() == "capacity_admission_refused" {
+                let mut recovered = self
+                    .contexts
+                    .get(&failure.frame_index)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ArtifactStoreError::fatal(
+                            "missing_frame_context",
+                            "recover_frame_capacity",
+                            "original refused frame context is missing",
+                        )
+                    })?;
+                let bytes = error
+                    .capacity()
+                    .map_or(0, |decision| decision.requested_bytes);
+                match self.artifact_store.admit_new_bytes(
+                    &mut recovered,
+                    &self.artifact_store.root().join("artifacts"),
+                    bytes,
+                ) {
+                    Ok(()) => self.pressure_refusal = None,
+                    Err(error) if !error.is_fatal() => return Ok(false),
+                    Err(error) => return Err(error),
+                }
+            } else if error.code() == "frame_workspace_unavailable"
+                && self
+                    .frame_store
+                    .publication_workspace_available(failure.frame_index)
+            {
+                self.pressure_refusal = None;
+            } else {
+                return Ok(false);
+            }
+        }
+        let mut persisted = Vec::new();
+        let result = self.frame_store.flush_pressure(&mut |candidate| {
+            let artifact = Self::publish_candidate(
+                &self.artifact_store,
+                &self.contexts,
+                ArtifactIssuePolicy::new(
+                    self.artifact_producer,
+                    self.retention_class,
+                    self.redaction_state,
+                ),
+                candidate,
+                sink,
+                &mut publisher,
+            )?;
+            let reference = artifact.reference().clone();
+            persisted.push((candidate.frame_index, reference.clone()));
+            Ok((Arc::clone(&self.artifact_store), reference))
+        });
+        for (index, reference) in persisted {
+            if self.frame_store.persisted_reference(index) != Some(&reference) {
+                continue;
+            }
+            if self.persisted.insert(index, reference).is_none() {
+                self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
+                    ArtifactStoreError::fatal(
+                        "capture_summary_count_overflow",
+                        "persist_capture_frame",
+                        "persisted count exceeds u64",
+                    )
+                })?;
+            }
+        }
+        if let Some(failure) = result?.into_iter().next() {
+            self.paused = true;
+            let error = failure.error.clone();
+            self.pressure_refusal = Some(failure);
+            return Err(error);
+        }
+        self.paused = self.frame_store.is_pressure_paused();
+        self.emit_frame_store_events(context, sink)?;
+        Ok(was_paused && !self.paused)
     }
 
     pub fn record_recognition(
@@ -493,6 +705,16 @@ impl CapturePipeline {
         frame_index: usize,
         state: crate::RecognitionState,
         sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<()> {
+        self.record_recognition_with_publisher(frame_index, state, sink, None)
+    }
+
+    pub fn record_recognition_with_publisher(
+        &mut self,
+        frame_index: usize,
+        state: crate::RecognitionState,
+        sink: &mut dyn ArtifactEventSink,
+        publisher: Option<&mut FrameArtifactPublisher<'_>>,
     ) -> ArtifactStoreResult<()> {
         self.frame_store.record_recognition(frame_index, state)?;
         let context = self.contexts.get(&frame_index).cloned().ok_or_else(|| {
@@ -502,7 +724,7 @@ impl CapturePipeline {
                 "original frame context is missing",
             )
         })?;
-        self.poll_pressure(&context, sink)?;
+        self.poll_pressure_with_publisher(&context, sink, publisher)?;
         Ok(())
     }
 
@@ -510,11 +732,19 @@ impl CapturePipeline {
         &mut self,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<CapturePipelineSummary> {
-        self.persist_candidates(true, sink)?;
+        self.finish_with_publisher(sink, None)
+    }
+
+    pub fn finish_with_publisher(
+        &mut self,
+        sink: &mut dyn ArtifactEventSink,
+        mut publisher: Option<&mut FrameArtifactPublisher<'_>>,
+    ) -> ArtifactStoreResult<CapturePipelineSummary> {
+        self.persist_candidates(true, sink, &mut publisher)?;
         self.summary()
     }
 
-    /// The caller owns the configured temporary directory and has finished material publication.
+    /// Releases resident ownership only after required material publication is complete.
     pub fn cleanup_spills(&mut self) -> ArtifactStoreResult<()> {
         if !self
             .frame_store
@@ -527,15 +757,7 @@ impl CapturePipeline {
                 "original frame publication is incomplete",
             ));
         }
-        let warnings = self.frame_store.cleanup_temp();
-        if !warnings.is_empty() {
-            return Err(ArtifactStoreError::fatal(
-                "frame_spill_cleanup_failed",
-                "finish_capture_pipeline",
-                warnings.join("; "),
-            ));
-        }
-        Ok(())
+        self.frame_store.cleanup_temp()
     }
 
     pub fn summary(&self) -> ArtifactStoreResult<CapturePipelineSummary> {
@@ -566,46 +788,69 @@ impl CapturePipeline {
         &self.frame_store
     }
 
+    pub fn frame_context(&self, index: usize) -> Option<&ArtifactWriteContext> {
+        self.contexts.get(&index)
+    }
+
+    pub fn failure_context(&self, error: &ArtifactStoreError) -> Option<&ArtifactWriteContext> {
+        self.pressure_refusal
+            .as_ref()
+            .filter(|failure| failure.error == *error)
+            .and_then(|failure| self.contexts.get(&failure.frame_index))
+            .or_else(|| {
+                self.frame_store
+                    .failure_frame_index(error)
+                    .and_then(|index| self.contexts.get(&index))
+            })
+    }
+
     fn persist_candidates(
         &mut self,
         include_all_retained: bool,
         sink: &mut dyn ArtifactEventSink,
+        publisher: &mut Option<&mut FrameArtifactPublisher<'_>>,
     ) -> ArtifactStoreResult<Vec<ArtifactReference>> {
         let candidates = self
             .frame_store
             .persistence_candidate_indexes(include_all_retained);
         let mut stored = Vec::new();
         for frame_index in candidates {
-            stored.push(self.persist_frame(frame_index, sink)?);
+            let reference = match publisher {
+                Some(publisher) => {
+                    self.persist_frame_with_publisher(frame_index, sink, Some(&mut **publisher))?
+                }
+                None => self.persist_frame(frame_index, sink)?,
+            };
+            stored.push(reference);
         }
         Ok(stored)
     }
 
-    fn persist_candidate(
-        &self,
-        candidate: &FramePersistenceCandidate,
+    fn publish_candidate(
+        artifact_store: &ArtifactStore,
+        contexts: &BTreeMap<usize, ArtifactWriteContext>,
+        policy: ArtifactIssuePolicy,
+        candidate: &FramePersistenceCandidate<'_>,
         sink: &mut dyn ArtifactEventSink,
+        publisher: &mut Option<&mut FrameArtifactPublisher<'_>>,
     ) -> ArtifactStoreResult<StoredArtifact> {
-        let context = self.contexts.get(&candidate.frame_index).ok_or_else(|| {
+        let context = contexts.get(&candidate.frame_index).ok_or_else(|| {
             ArtifactStoreError::fatal(
                 "missing_frame_context",
                 "persist_capture_frame",
                 format!("frame index {} has no typed context", candidate.frame_index),
             )
         })?;
-        self.artifact_store.put(
-            ArtifactWriteRequest::new(
-                ArtifactKind::CaptureFrame,
-                &candidate.png,
-                context.clone(),
-                ArtifactIssuePolicy::new(
-                    self.artifact_producer,
-                    self.retention_class,
-                    self.redaction_state,
-                ),
-            ),
-            sink,
-        )
+        let request = ArtifactWriteRequest::new(
+            ArtifactKind::CaptureFrame,
+            &candidate.png,
+            context.clone(),
+            policy,
+        );
+        match publisher {
+            Some(publish) => publish(artifact_store, request),
+            None => artifact_store.put(request, sink),
+        }
     }
 
     fn record_pinned_failure(
@@ -1224,13 +1469,18 @@ mod tests {
         frame_store.tier2_ratio = 0.70;
         frame_store.tier3_ratio = 0.90;
         frame_store.hysteresis_ratio = 0.10;
-        frame_store.max_mem_bytes = Some(max_mem_bytes);
+        let hard = max_mem_bytes.max(64 * 1024 + 32 * 1024);
+        let ratio = max_mem_bytes as f64 / hard as f64;
+        frame_store.tier1_ratio *= ratio;
+        frame_store.tier2_ratio *= ratio;
+        frame_store.tier3_ratio *= ratio;
+        frame_store.max_mem_bytes = Some(hard);
         frame_store.os_reserve_bytes = 0;
         frame_store.flush_workspace_reserve_bytes = 1;
         let frame_store =
             frame_store.with_memory_source(crate::MemorySampleSource::fixed(crate::MemorySample {
-                total_bytes: max_mem_bytes,
-                available_bytes: max_mem_bytes,
+                total_bytes: hard,
+                available_bytes: hard,
             }));
         CapturePipelineConfig {
             frame_store,

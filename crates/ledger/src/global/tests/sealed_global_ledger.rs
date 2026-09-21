@@ -643,16 +643,16 @@ fn run_capture_pipeline(
 fn pipeline_config() -> CapturePipelineConfig {
     let mut frame_store = FrameStoreConfig::default();
     frame_store.similarity_threshold = 0.95;
-    frame_store.tier1_ratio = 0.50;
-    frame_store.tier2_ratio = 0.70;
-    frame_store.tier3_ratio = 0.90;
+    frame_store.tier1_ratio = 3_500.0 / 98_304.0;
+    frame_store.tier2_ratio = 4_900.0 / 98_304.0;
+    frame_store.tier3_ratio = 6_300.0 / 98_304.0;
     frame_store.hysteresis_ratio = 0.10;
-    frame_store.max_mem_bytes = Some(7_000);
+    frame_store.max_mem_bytes = Some(98_304);
     frame_store.os_reserve_bytes = 0;
     frame_store.flush_workspace_reserve_bytes = 1;
     let frame_store = frame_store.with_memory_source(MemorySampleSource::fixed(MemorySample {
-        total_bytes: 7_000,
-        available_bytes: 7_000,
+        total_bytes: 98_304,
+        available_bytes: 98_304,
     }));
     CapturePipelineConfig {
         frame_store,

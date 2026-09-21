@@ -88,6 +88,10 @@ pub struct ArtifactWriteRequest<'a> {
 }
 
 impl<'a> ArtifactWriteRequest<'a> {
+    pub fn context(&self) -> &ArtifactWriteContext {
+        &self.context
+    }
+
     pub fn new(
         kind: actingcommand_contract::ArtifactKind,
         bytes: &'a [u8],
@@ -806,12 +810,20 @@ impl ArtifactStore {
         })?;
         verify_bytes(bytes, prepared.issued.reference())?;
 
-        admit_bytes(
+        if let Err(error) = admit_bytes(
             self.capacity.get().map(Arc::as_ref),
             &mut prepared.context,
             &prepared.path,
             bytes.len() as u64,
-        )?;
+        ) {
+            return Err(self.report_failure(
+                error,
+                sink,
+                &prepared.context,
+                &prepared.issued,
+                ArtifactFailureStage::BeforePublication,
+            ));
+        }
 
         let result = self.write_and_verify(bytes, &prepared.path, prepared.issued.reference());
         if let Err(error) = result {
@@ -1560,7 +1572,7 @@ fn cleanup_path(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use actingcommand_contract::{
         ArtifactKind, ArtifactProducer, ArtifactRedactionState, EventType, IssuedCorrelationId,
@@ -1569,13 +1581,15 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct RecordingSink {
-        capacity_root: Option<std::path::PathBuf>,
-        capacity_fact: std::sync::OnceLock<actingcommand_contract::CapacityFactReference>,
-        event_types: Vec<EventType>,
-        references: Vec<ArtifactReference>,
-        payloads: Vec<actingcommand_contract::EventPayload>,
-        fail_at: Option<usize>,
+    pub(crate) struct RecordingSink {
+        pub(crate) capacity_root: Option<std::path::PathBuf>,
+        pub(crate) capacity_limit: Option<u64>,
+        pub(crate) capacity_fact:
+            std::sync::OnceLock<actingcommand_contract::CapacityFactReference>,
+        pub(crate) event_types: Vec<EventType>,
+        pub(crate) references: Vec<ArtifactReference>,
+        pub(crate) payloads: Vec<actingcommand_contract::EventPayload>,
+        pub(crate) fail_at: Option<usize>,
     }
 
     impl crate::ArtifactCapacityAdmission for RecordingSink {
@@ -1616,7 +1630,7 @@ mod tests {
                     CapacityAdmissionOutcome::Unknown,
                     CapacityAdmissionReason::BindingChanged,
                 )
-            } else if bytes > 64 * 1024 * 1024 {
+            } else if bytes > self.capacity_limit.unwrap_or(64 * 1024 * 1024) {
                 (
                     CapacityAdmissionOutcome::HardPressure,
                     CapacityAdmissionReason::HardThreshold,
