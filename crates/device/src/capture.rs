@@ -2673,7 +2673,13 @@ fn validate_pixel_buffer(
     pixel_format: PixelFormat,
     len: usize,
 ) -> DeviceResult<()> {
-    let expected = checked_pixel_len(width, height, pixel_format)?;
+    if width == 0 || height == 0 {
+        return Err(DeviceError::fatal("frame dimensions must be nonzero")
+            .with_diagnostic(DeviceErrorCategory::FrameLayout, "capture.frame_layout"));
+    }
+    let expected = checked_pixel_len(width, height, pixel_format).map_err(|error| {
+        error.with_diagnostic(DeviceErrorCategory::FrameLayout, "capture.frame_layout")
+    })?;
     if len != expected {
         return Err(DeviceError::fatal(format!(
             "frame pixel buffer length mismatch for {}x{} {}: got {}, expected {}",
@@ -2682,7 +2688,8 @@ fn validate_pixel_buffer(
             pixel_format.as_str(),
             len,
             expected
-        )));
+        ))
+        .with_diagnostic(DeviceErrorCategory::FrameLayout, "capture.frame_layout"));
     }
     Ok(())
 }

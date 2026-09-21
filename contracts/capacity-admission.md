@@ -114,7 +114,13 @@ allocation overlap, and writes to a fixed output slice. Supplied original PNGs
 are borrowed. No batch of encoded frames is assembled. Completed encoding releases
 its workspace reservation; refused persistence keeps the actual resident charge.
 Insufficient workspace returns nonfatal `frame_workspace_unavailable`, while
-invalid original material and real persistence/recording failures remain fatal.
+the original pixel-layout owner classifies malformed incoming frames before
+copying or encoding. The admission error retains that category. Readonly capture
+rejects that category with `capture_frame_invalid` / `CaptureFailed`, an
+Indeterminate CaptureFailed and NotPerformed RecognitionFailed, and a Failed
+receipt referencing the recognition terminal. The request does not poison Host
+health; failure to record its facts remains fatal. Sealed-material validation,
+identity/hash and real persistence/recording failures retain their fatal route.
 
 Prepared-byte admission refusal emits the existing typed ArtifactStoreFailed
 record at BeforePublication with its attempted identity and capacity decision;

@@ -885,7 +885,7 @@ impl FrameStore {
         );
         let workspace = frame
             .artifact_png_workspace_bytes()
-            .map_err(|error| CliError::device(error.to_string()))?;
+            .map_err(CliError::incoming_frame)?;
         let required = payload
             .and_then(|bytes| bytes.checked_mul(2))
             .and_then(|bytes| bytes.checked_add(workspace.max(WRITER_BUFFER_BYTES)))
@@ -1526,7 +1526,7 @@ fn estimate_entry(input: &FrameStoreFrameInput) -> CliOutcome<ResidentEstimate> 
     let encoder_workspace = input
         .frame
         .artifact_png_workspace_bytes()
-        .map_err(|error| CliError::device(error.to_string()))?;
+        .map_err(CliError::incoming_frame)?;
     Ok(ResidentEstimate {
         payload,
         metadata,

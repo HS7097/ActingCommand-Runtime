@@ -160,6 +160,61 @@ impl HostShared {
         )
     }
 
+    fn readonly_frame_admission_failure(
+        &self,
+        error: ArtifactStoreError,
+        links: EventLinksDraft,
+    ) -> RequestFailure {
+        if !error.is_unpublished_frame_layout() {
+            return self.capture_material_failure(error, links);
+        }
+        let runtime = RuntimeHostError::request(
+            "capture_frame_invalid",
+            "observe_readonly",
+            RuntimeErrorCode::CaptureFailed,
+        )
+        .with_native_failure_detail(error.native_detail());
+        let recorded = (|| {
+            let failed = self.append_event_raw(
+                EventSeverity::Error,
+                EventSource::Device,
+                OriginModule::Capture,
+                EventActor::Runtime,
+                links.clone(),
+                CapturePayloadDraft::failed(
+                    EventAction::CaptureObserve,
+                    DiagnosticCode::CaptureFailed,
+                    EffectDisposition::Indeterminate,
+                    AuditInput::new(),
+                ),
+            )?;
+            self.record_required_failure(&runtime, &failed, links.clone())?;
+            self.append_event_raw(
+                EventSeverity::Error,
+                EventSource::Runtime,
+                OriginModule::Recognition,
+                EventActor::Runtime,
+                links.clone(),
+                RecognitionPayloadDraft::failed(
+                    EventAction::RecognitionObserve,
+                    DiagnosticCode::CaptureFailed,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                ),
+            )
+        })();
+        match recorded {
+            Ok(event) => RequestFailure::request(
+                runtime,
+                RuntimeReceiptState::Failed,
+                Some(terminal(&event)),
+            ),
+            Err(writer) => RequestFailure::poison_without_terminal(
+                runtime.with_related_failure("capture_failure_record", &writer),
+            ),
+        }
+    }
+
     pub(super) fn capture_observation_with_links(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -322,7 +377,7 @@ impl HostShared {
                     .map_err(|error| self.capture_material_failure(error, links.clone()))?;
                 Ok(reference)
             })
-            .map_err(|error| self.capture_material_failure(error, links.clone()))??;
+            .map_err(|error| self.readonly_frame_admission_failure(error, links.clone()))??;
         let observation = ReadonlyObservation::new(
             frame.width,
             frame.height,

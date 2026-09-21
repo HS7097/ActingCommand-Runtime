@@ -20,6 +20,7 @@ pub struct ArtifactStoreError {
     raw_os_error: Option<i32>,
     io_error_kind: Option<std::io::ErrorKind>,
     capacity: Option<Box<actingcommand_contract::CapacityDecision>>,
+    unpublished_frame_layout: bool,
 }
 
 impl ArtifactStoreError {
@@ -34,6 +35,7 @@ impl ArtifactStoreError {
             raw_os_error: None,
             io_error_kind: None,
             capacity: None,
+            unpublished_frame_layout: false,
         }
     }
 
@@ -137,6 +139,23 @@ impl ArtifactStoreError {
 
     pub fn device(detail: impl Into<String>) -> Self {
         Self::fatal("frame_store_device", "frame_store", detail)
+    }
+
+    pub(crate) fn incoming_frame(error: actingcommand_device::DeviceError) -> Self {
+        let invalid_layout = error.diagnostic().is_some_and(|diagnostic| {
+            diagnostic.category() == actingcommand_device::DeviceErrorCategory::FrameLayout
+        });
+        let mut result = Self::device(error.to_string());
+        result.unpublished_frame_layout = invalid_layout;
+        result
+    }
+
+    /// Only the incoming frame's layout owner sets this pre-publication category.
+    /// A subsequent recording or cleanup failure retains the normal fatal route.
+    pub fn is_unpublished_frame_layout(&self) -> bool {
+        self.unpublished_frame_layout
+            && self.secondary.is_empty()
+            && self.omitted_secondary_count == 0
     }
 
     pub(crate) fn with_secondary(mut self, secondary: &Self) -> Self {
