@@ -57,6 +57,19 @@ still completes previously committed pending `EvictionIntent` records. The
 manifest reports effective configuration, not evidence that a round or deletion
 has occurred.
 
+`frame_retention_failed_run_successes` (K, default `3`, range `1..=1024`) and
+`frame_retention_failed_run_days` (T, default `7`, range `1..=36500`) configure
+eligibility for failed/cancelled run frames. Either K later successful runs with
+distinct RunIds on the same InstanceId, or T days since the original terminal's
+ledger timestamp, satisfies the status condition. Both are integer configuration
+parameters; omission and explicit values retain their independent `default` or
+`explicit` sources in the manifest. Invalid values fail configuration assembly,
+even when periodic retention is disabled. Days convert to milliseconds within
+`u64`; a backward clock cannot supply a negative elapsed duration as an expiry.
+Confirmed close, summary/settlement, material binding and permanent evidence
+protections still apply. GlobalLedger seals the effective K/T and original
+terminal with the chosen eligibility basis in the original eviction intent.
+
 - `config_path` is the path as given; `state_root` is the configured value,
   neither resolved nor inspected.
 - `bind_port` `0` means the OS chooses the listening port.
@@ -98,7 +111,8 @@ has occurred.
     thread).
   - `parameters` (`key`, `value`, `source`): the effective values of
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
-    `frame_retention_enabled`, `secret_fingerprint_salt_bytes` (the byte
+    `frame_retention_enabled`, `frame_retention_failed_run_successes`,
+    `frame_retention_failed_run_days`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `mumu_root` (only when
     set), `instances_count`, `instances_deferred_count`,
     `instances_startup_package_count` (instances declaring a startup package), the

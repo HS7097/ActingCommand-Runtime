@@ -6,9 +6,9 @@ use actingcommand_artifact_store::{
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
     ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput, EventActor, EventLinksDraft,
-    EventSeverity, EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, OriginModule,
-    OwnerEpoch, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS, RETENTION_ROUND_START_BUDGET_MS,
-    RuntimeErrorCode, TerminalEvent,
+    EventSeverity, EventSource, EventType, FRAME_RETENTION_POLICY_VERSION,
+    FailedRunRetentionPolicy, OriginModule, OwnerEpoch, RETENTION_ROUND_BYTES,
+    RETENTION_ROUND_OBJECTS, RETENTION_ROUND_START_BUDGET_MS, RuntimeErrorCode, TerminalEvent,
 };
 use actingcommand_ledger::{
     ArtifactEvictionAdmission, GlobalLedger, GlobalLedgerError, PersistedEvent,
@@ -168,10 +168,11 @@ fn pin_failure(code: &'static str) -> ArtifactStoreError {
     )
 }
 
-/// Only the scan cursor lives here. Eligibility and recovery state belong to GlobalLedger.
+/// Scan cursor and immutable configuration only; eligibility and recovery belong to GlobalLedger.
 #[derive(Default)]
 pub(super) struct FrameRetention {
     after: Option<ArtifactId>,
+    policy: FailedRunRetentionPolicy,
 }
 
 struct RetentionRound {
@@ -180,6 +181,13 @@ struct RetentionRound {
 }
 
 impl FrameRetention {
+    pub(super) fn new(policy: FailedRunRetentionPolicy) -> Self {
+        Self {
+            after: None,
+            policy,
+        }
+    }
+
     /// Called by the existing performance loop after its sampling locks are released.
     pub(super) fn maintain(
         &mut self,
@@ -224,7 +232,7 @@ impl FrameRetention {
         ledger.check_writer_health().map_err(ledger_failure)?;
         let started = Instant::now();
         let candidates = ledger
-            .retention_candidates(self.after)
+            .retention_candidates(self.after, self.policy)
             .map_err(ledger_failure)?;
         if candidates.references.len() > RETENTION_ROUND_OBJECTS {
             return Err(failure("artifact_retention_candidate_bound_exceeded"));
@@ -263,7 +271,7 @@ impl FrameRetention {
                 return Ok(round);
             }
             match ledger
-                .admit_artifact_eviction(guard)
+                .admit_artifact_eviction(guard, self.policy)
                 .map_err(ledger_failure)?
             {
                 ArtifactEvictionAdmission::Deferred => {}

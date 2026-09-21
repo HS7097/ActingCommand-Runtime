@@ -8,7 +8,8 @@ use actingcommand_contract::{
     ArtifactEvictionDisposition, ArtifactEvictionIntentRecord, ArtifactEvictionProof, ArtifactId,
     ArtifactKind, ArtifactPinReason, ArtifactRetentionFact, ArtifactRetentionIdentity,
     CapturePayload, CorrelationId, EffectDisposition, EventId, EventPayload, EventSeverity,
-    EventSource, EventType, FRAME_RETENTION_BACKTRACE, FactContent, FactPayload, FrameId,
+    EventSource, EventType, FRAME_RETENTION_BACKTRACE, FactContent, FactPayload,
+    FailedRunRetentionBasis, FailedRunRetentionEvidence, FailedRunRetentionPolicy, FrameId,
     InstanceId, LeaseId, LeasePayload, OwnerEpoch, PolicyExecutionOutcome, PolicyPayload,
     ProjectedArtifactReference, RETENTION_ROUND_OBJECTS, RequestId, RunId, RuntimeLifecyclePhase,
     RuntimePayload, RuntimeStateFact, TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
@@ -26,6 +27,8 @@ pub(super) struct RetentionIndex {
     linked_runs: BTreeMap<RetentionScope, BTreeSet<RunId>>,
     sealed_scopes: BTreeSet<RetentionScope>,
     scheduled_runs: BTreeSet<RunId>,
+    run_terminals: BTreeMap<RunId, RunTerminal>,
+    successful_runs: BTreeMap<InstanceId, BTreeMap<u64, RunId>>,
     owner_epochs: BTreeMap<u64, OwnerEpoch>,
     closures: BTreeMap<ClosureScope, ClosureFacts>,
     released_leases: BTreeMap<(OwnerEpoch, InstanceId, LeaseId), TerminalEvent>,
@@ -67,6 +70,14 @@ struct ClosureFacts {
     success: Option<TerminalEvent>,
     close: Option<TerminalEvent>,
     settlement: Option<TerminalEvent>,
+}
+
+struct RunTerminal {
+    source: TerminalEvent,
+    scope: Option<ClosureScope>,
+    outcome: TaskOutcome,
+    timestamp_unix_ms: u64,
+    contradictory: bool,
 }
 
 impl ClosureScope {
@@ -163,6 +174,8 @@ impl RetentionIndex {
         &self,
         after: Option<ArtifactId>,
         recovery_only: bool,
+        policy: FailedRunRetentionPolicy,
+        now: u64,
     ) -> ArtifactRetentionCandidates {
         use std::ops::Bound::{Excluded, Unbounded};
         let bounds = (after.map_or(Unbounded, Excluded), Unbounded);
@@ -195,9 +208,14 @@ impl RetentionIndex {
                 .filter_map(|reference| {
                     let object = self.objects.get(&reference.artifact_id)?;
                     let eligible_scope = object.identity.as_ref().is_some_and(|identity| {
-                        self.closures
-                            .get(&ClosureScope::from_identity(identity))
-                            .is_some_and(|closure| closure.success.is_some())
+                        self.run_is_unambiguous(identity)
+                            && self
+                                .closures
+                                .get(&ClosureScope::from_identity(identity))
+                                .is_some_and(|closure| {
+                                    closure.success.is_some()
+                                        || self.failed_run_evidence(identity, policy, now).is_some()
+                                })
                             && self.close_for(identity).is_some()
                     });
                     (self.unlinked_warning
@@ -228,6 +246,8 @@ impl RetentionIndex {
         reference: &ProjectedArtifactReference,
         events: &[E],
         indexes: &EventIndexes,
+        policy: FailedRunRetentionPolicy,
+        now: u64,
     ) -> GlobalLedgerResult<Option<ArtifactEvictionIntentRecord>> {
         let Some(object) = self.objects.get(&reference.artifact_id) else {
             return Ok(None);
@@ -245,17 +265,33 @@ impl RetentionIndex {
         let (Some(identity), Some(verified)) = (&object.identity, &object.verified) else {
             return Ok(None);
         };
+        if !self.run_is_unambiguous(identity) {
+            return Ok(None);
+        }
         if indexes.lab_related(source(events, verified)?, self.through_sequence) {
             return Ok(None);
         }
         let Some(closure) = self.closures.get(&ClosureScope::from_identity(identity)) else {
             return Ok(None);
         };
-        let (Some(success), Some(close)) = (&closure.success, self.close_for(identity)) else {
+        let Some(close) = self.close_for(identity) else {
             return Ok(None);
         };
-        if verified.sequence > success.sequence
-            || success.sequence >= close.sequence
+        let failed_run = if closure.success.is_none() {
+            let Some(evidence) = self.failed_run_evidence(identity, policy, now) else {
+                return Ok(None);
+            };
+            Some(Box::new(evidence))
+        } else {
+            None
+        };
+        let terminal = closure
+            .success
+            .as_ref()
+            .or_else(|| failed_run.as_ref().map(|failed| &failed.terminal))
+            .expect("eligibility has a terminal source");
+        if verified.sequence > terminal.sequence
+            || terminal.sequence >= close.sequence
             || identity.run_id.is_some() && object.summary.is_none()
             || identity
                 .run_id
@@ -264,17 +300,127 @@ impl RetentionIndex {
         {
             return Ok(None);
         }
+        if let Some(failed) = &failed_run
+            && let Some(settlement) = &closure.settlement
+            && !settlement_matches(source(events, settlement)?, failed.outcome)
+        {
+            return Ok(None);
+        }
         let intent = ArtifactEvictionIntentRecord {
             identity: identity.clone(),
             verified: *verified,
-            success: *success,
+            success: closure.success,
+            failed_run,
             close: *close,
             capture_summary: object.summary,
             settlement: closure.settlement,
             through_sequence: self.through_sequence,
         };
-        self.validate_intent(object, &intent, events, indexes)?;
+        self.validate_intent(object, &intent, events, indexes, now)?;
         Ok(Some(intent))
+    }
+
+    fn run_is_unambiguous(&self, identity: &ArtifactRetentionIdentity) -> bool {
+        identity.run_id.is_none_or(|run| {
+            self.run_terminals.get(&run).is_some_and(|terminal| {
+                !terminal.contradictory
+                    && terminal.scope == Some(ClosureScope::from_identity(identity))
+            })
+        })
+    }
+
+    fn failed_run_evidence(
+        &self,
+        identity: &ArtifactRetentionIdentity,
+        policy: FailedRunRetentionPolicy,
+        now: u64,
+    ) -> Option<FailedRunRetentionEvidence> {
+        let run = identity.run_id?;
+        let failed = self.run_terminals.get(&run)?;
+        if failed.contradictory
+            || failed.scope != Some(ClosureScope::from_identity(identity))
+            || !matches!(
+                failed.outcome,
+                TaskOutcome::Failure | TaskOutcome::Cancelled
+            )
+            || failed.timestamp_unix_ms == 0
+            || now == 0
+        {
+            return None;
+        }
+        let terminals = self
+            .successful_runs
+            .get(&identity.instance_id)
+            .into_iter()
+            .flat_map(|runs| {
+                runs.range((
+                    std::ops::Bound::Excluded(failed.source.sequence),
+                    std::ops::Bound::Unbounded,
+                ))
+            })
+            .take(usize::from(policy.successor_successes))
+            .map(|(_, run)| self.run_terminals[run].source)
+            .collect::<Vec<_>>();
+        let basis = if terminals.len() == usize::from(policy.successor_successes) {
+            FailedRunRetentionBasis::SuccessorSuccesses { terminals }
+        } else if now
+            .checked_sub(failed.timestamp_unix_ms)
+            .is_some_and(|elapsed| elapsed >= policy.retention_ms())
+        {
+            FailedRunRetentionBasis::ElapsedTime
+        } else {
+            return None;
+        };
+        Some(FailedRunRetentionEvidence {
+            policy,
+            terminal: failed.source,
+            outcome: failed.outcome,
+            terminal_unix_ms: failed.timestamp_unix_ms,
+            evaluated_at_unix_ms: now,
+            basis,
+        })
+    }
+
+    fn apply_run_terminal<E: LedgerEventRead>(&mut self, event: &E) {
+        let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
+            return;
+        };
+        let TaskSemanticFact::TerminalCommitted { outcome, .. } = payload.fact() else {
+            return;
+        };
+        let Some(run) = event.links().run_id() else {
+            return;
+        };
+        // A second terminal cannot count twice or turn an ambiguous run into permission.
+        if let Some(previous) = self.run_terminals.get_mut(run) {
+            previous.contradictory = true;
+            if let Some(scope) = previous.scope
+                && let Some(successes) = self.successful_runs.get_mut(&scope.instance)
+            {
+                successes.remove(&previous.source.sequence);
+            }
+            return;
+        }
+        let scope = self
+            .owner_at(event.sequence())
+            .and_then(|owner| ClosureScope::from_event(event, owner));
+        let valid = scope.is_some() && event.timestamp_unix_ms() > 0;
+        if *outcome == TaskOutcome::Success && valid {
+            self.successful_runs
+                .entry(scope.expect("known scope").instance)
+                .or_default()
+                .insert(event.sequence(), *run);
+        }
+        self.run_terminals.insert(
+            *run,
+            RunTerminal {
+                source: terminal(event),
+                scope,
+                outcome: *outcome,
+                timestamp_unix_ms: event.timestamp_unix_ms(),
+                contradictory: false,
+            },
+        );
     }
 
     fn close_for(&self, identity: &ArtifactRetentionIdentity) -> Option<&TerminalEvent> {
@@ -467,7 +613,7 @@ impl RetentionIndex {
                 if !guarded_intent {
                     return Err(invalid("artifact_eviction_guard_required"));
                 }
-                self.validate_intent(object, intent, events, indexes)?;
+                self.validate_intent(object, intent, events, indexes, event.timestamp_unix_ms())?;
             }
             ArtifactRetentionFact::EvictionOutcome(outcome) => {
                 if !guarded_intent {
@@ -491,6 +637,7 @@ impl RetentionIndex {
         intent: &ArtifactEvictionIntentRecord,
         events: &[E],
         indexes: &EventIndexes,
+        now: u64,
     ) -> GlobalLedgerResult<()> {
         if intent.through_sequence != self.through_sequence
             || object.proof.is_some()
@@ -503,7 +650,22 @@ impl RetentionIndex {
             return Err(invalid("artifact_eviction_not_eligible"));
         }
         let verified = source(events, &intent.verified)?;
-        let success = source(events, &intent.success)?;
+        let terminal_ref = match (&intent.success, &intent.failed_run) {
+            (Some(success), None) => success,
+            (None, Some(failed)) => {
+                if failed.evaluated_at_unix_ms != now
+                    || self
+                        .failed_run_evidence(&intent.identity, failed.policy, now)
+                        .as_ref()
+                        != Some(failed.as_ref())
+                {
+                    return Err(invalid("artifact_eviction_failed_run_basis_conflict"));
+                }
+                &failed.terminal
+            }
+            _ => return Err(invalid("artifact_eviction_terminal_missing")),
+        };
+        let success = source(events, terminal_ref)?;
         let close = source(events, &intent.close)?;
         if !same_scope(verified, &intent.identity)
             || !same_scope(success, &intent.identity)
@@ -518,8 +680,12 @@ impl RetentionIndex {
         }
         match intent.identity.run_id {
             Some(_) => {
+                let expected = intent
+                    .failed_run
+                    .as_ref()
+                    .map_or(TaskOutcome::Success, |failed| failed.outcome);
                 if !matches!(success.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-                    if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Success, .. }))
+                    if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome, .. } if *outcome == expected))
                 {
                     return Err(invalid("artifact_eviction_task_not_successful"));
                 }
@@ -553,8 +719,13 @@ impl RetentionIndex {
                 if !same_scope(settlement, &intent.identity)
                     || settlement.sequence() <= success.sequence()
                     || self.owner_at(settlement.sequence()) != Some(intent.identity.owner_epoch)
-                    || !matches!(settlement.payload(), EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
-                        if matches!(payload.outcome(), PolicyExecutionOutcome::Succeeded { .. }))
+                    || !settlement_matches(
+                        settlement,
+                        intent
+                            .failed_run
+                            .as_ref()
+                            .map_or(TaskOutcome::Success, |failed| failed.outcome),
+                    )
                 {
                     return Err(invalid("artifact_eviction_settlement_conflict"));
                 }
@@ -569,6 +740,7 @@ impl RetentionIndex {
         if let Some(epoch) = recorded_owner(event) {
             self.owner_epochs.insert(event.sequence(), epoch);
         }
+        self.apply_run_terminal(event);
         if let EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload)) = event.payload()
             && let RuntimeLifecyclePhase::ResourceQuiescence {
                 instance_id,
@@ -631,9 +803,10 @@ impl RetentionIndex {
             {
                 closure.close = Some(terminal(event));
             }
-            if matches!(event.payload(), EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
-                if matches!(payload.outcome(), PolicyExecutionOutcome::Succeeded { .. }))
-            {
+            if matches!(
+                event.payload(),
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(_))
+            ) {
                 closure.settlement = Some(terminal(event));
             }
         }
@@ -897,6 +1070,29 @@ fn terminal<E: LedgerEventRead>(event: &E) -> TerminalEvent {
     }
 }
 
+fn settlement_matches<E: LedgerEventRead>(event: &E, outcome: TaskOutcome) -> bool {
+    let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = event.payload() else {
+        return false;
+    };
+    match (outcome, payload.outcome()) {
+        (TaskOutcome::Success, PolicyExecutionOutcome::Succeeded { .. }) => true,
+        (
+            TaskOutcome::Failure | TaskOutcome::Cancelled,
+            PolicyExecutionOutcome::Failed { failure },
+        ) => !failure.reported_success,
+        _ => false,
+    }
+}
+
+fn retention_now() -> GlobalLedgerResult<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|time| u64::try_from(time.as_millis()).ok())
+        .filter(|time| *time > 0)
+        .ok_or_else(|| invalid("artifact_retention_clock_failed"))
+}
+
 fn same_scope<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
     let links = event.links();
     links.instance_id() == Some(&identity.instance_id)
@@ -994,14 +1190,18 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
     pub(super) fn retention_candidates(
         &self,
         after: Option<ArtifactId>,
-    ) -> ArtifactRetentionCandidates {
-        self.retention.candidates(after, self.recovering_retention)
+        policy: FailedRunRetentionPolicy,
+    ) -> GlobalLedgerResult<ArtifactRetentionCandidates> {
+        Ok(self
+            .retention
+            .candidates(after, self.recovering_retention, policy, retention_now()?))
     }
 
     /// The material guard arrived before this command; the writer performs no material I/O.
     pub(super) fn admit_artifact_eviction(
         &mut self,
         guard: ArtifactDeleteGuard,
+        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
         if guard.root() != self.backend.material_root() {
             return Err(invalid("artifact_eviction_root_conflict"));
@@ -1075,9 +1275,13 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                 false,
             )?);
         }
-        let Some(intent) = self
-            .retention
-            .intent(&reference, &self.events, &self.indexes)?
+        let Some(intent) = self.retention.intent(
+            &reference,
+            &self.events,
+            &self.indexes,
+            policy,
+            retention_now()?,
+        )?
         else {
             return Ok((ArtifactEvictionAdmission::Deferred, appended));
         };
@@ -1152,11 +1356,16 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         };
         let ids =
             IdentifierIssuer::new().map_err(|_| invalid("artifact_retention_identifier_failed"))?;
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .and_then(|time| u64::try_from(time.as_millis()).ok())
-            .ok_or_else(|| invalid("artifact_retention_clock_failed"))?;
+        let timestamp = match &fact {
+            ArtifactRetentionFact::EvictionIntent(intent) if intent.failed_run.is_some() => {
+                intent
+                    .failed_run
+                    .as_ref()
+                    .expect("failed-run intent")
+                    .evaluated_at_unix_ms
+            }
+            _ => retention_now()?,
+        };
         let draft = EventDraft::new(
             ids.mint_event_id()
                 .map_err(|_| invalid("artifact_retention_identifier_failed"))?,
@@ -1208,7 +1417,14 @@ impl super::GlobalLedger {
     pub fn retention_candidates(
         &self,
         after: Option<ArtifactId>,
+        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<ArtifactRetentionCandidates> {
+        policy.validate().map_err(|_| {
+            GlobalLedgerError::request(
+                "invalid_failed_run_retention_policy",
+                "retention_candidates",
+            )
+        })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1216,7 +1432,11 @@ impl super::GlobalLedger {
             .ok_or_else(|| invalid("writer_unavailable"))?;
         super::send_command(
             sender,
-            super::WriterCommand::RetentionCandidates { after, response },
+            super::WriterCommand::RetentionCandidates {
+                after,
+                policy,
+                response,
+            },
             "retention_candidates",
         )?;
         super::receive_response(receiver, "retention_candidates")?
@@ -1225,7 +1445,14 @@ impl super::GlobalLedger {
     pub fn admit_artifact_eviction(
         &self,
         guard: ArtifactDeleteGuard,
+        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<ArtifactEvictionAdmission> {
+        policy.validate().map_err(|_| {
+            GlobalLedgerError::request(
+                "invalid_failed_run_retention_policy",
+                "admit_artifact_eviction",
+            )
+        })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1235,6 +1462,7 @@ impl super::GlobalLedger {
             sender,
             super::WriterCommand::AdmitArtifactEviction {
                 guard: Box::new(guard),
+                policy,
                 response,
             },
             "admit_artifact_eviction",
