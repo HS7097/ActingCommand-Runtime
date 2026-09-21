@@ -2655,6 +2655,9 @@ pub enum RuntimeOperation {
     RecordDebugEvent {
         event: RuntimeDebugEvent,
     },
+    ReleaseLabPin {
+        target: crate::LabPinReleaseTarget,
+    },
     RecordClientAction {
         action: ClientActionRecord,
     },
@@ -2786,6 +2789,9 @@ impl RuntimeOperation {
             Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::RecordDebugEvent { event } => event.validate(),
+            Self::ReleaseLabPin { target } => target
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_lab_pin_release_target")),
             Self::RecordClientAction { action } => action
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_client_action")),
@@ -2984,6 +2990,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordDebugEvent { .. } => {
                 "RuntimeOperation::RecordDebugEvent(<typed-debug-event>)"
             }
+            Self::ReleaseLabPin { .. } => "RuntimeOperation::ReleaseLabPin(<typed-target>)",
             Self::RecordClientAction { .. } => {
                 "RuntimeOperation::RecordClientAction(<typed-redacted-action>)"
             }
@@ -3092,6 +3099,7 @@ impl RuntimeRequest {
         if matches!(
             self.operation,
             RuntimeOperation::RecordDebugEvent { .. }
+                | RuntimeOperation::ReleaseLabPin { .. }
                 | RuntimeOperation::RunContainedLabOperation { .. }
                 | RuntimeOperation::RecognizeArtifact { .. }
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
@@ -3647,6 +3655,9 @@ pub enum RuntimeResult {
     DebugEventRecorded {
         phase: RuntimeDebugPhase,
     },
+    LabPinReleased {
+        release: Box<crate::LabPinReleaseResult>,
+    },
     ClientActionRecorded,
     GovernanceAuthenticated,
     ApprovalDecisionRecorded {
@@ -4049,6 +4060,16 @@ impl RuntimeReceipt {
                 return Err(RuntimeContractError::new("invalid_contained_task_result"));
             }
             Some(RuntimeResult::ContainedTaskCancellation { status, .. }) => status.validate()?,
+            Some(RuntimeResult::LabPinReleased { release }) => {
+                release
+                    .validate()
+                    .map_err(|_| RuntimeContractError::new("invalid_lab_pin_release_receipt"))?;
+                if self.state != RuntimeReceiptState::Completed
+                    || self.terminal != Some(release.released)
+                {
+                    return Err(RuntimeContractError::new("invalid_lab_pin_release_receipt"));
+                }
+            }
             Some(
                 RuntimeResult::AgentSessionOpened { context }
                 | RuntimeResult::AgentSessionObserved { context },

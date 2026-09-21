@@ -130,6 +130,7 @@ impl LedgerAppendSpan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerWriterCommandKind {
+    ReleaseLabPin,
     ResolveArtifact,
     RetentionCandidates,
     AdmitArtifactEviction,
@@ -663,6 +664,11 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 }
 
 enum WriterCommand {
+    ReleaseLabPin {
+        target: actingcommand_contract::LabPinReleaseTarget,
+        request: actingcommand_contract::TerminalEvent,
+        response: SyncSender<GlobalLedgerResult<actingcommand_contract::LabPinReleaseResult>>,
+    },
     ResolveArtifact {
         selection: Box<LedgerArtifactSelection>,
         deadline: Instant,
@@ -1563,6 +1569,7 @@ fn writer_loop<S: LedgerStore>(
             WriterCommand::RetentionCandidates { .. } => {
                 LedgerWriterCommandKind::RetentionCandidates
             }
+            WriterCommand::ReleaseLabPin { .. } => LedgerWriterCommandKind::ReleaseLabPin,
             WriterCommand::AdmitArtifactEviction { .. } => {
                 LedgerWriterCommandKind::AdmitArtifactEviction
             }
@@ -1617,6 +1624,28 @@ fn writer_loop<S: LedgerStore>(
                 }
                 command_observation.replied(response.send(result).is_ok());
             }
+            WriterCommand::ReleaseLabPin {
+                target,
+                request,
+                response,
+            } => match store.release_lab_pin(target, request) {
+                Ok((release, appended)) => {
+                    command_succeeded = true;
+                    for event in &appended {
+                        deliver_live_event(&mut subscribers, event);
+                    }
+                    command_observation.replied(response.send(Ok(release)).is_ok());
+                }
+                Err(error) => {
+                    command_succeeded = false;
+                    let terminal = error.terminal();
+                    command_observation.replied(response.send(Err(error.clone())).is_ok());
+                    if terminal {
+                        notify_terminal_failure(&mut subscribers, error.clone());
+                        return Err(error);
+                    }
+                }
+            },
             WriterCommand::RetentionCandidates {
                 after,
                 policy,

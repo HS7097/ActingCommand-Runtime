@@ -19,6 +19,14 @@ use std::sync::Arc;
 /// their physical snapshot through the existing database owner before returning.
 /// Projection, subscriptions and public request validation belong to GlobalLedger.
 pub(super) trait LedgerStore: Send + 'static {
+    fn release_lab_pin(
+        &mut self,
+        target: actingcommand_contract::LabPinReleaseTarget,
+        request: actingcommand_contract::TerminalEvent,
+    ) -> GlobalLedgerResult<(
+        actingcommand_contract::LabPinReleaseResult,
+        Vec<PersistedEvent>,
+    )>;
     fn resolve_artifact(
         &self,
         selection: &super::LedgerArtifactSelection,
@@ -88,6 +96,16 @@ pub(super) trait LedgerStore: Send + 'static {
 }
 
 impl<B: DurableStorage> LedgerStore for EventStore<B> {
+    fn release_lab_pin(
+        &mut self,
+        target: actingcommand_contract::LabPinReleaseTarget,
+        request: actingcommand_contract::TerminalEvent,
+    ) -> GlobalLedgerResult<(
+        actingcommand_contract::LabPinReleaseResult,
+        Vec<PersistedEvent>,
+    )> {
+        Self::release_lab_pin(self, target, request)
+    }
     fn resolve_artifact(
         &self,
         selection: &super::LedgerArtifactSelection,

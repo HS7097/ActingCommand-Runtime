@@ -3,6 +3,60 @@
 use super::*;
 use crate::{ArtifactEvictionDisposition, ArtifactRetentionFact};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabPinReleaseRequestPayload {
+    target: crate::LabPinReleaseTarget,
+    audit: SanitizedAudit,
+}
+
+impl PayloadDetail for LabPinReleaseRequestPayload {
+    fn action(&self) -> EventAction {
+        EventAction::ArtifactRetention
+    }
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl ClientPayloadDraft {
+    pub fn lab_pin_release(target: crate::LabPinReleaseTarget, audit: AuditInput) -> Self {
+        Self(ClientDraftKind::LabPinRelease(target, audit))
+    }
+}
+
+impl EventPayload {
+    pub fn lab_pin_release_request(&self) -> Option<&crate::LabPinReleaseTarget> {
+        match self {
+            Self::Client(ClientPayload::LabPinRelease(value)) => Some(&value.target),
+            _ => None,
+        }
+    }
+}
+
+impl LabPinReleaseRequestPayload {
+    pub(super) fn sanitize(
+        target: crate::LabPinReleaseTarget,
+        audit: AuditInput,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<Self, SanitizationError> {
+        target.validate()?;
+        Ok(Self {
+            target,
+            audit: audit.sanitize(fingerprinter)?,
+        })
+    }
+    pub(super) fn validate(&self) -> Result<(), SanitizationError> {
+        self.target.validate()
+    }
+}
+
 pub const ARTIFACT_RETENTION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact_retention.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
