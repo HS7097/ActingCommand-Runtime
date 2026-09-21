@@ -17,7 +17,7 @@ pub(super) fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> Cli
         }
         "validate" => lab_run::run_lab_validate(args),
         "signatures" => crate::signature_cli::run_signatures(args),
-        "debug-package" | "watch" => runtime_debug::run_runtime_debug(sub, args),
+        "debug-package" | "watch" | "unpin" => runtime_debug::run_runtime_debug(sub, args),
         "export-evidence" | "replay-evidence" => runtime_debug::run_runtime_debug(sub, args),
         "start" => {
             require_runtime(global)?;

@@ -321,6 +321,33 @@ their policy or repeating an unknown unlink; disabling periodic retention leaves
 that startup recovery intact. No unpin or synthetic-close permission follows
 from K/T.
 
+Explicit Lab unpin uses the existing `LabRequest` event type with a closed
+`ClientPayload::LabPinRelease` target (artifact ID and pin sequence/event ID).
+The Host first persists that Lab/Lab request, then the sole Ledger writer resolves
+the identity and validates the exact active Lab pin before appending the original
+`PinReleased { identity, pin, release }` fact. For Lab pins, `release` references
+that exact typed request; Explicit pins still require their original confirmed
+close. Warning/DirectEvidence pins remain unreleasable. A repeat returns the
+original durable release; a sealed eviction intent is always rejected.
+
+The retention index rebuilds released Lab pins, material-reference scopes, Lab
+anchors and run-to-request/correlation link positions from the committed prefix.
+Only an object with explicit Lab release evidence and no remaining Lab pins can
+pass the historical Lab-association check. The maximum covered prefix is its
+released pins' original request sequence. Later Lab anchors, material/frame uses
+in a Lab-related scope, or newly linked Lab scopes restore the protection; old
+release evidence cannot cover them. Missing or ambiguous coverage keeps the
+material. Intent admission and reconstruction perform the same check at the
+sealed Intent prefix; later releases never supply earlier permission. These
+indexes have no separate durable store.
+
+Current CaptureSummary pin reasons have no Lab-only variant: all existing summary
+pin evidence remains permanent, along with Warning/direct/nearest-frame,
+input-before-frame and unlinked-warning protections. Releasing a Lab pin does not
+remove any of those protections or create close, success or K/T evidence. Material
+guards, the sole eviction admission/outcome chain and pending-intent recovery are
+unchanged; no material I/O occurs in the unpin command.
+
 The frame owner reuses `frame_store`'s three watermarks, near-duplicate handling and
 pinning. ArtifactStore owns pin/persist/evict actions and file integrity, while the
 ledger owns immutable references and the derived query result. The same design

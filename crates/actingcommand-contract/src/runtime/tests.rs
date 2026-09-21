@@ -1007,6 +1007,53 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
     )
     .expect_err("non-Lab debug event must fail");
     assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+    let target = crate::LabPinReleaseTarget {
+        artifact_id: *ids.mint_artifact_id().expect("artifact").transport(),
+        pin: TerminalEvent {
+            event_id: *ids.mint_event_id().expect("pin").transport(),
+            sequence: 1,
+        },
+    };
+    for (actor, source, allowed) in [
+        (EventActor::Lab, EventSource::Lab, true),
+        (EventActor::Cli, EventSource::Cli, false),
+        (EventActor::User, EventSource::Ui, false),
+    ] {
+        let request = RuntimeRequest::new(
+            ids.mint_request_id().expect("request"),
+            ids.mint_correlation_id().expect("correlation"),
+            None,
+            actor,
+            source,
+            1,
+            RuntimeOperation::ReleaseLabPin { target },
+        );
+        if allowed {
+            let request = request.expect("Lab unpin request");
+            let encoded = serde_json::to_value(&request).expect("typed request");
+            let decoded: RuntimeRequest =
+                serde_json::from_value(encoded).expect("request round trip");
+            decoded.validate().expect("valid typed Lab request");
+        } else {
+            assert_eq!(
+                request.expect_err("Lab-only unpin").code(),
+                "invalid_runtime_debug_origin"
+            );
+        }
+    }
+    assert!(
+        RuntimeOperation::ReleaseLabPin {
+            target: crate::LabPinReleaseTarget {
+                pin: TerminalEvent {
+                    sequence: 0,
+                    ..target.pin
+                },
+                ..target
+            }
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 #[test]

@@ -47,6 +47,7 @@ pub(super) fn run_runtime_debug(subcommand: &str, args: &[String]) -> CliOutcome
     match subcommand {
         "debug-package" => run_package_debug(args),
         "watch" => run_watch(args),
+        "unpin" => run_unpin(args),
         "export-evidence" => run_export_evidence(args),
         "replay-evidence" => run_replay_evidence(args),
         _ => Err(CliError::usage(format!(
@@ -55,10 +56,11 @@ pub(super) fn run_runtime_debug(subcommand: &str, args: &[String]) -> CliOutcome
     }
 }
 
-pub(super) fn capabilities() -> [Value; 9] {
+pub(super) fn capabilities() -> [Value; 10] {
     [
         command_cap("lab status", ["running_runtime"], "available"),
         command_cap("lab receipt", ["running_runtime"], "available"),
+        command_cap("lab unpin", ["running_runtime"], "available"),
         command_cap("lab debug-package", ["running_runtime"], "available"),
         {
             let mut command = command_cap("lab watch", ["running_runtime"], "available");
@@ -71,6 +73,46 @@ pub(super) fn capabilities() -> [Value; 9] {
         crate::signature_cli::capability("match"),
         crate::signature_cli::capability("retire"),
     ]
+}
+
+fn run_unpin(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse_values(args)?;
+    flags.expect_positionals("lab unpin", 0)?;
+    if flags.flags.iter().any(|(key, values)| {
+        !["--artifact-id", "--pin-sequence", "--pin-event-id"].contains(&key.as_str())
+            || values.len() != 1
+    }) {
+        return Err(CliError::usage(
+            "lab unpin requires exactly one artifact and one pin reference",
+        ));
+    }
+    let target = serde_json::from_value::<actingcommand_contract::LabPinReleaseTarget>(json!({
+        "artifact_id": flags.required("--artifact-id")?,
+        "pin": {
+            "sequence": flags.required("--pin-sequence")?.parse::<u64>()
+                .map_err(|_| CliError::usage("--pin-sequence must be a positive integer"))?,
+            "event_id": flags.required("--pin-event-id")?,
+        },
+    }))
+    .map_err(|_| CliError::usage("lab unpin requires typed artifact/event identifiers"))?;
+    target
+        .validate()
+        .map_err(|_| CliError::usage("invalid lab pin reference"))?;
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_state_root()?,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .map_err(|error| CliError::device(error.to_string()))?;
+    let session = client
+        .begin_debug_session()
+        .map_err(|error| CliError::device(error.to_string()))?;
+    let receipt = session
+        .release_lab_pin(target)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    Ok(
+        json!({ "authority": "runtime_global_ledger", "effect": "lab_pin_released", "receipt": receipt }),
+    )
 }
 
 pub(super) fn run_package_debug(args: &[String]) -> CliOutcome<Value> {

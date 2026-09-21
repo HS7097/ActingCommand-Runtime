@@ -40,3 +40,21 @@ reference. No common highest version is defined. Each resource still passes
 its existing version-specific validation; schema support does not prove an
 installed resource or provider is usable. Package references include the
 accepted typed Git source-tree version and the legacy ZIP digest form.
+
+`lab unpin --artifact-id <artifact-id> --pin-sequence <sequence>
+--pin-event-id <event-id>` requires `running_runtime`. It releases only the named
+object's exact Lab pin through RuntimeDebugSession and the existing Runtime
+channel. Repeated flags, extra targets, and noncanonical identifiers are rejected.
+The Lab/Lab request carries its own request/correlation identity; Runtime and the
+Ledger resolve the original material identity rather than trusting a supplied
+identity or requiring the old capture correlation.
+
+The result's receipt contains the verified identity, original pin, durable Lab
+request and durable PinReleased reference. `already_released` returns the original
+release without appending another release. Unknown or non-Lab pins and sealed
+eviction objects are denied. Communication timeout remains an unknown result
+associated with the original request; the command does not retry a state change
+or require a follow-up event query after a successful response. A release proves
+neither deletion nor current eligibility: other pins, permanent evidence, Lab
+references after the release prefix, close/summary/settlement and success/K/T
+conditions still govern the original eviction path.

@@ -4012,6 +4012,29 @@ impl RuntimeAuthoringSession {
 }
 
 impl RuntimeDebugSession {
+    pub fn release_lab_pin(
+        &self,
+        target: actingcommand_contract::LabPinReleaseTarget,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        target.validate().map_err(|_| {
+            RuntimeClientError::fatal("invalid_lab_pin_release_target", "release_lab_pin")
+        })?;
+        let receipt = self.client.execute_receipt_with_correlation(
+            "release_lab_pin",
+            RuntimeOperation::ReleaseLabPin { target },
+            self.correlation,
+            None,
+        )?;
+        let Some(RuntimeResult::LabPinReleased { release }) = receipt.result() else {
+            return Err(self.client.unexpected_result("release_lab_pin"));
+        };
+        if release.identity.artifact.artifact_id != target.artifact_id || release.pin != target.pin
+        {
+            return Err(self.client.unexpected_result("release_lab_pin"));
+        }
+        Ok(receipt)
+    }
+
     pub const fn correlation_id(&self) -> CorrelationId {
         *self.correlation.transport()
     }

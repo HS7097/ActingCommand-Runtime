@@ -403,6 +403,7 @@ impl HostShared {
             RuntimeOperation::RecordDebugEvent { event } => {
                 self.record_debug_event(validated, event)
             }
+            RuntimeOperation::ReleaseLabPin { target } => self.release_lab_pin(validated, *target),
             RuntimeOperation::RecordClientAction { action } => {
                 self.record_client_action(request, validated, action)
             }

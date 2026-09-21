@@ -3,6 +3,53 @@
 use super::*;
 
 impl HostShared {
+    pub(super) fn release_lab_pin(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+        target: actingcommand_contract::LabPinReleaseTarget,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let requested = self.append_event(
+            EventSeverity::Info,
+            EventSource::Lab,
+            OriginModule::Actinglab,
+            EventActor::Lab,
+            validated.event_links(None, None, None),
+            ClientPayloadDraft::lab_pin_release(target, AuditInput::new()),
+        )?;
+        let release = self
+            .ledger
+            .release_lab_pin(target, terminal(&requested))
+            .map_err(|error| {
+                if error.is_fatal() {
+                    RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            error.code(),
+                            "release_lab_pin",
+                            RuntimeErrorCode::LedgerFailure,
+                        )
+                        .with_native_detail(error.to_string()),
+                    )
+                } else {
+                    RequestFailure::request(
+                        RuntimeHostError::request(
+                            error.code(),
+                            "release_lab_pin",
+                            RuntimeErrorCode::InvalidRequest,
+                        ),
+                        RuntimeReceiptState::Denied,
+                        Some(terminal(&requested)),
+                    )
+                }
+            })?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(release.released),
+            result: RuntimeResult::LabPinReleased {
+                release: Box::new(release),
+            },
+        })
+    }
+
     pub(super) fn record_authoring_event(
         &self,
         validated: &ValidatedRuntimeRequest<'_>,

@@ -6429,6 +6429,9 @@ fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError>
 }
 
 fn validate_client_action_payload(payload: &ClientPayload) -> Result<(), SanitizationError> {
+    if let ClientPayload::LabPinRelease(value) = payload {
+        return value.validate();
+    }
     if let ClientPayload::Action(value) = payload {
         if value.action == EventAction::ClientAction {
             return value.record.validate();
@@ -8516,6 +8519,7 @@ enum ClientDraftKind {
     UiAction(ObservationDraft),
     CliCommand(ObservationDraft),
     LabRequest(ObservationDraft),
+    LabPinRelease(crate::LabPinReleaseTarget, AuditInput),
 }
 
 pub struct ClientPayloadDraft(ClientDraftKind);
@@ -9400,6 +9404,7 @@ pub enum ClientPayload {
     UiAction(ObservationPayload),
     CliCommand(ObservationPayload),
     LabRequest(ObservationPayload),
+    LabPinRelease(LabPinReleaseRequestPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9619,6 +9624,7 @@ family_payload!(ClientPayload, {
     UiAction => EventType::UiAction,
     CliCommand => EventType::CliCommand,
     LabRequest => EventType::LabRequest,
+    LabPinRelease => EventType::LabRequest,
 });
 impl FamilyPayload for LedgerPayload {
     fn event_type(&self) -> EventType {
@@ -10014,6 +10020,9 @@ impl EventPayloadDraft {
                 ClientDraftKind::LabRequest(detail) => {
                     ClientPayload::LabRequest(detail.sanitize(fingerprinter)?)
                 }
+                ClientDraftKind::LabPinRelease(target, audit) => ClientPayload::LabPinRelease(
+                    LabPinReleaseRequestPayload::sanitize(target, audit, fingerprinter)?,
+                ),
             }),
             Self::Ledger(value) => EventPayload::Ledger(match value.0 {
                 LedgerDraftKind::Recovered(detail) => {
@@ -10635,6 +10644,7 @@ impl EventPayload {
                 }
                 _ => None,
             },
+            lab_pin_release_request: self.lab_pin_release_request().copied(),
             cadence_ms: capture_policy(self).map(CapturePolicyPayload::cadence_ms),
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
@@ -11057,6 +11067,8 @@ pub struct PublicPayload {
     preserved_frame_id: Option<Box<crate::FrameId>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     artifact_retention: Option<Box<ArtifactRetentionPublicSummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lab_pin_release_request: Option<crate::LabPinReleaseTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cadence_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -11243,6 +11255,10 @@ impl PublicPayload {
 
     pub fn artifact_retention(&self) -> Option<&ArtifactRetentionPublicSummary> {
         self.artifact_retention.as_deref()
+    }
+
+    pub fn lab_pin_release_request(&self) -> Option<&crate::LabPinReleaseTarget> {
+        self.lab_pin_release_request.as_ref()
     }
 
     pub const fn cadence_ms(&self) -> Option<u64> {

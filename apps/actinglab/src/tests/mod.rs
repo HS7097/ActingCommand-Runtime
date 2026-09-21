@@ -3613,6 +3613,34 @@ fn lab2_capabilities_and_schema_report_compiled_contracts() {
             .and_then(Value::as_str),
         Some("lab receipt")
     );
+    let unpin_schema = run_cli(["--json", "schema", "lab", "unpin"], true);
+    assert_eq!(unpin_schema.exit_code(), 0);
+    assert_eq!(
+        unpin_schema
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("command")
+            .and_then(Value::as_str),
+        Some("lab unpin")
+    );
+    for args in [
+        vec!["lab", "unpin"],
+        vec!["lab", "unpin", "--instance", "all"],
+        vec![
+            "lab",
+            "unpin",
+            "--artifact-id",
+            "invalid",
+            "--pin-sequence",
+            "0",
+            "--pin-event-id",
+            "invalid",
+        ],
+    ] {
+        assert_ne!(run_cli(args, true).exit_code(), 0);
+    }
 }
 
 #[test]

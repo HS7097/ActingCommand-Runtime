@@ -158,6 +158,45 @@ pub struct ArtifactPinReleaseRecord {
     pub release: TerminalEvent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabPinReleaseTarget {
+    pub artifact_id: super::ArtifactId,
+    pub pin: TerminalEvent,
+}
+
+impl LabPinReleaseTarget {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        event(&self.pin)
+    }
+}
+
+/// A durable release receipt proves only the named pin release, not eviction eligibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabPinReleaseResult {
+    pub identity: ArtifactRetentionIdentity,
+    pub pin: TerminalEvent,
+    pub release_request: TerminalEvent,
+    pub released: TerminalEvent,
+    pub already_released: bool,
+}
+
+impl LabPinReleaseResult {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        self.identity.validate()?;
+        for source in [&self.pin, &self.release_request, &self.released] {
+            event(source)?;
+        }
+        if self.pin.sequence >= self.release_request.sequence
+            || self.release_request.sequence >= self.released.sequence
+        {
+            return Err(invalid("lab_release_order"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactEvictionIntentRecord {

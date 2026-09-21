@@ -36,6 +36,7 @@ pub(super) fn help_data() -> Value {
             "resource validate": crate::resource_runtime_support::resource_declarations::options(),
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
+            "lab unpin": ["--artifact-id <artifact-id>", "--pin-sequence <sequence>", "--pin-event-id <event-id>"],
             "lab signatures register": crate::signature_cli::options("register"),
             "lab signatures match": crate::signature_cli::options("match"),
             "lab signatures retire": crate::signature_cli::options("retire"),
@@ -242,7 +243,7 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "device_io": false
         }),
         "all" => json!({
-            "schemas": ["task", "control", "pack", "package", "ledger", "observe", "do", "ensure", "wait", "lab receipt"],
+            "schemas": ["task", "control", "pack", "package", "ledger", "observe", "do", "ensure", "wait", "lab receipt", "lab unpin"],
             "schema_domains": crate::commands::capabilities::schema_capabilities()
         }),
         other => lab2_cli::command_schema(other)

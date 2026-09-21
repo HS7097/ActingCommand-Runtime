@@ -1461,6 +1461,18 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             requires_lease: false,
         },
         Lab2CommandContract {
+            name: "lab unpin",
+            summary: "release one exact Lab pin through Runtime; does not delete material",
+            required: &[
+                "--artifact-id <artifact-id>",
+                "--pin-sequence <sequence>",
+                "--pin-event-id <event-id>",
+            ],
+            optional: &[],
+            output_fields: &["authority", "effect", "receipt"],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
             name: "lab evidence",
             summary: "list debug evidence refs tied to an evidence id",
             required: &["--id <evidence_id>", "--run-root <path> or config run_root"],

@@ -25,6 +25,9 @@ pub(super) struct RetentionIndex {
     recent: BTreeMap<RetentionScope, VecDeque<FrameId>>,
     seen_frames: BTreeSet<FrameId>,
     linked_runs: BTreeMap<RetentionScope, BTreeSet<RunId>>,
+    run_scopes: BTreeMap<RunId, BTreeMap<RetentionScope, u64>>,
+    lab_anchors: BTreeMap<RetentionScope, u64>,
+    material_scope_activity: BTreeMap<RetentionScope, u64>,
     sealed_scopes: BTreeSet<RetentionScope>,
     scheduled_runs: BTreeSet<RunId>,
     run_terminals: BTreeMap<RunId, RunTerminal>,
@@ -51,6 +54,8 @@ struct RetainedObject {
     summary: Option<TerminalEvent>,
     identity: Option<ArtifactRetentionIdentity>,
     pins: BTreeMap<EventId, (TerminalEvent, ArtifactPinReason)>,
+    released_lab_pins: BTreeMap<EventId, actingcommand_contract::LabPinReleaseResult>,
+    reference_scopes: BTreeSet<RetentionScope>,
     permanently_protected: bool,
     proof: Option<ArtifactEvictionProof>,
 }
@@ -268,7 +273,7 @@ impl RetentionIndex {
         if !self.run_is_unambiguous(identity) {
             return Ok(None);
         }
-        if indexes.lab_related(source(events, verified)?, self.through_sequence) {
+        if self.lab_protected(object, source(events, verified)?, indexes) {
             return Ok(None);
         }
         let Some(closure) = self.closures.get(&ClosureScope::from_identity(identity)) else {
@@ -529,6 +534,7 @@ impl RetentionIndex {
                 || event.event_type() == EventType::LabRequest
                 || indexes.lab_related(event, self.through_sequence);
             if lab
+                && event.payload().lab_pin_release_request().is_none()
                 && scopes(event).any(|scope| {
                     self.sealed_scopes.contains(&scope)
                         || self.linked_runs.get(&scope).is_some_and(|runs| {
@@ -597,16 +603,30 @@ impl RetentionIndex {
                 let Some((pin, reason)) = object.pins.get(&release.pin.event_id) else {
                     return Err(invalid("artifact_pin_release_source_missing"));
                 };
-                // Only a temporary runtime pin has a release path. Durable evidence pins remain.
-                if *pin != release.pin || *reason != ArtifactPinReason::Explicit {
+                if *pin != release.pin {
                     return Err(invalid("artifact_pin_not_releasable"));
                 }
-                let close = source(events, &release.release)?;
-                if !same_close_scope(close, identity)
-                    || !successful_close(close, identity)
-                    || self.owner_at(close.sequence()) != Some(identity.owner_epoch)
-                {
-                    return Err(invalid("artifact_pin_release_not_closed"));
+                let release_source = source(events, &release.release)?;
+                match reason {
+                    ArtifactPinReason::Explicit => {
+                        if !same_close_scope(release_source, identity)
+                            || !successful_close(release_source, identity)
+                            || self.owner_at(release_source.sequence())
+                                != Some(identity.owner_epoch)
+                        {
+                            return Err(invalid("artifact_pin_release_not_closed"));
+                        }
+                    }
+                    ArtifactPinReason::Lab => {
+                        let target = actingcommand_contract::LabPinReleaseTarget {
+                            artifact_id: identity.artifact.artifact_id,
+                            pin: release.pin,
+                        };
+                        if !lab_release_request_matches(release_source, &target) {
+                            return Err(invalid("artifact_lab_pin_release_request_conflict"));
+                        }
+                    }
+                    _ => return Err(invalid("artifact_pin_not_releasable")),
                 }
             }
             ArtifactRetentionFact::EvictionIntent(intent) => {
@@ -670,7 +690,7 @@ impl RetentionIndex {
         if !same_scope(verified, &intent.identity)
             || !same_scope(success, &intent.identity)
             || !same_close_scope(close, &intent.identity)
-            || indexes.lab_related(verified, self.through_sequence)
+            || self.lab_protected(object, verified, indexes)
             || [verified, success, close]
                 .iter()
                 .any(|event| self.owner_at(event.sequence()) != Some(intent.identity.owner_epoch))
@@ -813,12 +833,37 @@ impl RetentionIndex {
         if let Some(run) = event.links().run_id() {
             for scope in scopes(event) {
                 self.linked_runs.entry(scope).or_default().insert(*run);
+                if !matches!(scope, RetentionScope::Run(_)) {
+                    self.run_scopes
+                        .entry(*run)
+                        .or_default()
+                        .entry(scope)
+                        .or_insert(event.sequence());
+                }
             }
             if matches!(
                 event.event_type(),
                 EventType::PolicyDispatchIntent | EventType::PolicyDispatchAdmitted
             ) {
                 self.scheduled_runs.insert(*run);
+            }
+        }
+        if event.payload().artifact_retention().is_none()
+            && event.payload().lab_pin_release_request().is_none()
+        {
+            let lab = event.origin().source() == EventSource::Lab
+                || event.event_type() == EventType::LabRequest;
+            if lab {
+                for scope in scopes(event).filter(|scope| !matches!(scope, RetentionScope::Run(_)))
+                {
+                    self.lab_anchors.insert(scope, event.sequence());
+                }
+            }
+            if lab || !material_references(event).is_empty() || !referenced_frames(event).is_empty()
+            {
+                for scope in scopes(event) {
+                    self.material_scope_activity.insert(scope, event.sequence());
+                }
             }
         }
         if event.payload().artifact_retention().is_none() {
@@ -871,15 +916,27 @@ impl RetentionIndex {
                     summary: None,
                     identity: None,
                     pins: BTreeMap::new(),
+                    released_lab_pins: BTreeMap::new(),
+                    reference_scopes: BTreeSet::new(),
                     permanently_protected: protect,
                     proof: None,
                 });
             object.permanently_protected |= protect;
+            object.reference_scopes.extend(scopes(event));
             if event.event_type() == EventType::ArtifactVerified {
                 object.verified.get_or_insert_with(|| terminal(event));
             }
             if event.event_type() == EventType::CaptureSummaryCommitted {
                 object.summary = Some(terminal(event));
+            }
+        }
+        for frame in referenced_frames(event) {
+            if let Some(ids) = self.frames.get(&frame) {
+                for id in ids {
+                    if let Some(object) = self.objects.get_mut(id) {
+                        object.reference_scopes.extend(scopes(event));
+                    }
+                }
             }
         }
         if let Some(fact) = event.payload().artifact_retention() {
@@ -897,7 +954,20 @@ impl RetentionIndex {
                         .insert(*event.event_id(), (terminal(event), pin.reason));
                 }
                 ArtifactRetentionFact::PinReleased(release) => {
-                    object.pins.remove(&release.pin.event_id);
+                    if let Some((_, ArtifactPinReason::Lab)) =
+                        object.pins.remove(&release.pin.event_id)
+                    {
+                        object.released_lab_pins.insert(
+                            release.pin.event_id,
+                            actingcommand_contract::LabPinReleaseResult {
+                                identity: release.identity.clone(),
+                                pin: release.pin,
+                                release_request: release.release,
+                                released: terminal(event),
+                                already_released: false,
+                            },
+                        );
+                    }
                 }
                 ArtifactRetentionFact::EvictionIntent(_) => {
                     self.pending_objects
@@ -931,6 +1001,69 @@ impl RetentionIndex {
             .range(..=sequence)
             .next_back()
             .map(|(_, epoch)| *epoch)
+    }
+
+    fn latest_lab_use(&self, scope: &RetentionScope) -> Option<u64> {
+        match scope {
+            RetentionScope::Run(run) => {
+                let latest = self
+                    .run_scopes
+                    .get(run)?
+                    .iter()
+                    .filter_map(|(scope, linked)| {
+                        self.latest_lab_use(scope)
+                            .map(|sequence| sequence.max(*linked))
+                    })
+                    .max()?;
+                Some(
+                    latest.max(
+                        self.material_scope_activity
+                            .get(scope)
+                            .copied()
+                            .unwrap_or(0),
+                    ),
+                )
+            }
+            _ => self.lab_anchors.get(scope).map(|anchor| {
+                (*anchor).max(
+                    self.material_scope_activity
+                        .get(scope)
+                        .copied()
+                        .unwrap_or(0),
+                )
+            }),
+        }
+    }
+
+    fn lab_protected<E: LedgerEventRead>(
+        &self,
+        object: &RetainedObject,
+        verified: &E,
+        indexes: &EventIndexes,
+    ) -> bool {
+        let latest = object
+            .reference_scopes
+            .iter()
+            .filter_map(|scope| self.latest_lab_use(scope))
+            .max();
+        if !indexes.lab_related(verified, self.through_sequence) && latest.is_none() {
+            return false;
+        }
+        let covered = object
+            .released_lab_pins
+            .values()
+            .map(|release| release.release_request.sequence)
+            .max();
+        match (latest, covered) {
+            (Some(latest), Some(covered)) => {
+                latest > covered
+                    || object
+                        .pins
+                        .values()
+                        .any(|(_, reason)| *reason == ArtifactPinReason::Lab)
+            }
+            _ => true,
+        }
     }
 
     /// The per-scope ring counts exact first-observed frames and never scans history.
@@ -1070,6 +1203,20 @@ fn terminal<E: LedgerEventRead>(event: &E) -> TerminalEvent {
     }
 }
 
+fn lab_release_request_matches<E: LedgerEventRead>(
+    event: &E,
+    target: &actingcommand_contract::LabPinReleaseTarget,
+) -> bool {
+    event.event_type() == EventType::LabRequest
+        && event.origin().source() == EventSource::Lab
+        && event.origin().actor() == actingcommand_contract::EventActor::Lab
+        && event.origin().module() == actingcommand_contract::OriginModule::Actinglab
+        && event.links().request_id().is_some()
+        && event.links().correlation_id().is_some()
+        && event.sequence() > target.pin.sequence
+        && event.payload().lab_pin_release_request() == Some(target)
+}
+
 fn settlement_matches<E: LedgerEventRead>(event: &E, outcome: TaskOutcome) -> bool {
     let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = event.payload() else {
         return false;
@@ -1187,6 +1334,65 @@ fn invalid(code: &'static str) -> GlobalLedgerError {
 }
 
 impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
+    pub(super) fn release_lab_pin(
+        &mut self,
+        target: actingcommand_contract::LabPinReleaseTarget,
+        request: TerminalEvent,
+    ) -> GlobalLedgerResult<(
+        actingcommand_contract::LabPinReleaseResult,
+        Vec<PersistedEvent>,
+    )> {
+        let denied = |code| GlobalLedgerError::request(code, "release_lab_pin");
+        let request_event = source(&self.events, &request)
+            .map_err(|_| denied("lab_pin_release_request_missing"))?;
+        if !lab_release_request_matches(request_event, &target) {
+            return Err(denied("lab_pin_release_request_conflict"));
+        }
+        let object = self
+            .retention
+            .objects
+            .get(&target.artifact_id)
+            .ok_or_else(|| denied("lab_pin_release_artifact_unknown"))?;
+        if object.proof.is_some() {
+            return Err(denied("lab_pin_release_artifact_sealed"));
+        }
+        if let Some(released) = object.released_lab_pins.get(&target.pin.event_id) {
+            if released.pin != target.pin {
+                return Err(denied("lab_pin_release_pin_conflict"));
+            }
+            let mut result = released.clone();
+            result.already_released = true;
+            return Ok((result, Vec::new()));
+        }
+        let Some((pin, reason)) = object.pins.get(&target.pin.event_id) else {
+            return Err(denied("lab_pin_release_pin_unknown"));
+        };
+        if *pin != target.pin || *reason != ArtifactPinReason::Lab {
+            return Err(denied("lab_pin_release_pin_not_lab"));
+        }
+        let identity = object
+            .identity
+            .clone()
+            .ok_or_else(|| denied("lab_pin_release_identity_missing"))?;
+        let fact =
+            ArtifactRetentionFact::PinReleased(actingcommand_contract::ArtifactPinReleaseRecord {
+                identity: identity.clone(),
+                pin: *pin,
+                release: request,
+            });
+        let persisted = self.append_retention_fact(fact, &target.pin, false)?;
+        Ok((
+            actingcommand_contract::LabPinReleaseResult {
+                identity,
+                pin: target.pin,
+                release_request: request,
+                released: terminal(&persisted),
+                already_released: false,
+            },
+            vec![persisted],
+        ))
+    }
+
     pub(super) fn retention_candidates(
         &self,
         after: Option<ArtifactId>,
@@ -1414,6 +1620,31 @@ impl ArtifactEvictionPermit {
 }
 
 impl super::GlobalLedger {
+    pub fn release_lab_pin(
+        &self,
+        target: actingcommand_contract::LabPinReleaseTarget,
+        request: TerminalEvent,
+    ) -> GlobalLedgerResult<actingcommand_contract::LabPinReleaseResult> {
+        target.validate().map_err(|_| {
+            GlobalLedgerError::request("invalid_lab_pin_release_target", "release_lab_pin")
+        })?;
+        let (response, receiver) = std::sync::mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| invalid("writer_unavailable"))?;
+        super::send_command(
+            sender,
+            super::WriterCommand::ReleaseLabPin {
+                target,
+                request,
+                response,
+            },
+            "release_lab_pin",
+        )?;
+        super::receive_response(receiver, "release_lab_pin")?
+    }
+
     pub fn retention_candidates(
         &self,
         after: Option<ArtifactId>,
