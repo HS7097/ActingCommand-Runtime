@@ -64,6 +64,16 @@ impl ArtifactStoreError {
         error
     }
 
+    pub(crate) fn frame_workspace_refused() -> Self {
+        let mut error = Self::fatal(
+            "frame_workspace_unavailable",
+            "admit_frame_workspace",
+            "the existing memory budget cannot reserve this frame's encoding workspace",
+        );
+        error.fatal = false;
+        error
+    }
+
     pub fn with_raw_os_error(mut self, code: Option<i32>) -> Self {
         self.raw_os_error = code;
         self

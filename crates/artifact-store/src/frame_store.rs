@@ -5,13 +5,10 @@ use actingcommand_contract::{ArtifactReference, CapturePressureState, PinnedFram
 use actingcommand_device::{Frame, PixelFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use zip::write::FileOptions;
-use zip::{ZipArchive, ZipWriter};
 
 const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.95;
 const DEFAULT_TIER1_RATIO: f64 = 0.60;
@@ -21,7 +18,6 @@ const DEFAULT_HYSTERESIS_RATIO: f64 = 0.10;
 const DEFAULT_OS_RESERVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 const ENTRY_BASE_METADATA_BYTES: u64 = 512;
-const SEGMENT_METADATA_BYTES: u64 = 256;
 const WRITER_BUFFER_BYTES: u64 = 64 * 1024;
 const THUMB_WIDTH: usize = 16;
 const THUMB_HEIGHT: usize = 9;
@@ -370,7 +366,6 @@ impl BackpressureState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameStorageState {
     Memory,
-    Segment,
     Artifact,
     Dropped,
 }
@@ -379,7 +374,6 @@ impl FrameStorageState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Memory => "memory",
-            Self::Segment => "segment",
             Self::Artifact => "artifact",
             Self::Dropped => "dropped",
         }
@@ -419,13 +413,16 @@ pub enum FrameStoreEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct FramePersistenceCandidate {
+pub struct FramePersistenceCandidate<'a> {
     pub frame_index: usize,
     pub file_name: String,
     pub captured_at: SystemTime,
     pub pinned_reason: Option<PinnedFrameReason>,
-    pub png: Vec<u8>,
+    pub png: Cow<'a, [u8]>,
 }
+
+pub type FramePersistencePublisher<'a> = dyn FnMut(&FramePersistenceCandidate<'_>) -> CliOutcome<(Arc<ArtifactStore>, ArtifactReference)>
+    + 'a;
 
 impl Tier3PauseCheckpoint {
     pub fn to_json(&self) -> Value {
@@ -449,8 +446,10 @@ impl Tier3PauseCheckpoint {
 
 pub struct FrameStore {
     config: FrameStoreConfig,
-    temp_dir: PathBuf,
-    segment_manifest_path: PathBuf,
+    #[cfg(test)]
+    fixture_root: PathBuf,
+    #[cfg(test)]
+    fixture_capacity_limit: Option<u64>,
     budget: MemoryBudget,
     resident_bytes: u64,
     payload_bytes: u64,
@@ -469,18 +468,18 @@ pub struct FrameStore {
     dropped_count: u64,
     spilled_count: u64,
     spill_warning_count: u64,
-    next_segment_id: u64,
-    active_segment_id: Option<u64>,
+    last_failure: Option<FramePersistenceFailure>,
 }
 
 impl FrameStore {
-    pub fn new(temp_dir: PathBuf, config: FrameStoreConfig) -> CliOutcome<Self> {
+    pub fn new(_frame_root: PathBuf, config: FrameStoreConfig) -> CliOutcome<Self> {
         let budget = MemoryBudget::build(&config)?;
-        let segment_manifest_path = temp_dir.join("segment-manifest.jsonl");
         Ok(Self {
             config,
-            temp_dir,
-            segment_manifest_path,
+            #[cfg(test)]
+            fixture_root: _frame_root,
+            #[cfg(test)]
+            fixture_capacity_limit: None,
             budget,
             resident_bytes: 0,
             payload_bytes: 0,
@@ -499,8 +498,7 @@ impl FrameStore {
             dropped_count: 0,
             spilled_count: 0,
             spill_warning_count: 0,
-            next_segment_id: 1,
-            active_segment_id: None,
+            last_failure: None,
         })
     }
 
@@ -520,6 +518,18 @@ impl FrameStore {
             .iter()
             .find(|entry| entry.frame_index == frame_index)
             .map(|entry| &entry.material)
+    }
+
+    pub(crate) fn persisted_reference(&self, frame_index: usize) -> Option<&ArtifactReference> {
+        self.entries
+            .iter()
+            .find(|entry| entry.frame_index == frame_index)
+            .and_then(|entry| match &entry.storage {
+                FrameStorage::Artifact(material) if entry.artifact_persisted => {
+                    Some(&material.reference)
+                }
+                _ => None,
+            })
     }
 
     pub(crate) fn record_recognition(
@@ -578,220 +588,143 @@ impl FrameStore {
         Ok(())
     }
 
-    pub fn add_frame(&mut self, input: FrameStoreFrameInput) -> CliOutcome<FrameStoreOutcome> {
+    pub fn add_frame(
+        &mut self,
+        mut input: FrameStoreFrameInput,
+        publish: &mut FramePersistencePublisher<'_>,
+    ) -> CliOutcome<FrameStoreOutcome> {
+        self.last_failure = None;
         self.refresh_budget()?;
         self.release_watermarks_if_needed();
-        let mut warnings = Vec::new();
-        let original_png = input
-            .frame
-            .png_for_artifact()
-            .map_err(|error| CliError::device(error.to_string()))?;
-        let material = FrameMaterialIdentity {
-            frame_index: input.frame_index,
-            byte_count: original_png.len() as u64,
-            sha256: crate::store::canonical_sha256(&original_png),
-        };
-        drop(original_png);
+        let mut frame_failures = Vec::new();
+        let mut attempted = Vec::new();
+        let mut refused = false;
         let file = format!("screenshots/{}", input.file_name);
-        let key_frame = self.is_key_frame(&input);
-        let pinned_reason = input.pinned_reason;
         let thumb = thumbnail(&input.frame);
-        let estimate = estimate_entry(&input, &file, &thumb);
-        let width = input.frame.width;
-        let height = input.frame.height;
-        let captured_at = input.frame.captured_at;
-        let backend = input.frame.backend_name.as_str().to_string();
-        let pixel_format = input.frame.pixel_format.as_str().to_string();
-        let mut backpressure_state = BackpressureState::Normal;
-
+        let mut estimate = estimate_entry(&input, &file, &thumb)?;
         let projected = self.resident_bytes.saturating_add(estimate.total());
         if projected >= self.budget.tier1_bytes {
             self.activate_tier1(projected);
             self.dedup_existing()?;
-            backpressure_state = BackpressureState::Tier1Dedup;
         }
-        let projected = self.resident_bytes.saturating_add(estimate.total());
-        if projected >= self.budget.tier2_bytes {
+        if self.resident_bytes.saturating_add(estimate.total()) >= self.budget.tier2_bytes {
             self.activate_tier2(projected);
-            self.flush_resident_segment(&mut warnings);
-            backpressure_state = BackpressureState::Tier2Flush;
+            self.flush_resident_frames(publish, &mut attempted, &mut frame_failures, &mut refused)?;
         }
-
-        let projected = self.resident_bytes.saturating_add(estimate.total());
-        let mut storage = FrameStorage::Resident(input.frame);
-        let mut resident_estimate = estimate;
-        let mut storage_state = FrameStorageState::Memory;
-        let mut tier3_triggered = false;
-        let mut pause_required = false;
-        let mut admission_spill_warning = None;
-        let mut admission_spill_failed = false;
-
-        if projected >= self.budget.tier3_bytes {
-            tier3_triggered = true;
-            self.activate_tier3(projected);
-            if input.recognition_state.can_spill() {
-                match self.spill_admission_frame(&storage, &input.file_name, &file, &material) {
-                    Ok(Some(spilled)) => {
-                        storage = spilled;
-                        resident_estimate = estimate.spilled_resident();
-                        storage_state = FrameStorageState::Segment;
-                        backpressure_state = BackpressureState::Tier2Flush;
-                    }
-                    Ok(None) => {}
-                    Err(message) => {
-                        warnings.push(message.clone());
-                        admission_spill_failed = message.starts_with("spill_degraded");
-                        admission_spill_warning = Some(message);
-                        resident_estimate = estimate.without_encoder_workspace();
-                        backpressure_state = BackpressureState::SpillDegraded;
-                    }
-                }
-            }
+        // The already-returned frame stays with its caller on refusal. No encoding or
+        // resident accounting commit precedes reservation of the complete live set.
+        if self
+            .resident_bytes
+            .checked_add(estimate.total())
+            .is_none_or(|bytes| bytes > self.budget.budget_bytes)
+        {
+            self.activate_tier3(self.resident_bytes.saturating_add(estimate.total()));
+            return Err(CliError::frame_workspace_refused());
         }
-
-        let segment_id = storage.segment_id();
-        let segment_path = storage.segment_path();
+        let png = input
+            .frame
+            .png_for_artifact_with_budget(estimate.encoder_workspace)
+            .map_err(|error| CliError::device(error.to_string()))?;
+        let material = FrameMaterialIdentity {
+            frame_index: input.frame_index,
+            byte_count: png.len() as u64,
+            sha256: crate::store::canonical_sha256(&png),
+        };
+        if let Cow::Owned(png) = png {
+            input.frame.original_png = Some(png);
+        }
+        estimate = estimate_entry(&input, &file, &thumb)?;
+        let key_frame = self.is_key_frame(&input);
         let entry = FrameEntry {
             material,
             frame_index: input.frame_index,
             file_name: input.file_name,
             file: file.clone(),
-            width,
-            height,
-            captured_at,
-            backend,
-            pixel_format,
+            width: input.frame.width,
+            height: input.frame.height,
+            captured_at: input.frame.captured_at,
+            backend: input.frame.backend_name.as_str().to_owned(),
+            pixel_format: input.frame.pixel_format.as_str().to_owned(),
             label: input.label,
             recognition_state: input.recognition_state,
             key_frame,
-            pinned_reason,
+            pinned_reason: input.pinned_reason,
             artifact_persisted: false,
             artifact_material: None,
             similarity_recorded: false,
             merged_count: 0,
             dwell_ms: 0,
-            delta_from_previous_ms: self.delta_from_previous_ms(captured_at),
+            delta_from_previous_ms: self.delta_from_previous_ms(input.frame.captured_at),
             retained: true,
             merged_into: None,
-            storage,
-            storage_state,
-            resident_estimate,
+            storage: FrameStorage::Resident(input.frame),
+            storage_state: FrameStorageState::Memory,
+            resident_estimate: estimate,
             thumb,
-            segment_id,
-            segment_path,
-            spill_attempted: storage_state == FrameStorageState::Segment,
-            spill_failed: admission_spill_failed,
+            spill_failed: false,
         };
         self.add_estimate(entry.resident_estimate);
         self.entries.push(entry);
-        let entry_index = self.entries.len() - 1;
-        if let Some(message) = &admission_spill_warning {
-            if admission_spill_failed {
-                self.record_spill_warning(input.frame_index, &file, message);
-            } else {
-                self.record_spill_unavailable_warning(message);
-            }
-        }
+        let index = self.entries.len() - 1;
         self.timeline.push(json!({
             "event": "frame_retained",
-            "frame_index": self.entries[entry_index].frame_index,
+            "frame_index": self.entries[index].frame_index,
             "file": file,
-            "key_frame": key_frame,
-            "pinned_reason": pinned_reason.map(PinnedFrameReason::as_str),
-            "recognition_state": self.entries[entry_index].recognition_state.as_json(),
-            "storage": self.entries[entry_index].storage_state.as_str(),
+            "original_material": self.entries[index].material,
             "resident_bytes": self.resident_bytes
         }));
-
         if self.tier1_active {
             self.dedup_existing()?;
         }
-        if self.tier2_active {
-            self.flush_resident_segment(&mut warnings);
-        }
-
-        if self.resident_bytes >= self.budget.tier3_bytes {
-            tier3_triggered = true;
-            pause_required = true;
+        let tier3_triggered = self.resident_bytes >= self.budget.tier3_bytes;
+        if tier3_triggered {
             self.activate_tier3(self.resident_bytes);
-            self.flush_resident_segment(&mut warnings);
-            if self.resident_bytes <= self.budget.tier3_release_bytes {
-                backpressure_state = BackpressureState::Tier3Resumable;
-                pause_required = false;
-            } else if !matches!(backpressure_state, BackpressureState::SpillDegraded) {
-                backpressure_state = BackpressureState::Tier3Paused;
-            }
+        }
+        if self.tier2_active {
+            self.flush_resident_frames(publish, &mut attempted, &mut frame_failures, &mut refused)?;
         }
         self.release_watermarks_if_needed();
-
-        if self.tier3_active && self.resident_bytes > self.budget.tier3_release_bytes {
-            pause_required = true;
-        }
-        let retained = self.entries[entry_index].retained;
+        let pause_required =
+            refused || (self.tier3_active && self.resident_bytes > self.budget.tier3_release_bytes);
+        let backpressure_state = if refused {
+            BackpressureState::SpillDegraded
+        } else if pause_required {
+            BackpressureState::Tier3Paused
+        } else if tier3_triggered {
+            BackpressureState::Tier3Resumable
+        } else if self.tier2_active {
+            BackpressureState::Tier2Flush
+        } else if self.tier1_active {
+            BackpressureState::Tier1Dedup
+        } else {
+            BackpressureState::Normal
+        };
+        let entry = &self.entries[index];
         Ok(FrameStoreOutcome {
-            retained,
-            file: retained.then(|| self.entries[entry_index].file.clone()),
-            merged_into: self.entries[entry_index].merged_into.clone(),
-            storage_state: self.entries[entry_index].storage_state,
+            retained: entry.retained,
+            file: entry.retained.then(|| entry.file.clone()),
+            merged_into: entry.merged_into.clone(),
+            storage_state: entry.storage_state,
             tier1_active: self.tier1_active,
             tier2_active: self.tier2_active,
             tier3_triggered,
             backpressure_state,
             pause_required,
-            warnings,
-            checkpoint: tier3_triggered.then(|| self.pause_checkpoint(input.frame_index)),
+            frame_failures,
+            checkpoint: pause_required.then(|| self.pause_checkpoint(input.frame_index)),
         })
     }
 
-    pub fn materialize(&mut self, screenshots_dir: &Path) -> CliOutcome<()> {
-        fs::create_dir_all(screenshots_dir).map_err(|err| {
-            CliError::package_invalid(format!(
-                "failed to create {}: {err}",
-                screenshots_dir.display()
-            ))
-        })?;
-        for entry in &mut self.entries {
-            if !entry.retained {
-                continue;
+    /// Releases only resident ownership. Published artifacts and old directories belong
+    /// to their original Ledger/retention owners and are never deleted here.
+    pub fn cleanup_temp(&mut self) -> CliOutcome<()> {
+        for index in 0..self.entries.len() {
+            if self.entries[index].artifact_persisted {
+                self.release_persisted_memory(index)?;
             }
-            let destination = screenshots_dir.join(&entry.file_name);
-            let png = entry.original_png()?;
-            fs::write(&destination, png).map_err(|err| {
-                CliError::package_invalid(format!(
-                    "failed to write {}: {err}",
-                    destination.display()
-                ))
-            })?;
         }
         Ok(())
     }
-
-    pub fn cleanup_temp(&mut self) -> Vec<String> {
-        if !self.temp_dir.exists() {
-            return Vec::new();
-        }
-        match fs::remove_dir_all(&self.temp_dir) {
-            Ok(()) => {
-                self.timeline.push(json!({
-                    "event": "frame_store_temp_cleaned",
-                    "path": self.temp_dir
-                }));
-                Vec::new()
-            }
-            Err(err) => {
-                let warning = format!(
-                    "failed to clean frame store temp {}: {err}",
-                    self.temp_dir.display()
-                );
-                self.timeline.push(json!({
-                    "event": "frame_store_temp_cleanup_failed",
-                    "warning": warning
-                }));
-                vec![warning]
-            }
-        }
-    }
-
     pub fn screenshots(&self) -> Vec<FrameStoreScreenshot> {
         self.entries
             .iter()
@@ -842,8 +775,7 @@ impl FrameStore {
             "spill_warning_count": self.spill_warning_count,
             "tier1_active": self.tier1_active,
             "tier2_active": self.tier2_active,
-            "tier3_active": self.tier3_active,
-            "active_segment_id": self.active_segment_id
+            "tier3_active": self.tier3_active
         })
     }
 
@@ -867,8 +799,6 @@ impl FrameStore {
                 "dwell_ms": entry.dwell_ms,
                 "merged_count": entry.merged_count,
                 "storage": entry.storage_state.as_str(),
-                "segment_id": entry.segment_id,
-                "segment_path": entry.segment_path.as_ref().map(|path| path.display().to_string()),
                 "resident_bytes_estimate": entry.resident_estimate.total(),
                 "metadata_bytes_estimate": entry.resident_estimate.metadata,
                 "thumb_bytes_estimate": entry.resident_estimate.thumbnail,
@@ -892,14 +822,65 @@ impl FrameStore {
         Ok(was_paused && !self.tier3_active)
     }
 
-    pub fn persistence_candidates(
-        &self,
-        include_all_retained: bool,
-    ) -> CliOutcome<Vec<FramePersistenceCandidate>> {
-        self.persistence_candidate_indexes(include_all_retained)
-            .into_iter()
-            .map(|frame_index| self.persistence_candidate(frame_index))
-            .collect()
+    pub(crate) fn is_pressure_paused(&self) -> bool {
+        self.tier3_active && self.resident_bytes > self.budget.tier3_release_bytes
+    }
+
+    pub(crate) fn failure_frame_index(&self, error: &CliError) -> Option<usize> {
+        self.last_failure
+            .as_ref()
+            .filter(|failure| failure.error == *error)
+            .map(|failure| failure.frame_index)
+    }
+
+    pub(crate) fn publication_workspace_available(&self, frame_index: usize) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.frame_index == frame_index && entry.retained)
+            && self
+                .resident_bytes
+                .checked_add(WRITER_BUFFER_BYTES)
+                .is_some_and(|bytes| bytes <= self.budget.budget_bytes)
+    }
+
+    pub(crate) fn flush_pressure(
+        &mut self,
+        publish: &mut FramePersistencePublisher<'_>,
+    ) -> CliOutcome<Vec<FramePersistenceFailure>> {
+        self.last_failure = None;
+        let mut failures = Vec::new();
+        if self.tier2_active || self.tier3_active {
+            self.flush_resident_frames(publish, &mut Vec::new(), &mut failures, &mut false)?;
+        }
+        self.release_watermarks_if_needed();
+        Ok(failures)
+    }
+
+    pub(crate) fn admit_frame_copy(&self, frame: &Frame) -> CliOutcome<()> {
+        let payload = (frame.pixels.capacity() as u64).checked_add(
+            frame
+                .original_png
+                .as_ref()
+                .map_or(0, |png| png.capacity() as u64),
+        );
+        let workspace = frame
+            .artifact_png_workspace_bytes()
+            .map_err(|error| CliError::device(error.to_string()))?;
+        let required = payload
+            .and_then(|bytes| bytes.checked_mul(2))
+            .and_then(|bytes| bytes.checked_add(workspace.max(WRITER_BUFFER_BYTES)))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    ENTRY_BASE_METADATA_BYTES * 2 + (THUMB_WIDTH * THUMB_HEIGHT) as u64,
+                )
+            });
+        if required
+            .and_then(|bytes| self.resident_bytes.checked_add(bytes))
+            .is_none_or(|bytes| bytes > self.budget.budget_bytes)
+        {
+            return Err(CliError::frame_workspace_refused());
+        }
+        Ok(())
     }
 
     pub(crate) fn persistence_candidate_indexes(&self, include_all_retained: bool) -> Vec<usize> {
@@ -908,9 +889,7 @@ impl FrameStore {
             .filter(|entry| {
                 entry.retained
                     && !entry.artifact_persisted
-                    && (include_all_retained
-                        || entry.pinned_reason.is_some()
-                        || entry.storage_state == FrameStorageState::Segment)
+                    && (include_all_retained || entry.pinned_reason.is_some())
             })
             .map(|entry| entry.frame_index)
             .collect()
@@ -919,7 +898,7 @@ impl FrameStore {
     pub(crate) fn persistence_candidate(
         &self,
         frame_index: usize,
-    ) -> CliOutcome<FramePersistenceCandidate> {
+    ) -> CliOutcome<FramePersistenceCandidate<'_>> {
         let entry = self
             .entries
             .iter()
@@ -933,6 +912,18 @@ impl FrameStore {
                 "persist_capture_frame",
                 "original frame is not retained",
             ));
+        }
+        let material_read = if matches!(entry.storage, FrameStorage::Artifact(_)) {
+            entry.material.byte_count.checked_mul(3)
+        } else {
+            Some(0)
+        };
+        if material_read
+            .and_then(|bytes| bytes.checked_add(WRITER_BUFFER_BYTES))
+            .and_then(|bytes| self.resident_bytes.checked_add(bytes))
+            .is_none_or(|bytes| bytes > self.budget.budget_bytes)
+        {
+            return Err(CliError::frame_workspace_refused());
         }
         Ok(FramePersistenceCandidate {
             frame_index,
@@ -973,9 +964,7 @@ impl FrameStore {
         }
         entry.artifact_persisted = true;
         entry.artifact_material = Some(PersistedFrameMaterial { store, reference });
-        if matches!(entry.storage, FrameStorage::Spilled { .. }) {
-            self.release_persisted_memory(index)?;
-        }
+        self.release_persisted_memory(index)?;
         Ok(())
     }
 
@@ -1105,10 +1094,7 @@ impl FrameStore {
     }
 
     fn release_persisted_memory(&mut self, index: usize) -> CliOutcome<()> {
-        if !matches!(
-            self.entries[index].storage,
-            FrameStorage::Resident(_) | FrameStorage::Spilled { .. }
-        ) {
+        if !matches!(self.entries[index].storage, FrameStorage::Resident(_)) {
             return Ok(());
         }
         let Some(material) = self.entries[index].artifact_material.take() else {
@@ -1175,367 +1161,74 @@ impl FrameStore {
         let metadata = self.entries[index].resident_estimate.metadata;
         let released =
             match std::mem::replace(&mut self.entries[index].storage, FrameStorage::Dropped) {
-                FrameStorage::Resident(_)
-                | FrameStorage::Spilled { .. }
-                | FrameStorage::Artifact(_) => self.replace_resident_estimate(
-                    index,
-                    ResidentEstimate {
-                        metadata,
-                        ..ResidentEstimate::default()
-                    },
-                ),
+                FrameStorage::Resident(_) | FrameStorage::Artifact(_) => self
+                    .replace_resident_estimate(
+                        index,
+                        ResidentEstimate {
+                            metadata,
+                            ..ResidentEstimate::default()
+                        },
+                    ),
                 FrameStorage::Dropped => 0,
             };
         self.entries[index].thumb.values = Vec::new();
         released
     }
 
-    fn flush_resident_segment(&mut self, warnings: &mut Vec<String>) {
-        let indexes = self.spillable_indexes();
-        if indexes.is_empty() {
-            return;
-        }
-        match self.write_segment(indexes) {
-            Ok(report) => {
-                for failure in report.frame_failures {
-                    warnings.push(failure.message.clone());
-                    let frame_index = self.entries[failure.index].frame_index;
-                    let file = self.entries[failure.index].file.clone();
-                    self.record_spill_warning(frame_index, &file, &failure.message);
-                }
-            }
-            Err(error) => {
-                for failure in error.frame_failures {
-                    warnings.push(failure.message.clone());
-                    let frame_index = self.entries[failure.index].frame_index;
-                    let file = self.entries[failure.index].file.clone();
-                    self.record_spill_warning(frame_index, &file, &failure.message);
-                }
-                let message = error.message;
-                warnings.push(message.clone());
-                self.record_spill_unavailable_warning(&message);
-            }
-        }
-    }
-
-    fn spillable_indexes(&self) -> Vec<usize> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                (entry.retained
-                    && !entry.spill_failed
-                    && entry.recognition_state.can_spill()
-                    && matches!(entry.storage, FrameStorage::Resident(_)))
-                .then_some(index)
-            })
-            .collect()
-    }
-
-    fn write_segment(
+    fn flush_resident_frames(
         &mut self,
-        mut indexes: Vec<usize>,
-    ) -> Result<SegmentWriteReport, SegmentWriteError> {
-        let mut frame_failures = Vec::new();
-        // Classify original frame failures before a shared segment I/O failure can mask them.
-        // Each check holds at most one encoded frame.
-        indexes.retain(|index| match self.entries[*index].original_png() {
-            Ok(_) => true,
-            Err(error) => {
-                frame_failures.push(SegmentFrameFailure {
-                    index: *index,
-                    message: format!("spill_degraded: failed to encode frame or verify original material: {error}"),
-                });
-                false
-            }
-        });
-        if indexes.is_empty() {
-            return Ok(SegmentWriteReport { frame_failures });
+        publish: &mut FramePersistencePublisher<'_>,
+        attempted: &mut Vec<usize>,
+        frame_failures: &mut Vec<FramePersistenceFailure>,
+        refused: &mut bool,
+    ) -> CliOutcome<()> {
+        if *refused {
+            return Ok(());
         }
-
-        if let Err(err) = fs::create_dir_all(&self.temp_dir) {
-            return Err(SegmentWriteError {
-                message: format!(
-                    "spill_unavailable: failed to create {}: {err}",
-                    self.temp_dir.display()
-                ),
-                frame_failures,
-            });
-        }
-        let segment_id = self.next_segment_id;
-        self.next_segment_id = self.next_segment_id.saturating_add(1);
-        let segment_path = self.temp_dir.join(format!("segment-{segment_id:06}.zip"));
-        let file = match File::create(&segment_path) {
-            Ok(file) => file,
-            Err(err) => {
-                return Err(SegmentWriteError {
-                    message: format!(
-                        "spill_unavailable: failed to create {}: {err}",
-                        segment_path.display()
-                    ),
-                    frame_failures,
-                });
+        for index in 0..self.entries.len() {
+            if self.entries[index].artifact_persisted {
+                self.release_persisted_memory(index)?;
+                continue;
             }
-        };
-        self.active_segment_id = Some(segment_id);
-        let result = (|| -> Result<Vec<(usize, u64)>, String> {
-            let options =
-                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            let mut zip = ZipWriter::new(file);
-            let mut manifest = Vec::new();
-            let mut written = Vec::new();
-            for index in indexes {
-                let png = match self.entries[index].original_png() {
-                    Ok(png) => png,
-                    Err(error) => {
-                        frame_failures.push(SegmentFrameFailure {
-                            index,
-                            message: format!(
-                                "spill_degraded: failed to encode frame or verify original material: {error}"
-                            ),
-                        });
-                        continue;
+            let entry = &self.entries[index];
+            if !entry.retained
+                || entry.spill_failed
+                || !entry.recognition_state.can_spill()
+                || !matches!(entry.storage, FrameStorage::Resident(_))
+                || attempted.contains(&index)
+            {
+                continue;
+            }
+            attempted.push(index);
+            let frame_index = entry.frame_index;
+            let result = self
+                .persistence_candidate(frame_index)
+                .and_then(|candidate| publish(&candidate));
+            match result {
+                Ok((store, reference)) => {
+                    let bytes = reference.byte_count();
+                    self.mark_artifact_persisted(frame_index, store, reference)?;
+                    self.spilled_count = self.spilled_count.saturating_add(1);
+                    self.spilled_bytes = self.spilled_bytes.saturating_add(bytes);
+                }
+                Err(error) => {
+                    self.spill_warning_count = self.spill_warning_count.saturating_add(1);
+                    self.last_failure = Some(FramePersistenceFailure {
+                        frame_index,
+                        error: error.clone(),
+                    });
+                    if error.is_fatal() {
+                        self.entries[index].spill_failed = true;
+                        return Err(error);
                     }
-                };
-                let zip_name = self.entries[index].file_name.clone();
-                zip.start_file(&zip_name, options).map_err(|err| {
-                    format!("spill_unavailable: failed to start segment entry: {err}")
-                })?;
-                zip.write_all(&png).map_err(|err| {
-                    format!("spill_unavailable: failed to write segment frame bytes: {err}")
-                })?;
-                manifest.push(json!({
-                    "frame_index": self.entries[index].frame_index,
-                    "file_name": self.entries[index].file_name,
-                    "zip_name": zip_name,
-                    "original_material": self.entries[index].material,
-                    "recognition_state": self.entries[index].recognition_state.as_json(),
-                    "dwell_ms": self.entries[index].dwell_ms,
-                    "merged_count": self.entries[index].merged_count
-                }));
-                written.push((index, png.len() as u64));
-            }
-            zip.start_file("segment-manifest.json", options)
-                .map_err(|err| {
-                    format!("spill_unavailable: failed to start segment manifest: {err}")
-                })?;
-            zip.write_all(
-                serde_json::to_string_pretty(&manifest)
-                    .map_err(|err| format!("spill_degraded: failed to serialize manifest: {err}"))?
-                    .as_bytes(),
-            )
-            .map_err(|err| format!("spill_unavailable: failed to write segment manifest: {err}"))?;
-            zip.finish()
-                .map_err(|err| format!("spill_unavailable: failed to finish segment: {err}"))?
-                .sync_all()
-                .map_err(|err| format!("spill_unavailable: failed to sync segment: {err}"))?;
-            for (index, _) in &written {
-                let entry = &self.entries[*index];
-                let png = read_segment_frame(&segment_path, &entry.file_name)
-                    .map_err(|err| format!("spill_unavailable: failed to verify segment: {err}"))?;
-                if png.len() as u64 != entry.material.byte_count
-                    || crate::store::canonical_sha256(&png) != entry.material.sha256
-                {
-                    return Err(
-                        "spill_unavailable: segment differs from original frame material"
-                            .to_string(),
-                    );
+                    frame_failures.push(FramePersistenceFailure { frame_index, error });
+                    *refused = true;
+                    break;
                 }
             }
-            self.append_segment_manifest(segment_id, &segment_path, &manifest)
-                .map_err(|err| {
-                    format!("spill_unavailable: failed to append segment manifest: {err}")
-                })?;
-            Ok(written)
-        })();
-        let encoded = match result {
-            Ok(encoded) => encoded,
-            Err(mut message) => {
-                self.active_segment_id = None;
-                if let Err(error) = fs::remove_file(&segment_path) {
-                    message.push_str(&format!("; failed segment cleanup: {error}"));
-                }
-                return Err(SegmentWriteError {
-                    message,
-                    frame_failures,
-                });
-            }
-        };
-
-        for (index, byte_count) in encoded {
-            self.mark_spilled(index, segment_id, &segment_path, byte_count);
         }
-        self.active_segment_id = None;
-        Ok(SegmentWriteReport { frame_failures })
+        Ok(())
     }
-
-    fn spill_admission_frame(
-        &mut self,
-        storage: &FrameStorage,
-        file_name: &str,
-        file: &str,
-        material: &FrameMaterialIdentity,
-    ) -> Result<Option<FrameStorage>, String> {
-        let FrameStorage::Resident(frame) = storage else {
-            return Ok(None);
-        };
-        fs::create_dir_all(&self.temp_dir).map_err(|err| {
-            format!(
-                "spill_unavailable: failed to create {}: {err}",
-                self.temp_dir.display()
-            )
-        })?;
-        let segment_id = self.next_segment_id;
-        self.next_segment_id = self.next_segment_id.saturating_add(1);
-        let segment_path = self.temp_dir.join(format!("segment-{segment_id:06}.zip"));
-        let file_handle = File::create(&segment_path).map_err(|err| {
-            format!(
-                "spill_unavailable: failed to create {}: {err}",
-                segment_path.display()
-            )
-        })?;
-        self.active_segment_id = Some(segment_id);
-        let result = (|| -> Result<usize, String> {
-            let options =
-                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            let mut zip = ZipWriter::new(file_handle);
-            let png = frame
-                .png_for_artifact()
-                .map_err(|err| format!("spill_degraded: failed to encode frame: {err}"))?;
-            if png.len() as u64 != material.byte_count
-                || crate::store::canonical_sha256(&png) != material.sha256
-            {
-                return Err("spill_degraded: frame differs from original material".to_string());
-            }
-            zip.start_file(file_name, options).map_err(|err| {
-                format!("spill_unavailable: failed to start segment entry: {err}")
-            })?;
-            zip.write_all(&png).map_err(|err| {
-                format!("spill_unavailable: failed to write segment frame bytes: {err}")
-            })?;
-            let manifest = vec![json!({
-                "file": file,
-                "file_name": file_name,
-                "original_material": material,
-                "zip_name": file_name
-            })];
-            zip.start_file("segment-manifest.json", options)
-                .map_err(|err| {
-                    format!("spill_unavailable: failed to start segment manifest: {err}")
-                })?;
-            zip.write_all(
-                serde_json::to_string_pretty(&manifest)
-                    .map_err(|err| format!("spill_degraded: failed to serialize manifest: {err}"))?
-                    .as_bytes(),
-            )
-            .map_err(|err| format!("spill_unavailable: failed to write segment manifest: {err}"))?;
-            zip.finish()
-                .map_err(|err| format!("spill_unavailable: failed to finish segment: {err}"))?
-                .sync_all()
-                .map_err(|err| format!("spill_unavailable: failed to sync segment: {err}"))?;
-            let restored = read_segment_frame(&segment_path, file_name)
-                .map_err(|err| format!("spill_unavailable: failed to verify segment: {err}"))?;
-            if restored.len() as u64 != material.byte_count
-                || crate::store::canonical_sha256(&restored) != material.sha256
-            {
-                return Err(
-                    "spill_unavailable: segment differs from original frame material".to_string(),
-                );
-            }
-            self.append_segment_manifest(segment_id, &segment_path, &manifest)
-                .map_err(|err| {
-                    format!("spill_unavailable: failed to append segment manifest: {err}")
-                })?;
-            Ok(png.len())
-        })();
-        let png_len = match result {
-            Ok(png_len) => png_len,
-            Err(message) => {
-                self.active_segment_id = None;
-                return Err(message);
-            }
-        };
-        self.spilled_count = self.spilled_count.saturating_add(1);
-        self.spilled_bytes = self.spilled_bytes.saturating_add(png_len as u64);
-        self.active_segment_id = None;
-        Ok(Some(FrameStorage::Spilled {
-            segment_id,
-            segment_path,
-            zip_name: file_name.to_string(),
-        }))
-    }
-
-    fn append_segment_manifest(
-        &self,
-        segment_id: u64,
-        segment_path: &Path,
-        manifest: &[Value],
-    ) -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.segment_manifest_path)?;
-        for entry in manifest {
-            let row = json!({
-                "segment_id": segment_id,
-                "segment_path": segment_path,
-                "entry": entry
-            });
-            writeln!(file, "{row}")?;
-        }
-        file.sync_all()
-    }
-
-    fn mark_spilled(&mut self, index: usize, segment_id: u64, segment_path: &Path, png_bytes: u64) {
-        let new_estimate = self.entries[index].resident_estimate.spilled_resident();
-        let released = self.replace_resident_estimate(index, new_estimate);
-        self.entries[index].storage = FrameStorage::Spilled {
-            segment_id,
-            segment_path: segment_path.to_path_buf(),
-            zip_name: self.entries[index].file_name.clone(),
-        };
-        self.entries[index].storage_state = FrameStorageState::Segment;
-        self.entries[index].segment_id = Some(segment_id);
-        self.entries[index].segment_path = Some(segment_path.to_path_buf());
-        self.entries[index].spill_attempted = true;
-        self.spilled_count = self.spilled_count.saturating_add(1);
-        self.spilled_bytes = self.spilled_bytes.saturating_add(png_bytes);
-        self.timeline.push(json!({
-            "event": "frame_spilled",
-            "frame_index": self.entries[index].frame_index,
-            "file": self.entries[index].file,
-            "segment_id": segment_id,
-            "segment_path": segment_path,
-            "released_bytes": released,
-            "resident_bytes": self.resident_bytes
-        }));
-    }
-
-    fn record_spill_warning(&mut self, frame_index: usize, file: &str, warning: &str) {
-        self.spill_warning_count = self.spill_warning_count.saturating_add(1);
-        if let Some(entry) = self
-            .entries
-            .iter_mut()
-            .find(|entry| entry.frame_index == frame_index)
-        {
-            entry.spill_failed = true;
-        }
-        self.timeline.push(json!({
-            "event": "spill_degraded",
-            "frame_index": frame_index,
-            "file": file,
-            "warning": warning
-        }));
-    }
-
-    fn record_spill_unavailable_warning(&mut self, warning: &str) {
-        self.spill_warning_count = self.spill_warning_count.saturating_add(1);
-        self.timeline.push(json!({
-            "event": "spill_unavailable",
-            "warning": warning
-        }));
-    }
-
     fn add_estimate(&mut self, estimate: ResidentEstimate) {
         self.resident_bytes = self.resident_bytes.saturating_add(estimate.total());
         self.payload_bytes = self.payload_bytes.saturating_add(estimate.payload);
@@ -1600,12 +1293,8 @@ impl FrameStore {
             tier1_bytes: self.budget.tier1_bytes,
             tier2_bytes: self.budget.tier2_bytes,
             tier3_bytes: self.budget.tier3_bytes,
-            active_segment_id: self.active_segment_id,
-            in_flight_flush_state: if self.active_segment_id.is_some() {
-                "segment_flush_active".to_string()
-            } else {
-                "idle".to_string()
-            },
+            active_segment_id: None,
+            in_flight_flush_state: "idle".to_string(),
             current_step_index: None,
             current_step_id: None,
             current_operation_id: None,
@@ -1644,7 +1333,7 @@ pub struct FrameStoreOutcome {
     pub tier3_triggered: bool,
     pub backpressure_state: BackpressureState,
     pub pause_required: bool,
-    pub warnings: Vec<String>,
+    pub frame_failures: Vec<FramePersistenceFailure>,
     pub checkpoint: Option<Tier3PauseCheckpoint>,
 }
 
@@ -1697,29 +1386,23 @@ struct FrameEntry {
     storage_state: FrameStorageState,
     resident_estimate: ResidentEstimate,
     thumb: Thumbnail,
-    segment_id: Option<u64>,
-    segment_path: Option<PathBuf>,
-    spill_attempted: bool,
     spill_failed: bool,
 }
 
-struct SegmentWriteReport {
-    frame_failures: Vec<SegmentFrameFailure>,
+#[derive(Debug, Clone)]
+pub struct FramePersistenceFailure {
+    pub frame_index: usize,
+    pub error: CliError,
 }
 
 impl FrameEntry {
-    fn original_png(&self) -> CliOutcome<Vec<u8>> {
+    fn original_png(&self) -> CliOutcome<Cow<'_, [u8]>> {
         let png = match &self.storage {
             FrameStorage::Resident(frame) => frame
-                .png_for_artifact()
+                .png_for_artifact_with_budget(0)
                 .map_err(|error| CliError::device(error.to_string()))?,
-            FrameStorage::Spilled {
-                segment_path,
-                zip_name,
-                ..
-            } => read_segment_frame(segment_path, zip_name)?,
             FrameStorage::Artifact(material) => {
-                material.store.read_verified(&material.reference)?
+                Cow::Owned(material.store.read_verified(&material.reference)?)
             }
             FrameStorage::Dropped => {
                 return Err(CliError::fatal(
@@ -1748,41 +1431,10 @@ struct PersistedFrameMaterial {
     reference: ArtifactReference,
 }
 
-struct SegmentWriteError {
-    message: String,
-    frame_failures: Vec<SegmentFrameFailure>,
-}
-
-struct SegmentFrameFailure {
-    index: usize,
-    message: String,
-}
-
 enum FrameStorage {
     Resident(Frame),
     Artifact(PersistedFrameMaterial),
-    Spilled {
-        segment_id: u64,
-        segment_path: PathBuf,
-        zip_name: String,
-    },
     Dropped,
-}
-
-impl FrameStorage {
-    fn segment_id(&self) -> Option<u64> {
-        match self {
-            Self::Spilled { segment_id, .. } => Some(*segment_id),
-            Self::Resident(_) | Self::Artifact(_) | Self::Dropped => None,
-        }
-    }
-
-    fn segment_path(&self) -> Option<PathBuf> {
-        match self {
-            Self::Spilled { segment_path, .. } => Some(segment_path.clone()),
-            Self::Resident(_) | Self::Artifact(_) | Self::Dropped => None,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -1805,32 +1457,20 @@ impl ResidentEstimate {
             .saturating_add(self.thumbnail)
             .saturating_add(self.encoder_workspace)
     }
-
-    fn spilled_resident(self) -> Self {
-        Self {
-            payload: 0,
-            metadata: self.metadata.saturating_add(SEGMENT_METADATA_BYTES),
-            thumbnail: self.thumbnail,
-            encoder_workspace: 0,
-        }
-    }
-
-    fn without_encoder_workspace(self) -> Self {
-        Self {
-            encoder_workspace: 0,
-            ..self
-        }
-    }
 }
 
-fn estimate_entry(input: &FrameStoreFrameInput, file: &str, thumb: &Thumbnail) -> ResidentEstimate {
+fn estimate_entry(
+    input: &FrameStoreFrameInput,
+    file: &str,
+    thumb: &Thumbnail,
+) -> CliOutcome<ResidentEstimate> {
     let original_png = input
         .frame
         .original_png
         .as_ref()
-        .map(|png| png.len() as u64)
+        .map(|png| png.capacity() as u64)
         .unwrap_or(0);
-    let payload = input.frame.pixels.len() as u64 + original_png;
+    let payload = input.frame.pixels.capacity() as u64 + original_png;
     let metadata = ENTRY_BASE_METADATA_BYTES
         + string_capacity_bytes(&input.file_name)
         + string_capacity_bytes(file)
@@ -1847,15 +1487,16 @@ fn estimate_entry(input: &FrameStoreFrameInput, file: &str, thumb: &Thumbnail) -
             | RecognitionState::CompletedNoMatch => 0,
         };
     let thumbnail = thumb.values.capacity() as u64;
-    let encoder_workspace = payload
-        .max(input.frame.pixels.len() as u64)
-        .saturating_add(WRITER_BUFFER_BYTES);
-    ResidentEstimate {
+    let encoder_workspace = input
+        .frame
+        .artifact_png_workspace_bytes()
+        .map_err(|error| CliError::device(error.to_string()))?;
+    Ok(ResidentEstimate {
         payload,
         metadata,
         thumbnail,
         encoder_workspace,
-    }
+    })
 }
 
 fn string_capacity_bytes(value: &str) -> u64 {
@@ -1906,32 +1547,6 @@ fn thumb_similarity(left: &Thumbnail, right: &Thumbnail) -> f32 {
     1.0 - (diff as f32 / (len as f32 * 255.0))
 }
 
-fn read_segment_frame(segment_path: &Path, zip_name: &str) -> CliOutcome<Vec<u8>> {
-    let file = File::open(segment_path).map_err(|err| {
-        CliError::package_invalid(format!("failed to open {}: {err}", segment_path.display()))
-    })?;
-    let mut archive = ZipArchive::new(file).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to read segment {}: {err}",
-            segment_path.display()
-        ))
-    })?;
-    let mut entry = archive.by_name(zip_name).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to find {zip_name} in segment {}: {err}",
-            segment_path.display()
-        ))
-    })?;
-    let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to read {zip_name} in segment {}: {err}",
-            segment_path.display()
-        ))
-    })?;
-    Ok(bytes)
-}
-
 fn ratio_bytes(bytes: u64, ratio: f64) -> u64 {
     ((bytes as f64) * ratio).floor() as u64
 }
@@ -1956,6 +1571,8 @@ fn validate_ratio_f64(name: &str, value: f64) -> Result<(), String> {
 mod tests {
     use super::*;
     use actingcommand_device::CaptureBackendName;
+    use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
 
@@ -2121,10 +1738,9 @@ mod tests {
     }
 
     #[test]
-    fn tier2_spills_segment_without_pausing() {
+    fn tier2_persists_artifacts_without_pausing() {
         let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 70_000);
-
+        let mut store = small_store(temp.path(), 2_000);
         add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         let outcome = add_test_frame(
             &mut store,
@@ -2133,31 +1749,27 @@ mod tests {
             matched("fixture01/terminal"),
             "page_wait",
         );
-
         assert!(store.spilled_count > 0);
         assert!(!outcome.pause_required);
-        assert!(
-            temp.path()
-                .join("temp")
-                .join("segment-000001.zip")
-                .is_file()
-        );
-        assert!(
-            temp.path()
-                .join("temp")
-                .join("segment-manifest.jsonl")
-                .is_file()
-        );
+        for entry in &store.entries {
+            assert_eq!(entry.storage_state, FrameStorageState::Artifact);
+            assert_eq!(
+                entry.original_png().expect("verified material").len() as u64,
+                entry.material.byte_count
+            );
+        }
         assert_resident_accounting(&store);
     }
 
     #[test]
     fn spilled_frame_keeps_thumbnail_for_later_dedup() {
         let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 70_000);
+        let mut store = small_store(temp.path(), 2_000);
 
+        store.config.tier1_ratio = 0.005;
+        store.config.tier2_ratio = 0.01;
         let first = add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-        assert_eq!(first.storage_state, FrameStorageState::Segment);
+        assert_eq!(first.storage_state, FrameStorageState::Artifact);
         add_test_frame(&mut store, 2, 10, matched("fixture01/home"), "page_wait");
 
         let screenshots = store.screenshots();
@@ -2169,30 +1781,33 @@ mod tests {
     #[test]
     fn single_frame_can_spill() {
         let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 70_000);
+        let mut store = small_store(temp.path(), 2_000);
 
+        store.config.tier2_ratio = 0.01;
+        store.config.tier1_ratio = 0.005;
         let outcome = add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
-        assert_eq!(outcome.storage_state, FrameStorageState::Segment);
+        assert_eq!(outcome.storage_state, FrameStorageState::Artifact);
         assert!(!outcome.pause_required);
     }
 
     #[test]
-    fn spilled_segment_materializes_to_screenshot_file() {
+    fn persisted_frame_reads_its_original_verified_material() {
         let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 70_000);
-
+        let mut store = small_store(temp.path(), 1_200);
         add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-
-        let screenshots = temp.path().join("screenshots");
-        store.materialize(&screenshots).expect("materialize");
-        assert!(screenshots.join("frame1.png").is_file());
+        assert_eq!(store.entries[0].storage_state, FrameStorageState::Artifact);
+        let png = store.entries[0].original_png().expect("verified original");
+        assert_eq!(
+            crate::store::canonical_sha256(&png),
+            store.entries[0].material.sha256
+        );
     }
 
     #[test]
     fn last_frame_can_spill_when_eligible() {
         let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 70_000);
+        let mut store = small_store(temp.path(), 2_000);
 
         add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         add_test_frame(
@@ -2207,7 +1822,7 @@ mod tests {
             store
                 .screenshots()
                 .iter()
-                .any(|record| record.storage_state == FrameStorageState::Segment)
+                .any(|record| record.storage_state == FrameStorageState::Artifact)
         );
     }
 
@@ -2234,38 +1849,40 @@ mod tests {
         assert!(diagnostics["payload_bytes"].as_u64().unwrap() > 0);
         assert!(diagnostics["metadata_estimated_bytes"].as_u64().unwrap() > 0);
         assert!(diagnostics["thumbnail_estimated_bytes"].as_u64().unwrap() > 0);
-        assert!(
-            diagnostics["encoder_workspace_reserved_bytes"]
-                .as_u64()
-                .unwrap()
-                > 0
+        // Encoding is complete; its temporary reservation has been released.
+        assert_eq!(
+            diagnostics["encoder_workspace_reserved_bytes"].as_u64(),
+            Some(0)
         );
+        if let FrameStorage::Resident(frame) = &store.entries[0].storage {
+            let mut raw = frame.clone();
+            raw.original_png = None;
+            assert!(raw.artifact_png_workspace_bytes().expect("codec workspace") > 0);
+        }
     }
 
     #[test]
-    fn spill_io_failure_degrades_without_panic() {
+    fn spill_capacity_refusal_retains_the_original_without_panic() {
         let temp = TempDir::new().expect("temp");
-        let temp_file = temp.path().join("not-a-dir");
-        fs::write(&temp_file, b"block directory creation").expect("write blocker");
-        let mut store = FrameStore::new(temp_file, test_config(90)).expect("store");
-
+        let mut store = small_store(temp.path(), 90);
+        store.fixture_capacity_limit = Some(0);
         let outcome = add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-
-        assert!(
-            outcome
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("spill"))
+        assert_eq!(outcome.frame_failures.len(), 1);
+        assert_eq!(
+            outcome.frame_failures[0].error.code(),
+            "capacity_admission_refused"
         );
+        assert!(!outcome.frame_failures[0].error.is_fatal());
         assert_eq!(outcome.backpressure_state, BackpressureState::SpillDegraded);
-        assert!(store.spill_warning_count >= 1);
+        assert_eq!(store.spill_warning_count, 1);
         assert!(store.entries.iter().all(|entry| !entry.spill_failed));
+        assert!(store.entries[0].original_png().is_ok());
         assert_eq!(store.encoder_workspace_reserved_bytes, 0);
         assert_resident_accounting(&store);
     }
 
     #[test]
-    fn spill_io_failure_preserves_per_frame_encode_failures() {
+    fn spill_preserves_original_identity_failure_before_publication() {
         let temp = TempDir::new().expect("temp");
         let config = test_config(10_000_000).with_memory_sample(MemorySample {
             total_bytes: 20_000_000,
@@ -2281,38 +1898,56 @@ mod tests {
             "page_wait",
         );
         if let FrameStorage::Resident(frame) = &mut store.entries[0].storage {
-            frame.pixels = vec![0];
+            frame.original_png.as_mut().expect("original PNG")[0] ^= 1;
         }
-        fs::create_dir_all(temp.path().join("temp").join("segment-000001.zip"))
-            .expect("segment path blocker");
-        let mut warnings = Vec::new();
-
-        store.flush_resident_segment(&mut warnings);
-
+        let mut publications = 0;
+        let mut failures = Vec::new();
+        let error = store
+            .flush_resident_frames(
+                &mut |_| {
+                    publications += 1;
+                    Err(CliError::fatal(
+                        "artifact_directory_failed",
+                        "store_artifact",
+                        "blocked publication",
+                    ))
+                },
+                &mut Vec::new(),
+                &mut failures,
+                &mut false,
+            )
+            .expect_err("original failure");
+        assert_eq!(error.code(), "frame_material_hash_mismatch");
         assert!(store.entries[0].spill_failed);
         assert!(!store.entries[1].spill_failed);
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.contains("failed to encode frame"))
-        );
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.contains("spill_unavailable"))
-        );
+        assert_eq!(publications, 0);
+        assert!(failures.is_empty());
         assert_resident_accounting(&store);
     }
 
     #[test]
-    fn cleanup_temp_removes_segment_directory() {
+    fn cleanup_releases_memory_and_preserves_existing_material() {
         let temp = TempDir::new().expect("temp");
-        let mut store = small_store(temp.path(), 90);
+        let mut store = small_store(temp.path(), 1_200);
         add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
-
-        assert!(temp.path().join("temp").exists());
-        assert!(store.cleanup_temp().is_empty());
-        assert!(!temp.path().join("temp").exists());
+        let original = store.entries[0]
+            .original_png()
+            .expect("original")
+            .into_owned();
+        let old_material = temp.path().join("preserved-frame-material");
+        fs::write(&old_material, b"retained").expect("old material");
+        store.cleanup_temp().expect("release resident ownership");
+        assert_eq!(
+            fs::read(&old_material).expect("old material retained"),
+            b"retained"
+        );
+        assert_eq!(
+            store.entries[0]
+                .original_png()
+                .expect("verified artifact")
+                .as_ref(),
+            original.as_slice()
+        );
     }
 
     #[test]
@@ -2331,16 +1966,16 @@ mod tests {
     }
 
     #[test]
-    fn tier3_alarm_still_materializes_partial_screenshots() {
+    fn tier3_alarm_still_preserves_partial_original_material() {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 80);
-
         let outcome = add_test_frame(&mut store, 1, 10, RecognitionState::Pending, "initial");
         assert!(outcome.tier3_triggered);
-
-        let screenshots_dir = temp.path().join("screenshots");
-        store.materialize(&screenshots_dir).expect("materialize");
-        assert!(screenshots_dir.join("frame1.png").is_file());
+        let material = store.entries[0].original_png().expect("partial original");
+        assert_eq!(
+            crate::store::canonical_sha256(&material),
+            store.entries[0].material.sha256
+        );
     }
 
     #[test]
@@ -2408,7 +2043,16 @@ mod tests {
     }
 
     fn small_store(path: &Path, max_mem_bytes: u64) -> FrameStore {
-        FrameStore::new(path.join("temp"), test_config(max_mem_bytes)).expect("store")
+        let mut config = test_config(max_mem_bytes);
+        // Pressure thresholds still model the original tiny fixture; the hard limit
+        // also admits one actual verification buffer and the fixture's held frames.
+        let hard = max_mem_bytes.max(WRITER_BUFFER_BYTES + 8 * 1024);
+        let ratio = max_mem_bytes as f64 / hard as f64;
+        config.max_mem_bytes = Some(hard);
+        config.tier1_ratio *= ratio;
+        config.tier2_ratio *= ratio;
+        config.tier3_ratio *= ratio;
+        FrameStore::new(path.join("temp"), config).expect("store")
     }
 
     fn add_test_frame(
@@ -2445,18 +2089,58 @@ mod tests {
         )
         .expect("frame");
         frame.captured_at = captured_at;
+        frame.original_png = Some(frame.encode_png_fast().expect("fixture original PNG"));
+        let artifacts =
+            Arc::new(ArtifactStore::open(store.fixture_root.join("materials")).expect("store"));
+        let capacity = crate::store::tests::RecordingSink {
+            capacity_root: Some(artifacts.root().to_path_buf()),
+            capacity_limit: store.fixture_capacity_limit,
+            ..Default::default()
+        };
+        artifacts
+            .install_capacity_admission(Arc::new(capacity))
+            .expect("fixture capacity");
+        let mut sink = crate::store::tests::RecordingSink::default();
         store
-            .add_frame(FrameStoreFrameInput {
-                frame_index: index,
-                file_name: format!("frame{index}.png"),
-                label: label.to_string(),
-                recognition_state,
-                pinned_reason: None,
-                frame,
-            })
+            .add_frame(
+                FrameStoreFrameInput {
+                    frame_index: index,
+                    file_name: format!("frame{index}.png"),
+                    label: label.to_string(),
+                    recognition_state,
+                    pinned_reason: None,
+                    frame,
+                },
+                &mut |candidate| {
+                    use actingcommand_contract::{
+                        ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+                        ArtifactRedactionState, EventLinksDraft, IdentifierIssuer, RetentionClass,
+                    };
+                    let ids = IdentifierIssuer::new().expect("fixture identity");
+                    let frame_id = ids.mint_frame_id().expect("fixture frame");
+                    let context = crate::ArtifactWriteContext::new(
+                        ArtifactLinksDraft::default().with_frame_id(frame_id),
+                        EventLinksDraft::default().with_frame_id(frame_id),
+                        1,
+                    );
+                    let artifact = artifacts.put(
+                        crate::ArtifactWriteRequest::new(
+                            ArtifactKind::CaptureFrame,
+                            &candidate.png,
+                            context,
+                            ArtifactIssuePolicy::new(
+                                ArtifactProducer::CapturePipeline,
+                                RetentionClass::Adaptive,
+                                ArtifactRedactionState::NotRequired,
+                            ),
+                        ),
+                        &mut sink,
+                    )?;
+                    Ok((Arc::clone(&artifacts), artifact.reference().clone()))
+                },
+            )
             .expect("add frame")
     }
-
     fn assert_resident_accounting(store: &FrameStore) {
         let mut estimate = ResidentEstimate::default();
         for entry in &store.entries {

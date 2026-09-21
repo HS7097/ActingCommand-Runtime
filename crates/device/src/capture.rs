@@ -218,6 +218,78 @@ impl Frame {
             None => self.encode_png_fast(),
         }
     }
+
+    /// Additional live bytes needed by the pinned RGB8/RGBA8 Fast/NoFilter encoder.
+    /// image 0.25.10 / png 0.18.1 retain two rows, the fdeflate output and, for
+    /// incompressible input, a stored-block replacement. fdeflate 0.3.7 uses
+    /// static tables and at most 16 bits per input byte. Six output bounds cover
+    /// both growing Vec allocations (including reallocation overlap); the final
+    /// PNG below uses a fixed slice. Existing PNG material is borrowed instead.
+    pub fn artifact_png_workspace_bytes(&self) -> DeviceResult<u64> {
+        if self.original_png.is_some() {
+            return Ok(0);
+        }
+        validate_pixel_buffer(
+            self.width,
+            self.height,
+            self.pixel_format,
+            self.pixels.len(),
+        )?;
+        let row = u64::from(self.width).checked_mul(self.pixel_format.bytes_per_pixel() as u64);
+        row.and_then(|row| {
+            let raw = row.checked_add(1)?.checked_mul(u64::from(self.height))?;
+            let compressed = raw.checked_mul(2)?.checked_add(64)?;
+            let output = compressed.checked_add(compressed.div_ceil(2_147_483_647) * 12 + 128)?;
+            compressed
+                .checked_mul(6)?
+                .checked_add(row.checked_mul(2)? + 1)?
+                .checked_add(output)
+        })
+        .ok_or_else(|| DeviceError::fatal("frame PNG workspace size overflow"))
+    }
+
+    /// Uses only the caller's admitted workspace; never grows the output buffer.
+    pub fn png_for_artifact_with_budget(
+        &self,
+        workspace_bytes: u64,
+    ) -> DeviceResult<std::borrow::Cow<'_, [u8]>> {
+        if let Some(png) = &self.original_png {
+            return Ok(std::borrow::Cow::Borrowed(png));
+        }
+        let required = self.artifact_png_workspace_bytes()?;
+        if required > workspace_bytes {
+            return Err(DeviceError::fatal("frame PNG workspace was not admitted"));
+        }
+        let row = u64::from(self.width) * self.pixel_format.bytes_per_pixel() as u64;
+        let compressed = (row + 1) * u64::from(self.height) * 2 + 64;
+        let output = compressed + compressed.div_ceil(2_147_483_647) * 12 + 128;
+        let length = usize::try_from(output)
+            .map_err(|_| DeviceError::fatal("frame PNG output exceeds address space"))?;
+        let mut png = Vec::new();
+        png.try_reserve_exact(length)
+            .map_err(|_| DeviceError::fatal("frame PNG workspace allocation failed"))?;
+        png.resize(length, 0);
+        let written = {
+            let mut destination = std::io::Cursor::new(png.as_mut_slice());
+            PngEncoder::new_with_quality(
+                &mut destination,
+                CompressionType::Fast,
+                FilterType::NoFilter,
+            )
+            .write_image(
+                &self.pixels,
+                self.width,
+                self.height,
+                self.pixel_format.color_type().into(),
+            )
+            .map_err(|error| {
+                DeviceError::fatal(format!("failed to encode bounded frame PNG: {error}"))
+            })?;
+            destination.position() as usize
+        };
+        png.truncate(written);
+        Ok(std::borrow::Cow::Owned(png))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

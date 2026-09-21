@@ -249,46 +249,6 @@ impl HostShared {
                 ));
             }
         };
-        let artifact_png = match frame.png_for_artifact() {
-            Ok(png) => png,
-            Err(_) => {
-                self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Device,
-                    OriginModule::Capture,
-                    EventActor::Runtime,
-                    links.clone(),
-                    CapturePayloadDraft::failed(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::Indeterminate,
-                        AuditInput::new(),
-                    ),
-                )?;
-                let event = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RecognitionPayloadDraft::failed(
-                        EventAction::RecognitionObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
-                return Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        "capture_frame_invalid",
-                        "observe_readonly",
-                        RuntimeErrorCode::CaptureFailed,
-                    ),
-                    RuntimeReceiptState::Failed,
-                    Some(terminal(&event)),
-                ));
-            }
-        };
         let write_context = ArtifactWriteContext::new(
             artifact_links.clone(),
             links.clone(),
@@ -326,40 +286,41 @@ impl HostShared {
             &mut sink,
         )
         .map_err(online_observation::observation_artifact_failure)?;
-        let mut retained = frame.clone();
-        retained.original_png = Some(artifact_png);
+        pipeline
+            .admit_frame_copy(&frame)
+            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+        let mut events = contained_task::RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        let mut publish = |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
+            sink.publish_frame(store, input, Some(*frame_id))
+        };
         let captured = pipeline
-            .record_frame(
+            .record_frame_with_publisher(
                 FrameStoreFrameInput {
                     frame_index: 0,
                     file_name: "frame-0.png".to_owned(),
                     label: "initial".to_owned(),
                     recognition_state: RecognitionState::CompletedNoMatch,
                     pinned_reason: None,
-                    frame: retained,
+                    frame: frame.clone(),
                 },
                 write_context.clone(),
-                &mut sink,
+                &mut events,
+                Some(&mut publish),
             )
-            .map_err(online_observation::observation_artifact_failure)?;
-        if !captured.frame.warnings.is_empty() {
-            return Err(online_observation::observation_artifact_failure(
-                ArtifactStoreError::fatal(
-                    "capture_spill_failed",
-                    "persist_readonly_frame",
-                    captured.frame.warnings.join("; "),
-                ),
-            ));
-        }
+            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+        self.record_frame_pressure_failures(&pipeline, &captured.frame.frame_failures)?;
         let reference = pipeline
-            .persist_frame(0, &mut sink)
-            .map_err(online_observation::observation_artifact_failure)?;
+            .persist_frame_with_publisher(0, &mut events, Some(&mut publish))
+            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
         pipeline
-            .poll_pressure(&write_context, &mut sink)
-            .map_err(online_observation::observation_artifact_failure)?;
+            .poll_pressure_with_publisher(&write_context, &mut events, Some(&mut publish))
+            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
         pipeline
             .cleanup_spills()
-            .map_err(online_observation::observation_artifact_failure)?;
+            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
         let observation = ReadonlyObservation::new(
             frame.width,
             frame.height,

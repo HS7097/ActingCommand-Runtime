@@ -88,3 +88,40 @@ owner. Formal offline Ledger maintenance retains its existing ownership, inactiv
 recovery and error rules. Its recovery-reference restore uses a separate byte-copy
 entry, outside the admission calls described above; this does not establish
 capacity admission for that restore path.
+
+Frame pressure uses the same existing `CaptureFrame` material path. FrameStore
+owns resident bytes, pressure selection and recognition state; CapturePipeline
+retains each frame's original context. Each selected frame is encoded or borrowed
+individually, admitted as Business bytes, and committed through ArtifactStore.
+Only successful Created, verification, Verified and the Host's required pin
+permit the resident payload to be replaced by its original artifact reference.
+Reads verify that reference and the retained original PNG length and hash.
+Already published frames release resident memory without another write.
+
+The original memory budget admits the live frame/copy, PNG workspace and material
+verification buffer before allocation or publication. RGB8/RGBA8 Fast/NoFilter
+encoding reserves the locked codec's rows and both compression outputs, including
+allocation overlap, and writes to a fixed output slice. Supplied original PNGs
+are borrowed. No batch of encoded frames is assembled. Completed encoding releases
+its workspace reservation; refused persistence keeps the actual resident charge.
+Insufficient workspace returns nonfatal `frame_workspace_unavailable`, while
+invalid original material and real persistence/recording failures remain fatal.
+
+Prepared-byte admission refusal emits the existing typed ArtifactStoreFailed
+record at BeforePublication with its attempted identity and capacity decision;
+it does not attach a readable artifact. Errors before preparation retain their
+original frame context for the Host's existing lifecycle failure record.
+Optional pressure refusals are typed per-frame results, stop further writes in
+that pressure round and do not increment successful persistence or dropped-frame
+counts. Explicit persistence cannot immediately retry the refused write.
+The existing pressure poll may resume on available workspace and a fresh allowed
+capacity decision; the original request deadline and cancellation still apply.
+Required current-frame evidence must exist before an observation can succeed.
+
+Host publication constructs one existing single-Verified sink per original frame.
+History publication uses the history frame's links and pin; it cannot consume the
+current frame's receipt. Frame pressure never uses Drain to admit a new PNG.
+The existing stream's trusted zero-new-byte seal and publication rollback are
+unchanged. FrameStore does not create segment ZIPs, side manifests or screenshot
+files. Cleanup releases resident ownership only; old directories and all published
+objects remain with their original Ledger/retention owners.

@@ -353,10 +353,17 @@ impl CaptureEvidenceAccumulator {
                     actingcommand_contract::ArtifactPinReason::Explicit,
                 )),
             };
+            let mut events = RuntimeArtifactEventSink {
+                ledger: &host.ledger,
+                events: &host.events,
+            };
+            let mut publish = |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
+                sink.publish_frame(store, input, None)
+            };
             for ((index, reason), original) in &self.pinned {
                 if let Some(index) = index {
                     let material = pipeline
-                        .pin_frame(*index, *reason, &mut sink)
+                        .pin_frame_with_publisher(*index, *reason, &mut events, Some(&mut publish))
                         .map_err(online_observation::observation_artifact_failure)?;
                     if original.as_ref() != Some(&material) {
                         return Err(online_observation::observation_integrity_failure(
@@ -366,7 +373,7 @@ impl CaptureEvidenceAccumulator {
                 }
             }
             let summary = pipeline
-                .finish(&mut sink)
+                .finish_with_publisher(&mut events, Some(&mut publish))
                 .map_err(online_observation::observation_artifact_failure)?;
             pipeline
                 .cleanup_spills()
@@ -1234,6 +1241,18 @@ impl RuntimeContainedTask<'_> {
             self.links(),
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
+        let mut frame_sink = online_observation::ObservationArtifactSink {
+            ledger: &self.host.ledger,
+            events: &self.host.events,
+            verified: None,
+            frame_retention: Some((
+                self.host.owner_epoch,
+                frame_retention::capture_pin_reason(self.request),
+            )),
+        };
+        let mut publish = |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
+            frame_sink.publish_frame(store, input, None)
+        };
         loop {
             self.ensure_active()?;
             self.host.ledger.check_writer_health().map_err(|error| {
@@ -1252,8 +1271,15 @@ impl RuntimeContainedTask<'_> {
                 .as_mut()
                 .expect("paused pipeline exists");
             pipeline
-                .poll_pressure(&context, &mut sink)
-                .map_err(online_observation::observation_artifact_failure)?;
+                .poll_pressure_with_publisher(&context, &mut sink, Some(&mut publish))
+                .map_err(|error| {
+                    let links = pipeline
+                        .failure_context(&error)
+                        .unwrap_or(&context)
+                        .event_links()
+                        .clone();
+                    self.host.capture_material_failure(error, links)
+                })?;
             if !pipeline.is_paused() || self.finalizing.is_some() {
                 return Ok(());
             }
@@ -1318,9 +1344,39 @@ impl RuntimeContainedTask<'_> {
                 events: &self.host.events,
             };
             if let Some(pipeline) = self.capture_evidence.pipeline.as_mut() {
+                let mut frame_sink = online_observation::ObservationArtifactSink {
+                    ledger: &self.host.ledger,
+                    events: &self.host.events,
+                    verified: None,
+                    frame_retention: Some((
+                        self.host.owner_epoch,
+                        frame_retention::capture_pin_reason(self.request),
+                    )),
+                };
+                let mut publish = |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
+                    frame_sink.publish_frame(store, input, None)
+                };
                 pipeline
-                    .record_recognition(index, state, &mut sink)
-                    .map_err(online_observation::observation_artifact_failure)?;
+                    .record_recognition_with_publisher(index, state, &mut sink, Some(&mut publish))
+                    .map_err(|error| {
+                        let context = pipeline
+                            .failure_context(&error)
+                            .or_else(|| pipeline.frame_context(index));
+                        let Some(context) = context else {
+                            return RequestFailure::poison_without_terminal(
+                                RuntimeHostError::artifact(error).with_related_failure(
+                                    "capture_frame_context",
+                                    &RuntimeHostError::fatal(
+                                        "observation_frame_context_missing",
+                                        "record_capture_recognition",
+                                        RuntimeErrorCode::RuntimeFatal,
+                                    ),
+                                ),
+                            );
+                        };
+                        self.host
+                            .capture_material_failure(error, context.event_links().clone())
+                    })?;
             }
             Ok(())
         })();
@@ -2263,6 +2319,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 frame_retention::capture_pin_reason(self.request),
                             )),
                         };
+                        let mut events = RuntimeArtifactEventSink {
+                            ledger: &self.host.ledger,
+                            events: &self.host.events,
+                        };
+                        let mut publish =
+                            |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
+                                sink.publish_frame(store, input, Some(*frame_id.transport()))
+                            };
                         let persistence = (|| {
                             if self.capture_evidence.pipeline.is_none() {
                                 self.capture_evidence.pipeline =
@@ -2280,7 +2344,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                             ..CapturePipelineConfig::default()
                                         },
                                         write_context.clone(),
-                                        &mut sink,
+                                        &mut events,
                                     )?);
                             }
                             let pipeline = self
@@ -2288,7 +2352,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 .pipeline
                                 .as_mut()
                                 .expect("capture pipeline initialized");
-                            let result = pipeline.record_frame(
+                            pipeline.admit_frame_copy(&frame)?;
+                            let result = pipeline.record_frame_with_publisher(
                                 FrameStoreFrameInput {
                                     frame_index,
                                     file_name: format!("frame-{frame_index}.png"),
@@ -2307,28 +2372,45 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                     frame: frame.clone(),
                                 },
                                 write_context.clone(),
-                                &mut sink,
+                                &mut events,
+                                Some(&mut publish),
                             )?;
-                            if !result.frame.warnings.is_empty() {
-                                return Err(ArtifactStoreError::fatal(
-                                    "capture_spill_failed",
-                                    "persist_contained_task_frame",
-                                    result.frame.warnings.join("; "),
-                                ));
-                            }
-                            let reference = pipeline.persist_frame(frame_index, &mut sink)?;
-                            pipeline.poll_pressure(&write_context, &mut sink)?;
-                            Ok(reference)
+                            let reference = pipeline.persist_frame_with_publisher(
+                                frame_index,
+                                &mut events,
+                                Some(&mut publish),
+                            )?;
+                            pipeline.poll_pressure_with_publisher(
+                                &write_context,
+                                &mut events,
+                                Some(&mut publish),
+                            )?;
+                            Ok((reference, result.frame.frame_failures))
                         })();
                         let reference = match persistence {
-                            Ok(reference) => reference,
+                            Ok((reference, failures)) => {
+                                self.host.record_frame_pressure_failures(
+                                    self.capture_evidence
+                                        .pipeline
+                                        .as_ref()
+                                        .expect("capture pipeline initialized"),
+                                    &failures,
+                                )?;
+                                reference
+                            }
                             Err(error) => {
                                 self.capture_evidence
                                     .pipeline_failure
                                     .get_or_insert(error.clone());
-                                return Err(online_observation::observation_artifact_failure(
-                                    error,
-                                ));
+                                let links = self
+                                    .capture_evidence
+                                    .pipeline
+                                    .as_ref()
+                                    .and_then(|pipeline| pipeline.failure_context(&error))
+                                    .unwrap_or(&write_context)
+                                    .event_links()
+                                    .clone();
+                                return Err(self.host.capture_material_failure(error, links));
                             }
                         };
                         self.capture_evidence.persisted(frame_index, &reference)?;

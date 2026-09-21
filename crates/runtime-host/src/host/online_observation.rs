@@ -9,6 +9,73 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{OnlineObservationError, PreparedPageObservation};
 
 impl HostShared {
+    pub(super) fn capture_material_failure(
+        &self,
+        error: ArtifactStoreError,
+        links: EventLinksDraft,
+    ) -> RequestFailure {
+        let runtime = RuntimeHostError::artifact(error.clone());
+        // Capture has already returned. Failure to retain its material does not
+        // make the capture unperformed or create a successful FrameDecoded result.
+        let recorded = self
+            .append_event_raw(
+                if runtime.is_fatal() {
+                    EventSeverity::Error
+                } else {
+                    EventSeverity::Warning
+                },
+                EventSource::Runtime,
+                OriginModule::Capture,
+                EventActor::Runtime,
+                links.clone(),
+                CapturePayloadDraft::failed(
+                    EventAction::CaptureObserve,
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                ),
+            )
+            .and_then(|event| {
+                self.record_required_failure(&runtime, &event, links)?;
+                Ok(event)
+            });
+        match recorded {
+            Ok(event) => {
+                let mut failure = observation_artifact_failure(error);
+                failure.terminal = Some(terminal(&event));
+                failure
+            }
+            Err(writer) => RequestFailure::poison_without_terminal(
+                runtime.with_related_failure("capture_failure_record", &writer),
+            ),
+        }
+    }
+
+    pub(super) fn record_frame_pressure_failures(
+        &self,
+        pipeline: &CapturePipeline,
+        failures: &[actingcommand_artifact_store::FramePersistenceFailure],
+    ) -> Result<(), RequestFailure> {
+        for failure in failures {
+            // Prepared-byte refusal already has its exact ArtifactStoreFailed record.
+            if failure.error.capacity().is_some() {
+                continue;
+            }
+            let context = pipeline.frame_context(failure.frame_index).ok_or_else(|| {
+                observation_integrity_failure("observation_frame_context_missing")
+            })?;
+            let runtime = RuntimeHostError::artifact(failure.error.clone());
+            self.append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::OperationCleanup,
+                RuntimeLifecycleFailure::Host(&runtime),
+                context.event_links().clone(),
+                None,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn observe_contained_page(
         &self,
         original: &RuntimeRequest,
@@ -400,6 +467,48 @@ pub(super) struct ObservationArtifactSink<'a> {
         actingcommand_contract::OwnerEpoch,
         actingcommand_contract::ArtifactPinReason,
     )>,
+}
+impl ObservationArtifactSink<'_> {
+    pub(super) fn publish_frame(
+        &mut self,
+        store: &actingcommand_artifact_store::ArtifactStore,
+        request: actingcommand_artifact_store::ArtifactWriteRequest<'_>,
+        expected_frame: Option<actingcommand_contract::FrameId>,
+    ) -> ArtifactStoreResult<actingcommand_artifact_store::StoredArtifact> {
+        let frame_id = request.context().event_links().frame_id().copied();
+        if frame_id.is_none() {
+            return Err(ArtifactStoreError::fatal(
+                "observation_frame_identity_missing",
+                "publish_capture_frame",
+                "frame publication requires its original frame identity",
+            ));
+        }
+        if frame_id == expected_frame && self.verified.is_some() {
+            return Err(ArtifactStoreError::fatal(
+                "observation_duplicate_verified_event",
+                "publish_capture_frame",
+                "the current frame has already been published",
+            ));
+        }
+        let mut frame_sink = ObservationArtifactSink {
+            ledger: self.ledger,
+            events: self.events,
+            verified: None,
+            frame_retention: self.frame_retention,
+        };
+        let artifact = store.put(request, &mut frame_sink)?;
+        let verified = frame_sink.verified.ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "observation_verified_event_missing",
+                "publish_capture_frame",
+                "successful frame publication has no verified Ledger receipt",
+            )
+        })?;
+        if frame_id == expected_frame {
+            self.verified = Some(verified);
+        }
+        Ok(artifact)
+    }
 }
 impl ArtifactEventSink for ObservationArtifactSink<'_> {
     fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
