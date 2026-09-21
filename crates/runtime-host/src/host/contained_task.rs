@@ -2327,7 +2327,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
                                 sink.publish_frame(store, input, Some(*frame_id.transport()))
                             };
-                        let persistence = (|| {
+                        let persistence: ArtifactStoreResult<_> = (|| {
                             if self.capture_evidence.pipeline.is_none() {
                                 self.capture_evidence.pipeline =
                                     Some(CapturePipeline::open_with_store(
