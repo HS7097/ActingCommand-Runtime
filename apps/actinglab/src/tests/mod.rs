@@ -73,16 +73,40 @@ impl ExecutionBackendProvider for AuthoringRuntimeProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<authoring-test>"))
     }
 
-    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        Err(DeviceError::fatal(
-            "resource authoring must not open an input backend",
-        ))
+    fn open_input(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            Err(DeviceError::fatal(
+                "resource authoring must not open an input backend",
+            ))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        Err(DeviceError::fatal(
-            "resource authoring must not open a capture backend",
-        ))
+    fn open_capture(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            Err(DeviceError::fatal(
+                "resource authoring must not open a capture backend",
+            ))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the

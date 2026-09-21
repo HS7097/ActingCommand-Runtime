@@ -18,6 +18,7 @@ use std::thread;
 use std::time::Instant;
 
 struct KernelState {
+    session_generation: u64,
     sessions: BTreeMap<InstanceId, Arc<ExecutionSession>>,
     closed: bool,
     close_result: Option<ExecutionKernelResult<()>>,
@@ -51,6 +52,7 @@ impl ExecutionKernel {
         Self {
             provider,
             state: Mutex::new(KernelState {
+                session_generation: 0,
                 sessions: BTreeMap::new(),
                 closed: false,
                 close_result: None,
@@ -627,10 +629,16 @@ impl ExecutionKernel {
             return Err(error.clone());
         }
         state.instance_closes.remove(&resolved.instance_id());
+        let generation = state
+            .session_generation
+            .checked_add(1)
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_generation_exhausted"))?;
+        state.session_generation = generation;
         let session = Arc::new(ExecutionSession::start(
             Arc::clone(&self.provider),
             instance_alias.to_string(),
             resolved.clone(),
+            generation,
         )?);
         state
             .sessions

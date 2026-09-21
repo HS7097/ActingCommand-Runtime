@@ -485,7 +485,10 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         })
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
         let entry = self
             .entries
             .get(instance_alias)
@@ -495,11 +498,35 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             endpoint.require_bound("open_input")?;
             endpoint.input.clone()
         };
+        let serial_configured = input.target.serial.is_some();
+        let maatouch_pressure = input.maatouch_config.default_pressure;
+        let minitouch_pressure = input.minitouch_config.default_pressure;
+        let mut report = actingcommand_contract::BackendOpenReport::unobserved(
+            actingcommand_contract::BackendOpenEntry::Input,
+        );
+        report.source = actingcommand_contract::BackendOpenSource::Native;
+        report.requested = input.requested.as_str().into();
+        report.serial_configured = Some(serial_configured);
         create_touch_backend_for_fenced_input(input)
-            .map(|backend| Box::new(backend) as Box<dyn InputBackend>)
+            .map(|backend| {
+                let mut report = backend.open_report(serial_configured);
+                report.configured_pressure = match backend.backend_name() {
+                    actingcommand_device::TouchBackendName::MaaTouch => Some(maatouch_pressure),
+                    actingcommand_device::TouchBackendName::Minitouch => Some(minitouch_pressure),
+                    _ => None,
+                };
+                actingcommand_device::OpenedBackend::new(
+                    Box::new(backend) as Box<dyn InputBackend>,
+                    report,
+                )
+            })
+            .map_err(|error| actingcommand_device::observe_open_failure(report, error))
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let entry = self
             .entries
             .get(instance_alias)
@@ -509,11 +536,31 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             endpoint.require_bound("open_capture")?;
             endpoint.capture.clone()
         };
+        let mut report = actingcommand_contract::BackendOpenReport::unobserved(
+            actingcommand_contract::BackendOpenEntry::Capture,
+        );
+        report.source = actingcommand_contract::BackendOpenSource::Native;
+        report.requested = capture.requested.as_str().into();
+        report.serial_configured = Some(capture.target.serial.is_some());
+        report.installation_source = capture
+            .resolved_mumu
+            .as_ref()
+            .map(|context| context.source.into());
         create_capture_backend(capture)
-            .map(|selected| Box::new(selected) as Box<dyn CaptureBackend>)
+            .map(|selected| {
+                let report = selected.open_report();
+                actingcommand_device::OpenedBackend::new(
+                    Box::new(selected) as Box<dyn CaptureBackend>,
+                    report,
+                )
+            })
+            .map_err(|error| actingcommand_device::observe_open_failure(report, error))
     }
 
-    fn open_nemu_session(&self, instance_alias: &str) -> DeviceResult<Option<NemuSessionBackends>> {
+    fn open_nemu_session(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         let entry = self
             .entries
             .get(instance_alias)
@@ -543,6 +590,14 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                 tap_hold: input.maatouch_config.tap_hold,
             },
         )
+        .map_err(|error| {
+            let mut report = actingcommand_contract::BackendOpenReport::unobserved(
+                actingcommand_contract::BackendOpenEntry::NemuPair,
+            );
+            report.source = actingcommand_contract::BackendOpenSource::Native;
+            report.requested = "nemu_ipc".into();
+            actingcommand_device::observe_open_failure(report, error)
+        })
         .map(Some)
     }
 

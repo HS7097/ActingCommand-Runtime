@@ -233,6 +233,17 @@ impl HostShared {
                 );
                 match backend_result {
                     Ok(outcome) => {
+                        if let Err(error) = self.append_backend_open_observations(
+                            &outcome.backend_open_observations,
+                            lifecycle_links.clone(),
+                            source,
+                            module,
+                        ) {
+                            return CriticalActionReport::Failed {
+                                error: ActionFailure::poison(error),
+                                effect: success_effect.into(),
+                            };
+                        }
                         if let Some(recovery) = outcome.recovery
                             && let Err(error) = self.append_event_raw(
                                 EventSeverity::Warning,
@@ -257,6 +268,17 @@ impl HostShared {
                         }
                     }
                     Err(error) => {
+                        if let Err(writer) = self.append_backend_open_failure_observations(
+                            &error,
+                            lifecycle_links.clone(),
+                            source,
+                            module,
+                        ) {
+                            return CriticalActionReport::Failed {
+                                error: ActionFailure::poison(writer),
+                                effect: backend_failure_effect,
+                            };
+                        }
                         if let Some(recovery) =
                             error.adb_recovery().filter(|report| report.recovered)
                             && let Err(failure) = self.append_event_raw(

@@ -1153,6 +1153,7 @@ impl CaptureBackend for FakeCapture {
         }
         if self.state.invalid_capture.load(Ordering::Acquire) {
             return Ok(Frame {
+                backend_open_observations: Vec::new(),
                 width: 2,
                 height: 1,
                 pixels: Vec::new(),
@@ -1208,49 +1209,73 @@ impl ExecutionBackendProvider for FakeProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "127.0.0.1:16384"))
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        #[cfg(feature = "test-observation")]
-        let _observation_owner = enter_observation_owner(self.state.observation_owner);
-        #[cfg(feature = "test-observation")]
-        record_active(
-            ObservationStage::BackendOpenStart,
-            ObservationOperation::Backend,
-            ObservationThreadRole::Backend,
-            ObservationOutcome::Started,
-            None,
-            None,
-            None,
-        );
-        assert_eq!(instance_alias, "node.a");
-        self.state.opens.fetch_add(1, Ordering::AcqRel);
-        thread::sleep(self.state.input_open_delay);
-        if let Some(error) = &self.state.input_open_error {
-            return Err(error.clone());
-        }
-        let backend: Box<dyn InputBackend> = Box::new(FakeBackend {
-            state: Arc::clone(&self.state),
-            closed: false,
-        });
-        #[cfg(feature = "test-observation")]
-        record_active(
-            ObservationStage::BackendOpenResult,
-            ObservationOperation::Backend,
-            ObservationThreadRole::Backend,
-            ObservationOutcome::Success,
-            None,
-            None,
-            None,
-        );
-        Ok(backend)
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            #[cfg(feature = "test-observation")]
+            let _observation_owner = enter_observation_owner(self.state.observation_owner);
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::BackendOpenStart,
+                ObservationOperation::Backend,
+                ObservationThreadRole::Backend,
+                ObservationOutcome::Started,
+                None,
+                None,
+                None,
+            );
+            assert_eq!(instance_alias, "node.a");
+            self.state.opens.fetch_add(1, Ordering::AcqRel);
+            thread::sleep(self.state.input_open_delay);
+            if let Some(error) = &self.state.input_open_error {
+                return Err(error.clone());
+            }
+            let backend: Box<dyn InputBackend> = Box::new(FakeBackend {
+                state: Arc::clone(&self.state),
+                closed: false,
+            });
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::BackendOpenResult,
+                ObservationOperation::Backend,
+                ObservationThreadRole::Backend,
+                ObservationOutcome::Success,
+                None,
+                None,
+                None,
+            );
+            Ok(backend)
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        assert_eq!(instance_alias, "node.a");
-        self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
-        Ok(Box::new(FakeCapture {
-            state: Arc::clone(&self.state),
-            closed: false,
-        }))
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            assert_eq!(instance_alias, "node.a");
+            self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
+            Ok(Box::new(FakeCapture {
+                state: Arc::clone(&self.state),
+                closed: false,
+            }))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the
@@ -1287,14 +1312,38 @@ impl ExecutionBackendProvider for NeutralProjectProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "local-neutral-endpoint"))
     }
 
-    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        self.state.opens.fetch_add(1, Ordering::AcqRel);
-        Err(DeviceError::fatal("project interface opened input"))
+    fn open_input(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            self.state.opens.fetch_add(1, Ordering::AcqRel);
+            Err(DeviceError::fatal("project interface opened input"))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
-        Err(DeviceError::fatal("project interface opened capture"))
+    fn open_capture(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
+            Err(DeviceError::fatal("project interface opened capture"))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the
@@ -3098,6 +3147,7 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::RuntimeLifecycleObserved,
             EventType::CapturePolicyChanged,
             EventType::ArtifactCreated,
             EventType::ArtifactVerified,

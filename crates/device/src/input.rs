@@ -135,6 +135,10 @@ pub struct InputSelectionContext {
 }
 
 pub trait InputBackend {
+    fn opened_geometry(&self) -> Option<actingcommand_contract::BackendInputGeometryObservation> {
+        None
+    }
+
     fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
         None
     }

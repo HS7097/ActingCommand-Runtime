@@ -2296,7 +2296,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     .finish_boundary(backend_started, captured.is_ok()),
             );
             match captured {
-                Ok((frame, geometry_session)) => {
+                Ok((mut frame, geometry_session)) => {
+                    self.host
+                        .append_backend_open_observations(
+                            &std::mem::take(&mut frame.backend_open_observations),
+                            links.clone(),
+                            source,
+                            module,
+                        )
+                        .map_err(RequestFailure::poison_without_terminal)?;
                     let material_started = self
                         .task_timing
                         .begin_boundary(Boundary::CaptureMaterial, identity);
@@ -2466,6 +2474,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     Ok(frame)
                 }
                 Err(error) => {
+                    self.host
+                        .append_backend_open_failure_observations(
+                            &error,
+                            links.clone(),
+                            source,
+                            module,
+                        )
+                        .map_err(RequestFailure::poison_without_terminal)?;
                     let error = self
                         .host
                         .finish_capture_failure_while_guarded(error, links.clone(), &admission)

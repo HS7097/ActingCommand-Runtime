@@ -90,24 +90,34 @@ impl SessionBackends {
         &mut self,
         provider: &dyn ExecutionBackendProvider,
         alias: &str,
-    ) -> ExecutionKernelResult<()> {
+    ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
         if matches!(self, Self::Pending) {
+            let mut observations = Vec::new();
             *self = match provider.open_nemu_session(alias).map_err(|error| {
-                ExecutionKernelError::device("paired_backend_open_failed", &error)
+                observed_open_error(
+                    "paired_backend_open_failed",
+                    actingcommand_contract::BackendOpenEntry::NemuPair,
+                    error,
+                )
             })? {
-                Some(pair) => Self::Nemu(pair),
+                Some(pair) => {
+                    observations.push(pair.observation);
+                    Self::Nemu(pair.backend)
+                }
                 None => Self::Independent {
                     input: None,
                     capture: None,
                 },
             };
+            return Ok(observations);
         }
-        Ok(())
+        Ok(Vec::new())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionInputOutcome {
+    pub backend_open_observations: Vec<actingcommand_device::BackendOpenObservation>,
     pub selection: Option<actingcommand_device::InputSelectionContext>,
     pub recovery: Option<actingcommand_contract::AdbTargetRecovery>,
 }
@@ -260,6 +270,7 @@ impl ExecutionSession {
         provider: Arc<dyn ExecutionBackendProvider>,
         instance_alias: String,
         resolved: ResolvedExecutionInstance,
+        generation: u64,
     ) -> ExecutionKernelResult<Self> {
         let (sender, receiver) = mpsc::sync_channel(SESSION_CHANNEL_CAPACITY);
         let join = thread::Builder::new()
@@ -267,7 +278,13 @@ impl ExecutionSession {
             .spawn(move || {
                 let mut backends = SessionBackends::Pending;
                 match catch_unwind(AssertUnwindSafe(|| {
-                    run_session(provider, instance_alias, receiver, &mut backends)
+                    run_session(
+                        provider,
+                        instance_alias,
+                        receiver,
+                        &mut backends,
+                        generation,
+                    )
                 })) {
                     Ok(result) => result,
                     Err(_) => Err(close_after_failure(
@@ -715,6 +732,7 @@ fn run_session(
     instance_alias: String,
     receiver: Receiver<SessionCommand>,
     backends: &mut SessionBackends,
+    generation: u64,
 ) -> ExecutionKernelResult<()> {
     let mut pending_frame: Option<InputFrameContext> = None;
     let mut committed_frame: Option<InputFrameContext> = None;
@@ -737,6 +755,14 @@ fn run_session(
                     check,
                 );
                 drop(step);
+                let result = result
+                    .map(|mut outcome| {
+                        for observation in &mut outcome.backend_open_observations {
+                            observation.report.session_generation = generation;
+                        }
+                        outcome
+                    })
+                    .map_err(|error| error.with_backend_session_generation(generation));
                 let context = match result {
                     Ok(context) => context,
                     Err(error) => {
@@ -771,7 +797,14 @@ fn run_session(
             SessionCommand::Capture { frame_id, response } => {
                 pending_frame = None;
                 committed_frame = None;
-                let result = execute_capture(provider.as_ref(), &instance_alias, backends);
+                let result = execute_capture(provider.as_ref(), &instance_alias, backends)
+                    .map(|mut frame| {
+                        for observation in &mut frame.backend_open_observations {
+                            observation.report.session_generation = generation;
+                        }
+                        frame
+                    })
+                    .map_err(|error| error.with_backend_session_generation(generation));
                 if let (Some(frame_id), Ok(frame)) = (frame_id, &result) {
                     pending_frame = Some(InputFrameContext::captured(frame_id, frame));
                 }
@@ -1110,6 +1143,21 @@ fn close_retained_after_failure(
     }
 }
 
+fn observed_open_error(
+    code: &'static str,
+    entry: actingcommand_contract::BackendOpenEntry,
+    mut error: DeviceError,
+) -> ExecutionKernelError {
+    if error.backend_open_observations().is_empty() {
+        let mut report = actingcommand_contract::BackendOpenReport::unobserved(entry);
+        report.status = actingcommand_contract::BackendObservationStatus::Failed;
+        error = error.with_backend_open_observation(
+            actingcommand_device::BackendOpenObservation::new(report),
+        );
+    }
+    ExecutionKernelError::device(code, &error)
+}
+
 fn execute_input(
     provider: &dyn ExecutionBackendProvider,
     instance_alias: &str,
@@ -1119,56 +1167,74 @@ fn execute_input(
     committed_frame: Option<&InputFrameContext>,
     check: Option<Arc<dyn InputOperationCheck>>,
 ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-    backends.prepare(provider, instance_alias)?;
-    let context = match backends {
-        SessionBackends::Nemu(_) => {
-            let reference =
-                frame.ok_or_else(|| ExecutionKernelError::fatal("nemu_input_frame_required"))?;
-            let committed = committed_frame
-                .filter(|value| value.reference == reference)
-                .ok_or_else(|| ExecutionKernelError::fatal("input_frame_not_committed"))?;
-            if committed.geometry.is_none() {
-                return Err(ExecutionKernelError::fatal(
-                    "nemu_input_frame_source_missing",
-                ));
+    let mut observations = backends.prepare(provider, instance_alias)?;
+    let execute = || -> ExecutionKernelResult<ExecutionInputOutcome> {
+        let context = match backends {
+            SessionBackends::Nemu(_) => {
+                let reference = frame
+                    .ok_or_else(|| ExecutionKernelError::fatal("nemu_input_frame_required"))?;
+                let committed = committed_frame
+                    .filter(|value| value.reference == reference)
+                    .ok_or_else(|| ExecutionKernelError::fatal("input_frame_not_committed"))?;
+                if committed.geometry.is_none() {
+                    return Err(ExecutionKernelError::fatal(
+                        "nemu_input_frame_source_missing",
+                    ));
+                }
+                Some(InputExecutionContext {
+                    geometry: committed.geometry.clone(),
+                    check: check.ok_or_else(|| {
+                        ExecutionKernelError::fatal("nemu_input_fencing_required")
+                    })?,
+                })
             }
-            Some(InputExecutionContext {
-                geometry: committed.geometry.clone(),
-                check: check
-                    .ok_or_else(|| ExecutionKernelError::fatal("nemu_input_fencing_required"))?,
-            })
-        }
-        _ => None,
-    };
-    let backend = match backends {
-        SessionBackends::Independent { input, .. } => {
-            if input.is_none() {
-                *input = Some(provider.open_input(instance_alias).map_err(|error| {
-                    ExecutionKernelError::device("input_backend_open_failed", &error)
-                })?);
-            }
-            input
-                .as_mut()
-                .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?
-                .as_mut()
-        }
-        SessionBackends::Nemu(pair) => pair.input.as_mut(),
-        SessionBackends::Pending => {
-            return Err(ExecutionKernelError::fatal("input_backend_missing"));
-        }
-    };
-    let recovery = backend.take_adb_recovery();
-    execute_action(backend, &action, context.as_ref()).map_err(|error| {
-        let error = match &recovery {
-            Some(report) => error.with_adb_recovery(report.clone()),
-            None => error,
+            _ => None,
         };
-        ExecutionKernelError::device("input_backend_operation_failed", &error)
-    })?;
-    Ok(ExecutionInputOutcome {
-        selection: backend.selection_context(),
-        recovery: recovery.as_ref().map(crate::error::adb_recovery_record),
-    })
+        let backend = match backends {
+            SessionBackends::Independent { input, .. } => {
+                if input.is_none() {
+                    let opened = provider.open_input(instance_alias).map_err(|error| {
+                        observed_open_error(
+                            "input_backend_open_failed",
+                            actingcommand_contract::BackendOpenEntry::Input,
+                            error,
+                        )
+                    })?;
+                    observations.push(opened.observation);
+                    *input = Some(opened.backend);
+                }
+                input
+                    .as_mut()
+                    .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?
+                    .as_mut()
+            }
+            SessionBackends::Nemu(pair) => pair.input.as_mut(),
+            SessionBackends::Pending => {
+                return Err(ExecutionKernelError::fatal("input_backend_missing"));
+            }
+        };
+        let recovery = backend.take_adb_recovery();
+        execute_action(backend, &action, context.as_ref()).map_err(|error| {
+            let error = match &recovery {
+                Some(report) => error.with_adb_recovery(report.clone()),
+                None => error,
+            };
+            ExecutionKernelError::device("input_backend_operation_failed", &error)
+        })?;
+        Ok(ExecutionInputOutcome {
+            backend_open_observations: Vec::new(),
+            selection: backend.selection_context(),
+            recovery: recovery.as_ref().map(crate::error::adb_recovery_record),
+        })
+    };
+    let result = execute();
+    match result {
+        Ok(mut outcome) => {
+            outcome.backend_open_observations = observations;
+            Ok(outcome)
+        }
+        Err(error) => Err(error.with_backend_open_observations(&observations)),
+    }
 }
 
 fn execute_capture(
@@ -1176,27 +1242,43 @@ fn execute_capture(
     instance_alias: &str,
     backends: &mut SessionBackends,
 ) -> ExecutionKernelResult<Frame> {
-    backends.prepare(provider, instance_alias)?;
-    let backend = match backends {
-        SessionBackends::Independent { capture, .. } => {
-            if capture.is_none() {
-                *capture = Some(provider.open_capture(instance_alias).map_err(|error| {
-                    ExecutionKernelError::device("capture_backend_open_failed", &error)
-                })?);
+    let mut observations = backends.prepare(provider, instance_alias)?;
+    let mut execute = || -> ExecutionKernelResult<Frame> {
+        let backend = match backends {
+            SessionBackends::Independent { capture, .. } => {
+                if capture.is_none() {
+                    let opened = provider.open_capture(instance_alias).map_err(|error| {
+                        observed_open_error(
+                            "capture_backend_open_failed",
+                            actingcommand_contract::BackendOpenEntry::Capture,
+                            error,
+                        )
+                    })?;
+                    observations.push(opened.observation);
+                    *capture = Some(opened.backend);
+                }
+                capture
+                    .as_mut()
+                    .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
+                    .as_mut()
             }
-            capture
-                .as_mut()
-                .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
-                .as_mut()
-        }
-        SessionBackends::Nemu(pair) => pair.capture.as_mut(),
-        SessionBackends::Pending => {
-            return Err(ExecutionKernelError::fatal("capture_backend_missing"));
-        }
+            SessionBackends::Nemu(pair) => pair.capture.as_mut(),
+            SessionBackends::Pending => {
+                return Err(ExecutionKernelError::fatal("capture_backend_missing"));
+            }
+        };
+        backend.capture().map_err(|error| {
+            ExecutionKernelError::device("capture_backend_operation_failed", &error)
+        })
     };
-    backend
-        .capture()
-        .map_err(|error| ExecutionKernelError::device("capture_backend_operation_failed", &error))
+    let result = execute();
+    match result {
+        Ok(mut frame) => {
+            frame.backend_open_observations = observations;
+            Ok(frame)
+        }
+        Err(error) => Err(error.with_backend_open_observations(&observations)),
+    }
 }
 
 fn execute_action(

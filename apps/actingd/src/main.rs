@@ -2058,20 +2058,44 @@ mod tests {
                 .then(|| ResolvedExecutionInstance::new(self.instance_id, "recording-device"))
         }
 
-        fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-            Ok(Box::new(RecordingInput {
-                count: Arc::clone(&self.input_count),
-            }))
+        fn open_input(
+            &self,
+            _instance_alias: &str,
+        ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+            let open = || -> DeviceResult<Box<dyn InputBackend>> {
+                Ok(Box::new(RecordingInput {
+                    count: Arc::clone(&self.input_count),
+                }))
+            };
+            let result: DeviceResult<Box<dyn InputBackend>> = open();
+            result.map(|backend| {
+                actingcommand_device::OpenedBackend::unobserved(
+                    backend,
+                    actingcommand_contract::BackendOpenEntry::Input,
+                )
+            })
         }
 
-        fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-            Ok(Box::new(RecordingCapture {
-                count: Arc::clone(&self.capture_count),
-                frames: VecDeque::from([
-                    recording_frame([255, 0, 0]).expect("home frame"),
-                    recording_frame([0, 0, 255]).expect("terminal frame"),
-                ]),
-            }))
+        fn open_capture(
+            &self,
+            _instance_alias: &str,
+        ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+            let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+                Ok(Box::new(RecordingCapture {
+                    count: Arc::clone(&self.capture_count),
+                    frames: VecDeque::from([
+                        recording_frame([255, 0, 0]).expect("home frame"),
+                        recording_frame([0, 0, 255]).expect("terminal frame"),
+                    ]),
+                }))
+            };
+            let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+            result.map(|backend| {
+                actingcommand_device::OpenedBackend::unobserved(
+                    backend,
+                    actingcommand_contract::BackendOpenEntry::Capture,
+                )
+            })
         }
 
         // Slice #316-B3: the fake device always reports its assigned application in the

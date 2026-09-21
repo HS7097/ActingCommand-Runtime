@@ -255,8 +255,24 @@ impl HostShared {
             actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
         );
         let frame = match captured {
-            Ok(frame) => frame,
+            Ok(mut frame) => {
+                self.append_backend_open_observations(
+                    &std::mem::take(&mut frame.backend_open_observations),
+                    links.clone(),
+                    EventSource::Device,
+                    OriginModule::Capture,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+                frame
+            }
             Err(error) => {
+                self.append_backend_open_failure_observations(
+                    &error,
+                    links.clone(),
+                    EventSource::Device,
+                    OriginModule::Capture,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
                 let error = self
                     .finish_capture_failure_while_guarded(error, links.clone(), admission)
                     .map_err(RequestFailure::poison_without_terminal)?;

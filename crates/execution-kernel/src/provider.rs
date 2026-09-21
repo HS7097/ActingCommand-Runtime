@@ -848,14 +848,22 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance>;
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>>;
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>>;
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>>;
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>>;
 
     fn open_nemu_session(
         &self,
         _instance_alias: &str,
-    ) -> DeviceResult<Option<actingcommand_device::NemuSessionBackends>> {
+    ) -> DeviceResult<
+        Option<actingcommand_device::OpenedBackend<actingcommand_device::NemuSessionBackends>>,
+    > {
         Ok(None)
     }
 

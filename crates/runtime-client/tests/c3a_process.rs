@@ -133,23 +133,47 @@ impl ExecutionBackendProvider for FileProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-process-test>"))
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        if instance_alias != "node.a" {
-            return Err(DeviceError::fatal("sealed process-test instance mismatch"));
-        }
-        let backend = FileBackend {
-            events_path: self.events_path.clone(),
-            closed: false,
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            if instance_alias != "node.a" {
+                return Err(DeviceError::fatal("sealed process-test instance mismatch"));
+            }
+            let backend = FileBackend {
+                events_path: self.events_path.clone(),
+                closed: false,
+            };
+            backend.record("open")?;
+            Ok(Box::new(backend))
         };
-        backend.record("open")?;
-        Ok(Box::new(backend))
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        if instance_alias != "node.a" {
-            return Err(DeviceError::fatal("sealed process-test instance mismatch"));
-        }
-        Ok(Box::new(FileCapture))
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            if instance_alias != "node.a" {
+                return Err(DeviceError::fatal("sealed process-test instance mismatch"));
+            }
+            Ok(Box::new(FileCapture))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the

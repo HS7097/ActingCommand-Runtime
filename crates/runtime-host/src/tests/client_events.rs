@@ -65,6 +65,7 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
             EventType::LeaseGranted,
             EventType::SchedulerAdmitted,
             EventType::InputIntent,
+            EventType::RuntimeLifecycleObserved,
             EventType::InputCommitted,
             EventType::SchedulerAdmitted,
             EventType::LeaseTransitionIntent,
@@ -77,12 +78,12 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
             .all(|event| event.links.request_id() == Some(&acquire_id))
     );
     assert!(
-        events[4..7]
+        events[4..8]
             .iter()
             .all(|event| event.links.request_id() == Some(&input_id))
     );
     assert!(
-        events[7..]
+        events[8..]
             .iter()
             .all(|event| event.links.request_id() == Some(&release_id))
     );

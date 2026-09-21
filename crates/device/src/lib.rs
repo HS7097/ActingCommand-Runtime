@@ -13,6 +13,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub mod adb;
 mod adb_bounds_diagnostic;
+mod backend_open;
 pub mod capture;
 pub mod discovery;
 pub mod emulator;
@@ -30,6 +31,7 @@ mod vendor_stdio_facts;
 
 pub use adb::*;
 pub use adb_bounds_diagnostic::*;
+pub use backend_open::*;
 pub use capture::*;
 pub use discovery::*;
 pub use emulator::*;

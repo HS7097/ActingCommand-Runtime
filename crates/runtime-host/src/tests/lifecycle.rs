@@ -496,6 +496,7 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
             EventType::LeaseGranted,
             EventType::SchedulerAdmitted,
             EventType::InputIntent,
+            EventType::RuntimeLifecycleObserved,
             EventType::InputCommitted,
             EventType::SchedulerAdmitted,
             EventType::LeaseTransitionIntent,
@@ -606,7 +607,7 @@ fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     assert_eq!(
         event_types_for_request(&host, &ids, connection, request.request_id()).len(),
-        13
+        14
     );
     host.close().expect("close host");
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);

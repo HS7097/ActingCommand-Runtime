@@ -336,6 +336,7 @@ fn segmented_swipe_intent_records_the_exact_prepared_plan_before_input() {
         vec![
             EventType::SchedulerAdmitted,
             EventType::InputIntent,
+            EventType::RuntimeLifecycleObserved,
             EventType::InputCommitted,
         ]
     );

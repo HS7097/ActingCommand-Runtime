@@ -65,6 +65,15 @@ fn bounded_capture_sequence_returns_unique_verified_observations_without_input()
             EventType::CommandReceived,
             EventType::CommandValidated,
             EventType::SchedulerAdmitted,
+            EventType::CaptureRequested,
+            EventType::RecognitionRequested,
+            EventType::RuntimeLifecycleObserved,
+            EventType::CapturePolicyChanged,
+            EventType::ArtifactCreated,
+            EventType::ArtifactVerified,
+            EventType::ArtifactPinRecorded,
+            EventType::CaptureCompleted,
+            EventType::RecognitionCompleted,
         ]
         .into_iter()
         .chain(
@@ -80,7 +89,7 @@ fn bounded_capture_sequence_returns_unique_verified_observations_without_input()
             ]
             .into_iter()
             .cycle()
-            .take(24),
+            .take(16),
         )
         .collect::<Vec<_>>()
     );

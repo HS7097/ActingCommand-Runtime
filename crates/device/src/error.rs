@@ -436,12 +436,51 @@ pub struct DeviceError {
 
 #[derive(Clone, Default)]
 struct StoredDeviceEvidence {
+    backend_open: Vec<crate::BackendOpenObservation>,
     vendor_stdio: Vec<DeviceStdioObservation>,
     command: Option<crate::AdbCommandEvidence>,
     recovery: Option<crate::AdbTargetRecovery>,
 }
 
 impl DeviceError {
+    pub(crate) fn with_backend_open_configuration(
+        mut self,
+        report: &actingcommand_contract::BackendOpenReport,
+    ) -> Self {
+        if let Some(evidence) = &mut self.evidence {
+            for observation in &mut evidence.backend_open {
+                if observation.report.entry == report.entry {
+                    observation.report.serial_configured = observation
+                        .report
+                        .serial_configured
+                        .or(report.serial_configured);
+                    observation.report.installation_source = observation
+                        .report
+                        .installation_source
+                        .or(report.installation_source);
+                }
+            }
+        }
+        self
+    }
+
+    pub fn backend_open_observations(&self) -> &[crate::BackendOpenObservation] {
+        self.evidence
+            .as_deref()
+            .map_or(&[], |value| value.backend_open.as_slice())
+    }
+
+    pub fn with_backend_open_observation(
+        mut self,
+        observation: crate::BackendOpenObservation,
+    ) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .backend_open
+            .push(observation);
+        self
+    }
+
     pub fn adb_command(&self) -> Option<&crate::AdbCommandEvidence> {
         self.evidence
             .as_deref()

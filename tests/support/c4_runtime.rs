@@ -170,7 +170,10 @@ impl ExecutionBackendProvider for FileProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-c4-process>"))
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
         if instance_alias != self.instance_alias {
             return Err(DeviceError::fatal("sealed C4 instance mismatch"));
         }
@@ -181,19 +184,28 @@ impl ExecutionBackendProvider for FileProvider {
             closed: false,
         };
         backend.record("open")?;
-        Ok(Box::new(backend))
+        Ok(actingcommand_device::OpenedBackend::unobserved(
+            Box::new(backend) as Box<dyn InputBackend>,
+            actingcommand_contract::BackendOpenEntry::Input,
+        ))
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         if instance_alias != self.instance_alias {
             return Err(DeviceError::fatal("sealed C4 instance mismatch"));
         }
         record_event(&self.events_path, "capture_open")?;
-        Ok(Box::new(FileCaptureBackend {
-            frame_path: self.frame_path.clone(),
-            events_path: self.events_path.clone(),
-            closed: false,
-        }))
+        Ok(actingcommand_device::OpenedBackend::unobserved(
+            Box::new(FileCaptureBackend {
+                frame_path: self.frame_path.clone(),
+                events_path: self.events_path.clone(),
+                closed: false,
+            }) as Box<dyn CaptureBackend>,
+            actingcommand_contract::BackendOpenEntry::Capture,
+        ))
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the
