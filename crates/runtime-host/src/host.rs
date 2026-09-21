@@ -50,7 +50,7 @@ use actingcommand_contract::{
     EffectDisposition, EffectiveCaptureSelection, EffectiveConfigurationFacts,
     EffectiveConfigurationRecord, EffectiveInputSelection, EffectiveMumuInstallation, EventAction,
     EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
-    EventSource, EventType, FactPayloadDraft, FactRecord, FrameId, InputAction,
+    EventSource, EventType, FactPayloadDraft, FactRecord, FencedWrite, FrameId, InputAction,
     InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload, InputPayloadDraft,
     InstanceBindingSource, InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId,
     IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId,

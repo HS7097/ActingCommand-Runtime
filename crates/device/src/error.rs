@@ -45,10 +45,31 @@ pub enum DeviceClosePhase {
     UnexpectedStderr,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Device-effect close requires the same ResourceClose step that admitted it.
+///
+/// ```compile_fail
+/// fn close(backend: &mut dyn actingcommand_device::InputBackend) {
+///     backend.close_once(actingcommand_device::DeviceCloseAuthority::FencedDeviceWrite);
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceCloseAuthority {
     LocalOnly,
-    FencedDeviceWrite,
+    FencedDeviceWrite(Arc<actingcommand_contract::FencedWrite>),
+}
+
+impl DeviceCloseAuthority {
+    pub fn resource_close_witness(&self) -> Option<&actingcommand_contract::FencedWrite> {
+        match self {
+            Self::FencedDeviceWrite(witness)
+                if witness.purpose()
+                    == actingcommand_contract::FencedWritePurpose::ResourceClose =>
+            {
+                Some(witness)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

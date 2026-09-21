@@ -89,6 +89,20 @@ struct FakeProvider {
 // Defect regressions D02/D08/D09/D14: PR298 review 5120590779, Workflow #257 C1B9 v16.
 #[test]
 fn c1b9_d02_readonly_close_authority() {
+    let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+    let close_witness = std::sync::Arc::new(actingcommand_contract::issue_fenced_write(
+        actingcommand_contract::LeaseToken::new(
+            *issuer.mint_owner_epoch().expect("epoch").transport(),
+            *issuer.mint_lease_id().expect("lease").transport(),
+            *issuer.mint_instance_id().expect("instance").transport(),
+            *issuer.mint_holder_id().expect("holder").transport(),
+            100,
+        )
+        .expect("test close token"),
+        1,
+        std::num::NonZeroU64::new(1).expect("step"),
+        actingcommand_contract::FencedWritePurpose::ResourceClose,
+    ));
     let state = Arc::new(Mutex::new(FakeState {
         fail_capture: true,
         ..FakeState::default()
@@ -167,7 +181,9 @@ fn c1b9_d02_readonly_close_authority() {
         let closed = retained
             .close_instance(
                 id,
-                actingcommand_device::DeviceCloseAuthority::FencedDeviceWrite,
+                actingcommand_device::DeviceCloseAuthority::FencedDeviceWrite(
+                    std::sync::Arc::clone(&close_witness),
+                ),
             )
             .expect("owner supplied close authority");
         assert_eq!(closed.resource_count(), if open_failure { 1 } else { 2 });

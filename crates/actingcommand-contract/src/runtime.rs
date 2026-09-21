@@ -832,6 +832,57 @@ impl LeaseToken {
     }
 }
 
+/// The original scheduler admission carried through one in-flight execution step.
+/// The issuing bridge is constrained by the workspace issuer guard; Rust privacy
+/// prevents field construction, but does not make an external crate a friend.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FencedWrite {
+    token: LeaseToken,
+    connection_id: u64,
+    step_id: std::num::NonZeroU64,
+    purpose: FencedWritePurpose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FencedWritePurpose {
+    Business,
+    ResourceClose,
+}
+
+impl FencedWrite {
+    pub fn token(&self) -> &LeaseToken {
+        &self.token
+    }
+
+    pub const fn connection_id(&self) -> u64 {
+        self.connection_id
+    }
+
+    pub const fn step_id(&self) -> std::num::NonZeroU64 {
+        self.step_id
+    }
+
+    pub const fn purpose(&self) -> FencedWritePurpose {
+        self.purpose
+    }
+}
+
+/// Cross-crate issuance bridge. Only the scheduler's two admission methods may
+/// call this on the production graph; this is enforced by the issuer guard.
+pub fn issue_fenced_write(
+    token: LeaseToken,
+    connection_id: u64,
+    step_id: std::num::NonZeroU64,
+    purpose: FencedWritePurpose,
+) -> FencedWrite {
+    FencedWrite {
+        token,
+        connection_id,
+        step_id,
+        purpose,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeasePriority {

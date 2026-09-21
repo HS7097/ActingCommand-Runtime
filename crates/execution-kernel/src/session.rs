@@ -5,8 +5,8 @@ use crate::{
     ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureGeometryObservation, CaptureGeometryUnknownReason, FrameId,
-    InputAction, InputFrameReference, ResourceQuiescence,
+    ApplicationLifecycleAction, CaptureGeometryObservation, CaptureGeometryUnknownReason,
+    FencedWrite, FrameId, InputAction, InputFrameReference, ResourceQuiescence,
 };
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
@@ -167,6 +167,7 @@ enum SessionCommand {
         action: PreparedInputAction,
         frame: Option<InputFrameReference>,
         check: Option<Arc<dyn InputOperationCheck>>,
+        step: Option<Arc<FencedWrite>>,
         response: SyncSender<ExecutionKernelResult<ExecutionInputOutcome>>,
     },
     Capture {
@@ -187,6 +188,7 @@ enum SessionCommand {
     },
     ApplicationLifecycle {
         action: ApplicationLifecycleAction,
+        step: Option<Arc<FencedWrite>>,
         response: SyncSender<ExecutionKernelResult<()>>,
     },
     Close {
@@ -317,7 +319,7 @@ impl ExecutionSession {
         &self,
         action: PreparedInputAction,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        self.input_prepared_in_frame(action, None, None)
+        self.input_prepared_in_frame(action, None, None, None)
     }
 
     pub(crate) fn input_prepared_in_frame(
@@ -325,6 +327,7 @@ impl ExecutionSession {
         action: PreparedInputAction,
         frame: Option<InputFrameReference>,
         check: Option<Arc<dyn InputOperationCheck>>,
+        step: Option<Arc<FencedWrite>>,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
@@ -337,6 +340,7 @@ impl ExecutionSession {
                 action,
                 frame,
                 check,
+                step,
                 response,
             })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
@@ -449,7 +453,7 @@ impl ExecutionSession {
         &self,
         action: ApplicationLifecycleAction,
     ) -> ExecutionKernelResult<()> {
-        match self.control_application_retained(action) {
+        match self.control_application_retained(action, None) {
             Ok(()) => Ok(()),
             Err(primary) => {
                 let error = match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
@@ -465,6 +469,7 @@ impl ExecutionSession {
     pub(crate) fn control_application_retained(
         &self,
         action: ApplicationLifecycleAction,
+        step: Option<Arc<FencedWrite>>,
     ) -> ExecutionKernelResult<()> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
@@ -473,7 +478,11 @@ impl ExecutionSession {
             .sender
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
-            .send(SessionCommand::ApplicationLifecycle { action, response })
+            .send(SessionCommand::ApplicationLifecycle {
+                action,
+                step,
+                response,
+            })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
@@ -715,6 +724,7 @@ fn run_session(
                 action,
                 frame,
                 check,
+                step,
                 response,
             } => {
                 let result = execute_input(
@@ -726,6 +736,7 @@ fn run_session(
                     committed_frame.as_ref(),
                     check,
                 );
+                drop(step);
                 let context = match result {
                     Ok(context) => context,
                     Err(error) => {
@@ -878,7 +889,11 @@ fn run_session(
                     });
                 }
             }
-            SessionCommand::ApplicationLifecycle { action, response } => {
+            SessionCommand::ApplicationLifecycle {
+                action,
+                step,
+                response,
+            } => {
                 pending_frame = None;
                 committed_frame = None;
                 let invalidation = match backends {
@@ -899,6 +914,7 @@ fn run_session(
                     .map(|_| ()),
                 };
                 if let Err(error) = invalidation {
+                    drop(step);
                     if response.send(Err(error.clone())).is_err() {
                         return Err(close_after_failure(
                             backends.take(),
@@ -922,6 +938,7 @@ fn run_session(
                     .map_err(|error| {
                         ExecutionKernelError::device("application_backend_operation_failed", &error)
                     });
+                drop(step);
                 if let Err(error) = result {
                     if response.send(Err(error.clone())).is_err() {
                         return Err(close_after_failure(
@@ -1265,11 +1282,11 @@ fn close_resources(
     };
     let (first, second) = match order {
         ResourceCloseOrder::CaptureFirst => (
-            close_capture(capture, authority),
+            close_capture(capture, authority.clone()),
             close_input(input, authority),
         ),
         ResourceCloseOrder::InputFirst => (
-            close_input(input, authority),
+            close_input(input, authority.clone()),
             close_capture(capture, authority),
         ),
     };

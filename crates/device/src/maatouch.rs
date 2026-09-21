@@ -676,9 +676,9 @@ impl InputBackend for MaaTouchBackend {
             return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
 
-        let reset = match authority {
-            DeviceCloseAuthority::FencedDeviceWrite => self.reset().err(),
-            DeviceCloseAuthority::LocalOnly => Some(
+        let reset = match authority.resource_close_witness() {
+            Some(_witness) => self.reset().err(),
+            None => Some(
                 DeviceError::fatal("MaaTouch device reset requires current lease admission")
                     .with_resource_close_cause(
                         crate::DeviceResourceKind::InputBackend,
@@ -1018,6 +1018,20 @@ mod tests {
     // Defect regressions D01/D07: PR298 review 5120590779, Workflow #257 C1B9 v16.
     #[test]
     fn c1b9_d01_local_only_close() {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        let close_witness = std::sync::Arc::new(actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test close token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::ResourceClose,
+        ));
         let mut backend = MaaTouchBackend::new(
             AdbConfig::default(),
             DeviceTarget::default(),
@@ -1038,7 +1052,9 @@ mod tests {
                 .contains("requires current lease admission")
         );
         let repeated = backend
-            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+            .close_once(DeviceCloseAuthority::FencedDeviceWrite(
+                std::sync::Arc::clone(&close_witness),
+            ))
             .expect_err("terminal close cannot be retried with another authority");
         assert_eq!(first, repeated);
     }

@@ -1019,6 +1019,39 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
     );
 }
 
+// Workflow #314 FENCED-CLOSE-v1: approved issuer/close invariant.
+// Source first red: 14b7addc crates/device/src/error.rs DeviceCloseAuthority
+// had a zero-field FencedDeviceWrite; Workflow #314 issuecomment-5766924100.
+#[test]
+fn fenced_close_requires_scheduler_witness() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for directory in ["crates", "apps", "providers", "tools"] {
+        collect_rust_files(&root.join(directory), &mut files);
+    }
+    files.sort();
+    let sources = files
+        .into_iter()
+        .map(|file| {
+            let path = file
+                .strip_prefix(&root)
+                .expect("workspace source")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source =
+                fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            (path, source)
+        })
+        .collect::<Vec<_>>();
+    let violations = actingcommand_actinglab_architecture::inspect_fenced_close_sources(&sources)
+        .expect("parse fenced-close source inventory");
+    assert!(
+        violations.is_empty(),
+        "fenced-close violations:\n{}",
+        violations.join("\n")
+    );
+}
+
 #[test]
 fn contract_has_no_public_value_payload_or_persisted_fact() {
     let root = workspace_root();

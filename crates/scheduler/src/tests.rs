@@ -912,7 +912,7 @@ fn destructive_step_defers_preemption_until_prepared_transfer_is_committed() {
             1,
         )
         .expect("current lease");
-    scheduler
+    let step = scheduler
         .begin_destructive_step(&current, connection(1), 2)
         .expect("begin destructive");
     let queued_id = request(&issuer);
@@ -942,7 +942,7 @@ fn destructive_step_defers_preemption_until_prepared_transfer_is_committed() {
         TransferPreparation::Deferred
     ));
     scheduler
-        .finish_destructive_step(&current, connection(1))
+        .finish_destructive_step(step, connection(1))
         .expect("finish destructive");
     let TransferPreparation::Ready(prepared) = scheduler
         .prepare_transfer(
@@ -1029,7 +1029,7 @@ fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
             .expect_err("close remains connection fenced"),
         SchedulerError::ConnectionMismatch
     );
-    scheduler
+    let step = scheduler
         .begin_resource_close(&current, connection(1), 3)
         .expect("current owner may close before yielding");
     assert!(matches!(
@@ -1045,7 +1045,7 @@ fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
         TransferPreparation::Deferred
     ));
     scheduler
-        .finish_destructive_step(&current, connection(1))
+        .finish_destructive_step(step, connection(1))
         .expect("resource close finished");
     assert_eq!(
         scheduler
@@ -1086,7 +1086,7 @@ fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
             .expect_err("connection fenced"),
         SchedulerError::ConnectionMismatch
     );
-    closing
+    let step = closing
         .begin_resource_close(&close_token, connection(3), 2)
         .expect("real close permission");
     assert_eq!(
@@ -1096,7 +1096,7 @@ fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
         SchedulerError::DestructiveStateMismatch
     );
     closing
-        .finish_destructive_step(&close_token, connection(3))
+        .finish_destructive_step(step, connection(3))
         .expect("close completed");
     assert_eq!(
         closing

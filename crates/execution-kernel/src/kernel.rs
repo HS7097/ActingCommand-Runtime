@@ -6,8 +6,8 @@ use crate::{
     ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureGeometryObservation, EmulatorInstanceAction, FrameId,
-    InputAction, InputFrameReference, InstanceId, MonitorObservation,
+    ApplicationLifecycleAction, CaptureGeometryObservation, EmulatorInstanceAction, FencedWrite,
+    FrameId, InputAction, InputFrameReference, InstanceId, MonitorObservation,
 };
 use actingcommand_device::{
     DeviceCloseAuthority, EmulatorControlOutcome, EmulatorControlResult, Frame, InputOperationCheck,
@@ -111,7 +111,7 @@ impl ExecutionKernel {
         action: PreparedInputAction,
         registration_guard: G,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        self.input_prepared_in_frame(instance_alias, action, None, None, registration_guard)
+        self.input_prepared_in_frame(instance_alias, action, None, None, None, registration_guard)
     }
 
     pub fn input_prepared_in_frame<G>(
@@ -120,12 +120,13 @@ impl ExecutionKernel {
         action: PreparedInputAction,
         frame: Option<InputFrameReference>,
         check: Option<Arc<dyn InputOperationCheck>>,
+        step: Option<Arc<FencedWrite>>,
         registration_guard: G,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         session
-            .input_prepared_in_frame(action, frame, check)
+            .input_prepared_in_frame(action, frame, check, step)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
     }
 
@@ -429,12 +430,13 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
+        step: Option<Arc<FencedWrite>>,
         registration_guard: G,
     ) -> ExecutionKernelResult<()> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         session
-            .control_application_retained(action)
+            .control_application_retained(action, step)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
     }
 

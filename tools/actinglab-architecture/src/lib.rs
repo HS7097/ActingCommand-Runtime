@@ -1069,6 +1069,293 @@ pub fn ledger_owns_query_matching(path: &str, source: &str) -> Result<bool, Stri
     }))
 }
 
+/// Workflow #314 FENCED-CLOSE: inspect the issuing bridge and its close consumers.
+/// Import aliases are propagated across this bounded workspace inventory, including
+/// re-exports. This is a source guard, not a claim of Rust cross-crate privacy.
+pub fn inspect_fenced_close_sources(sources: &[(String, String)]) -> Result<Vec<String>, String> {
+    let mut parsed = Vec::new();
+    for (path, source) in sources {
+        let file = syn::parse_file(source).map_err(|error| format!("parse {path}: {error}"))?;
+        parsed.push((path, ledger_owners::production_items(&file.items)?));
+    }
+    let mut issuer_names = HashSet::from(["issue_fenced_write".to_string()]);
+    let mut witness_names = HashSet::from(["FencedWrite".to_string()]);
+    struct Imports(Vec<(String, String)>);
+    impl<'ast> Visit<'ast> for Imports {
+        fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+            self.0.extend(public_use_aliases(&item.tree));
+        }
+    }
+    let mut imports = Imports(Vec::new());
+    for (_, items) in &parsed {
+        for item in items {
+            imports.visit_item(item);
+        }
+    }
+    loop {
+        let before = (issuer_names.len(), witness_names.len());
+        for (local, target) in &imports.0 {
+            if issuer_names.contains(target) {
+                issuer_names.insert(local.clone());
+            }
+            if witness_names.contains(target) {
+                witness_names.insert(local.clone());
+            }
+        }
+        for (_, items) in &parsed {
+            let aliases = local_type_aliases(items);
+            for (local, target) in &aliases.names {
+                if issuer_names.contains(target) {
+                    issuer_names.insert(local.clone());
+                }
+                if witness_names.contains(target) {
+                    witness_names.insert(local.clone());
+                }
+            }
+        }
+        if before == (issuer_names.len(), witness_names.len()) {
+            break;
+        }
+    }
+    let mut violations = Vec::new();
+    let mut issuers = HashSet::new();
+    let mut witness_definitions = 0;
+    let mut close_authorities = 0;
+    let mut bridge_definitions = 0;
+    for (path, items) in &parsed {
+        let aliases = local_type_aliases(items);
+        let mut visitor = FencedCloseVisitor {
+            path,
+            aliases: &aliases,
+            issuer_names: &issuer_names,
+            witness_names: &witness_names,
+            function: String::new(),
+            self_type: String::new(),
+            violations: &mut violations,
+            issuers: &mut issuers,
+        };
+        for item in items {
+            visitor.visit_item(item);
+        }
+        let mut nested = Vec::new();
+        collect_nested_items(items, &mut nested);
+        for item in nested {
+            match item {
+                Item::Struct(value) if value.ident == "FencedWrite" => {
+                    witness_definitions += 1;
+                    if value
+                        .fields
+                        .iter()
+                        .any(|field| !matches!(field.vis, Visibility::Inherited))
+                        || ["Copy", "Clone", "Default", "Serialize", "Deserialize"]
+                            .iter()
+                            .any(|name| derives_ident(&value.attrs, name))
+                    {
+                        violations.push(format!(
+                            "{path}: FencedWrite must remain opaque and non-copyable"
+                        ));
+                    }
+                }
+                Item::Fn(value) if value.sig.ident == "issue_fenced_write" => {
+                    bridge_definitions += 1;
+                    if path.as_str() != "crates/actingcommand-contract/src/runtime.rs" {
+                        violations.push(format!("{path}: unexpected witness issuing bridge"));
+                    }
+                }
+                Item::Impl(value)
+                    if impl_self_ident(value)
+                        .is_some_and(|name| witness_names.contains(&name.to_string())) =>
+                {
+                    if let Some((_, target, _)) = &value.trait_
+                        && target.segments.last().is_some_and(|name| {
+                            [
+                                "Copy",
+                                "Clone",
+                                "Default",
+                                "Serialize",
+                                "Deserialize",
+                                "From",
+                                "TryFrom",
+                            ]
+                            .contains(&name.ident.to_string().as_str())
+                        })
+                    {
+                        violations.push(format!(
+                            "{path}: witness trait opens copying or construction"
+                        ));
+                    }
+                    for method in &value.items {
+                        if let syn::ImplItem::Fn(method) = method
+                            && is_public(&method.vis)
+                            && !method
+                                .sig
+                                .inputs
+                                .iter()
+                                .any(|input| matches!(input, FnArg::Receiver(_)))
+                            && signature_returns_any_resolved_ident(
+                                &method.sig,
+                                &["Self".into(), "FencedWrite".into()],
+                                &aliases,
+                            )
+                        {
+                            violations.push(format!(
+                                "{path}: witness exposes constructor {}",
+                                method.sig.ident
+                            ));
+                        }
+                    }
+                }
+                Item::Enum(value) if value.ident == "DeviceCloseAuthority" => {
+                    close_authorities += 1;
+                    if !value.variants.iter().any(|variant| {
+                        variant.ident == "FencedDeviceWrite"
+                            && variant.fields.len() == 1
+                            && variant.fields.iter().any(|field| {
+                                type_uses_resolved_ident(&field.ty, "FencedWrite", &aliases)
+                            })
+                    }) {
+                        violations.push(format!(
+                            "{path}: device-effect close must carry FencedWrite"
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if witness_definitions != 1 || close_authorities != 1 || bridge_definitions != 1 {
+        violations.push(
+            "fenced close requires one witness, issuing bridge and close authority".to_string(),
+        );
+    }
+    if issuers
+        != HashSet::from([
+            "begin_destructive_step".to_string(),
+            "begin_resource_close".to_string(),
+        ])
+    {
+        violations.push(format!(
+            "fenced close production issuers differ from scheduler admission: {issuers:?}"
+        ));
+    }
+    Ok(violations)
+}
+
+struct FencedCloseVisitor<'a> {
+    path: &'a str,
+    aliases: &'a LocalTypeAliases,
+    issuer_names: &'a HashSet<String>,
+    witness_names: &'a HashSet<String>,
+    function: String,
+    self_type: String,
+    violations: &'a mut Vec<String>,
+    issuers: &'a mut HashSet<String>,
+}
+
+impl FencedCloseVisitor<'_> {
+    fn close_signature(&mut self, signature: &syn::Signature) {
+        let name = signature.ident.to_string();
+        let close = name == "close_once"
+            || (self.path == "crates/device/src/capture.rs"
+                && ["NemuIpcWorker", "NemuIpcWorkerState"].contains(&self.self_type.as_str())
+                && [
+                    "shutdown_once",
+                    "shutdown_with_input_check",
+                    "disconnect",
+                    "close",
+                ]
+                .contains(&name.as_str()))
+            || (self.path == "crates/device/src/capture/nemu_input.rs"
+                && name == "close_input_contact");
+        if close && !signature.inputs.iter().any(|argument| matches!(argument,
+            FnArg::Typed(argument) if type_uses_resolved_ident(&argument.ty, "DeviceCloseAuthority", self.aliases))) {
+            self.violations.push(format!(
+                "{}: {}::{name} lost close authority",
+                self.path, self.self_type
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for FencedCloseVisitor<'_> {
+    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        if has_cfg_test(&function.attrs)
+            || function
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("test"))
+        {
+            return;
+        }
+        let prior = std::mem::replace(&mut self.function, function.sig.ident.to_string());
+        syn::visit::visit_item_fn(self, function);
+        self.function = prior;
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let prior = std::mem::replace(
+            &mut self.self_type,
+            impl_self_ident(item)
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        syn::visit::visit_item_impl(self, item);
+        self.self_type = prior;
+    }
+
+    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+        let prior = std::mem::replace(&mut self.function, method.sig.ident.to_string());
+        self.close_signature(&method.sig);
+        syn::visit::visit_impl_item_fn(self, method);
+        self.function = prior;
+    }
+
+    fn visit_trait_item_fn(&mut self, method: &'ast syn::TraitItemFn) {
+        self.close_signature(&method.sig);
+        syn::visit::visit_trait_item_fn(self, method);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        if expression
+            .path
+            .segments
+            .last()
+            .is_some_and(|name| self.issuer_names.contains(&name.ident.to_string()))
+        {
+            if self.path == "crates/scheduler/src/lib.rs"
+                && self.self_type == "SeedScheduler"
+                && ["begin_destructive_step", "begin_resource_close"]
+                    .contains(&self.function.as_str())
+            {
+                self.issuers.insert(self.function.clone());
+            } else {
+                self.violations.push(format!(
+                    "{}: {} references the scheduler issuing bridge",
+                    self.path, self.function
+                ));
+            }
+        }
+        syn::visit::visit_expr_path(self, expression);
+    }
+
+    fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+        if expression
+            .path
+            .segments
+            .last()
+            .is_some_and(|name| self.witness_names.contains(&name.ident.to_string()))
+            && !(self.path == "crates/actingcommand-contract/src/runtime.rs"
+                && self.function == "issue_fenced_write")
+        {
+            self.violations.push(format!(
+                "{}: {} constructs a witness outside its bridge",
+                self.path, self.function
+            ));
+        }
+        syn::visit::visit_expr_struct(self, expression);
+    }
+}
+
 /// Enforces issuer-only producer IDs and store-issued artifact attachments.
 pub fn inspect_producer_event_capabilities(
     path: &str,

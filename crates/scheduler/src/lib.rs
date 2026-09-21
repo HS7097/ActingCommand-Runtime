@@ -7,9 +7,9 @@
 pub mod facts;
 
 use actingcommand_contract::{
-    ContainedTaskRequest, HolderId, IdentifierIssuer, InstanceId, LeaseId, LeasePriority,
-    LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch, RequestId,
-    RuntimeErrorCode, RuntimeErrorProjection,
+    ContainedTaskRequest, FencedWrite, FencedWritePurpose, HolderId, IdentifierIssuer, InstanceId,
+    LeaseId, LeasePriority, LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch,
+    RequestId, RuntimeErrorCode, RuntimeErrorProjection, issue_fenced_write,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -181,6 +181,7 @@ pub enum SchedulerError {
     QueueRequestMismatch,
     QueueTimeoutInvalid,
     QueueSequenceOverflow,
+    StepSequenceOverflow,
     TransferNotSafe,
     DestructiveStateMismatch,
     ResourceCloseOnly,
@@ -210,6 +211,7 @@ impl SchedulerError {
             Self::QueueRequestMismatch => "lease_queue_request_mismatch",
             Self::QueueTimeoutInvalid => "lease_queue_timeout_invalid",
             Self::QueueSequenceOverflow => "lease_queue_sequence_overflow",
+            Self::StepSequenceOverflow => "lease_step_sequence_overflow",
             Self::TransferNotSafe => "lease_transfer_not_safe",
             Self::DestructiveStateMismatch => "destructive_state_mismatch",
             Self::ResourceCloseOnly => "resource_close_only",
@@ -224,6 +226,7 @@ impl SchedulerError {
                 | Self::IdentifierIssuance
                 | Self::ExpiryOverflow
                 | Self::QueueSequenceOverflow
+                | Self::StepSequenceOverflow
         )
     }
 
@@ -282,7 +285,7 @@ impl SchedulerError {
             Self::QueueTimeoutInvalid => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
             }
-            Self::QueueSequenceOverflow => {
+            Self::QueueSequenceOverflow | Self::StepSequenceOverflow => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeFatal, true)
             }
             Self::TransferNotSafe | Self::DestructiveStateMismatch | Self::ResourceCloseOnly => {
@@ -308,7 +311,7 @@ struct LeaseEntry {
     acquire_request_id: RequestId,
     last_renew: Option<RenewRecord>,
     priority: LeasePriority,
-    destructive_step_active: bool,
+    destructive_step: Option<(std::num::NonZeroU64, FencedWritePurpose)>,
     preempt_requested: bool,
 }
 
@@ -590,6 +593,7 @@ pub struct SeedScheduler {
     instances: BTreeMap<InstanceId, InstanceState>,
     lease_locations: BTreeMap<LeaseId, InstanceId>,
     next_arrival_sequence: u64,
+    next_step_id: u64,
 }
 
 impl fmt::Debug for SeedScheduler {
@@ -630,6 +634,7 @@ impl SeedScheduler {
             instances,
             lease_locations: BTreeMap::new(),
             next_arrival_sequence: 1,
+            next_step_id: 1,
         })
     }
 
@@ -840,7 +845,7 @@ impl SeedScheduler {
             acquire_request_id: prepared.acquire_request_id,
             last_renew: None,
             priority: prepared.priority,
-            destructive_step_active: false,
+            destructive_step: None,
             preempt_requested: false,
         });
         state.last_release = None;
@@ -1110,21 +1115,30 @@ impl SeedScheduler {
         token: &LeaseToken,
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
-    ) -> SchedulerResult<()> {
+    ) -> SchedulerResult<FencedWrite> {
         self.validate_write(token, connection_id, now_monotonic_ms)?;
         let state = self
             .instances
             .get_mut(&token.instance_id())
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
-        if lease.destructive_step_active {
+        if lease.destructive_step.is_some() {
             return Err(SchedulerError::DestructiveStateMismatch);
         }
         if lease.preempt_requested {
             return Err(SchedulerError::TransferNotSafe);
         }
-        lease.destructive_step_active = true;
-        Ok(())
+        let next = self
+            .next_step_id
+            .checked_add(1)
+            .ok_or(SchedulerError::StepSequenceOverflow)?;
+        let step_id = std::num::NonZeroU64::new(self.next_step_id)
+            .ok_or(SchedulerError::StepSequenceOverflow)?;
+        let purpose = FencedWritePurpose::Business;
+        let witness = issue_fenced_write(token.clone(), connection_id.0, step_id, purpose);
+        self.next_step_id = next;
+        lease.destructive_step = Some((step_id, purpose));
+        Ok(witness)
     }
 
     /// Keeps the current owner's resources fenced while closing before a transfer.
@@ -1133,25 +1147,35 @@ impl SeedScheduler {
         token: &LeaseToken,
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
-    ) -> SchedulerResult<()> {
+    ) -> SchedulerResult<FencedWrite> {
         self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
         let state = self
             .instances
             .get_mut(&token.instance_id())
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
-        if lease.destructive_step_active {
+        if lease.destructive_step.is_some() {
             return Err(SchedulerError::DestructiveStateMismatch);
         }
-        lease.destructive_step_active = true;
-        Ok(())
+        let next = self
+            .next_step_id
+            .checked_add(1)
+            .ok_or(SchedulerError::StepSequenceOverflow)?;
+        let step_id = std::num::NonZeroU64::new(self.next_step_id)
+            .ok_or(SchedulerError::StepSequenceOverflow)?;
+        let purpose = FencedWritePurpose::ResourceClose;
+        let witness = issue_fenced_write(token.clone(), connection_id.0, step_id, purpose);
+        self.next_step_id = next;
+        lease.destructive_step = Some((step_id, purpose));
+        Ok(witness)
     }
 
     pub fn finish_destructive_step(
         &mut self,
-        token: &LeaseToken,
+        witness: FencedWrite,
         connection_id: ConnectionId,
     ) -> SchedulerResult<()> {
+        let token = witness.token();
         self.validate_epoch(token)?;
         let instance_id = self.locate_token_instance(token)?;
         let state = self
@@ -1159,13 +1183,16 @@ impl SeedScheduler {
             .get_mut(&instance_id)
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
-        if lease.token != *token || lease.connection_id != connection_id {
+        if lease.token != *token
+            || lease.connection_id != connection_id
+            || witness.connection_id() != connection_id.0
+        {
             return Err(SchedulerError::ConnectionMismatch);
         }
-        if !lease.destructive_step_active {
+        if lease.destructive_step != Some((witness.step_id(), witness.purpose())) {
             return Err(SchedulerError::DestructiveStateMismatch);
         }
-        lease.destructive_step_active = false;
+        lease.destructive_step = None;
         Ok(())
     }
 
@@ -1193,7 +1220,7 @@ impl SeedScheduler {
         if lease.connection_id != connection_id {
             return Err(SchedulerError::ConnectionMismatch);
         }
-        if lease.destructive_step_active {
+        if lease.destructive_step.is_some() {
             return Ok(TransferPreparation::Deferred);
         }
         let Some(queued) = state.queue.first() else {
@@ -1271,7 +1298,7 @@ impl SeedScheduler {
             acquire_request_id: queued.request_id,
             last_renew: None,
             priority: queued.priority,
-            destructive_step_active: false,
+            destructive_step: None,
             preempt_requested: false,
         });
         refresh_preempt_requested(state);
@@ -1421,12 +1448,15 @@ impl SeedScheduler {
     /// Rechecks the existing in-progress boundary without granting a new operation.
     pub fn validate_destructive_step(
         &self,
-        token: &LeaseToken,
+        witness: &FencedWrite,
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<()> {
-        let lease = self.validate_current_lease(token, connection_id, now_monotonic_ms)?;
-        if !lease.destructive_step_active {
+        let lease =
+            self.validate_current_lease(witness.token(), connection_id, now_monotonic_ms)?;
+        if witness.connection_id() != connection_id.0
+            || lease.destructive_step != Some((witness.step_id(), witness.purpose()))
+        {
             return Err(SchedulerError::DestructiveStateMismatch);
         }
         Ok(())
@@ -1596,7 +1626,7 @@ impl SeedScheduler {
                 token: lease.token.clone(),
                 connection_id: lease.connection_id,
                 priority: lease.priority,
-                destructive_step_active: lease.destructive_step_active,
+                destructive_step_active: lease.destructive_step.is_some(),
                 preempt_requested: lease.preempt_requested,
             })
     }

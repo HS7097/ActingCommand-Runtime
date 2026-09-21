@@ -1780,6 +1780,7 @@ impl NemuIpcWorker {
                             let result = worker_state_result(&mut state, |state| {
                                 state.input_tap(x, y, &context, &worker_poisoned)
                             });
+                            drop(context);
                             response
                                 .send(result)
                                 .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
@@ -1792,6 +1793,7 @@ impl NemuIpcWorker {
                             let result = worker_state_result(&mut state, |state| {
                                 state.input_segmented(&plan, &context, &worker_poisoned)
                             });
+                            drop(context);
                             response
                                 .send(result)
                                 .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
@@ -1814,12 +1816,13 @@ impl NemuIpcWorker {
                         } => {
                             let result = worker_state_result(&mut state, |state| {
                                 state.close_input_contact(
-                                    authority,
+                                    authority.clone(),
                                     input_check.as_deref(),
                                     &worker_poisoned,
                                 )?;
                                 state.close(authority)
                             });
+                            drop(input_check);
                             closed = true;
                             if response.send(result.clone()).is_err() {
                                 return Err(match result {
@@ -2416,7 +2419,7 @@ impl NemuIpcWorkerState {
         if self.connect_id <= 0 {
             return Ok(());
         }
-        if authority != DeviceCloseAuthority::FencedDeviceWrite {
+        if authority.resource_close_witness().is_none() {
             return Err(DeviceError::fatal(
                 "Nemu IPC disconnect requires current fenced device-write authority",
             )
@@ -3283,6 +3286,20 @@ mod tests {
     // Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
     #[test]
     fn capture_close_once_reports_acquired_resource_quiescence() {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        let close_witness = std::sync::Arc::new(actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test close token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::ResourceClose,
+        ));
         let close_calls = Rc::new(Cell::new(0));
         let frame = Frame::from_pixels(
             1,
@@ -3301,10 +3318,14 @@ mod tests {
         };
 
         let first = backend
-            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+            .close_once(DeviceCloseAuthority::FencedDeviceWrite(
+                std::sync::Arc::clone(&close_witness),
+            ))
             .expect("first close");
         let second = backend
-            .close_once(DeviceCloseAuthority::FencedDeviceWrite)
+            .close_once(DeviceCloseAuthority::FencedDeviceWrite(
+                std::sync::Arc::clone(&close_witness),
+            ))
             .expect("cached close");
 
         assert_eq!(first, second);
@@ -3319,6 +3340,20 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn nemu_owned_close_retires_sync_handle_and_preserves_real_failures() {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        let close_witness = std::sync::Arc::new(actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test close token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::ResourceClose,
+        ));
         use std::io::Write as _;
         use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
         static CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -3343,6 +3378,7 @@ mod tests {
             let (tx, rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
+            let worker_close_witness = Arc::clone(&close_witness);
             let handle = thread::spawn(move || {
                 let mut phase = "worker_library_start";
                 let mut errors = Vec::<(&str, DeviceError)>::new();
@@ -3421,14 +3457,21 @@ mod tests {
                     }
                     phase = "worker_retired_disconnect";
                     state
-                        .disconnect(DeviceCloseAuthority::FencedDeviceWrite, |_| {
-                            panic!("a retired handle must not resolve or call disconnect again")
-                        })
+                        .disconnect(
+                            DeviceCloseAuthority::FencedDeviceWrite(std::sync::Arc::clone(
+                                &worker_close_witness,
+                            )),
+                            |_| {
+                                panic!("a retired handle must not resolve or call disconnect again")
+                            },
+                        )
                         .inspect_err(|error| errors.push((phase, error.clone())))
                         .expect("retired disconnect");
                     phase = "worker_cleanup";
                     let cleanup = state
-                        .close(DeviceCloseAuthority::FencedDeviceWrite)
+                        .close(DeviceCloseAuthority::FencedDeviceWrite(
+                            std::sync::Arc::clone(&worker_close_witness),
+                        ))
                         .inspect_err(|error| errors.push((phase, error.clone())));
                     assert!(state.stdio_session.is_none());
                     assert!(state.library.is_none());
@@ -3560,15 +3603,15 @@ mod tests {
                 let authority = if mode == 3 {
                     DeviceCloseAuthority::LocalOnly
                 } else {
-                    DeviceCloseAuthority::FencedDeviceWrite
+                    DeviceCloseAuthority::FencedDeviceWrite(std::sync::Arc::clone(&close_witness))
                 };
                 phase = "parent_first_close";
                 let first = backend
-                    .close_once(authority)
+                    .close_once(authority.clone())
                     .inspect_err(|error| errors.push((phase, error.clone())));
                 phase = "parent_second_close";
                 let second = backend
-                    .close_once(authority)
+                    .close_once(authority.clone())
                     .inspect_err(|error| errors.push((phase, error.clone())));
                 match (&first, &second) {
                     (Ok(first), Ok(second)) => assert_eq!(first, second),

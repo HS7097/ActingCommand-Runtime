@@ -563,9 +563,9 @@ impl InputBackend for MinitouchBackend {
             return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
 
-        let reset = match authority {
-            DeviceCloseAuthority::FencedDeviceWrite => self.reset().err(),
-            DeviceCloseAuthority::LocalOnly => Some(
+        let reset = match authority.resource_close_witness() {
+            Some(_witness) => self.reset().err(),
+            None => Some(
                 DeviceError::fatal("minitouch device reset requires current lease admission")
                     .with_resource_close_cause(
                         crate::DeviceResourceKind::InputBackend,

@@ -3,7 +3,7 @@
 use super::*;
 use actingcommand_device::{DeviceError, DeviceResult, InputCheckPhase, InputOperationCheck};
 
-struct RuntimeInputCheck {
+pub(super) struct RuntimeInputCheck {
     scheduler: Arc<Mutex<SeedScheduler>>,
     token: LeaseToken,
     connection_id: ConnectionId,
@@ -15,8 +15,26 @@ struct RuntimeInputCheck {
     closing: bool,
 }
 
-impl InputOperationCheck for RuntimeInputCheck {
+struct FencedInputCheck {
+    check: RuntimeInputCheck,
+    witness: Arc<FencedWrite>,
+}
+
+impl InputOperationCheck for FencedInputCheck {
     fn check(&self, phase: InputCheckPhase) -> DeviceResult<Duration> {
+        self.check.check(phase, &self.witness)
+    }
+}
+
+impl RuntimeInputCheck {
+    pub(super) fn fenced(self, witness: Arc<FencedWrite>) -> Arc<dyn InputOperationCheck> {
+        Arc::new(FencedInputCheck {
+            check: self,
+            witness,
+        })
+    }
+
+    fn check(&self, phase: InputCheckPhase, witness: &FencedWrite) -> DeviceResult<Duration> {
         let sample = self
             .clock
             .sample()
@@ -42,7 +60,7 @@ impl InputOperationCheck for RuntimeInputCheck {
             .lock()
             .map_err(|_| DeviceError::fatal("Nemu input scheduler is poisoned"))?;
         scheduler
-            .validate_destructive_step(&self.token, self.connection_id, now)
+            .validate_destructive_step(witness, self.connection_id, now)
             .map_err(|error| DeviceError::fatal(format!("Nemu input fencing failed: {error}")))?;
         if !self.closing {
             scheduler
@@ -73,7 +91,7 @@ impl HostShared {
         connection_id: ConnectionId,
         control: Option<Arc<ContainedRunControl>>,
         closing: bool,
-    ) -> RuntimeHostResult<Option<Arc<dyn InputOperationCheck>>> {
+    ) -> RuntimeHostResult<Option<RuntimeInputCheck>> {
         let resolved = self.execution.resolve(alias).map_err(|error| {
             RuntimeHostError::execution("resolve_nemu_input_configuration", &error)
         })?;
@@ -104,7 +122,7 @@ impl HostShared {
             }
             hard_deadline = hard_deadline.min(control.deadline());
         }
-        Ok(Some(Arc::new(RuntimeInputCheck {
+        Ok(Some(RuntimeInputCheck {
             scheduler: Arc::clone(&self.scheduler),
             token: token.clone(),
             connection_id,
@@ -114,12 +132,13 @@ impl HostShared {
             control,
             fatal: self.fatal.clone(),
             closing,
-        })))
+        }))
     }
 
     pub(super) fn nemu_close_check(
         &self,
         token: &LeaseToken,
+        witness: Arc<FencedWrite>,
         connection_id: ConnectionId,
     ) -> RuntimeHostResult<Option<Arc<dyn InputOperationCheck>>> {
         let alias = lock(&self.registered_instances, "resolve_nemu_close_instance")?
@@ -133,5 +152,6 @@ impl HostShared {
                 )
             })?;
         self.nemu_input_check(&alias, token, connection_id, None, true)
+            .map(|check| check.map(|check| check.fenced(witness)))
     }
 }

@@ -343,7 +343,7 @@ impl CaptureBackend for FakeCapture {
             .state
             .require_fenced_capture_close
             .load(Ordering::Acquire)
-            && authority != actingcommand_device::DeviceCloseAuthority::FencedDeviceWrite
+            && authority.resource_close_witness().is_none()
         {
             self.state
                 .unfenced_capture_close_count

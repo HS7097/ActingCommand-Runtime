@@ -178,6 +178,7 @@ impl HostShared {
         let close_links = links.clone();
         let failure_links = links;
         let action_for_worker = prepared_action;
+        let mut destructive_step = None;
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
@@ -191,11 +192,14 @@ impl HostShared {
                                 RuntimeHostError::scheduler("begin_destructive_input", &error)
                             })
                     });
-                if let Err(error) = destructive {
-                    return CriticalActionReport::Failed {
-                        error: ActionFailure::scheduler(error),
-                        effect: EffectDisposition::NotPerformed,
-                    };
+                match destructive {
+                    Ok(witness) => destructive_step = Some(Arc::new(witness)),
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::scheduler(error),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
                 }
                 let registration = match self.mark_resources_in_use() {
                     Ok(registration) => registration,
@@ -213,7 +217,12 @@ impl HostShared {
                     &instance_alias,
                     action_for_worker,
                     input_frame,
-                    input_check,
+                    input_check.map(|check| {
+                        check.fenced(Arc::clone(
+                            destructive_step.as_ref().expect("admitted step"),
+                        ))
+                    }),
+                    destructive_step.as_ref().map(Arc::clone),
                     registration,
                 );
                 let touch_response_us = performance::measured_microseconds(
@@ -271,6 +280,7 @@ impl HostShared {
                             error: match self.finish_input_failure(
                                 error,
                                 token,
+                                destructive_step.take(),
                                 connection_id,
                                 close_links,
                             ) {
@@ -331,7 +341,7 @@ impl HostShared {
         );
         match result {
             Ok(receipt) => {
-                self.finish_destructive_input(token, connection_id)?;
+                self.finish_destructive_input(destructive_step.take(), connection_id)?;
                 self.transfer_preempted_if_ready(token, connection_id)?;
                 self.observe_pipeline_event(receipt.outcome())
                     .map_err(RequestFailure::poison_without_terminal)?;
@@ -360,7 +370,7 @@ impl HostShared {
                     });
                 }
                 if error.destructive_started {
-                    self.finish_destructive_input(token, connection_id)?;
+                    self.finish_destructive_input(destructive_step.take(), connection_id)?;
                 }
                 if error.transfer_after {
                     self.transfer_preempted_if_ready(token, connection_id)?;
@@ -456,6 +466,7 @@ impl HostShared {
         let instance_alias = resolved.instance_alias.clone();
         let outcome_links = links.clone();
         let failure_links = links;
+        let mut destructive_step = None;
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
@@ -470,11 +481,14 @@ impl HostShared {
                             })
                     },
                 );
-                if let Err(error) = destructive {
-                    return CriticalActionReport::Failed {
-                        error: ActionFailure::scheduler(error),
-                        effect: EffectDisposition::NotPerformed,
-                    };
+                match destructive {
+                    Ok(witness) => destructive_step = Some(Arc::new(witness)),
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::scheduler(error),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
                 }
                 let registration = match self.mark_resources_in_use() {
                     Ok(registration) => registration,
@@ -490,6 +504,7 @@ impl HostShared {
                     .control_application_retained_with_registration_guard(
                         &instance_alias,
                         action,
+                        destructive_step.as_ref().map(Arc::clone),
                         registration,
                     ) {
                     Ok(()) => CriticalActionReport::Succeeded {
@@ -541,7 +556,7 @@ impl HostShared {
         );
         match result {
             Ok(receipt) => {
-                self.finish_destructive_input(token, connection_id)?;
+                self.finish_destructive_input(destructive_step.take(), connection_id)?;
                 self.transfer_preempted_if_ready(token, connection_id)?;
                 Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
@@ -573,7 +588,7 @@ impl HostShared {
                     });
                 }
                 if error.destructive_started {
-                    self.finish_destructive_input(token, connection_id)?;
+                    self.finish_destructive_input(destructive_step.take(), connection_id)?;
                 }
                 if error.transfer_after {
                     self.transfer_preempted_if_ready(token, connection_id)?;
