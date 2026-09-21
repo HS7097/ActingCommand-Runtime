@@ -349,7 +349,7 @@ impl RuntimeHostConfig {
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             performance_monitor: None,
             capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
-            frame_retention_enabled: false,
+            frame_retention_enabled: true,
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),

@@ -419,7 +419,7 @@ impl ActingdConfigFile {
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
                 .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
                 .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
-                .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or_default())
+                .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or(true))
                 .with_bind_address(SocketAddr::new(
                     bind_host,
                     self.bind_port.unwrap_or_default(),
@@ -1788,7 +1788,7 @@ const fn enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_contract::IdentifierIssuer;
+    use actingcommand_contract::{ConfigParameterSource, FactScalar, IdentifierIssuer};
     use actingcommand_device::{DeviceErrorCategory, SegmentedSwipeAction};
     use actingcommand_vision_ffi::{FastDeployPpocrArtifacts, OnnxExecutionProvider};
     use serde_json::json;
@@ -2427,17 +2427,48 @@ mod tests {
                 "push_touch_tool": false
             }]
         });
-        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
-        let assembly = config.assemble().expect("runtime assembly");
-        assert_eq!(assembly.host.state_root(), root.path());
-        assert_eq!(
-            assembly.registry.device_input_backends.get("node.a"),
-            Some(&TouchBackendChoice::MaaTouch)
-        );
-        assert_eq!(
-            assembly.registry.device_capture_backends.get("node.a"),
-            Some(&CaptureBackendChoice::Adb)
-        );
+        for (configured, enabled, source, reason) in [
+            (None, true, ConfigParameterSource::Default, "flag absent"),
+            (
+                Some(false),
+                false,
+                ConfigParameterSource::Explicit,
+                "configured off",
+            ),
+        ] {
+            let mut value = value.clone();
+            if let Some(configured) = configured {
+                value["frame_retention_enabled"] = json!(configured);
+            }
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            assert_eq!(config.frame_retention_enabled, configured);
+            let assembly = config.assemble().expect("runtime assembly");
+            assert_eq!(assembly.host.state_root(), root.path());
+            assert_eq!(
+                assembly.registry.device_input_backends.get("node.a"),
+                Some(&TouchBackendChoice::MaaTouch)
+            );
+            assert_eq!(
+                assembly.registry.device_capture_backends.get("node.a"),
+                Some(&CaptureBackendChoice::Adb)
+            );
+            let retention = assembly
+                .manifest
+                .subsystems
+                .iter()
+                .find(|subsystem| subsystem.name == "frame_retention")
+                .expect("frame retention subsystem");
+            assert_eq!(retention.enabled, enabled);
+            assert_eq!(retention.reason, reason);
+            let parameter = assembly
+                .manifest
+                .parameters
+                .iter()
+                .find(|parameter| parameter.key == "frame_retention_enabled")
+                .expect("frame retention parameter");
+            assert_eq!(parameter.value, FactScalar::Boolean(enabled));
+            assert_eq!(parameter.source, source);
+        }
     }
 
     #[test]
