@@ -4,37 +4,21 @@ use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     IdentifierIssuer, InstanceId, OwnerEpoch, OwnerResourceDisposition, RuntimeErrorCode,
 };
-use serde::{Deserialize, Serialize};
+use actingcommand_ledger::owner_journal::{RuntimeOwnerJournal, RuntimeOwnerRecord as OwnerRecord};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process;
 
 pub(crate) const OWNER_FILE_NAME: &str = "owner.lock";
-const OWNER_SCHEMA_VERSION_V1: &str = "actingcommand.runtime-owner.v1";
-const OWNER_SCHEMA_VERSION: &str = "actingcommand.runtime-owner.v2";
-const MAX_OWNER_JOURNAL_BYTES: u64 = 4 * 1024 * 1024;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OwnerRecord {
-    schema_version: String,
-    revision: u64,
-    owner_epoch: OwnerEpoch,
-    pid: u32,
-    started_at_unix_ms: u64,
-    active: bool,
-    active_instances: Vec<InstanceId>,
-    closed_at_unix_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    resource_disposition: Option<OwnerResourceDisposition>,
-}
+const OWNER_SCHEMA_VERSION: &str = actingcommand_contract::OWNER_JOURNAL_SCHEMA;
 
 pub(crate) struct OwnerStartup {
     pub(crate) guard: OwnerGuard,
     pub(crate) owner_epoch: OwnerEpoch,
     pub(crate) takeover_instances: Vec<InstanceId>,
     pub(crate) takeover: bool,
+    pub(crate) journal: RuntimeOwnerJournal,
 }
 
 pub(crate) struct OwnerGuard {
@@ -79,7 +63,8 @@ impl OwnerGuard {
                 RuntimeErrorCode::RuntimeFatal,
             ),
         })?;
-        let previous = read_last_record(&mut file)?;
+        let journal = read_owner_journal(&mut file)?;
+        let previous = journal.last().cloned();
         if previous.as_ref().is_some_and(|record| {
             record.schema_version == OWNER_SCHEMA_VERSION
                 && matches!(
@@ -146,6 +131,7 @@ impl OwnerGuard {
             owner_epoch,
             takeover_instances,
             takeover,
+            journal,
         })
     }
 
@@ -320,113 +306,15 @@ impl Drop for OwnerGuard {
     }
 }
 
-fn read_last_record(file: &mut File) -> RuntimeHostResult<Option<OwnerRecord>> {
-    let length = file
-        .metadata()
-        .map_err(|_| {
-            RuntimeHostError::fatal(
-                "owner_metadata_failed",
-                "read_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?
-        .len();
-    if length > MAX_OWNER_JOURNAL_BYTES {
-        return Err(RuntimeHostError::fatal(
-            "owner_journal_too_large",
-            "read_owner_file",
-            RuntimeErrorCode::RuntimeFatal,
-        ));
-    }
-    file.seek(SeekFrom::Start(0)).map_err(|_| {
-        RuntimeHostError::fatal(
-            "owner_seek_failed",
-            "read_owner_file",
-            RuntimeErrorCode::RuntimeFatal,
-        )
-    })?;
-    let mut content = Vec::new();
-    file.read_to_end(&mut content).map_err(|_| {
-        RuntimeHostError::fatal(
-            "owner_read_failed",
-            "read_owner_file",
-            RuntimeErrorCode::RuntimeFatal,
-        )
-    })?;
-    if content.is_empty() {
-        return Ok(None);
-    }
-    let complete_length = if content.last() == Some(&b'\n') {
-        content.len()
-    } else {
-        content
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map(|index| index + 1)
-            .ok_or_else(|| invalid_owner_record("recover_owner_file"))?
-    };
-    if complete_length < content.len() {
-        file.set_len(complete_length as u64).map_err(|_| {
-            RuntimeHostError::fatal(
-                "owner_tail_truncate_failed",
-                "recover_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
-        file.sync_data().map_err(|_| {
-            RuntimeHostError::fatal(
-                "owner_tail_sync_failed",
-                "recover_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
-        content.truncate(complete_length);
-    }
-    let content =
-        std::str::from_utf8(&content).map_err(|_| invalid_owner_record("read_owner_file"))?;
-    let mut previous_revision = 0;
-    let mut last = None;
-    for line in content.lines().filter(|line| !line.trim().is_empty()) {
-        let record = serde_json::from_str::<OwnerRecord>(line)
-            .map_err(|_| invalid_owner_record("read_owner_file"))?;
-        validate_record(&record)?;
-        if record.revision != previous_revision + 1 {
-            return Err(invalid_owner_record("validate_owner_file"));
-        }
-        previous_revision = record.revision;
-        last = Some(record);
-    }
-    last.ok_or_else(|| invalid_owner_record("read_owner_file"))
-        .map(Some)
+fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal> {
+    RuntimeOwnerJournal::read_locked(file).map_err(|error| {
+        RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
+    })
 }
 
-fn validate_record(record: &OwnerRecord) -> RuntimeHostResult<()> {
-    let mut sorted = record.active_instances.clone();
-    sorted.sort_unstable();
-    sorted.dedup();
-    let schema_valid = match record.schema_version.as_str() {
-        OWNER_SCHEMA_VERSION_V1 => record.resource_disposition.is_none(),
-        OWNER_SCHEMA_VERSION => record.resource_disposition.is_some(),
-        _ => false,
-    };
-    if !schema_valid
-        || record.revision == 0
-        || record.pid == 0
-        || record.started_at_unix_ms == 0
-        || sorted != record.active_instances
-        || (record.active && record.closed_at_unix_ms.is_some())
-        || (!record.active && record.closed_at_unix_ms.is_none())
-        || (record.schema_version == OWNER_SCHEMA_VERSION
-            && !record.active
-            && record.resource_disposition != Some(OwnerResourceDisposition::None))
-    {
-        return Err(RuntimeHostError::fatal(
-            "owner_record_invalid",
-            "validate_owner_file",
-            RuntimeErrorCode::RuntimeFatal,
-        ));
-    }
-    Ok(())
+#[cfg(test)]
+fn read_last_record(file: &mut File) -> RuntimeHostResult<Option<OwnerRecord>> {
+    Ok(read_owner_journal(file)?.last().cloned())
 }
 
 fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()> {
@@ -459,14 +347,6 @@ fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()>
             RuntimeErrorCode::RuntimeFatal,
         )
     })
-}
-
-fn invalid_owner_record(operation: &'static str) -> RuntimeHostError {
-    RuntimeHostError::fatal(
-        "owner_record_invalid",
-        operation,
-        RuntimeErrorCode::RuntimeFatal,
-    )
 }
 
 #[cfg(test)]

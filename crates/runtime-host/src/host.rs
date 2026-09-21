@@ -668,6 +668,7 @@ impl RuntimeHost {
             owner_epoch,
             takeover_instances,
             takeover,
+            journal,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
         let mut fresh_storage = true;
         for material in [
@@ -855,6 +856,49 @@ impl RuntimeHost {
                 return Err(original);
             }
         };
+        let prior_epoch_recovery = limits
+            .deadline()
+            .map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            })
+            .and_then(|deadline| {
+                ledger
+                    .reconcile_prior_epoch_closes(owner_epoch, journal, deadline)
+                    .map_err(|error| {
+                        RuntimeHostError::fatal(
+                            error.code(),
+                            error.operation(),
+                            RuntimeErrorCode::LedgerFailure,
+                        )
+                        .with_native_detail(format!("{error:?}"))
+                    })
+            });
+        if let Err(mut original) = prior_epoch_recovery {
+            let ledger_closed = ledger.close().map_err(|error| {
+                RuntimeHostError::fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_native_detail(format!("{error:?}"))
+            });
+            let owner_closed = config
+                .clock
+                .sample()
+                .and_then(|now| owner.close(now.unix_ms));
+            for result in [ledger_closed, owner_closed] {
+                if let Err(secondary) = result {
+                    original = original
+                        .into_fatal()
+                        .with_related_failure("prior_epoch_startup_cleanup", &secondary);
+                }
+            }
+            return Err(original);
+        }
         let provider = match assemble(&mut crate::ProviderStartup {
             ledger: &ledger,
             events: &events,

@@ -19,6 +19,16 @@ use std::sync::Arc;
 /// their physical snapshot through the existing database owner before returning.
 /// Projection, subscriptions and public request validation belong to GlobalLedger.
 pub(super) trait LedgerStore: Send + 'static {
+    fn reconcile_prior_epoch_closes(
+        &mut self,
+        writer: actingcommand_contract::OwnerEpoch,
+        journal: &crate::owner_journal::RuntimeOwnerJournal,
+        after: Option<actingcommand_contract::PriorEpochScope>,
+        deadline: std::time::Instant,
+    ) -> GlobalLedgerResult<(
+        Option<actingcommand_contract::PriorEpochScope>,
+        Vec<PersistedEvent>,
+    )>;
     fn release_lab_pin(
         &mut self,
         target: actingcommand_contract::LabPinReleaseTarget,
@@ -96,6 +106,18 @@ pub(super) trait LedgerStore: Send + 'static {
 }
 
 impl<B: DurableStorage> LedgerStore for EventStore<B> {
+    fn reconcile_prior_epoch_closes(
+        &mut self,
+        writer: actingcommand_contract::OwnerEpoch,
+        journal: &crate::owner_journal::RuntimeOwnerJournal,
+        after: Option<actingcommand_contract::PriorEpochScope>,
+        deadline: std::time::Instant,
+    ) -> GlobalLedgerResult<(
+        Option<actingcommand_contract::PriorEpochScope>,
+        Vec<PersistedEvent>,
+    )> {
+        Self::reconcile_prior_epoch_closes(self, writer, journal, after, deadline)
+    }
     fn release_lab_pin(
         &mut self,
         target: actingcommand_contract::LabPinReleaseTarget,
