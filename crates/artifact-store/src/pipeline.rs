@@ -337,8 +337,17 @@ impl CapturePipeline {
         self.counts
     }
 
-    pub fn admit_frame_copy(&self, frame: &actingcommand_device::Frame) -> ArtifactStoreResult<()> {
-        self.frame_store.admit_frame_copy(frame)
+    /// The caller retains the original throughout this synchronous material operation.
+    /// Sample before cloning and keep that original charged through every publication.
+    pub fn with_frame_copy<T>(
+        &mut self,
+        frame: &actingcommand_device::Frame,
+        operation: impl FnOnce(&mut Self, actingcommand_device::Frame) -> T,
+    ) -> ArtifactStoreResult<T> {
+        let previous = self.frame_store.admit_frame_copy(frame)?;
+        let result = operation(self, frame.clone());
+        self.frame_store.release_frame_copy(previous);
+        Ok(result)
     }
 
     pub fn record_frame(

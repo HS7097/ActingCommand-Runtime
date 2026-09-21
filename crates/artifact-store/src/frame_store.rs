@@ -452,6 +452,8 @@ pub struct FrameStore {
     fixture_capacity_limit: Option<u64>,
     budget: MemoryBudget,
     resident_bytes: u64,
+    caller_frame_bytes: u64,
+    pending_input_bytes: u64,
     payload_bytes: u64,
     metadata_estimated_bytes: u64,
     thumbnail_estimated_bytes: u64,
@@ -482,6 +484,8 @@ impl FrameStore {
             fixture_capacity_limit: None,
             budget,
             resident_bytes: 0,
+            caller_frame_bytes: 0,
+            pending_input_bytes: 0,
             payload_bytes: 0,
             metadata_estimated_bytes: 0,
             thumbnail_estimated_bytes: 0,
@@ -590,18 +594,30 @@ impl FrameStore {
 
     pub fn add_frame(
         &mut self,
-        mut input: FrameStoreFrameInput,
+        input: FrameStoreFrameInput,
         publish: &mut FramePersistencePublisher<'_>,
     ) -> CliOutcome<FrameStoreOutcome> {
         self.last_failure = None;
         self.refresh_budget()?;
+        let estimate = estimate_entry(&input)?;
+        // This input is already alive while history is published. Keep its full
+        // stored charge until ownership moves into the resident entry below.
+        self.pending_input_bytes = estimate.stored_bytes();
+        let result = self.add_frame_admitted(input, estimate, publish);
+        self.pending_input_bytes = 0;
+        result
+    }
+
+    fn add_frame_admitted(
+        &mut self,
+        mut input: FrameStoreFrameInput,
+        mut estimate: ResidentEstimate,
+        publish: &mut FramePersistencePublisher<'_>,
+    ) -> CliOutcome<FrameStoreOutcome> {
         self.release_watermarks_if_needed();
         let mut frame_failures = Vec::new();
         let mut attempted = Vec::new();
         let mut refused = false;
-        let file = format!("screenshots/{}", input.file_name);
-        let thumb = thumbnail(&input.frame);
-        let mut estimate = estimate_entry(&input, &file, &thumb)?;
         let projected = self.resident_bytes.saturating_add(estimate.total());
         if projected >= self.budget.tier1_bytes {
             self.activate_tier1(projected);
@@ -614,13 +630,15 @@ impl FrameStore {
         // The already-returned frame stays with its caller on refusal. No encoding or
         // resident accounting commit precedes reservation of the complete live set.
         if self
-            .resident_bytes
-            .checked_add(estimate.total())
+            .live_bytes()
+            .and_then(|bytes| bytes.checked_add(estimate.encoder_workspace))
             .is_none_or(|bytes| bytes > self.budget.budget_bytes)
         {
             self.activate_tier3(self.resident_bytes.saturating_add(estimate.total()));
             return Err(CliError::frame_workspace_refused());
         }
+        let file = format!("screenshots/{}", input.file_name);
+        let thumb = thumbnail(&input.frame);
         let png = input
             .frame
             .png_for_artifact_with_budget(estimate.encoder_workspace)
@@ -633,7 +651,7 @@ impl FrameStore {
         if let Cow::Owned(png) = png {
             input.frame.original_png = Some(png);
         }
-        estimate = estimate_entry(&input, &file, &thumb)?;
+        estimate = estimate_entry(&input)?;
         let key_frame = self.is_key_frame(&input);
         let entry = FrameEntry {
             material,
@@ -664,6 +682,7 @@ impl FrameStore {
             spill_failed: false,
         };
         self.add_estimate(entry.resident_estimate);
+        self.pending_input_bytes = 0;
         self.entries.push(entry);
         let index = self.entries.len() - 1;
         self.timeline.push(json!({
@@ -838,8 +857,8 @@ impl FrameStore {
             .iter()
             .any(|entry| entry.frame_index == frame_index && entry.retained)
             && self
-                .resident_bytes
-                .checked_add(WRITER_BUFFER_BYTES)
+                .live_bytes()
+                .and_then(|bytes| bytes.checked_add(WRITER_BUFFER_BYTES))
                 .is_some_and(|bytes| bytes <= self.budget.budget_bytes)
     }
 
@@ -856,7 +875,8 @@ impl FrameStore {
         Ok(failures)
     }
 
-    pub(crate) fn admit_frame_copy(&self, frame: &Frame) -> CliOutcome<()> {
+    pub(crate) fn admit_frame_copy(&mut self, frame: &Frame) -> CliOutcome<u64> {
+        self.refresh_budget()?;
         let payload = (frame.pixels.capacity() as u64).checked_add(
             frame
                 .original_png
@@ -875,12 +895,27 @@ impl FrameStore {
                 )
             });
         if required
-            .and_then(|bytes| self.resident_bytes.checked_add(bytes))
+            .and_then(|bytes| self.live_bytes()?.checked_add(bytes))
             .is_none_or(|bytes| bytes > self.budget.budget_bytes)
         {
             return Err(CliError::frame_workspace_refused());
         }
-        Ok(())
+        let previous = self.caller_frame_bytes;
+        self.caller_frame_bytes = payload
+            .and_then(|bytes| bytes.checked_add(ENTRY_BASE_METADATA_BYTES))
+            .and_then(|bytes| previous.checked_add(bytes))
+            .ok_or_else(CliError::frame_workspace_refused)?;
+        Ok(previous)
+    }
+
+    pub(crate) fn release_frame_copy(&mut self, previous: u64) {
+        self.caller_frame_bytes = previous;
+    }
+
+    fn live_bytes(&self) -> Option<u64> {
+        self.resident_bytes
+            .checked_add(self.caller_frame_bytes)?
+            .checked_add(self.pending_input_bytes)
     }
 
     pub(crate) fn persistence_candidate_indexes(&self, include_all_retained: bool) -> Vec<usize> {
@@ -896,9 +931,10 @@ impl FrameStore {
     }
 
     pub(crate) fn persistence_candidate(
-        &self,
+        &mut self,
         frame_index: usize,
     ) -> CliOutcome<FramePersistenceCandidate<'_>> {
+        self.refresh_budget()?;
         let entry = self
             .entries
             .iter()
@@ -920,7 +956,7 @@ impl FrameStore {
         };
         if material_read
             .and_then(|bytes| bytes.checked_add(WRITER_BUFFER_BYTES))
-            .and_then(|bytes| self.resident_bytes.checked_add(bytes))
+            .and_then(|bytes| self.live_bytes()?.checked_add(bytes))
             .is_none_or(|bytes| bytes > self.budget.budget_bytes)
         {
             return Err(CliError::frame_workspace_refused());
@@ -1451,19 +1487,18 @@ struct ResidentEstimate {
 }
 
 impl ResidentEstimate {
-    fn total(self) -> u64 {
+    fn stored_bytes(self) -> u64 {
         self.payload
             .saturating_add(self.metadata)
             .saturating_add(self.thumbnail)
-            .saturating_add(self.encoder_workspace)
+    }
+
+    fn total(self) -> u64 {
+        self.stored_bytes().saturating_add(self.encoder_workspace)
     }
 }
 
-fn estimate_entry(
-    input: &FrameStoreFrameInput,
-    file: &str,
-    thumb: &Thumbnail,
-) -> CliOutcome<ResidentEstimate> {
+fn estimate_entry(input: &FrameStoreFrameInput) -> CliOutcome<ResidentEstimate> {
     let original_png = input
         .frame
         .original_png
@@ -1473,7 +1508,8 @@ fn estimate_entry(
     let payload = input.frame.pixels.capacity() as u64 + original_png;
     let metadata = ENTRY_BASE_METADATA_BYTES
         + string_capacity_bytes(&input.file_name)
-        + string_capacity_bytes(file)
+        + "screenshots/".len() as u64
+        + string_capacity_bytes(&input.file_name)
         + string_capacity_bytes(&input.label)
         + input
             .recognition_state
@@ -1486,7 +1522,7 @@ fn estimate_entry(
             | RecognitionState::Matched { .. }
             | RecognitionState::CompletedNoMatch => 0,
         };
-    let thumbnail = thumb.values.capacity() as u64;
+    let thumbnail = (THUMB_WIDTH * THUMB_HEIGHT) as u64;
     let encoder_workspace = input
         .frame
         .artifact_png_workspace_bytes()

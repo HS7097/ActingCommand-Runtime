@@ -99,7 +99,16 @@ Reads verify that reference and the retained original PNG length and hash.
 Already published frames release resident memory without another write.
 
 The original memory budget admits the live frame/copy, PNG workspace and material
-verification buffer before allocation or publication. RGB8/RGBA8 Fast/NoFilter
+verification buffer before allocation or publication. Host copies run inside one
+synchronous pipeline operation: a fresh budget is sampled before the copy, and
+the caller's original remains charged through recording, publication and pressure
+polling, including failure returns. An incoming frame remains charged while
+history is published, until its charge transfers to the resident entry. Each
+material candidate refreshes the budget and includes both live charges alongside
+resident bytes, verified-read material and the publication buffer. Encoding checks
+that same live set with its codec workspace before allocating it. The original
+charge is released only when the synchronous material operation returns.
+RGB8/RGBA8 Fast/NoFilter
 encoding reserves the locked codec's rows and both compression outputs, including
 allocation overlap, and writes to a fixed output slice. Supplied original PNGs
 are borrowed. No batch of encoded frames is assembled. Completed encoding releases

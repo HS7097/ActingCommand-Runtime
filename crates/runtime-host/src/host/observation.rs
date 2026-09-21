@@ -286,9 +286,6 @@ impl HostShared {
             &mut sink,
         )
         .map_err(online_observation::observation_artifact_failure)?;
-        pipeline
-            .admit_frame_copy(&frame)
-            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
         let mut events = contained_task::RuntimeArtifactEventSink {
             ledger: &self.ledger,
             events: &self.events,
@@ -296,31 +293,36 @@ impl HostShared {
         let mut publish = |store: &ArtifactStore, input: ArtifactWriteRequest<'_>| {
             sink.publish_frame(store, input, Some(*frame_id))
         };
-        let captured = pipeline
-            .record_frame_with_publisher(
-                FrameStoreFrameInput {
-                    frame_index: 0,
-                    file_name: "frame-0.png".to_owned(),
-                    label: "initial".to_owned(),
-                    recognition_state: RecognitionState::CompletedNoMatch,
-                    pinned_reason: None,
-                    frame: frame.clone(),
-                },
-                write_context.clone(),
-                &mut events,
-                Some(&mut publish),
-            )
-            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
-        self.record_frame_pressure_failures(&pipeline, &captured.frame.frame_failures)?;
         let reference = pipeline
-            .persist_frame_with_publisher(0, &mut events, Some(&mut publish))
-            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
-        pipeline
-            .poll_pressure_with_publisher(&write_context, &mut events, Some(&mut publish))
-            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
-        pipeline
-            .cleanup_spills()
-            .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+            .with_frame_copy(&frame, |pipeline, frame| -> Result<_, RequestFailure> {
+                let captured = pipeline
+                    .record_frame_with_publisher(
+                        FrameStoreFrameInput {
+                            frame_index: 0,
+                            file_name: "frame-0.png".to_owned(),
+                            label: "initial".to_owned(),
+                            recognition_state: RecognitionState::CompletedNoMatch,
+                            pinned_reason: None,
+                            frame,
+                        },
+                        write_context.clone(),
+                        &mut events,
+                        Some(&mut publish),
+                    )
+                    .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+                self.record_frame_pressure_failures(pipeline, &captured.frame.frame_failures)?;
+                let reference = pipeline
+                    .persist_frame_with_publisher(0, &mut events, Some(&mut publish))
+                    .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+                pipeline
+                    .poll_pressure_with_publisher(&write_context, &mut events, Some(&mut publish))
+                    .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+                pipeline
+                    .cleanup_spills()
+                    .map_err(|error| self.capture_material_failure(error, links.clone()))?;
+                Ok(reference)
+            })
+            .map_err(|error| self.capture_material_failure(error, links.clone()))??;
         let observation = ReadonlyObservation::new(
             frame.width,
             frame.height,

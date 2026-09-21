@@ -2352,40 +2352,44 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 .pipeline
                                 .as_mut()
                                 .expect("capture pipeline initialized");
-                            pipeline.admit_frame_copy(&frame)?;
-                            let result = pipeline.record_frame_with_publisher(
-                                FrameStoreFrameInput {
-                                    frame_index,
-                                    file_name: format!("frame-{frame_index}.png"),
-                                    label: if frame_index == 0 {
-                                        "initial"
-                                    } else if input_action_id.is_some() {
-                                        "after-input"
-                                    } else {
-                                        "capture"
-                                    }
-                                    .to_owned(),
-                                    recognition_state: RecognitionState::Pending,
-                                    pinned_reason: self
-                                        .finalizing
-                                        .map(|_| PinnedFrameReason::Terminal),
-                                    frame: frame.clone(),
+                            pipeline.with_frame_copy(
+                                &frame,
+                                |pipeline, frame| -> ArtifactStoreResult<_> {
+                                    let result = pipeline.record_frame_with_publisher(
+                                        FrameStoreFrameInput {
+                                            frame_index,
+                                            file_name: format!("frame-{frame_index}.png"),
+                                            label: if frame_index == 0 {
+                                                "initial"
+                                            } else if input_action_id.is_some() {
+                                                "after-input"
+                                            } else {
+                                                "capture"
+                                            }
+                                            .to_owned(),
+                                            recognition_state: RecognitionState::Pending,
+                                            pinned_reason: self
+                                                .finalizing
+                                                .map(|_| PinnedFrameReason::Terminal),
+                                            frame,
+                                        },
+                                        write_context.clone(),
+                                        &mut events,
+                                        Some(&mut publish),
+                                    )?;
+                                    let reference = pipeline.persist_frame_with_publisher(
+                                        frame_index,
+                                        &mut events,
+                                        Some(&mut publish),
+                                    )?;
+                                    pipeline.poll_pressure_with_publisher(
+                                        &write_context,
+                                        &mut events,
+                                        Some(&mut publish),
+                                    )?;
+                                    Ok((reference, result.frame.frame_failures))
                                 },
-                                write_context.clone(),
-                                &mut events,
-                                Some(&mut publish),
-                            )?;
-                            let reference = pipeline.persist_frame_with_publisher(
-                                frame_index,
-                                &mut events,
-                                Some(&mut publish),
-                            )?;
-                            pipeline.poll_pressure_with_publisher(
-                                &write_context,
-                                &mut events,
-                                Some(&mut publish),
-                            )?;
-                            Ok((reference, result.frame.frame_failures))
+                            )?
                         })();
                         let reference = match persistence {
                             Ok((reference, failures)) => {
