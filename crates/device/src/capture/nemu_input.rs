@@ -638,7 +638,7 @@ impl NemuIpcWorkerState {
     ) -> DeviceResult<()> {
         match self.input.as_ref().map(|input| input.contact) {
             Some(Contact::MayBeDown) => {
-                if authority != DeviceCloseAuthority::FencedDeviceWrite {
+                if authority.resource_close_witness().is_none() {
                     return Err(contact_unconfirmed(
                         "Nemu final up requires current fenced close",
                     ));

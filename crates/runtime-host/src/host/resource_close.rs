@@ -50,11 +50,22 @@ impl HostShared {
 
     pub(super) fn finish_destructive_input(
         &self,
-        token: &LeaseToken,
+        step: Option<Arc<FencedWrite>>,
         connection_id: ConnectionId,
     ) -> Result<(), RequestFailure> {
+        let Some(witness) = step.and_then(|step| Arc::try_unwrap(step).ok()) else {
+            let mut error = RuntimeHostError::fatal(
+                "fenced_step_not_reclaimed",
+                "finish_destructive_input",
+                RuntimeErrorCode::RuntimeFatal,
+            );
+            error.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
+            self.retain_unconfirmed_resources(&error, EventLinksDraft::default())
+                .map_err(RequestFailure::poison_without_terminal)?;
+            return Err(RequestFailure::poison_without_terminal(error));
+        };
         lock(&self.scheduler, "finish_destructive_input")?
-            .finish_destructive_step(token, connection_id)
+            .finish_destructive_step(witness, connection_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
                     "finish_destructive_input",
@@ -157,19 +168,21 @@ impl HostShared {
             self.record_owner_resource_close()?;
             return Ok(Ok(()));
         }
-        lock(&self.scheduler, "begin_destructive_resource_close")?
-            .begin_resource_close(token, connection_id, self.monotonic_ms()?)
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "begin_destructive_resource_close",
-                    &error,
-                ))
-            })?;
+        let witness = Arc::new(
+            lock(&self.scheduler, "begin_destructive_resource_close")?
+                .begin_resource_close(token, connection_id, self.monotonic_ms()?)
+                .map_err(|error| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                        "begin_destructive_resource_close",
+                        &error,
+                    ))
+                })?,
+        );
 
         match self.execution.close_instance_with_input_check(
             token.instance_id(),
-            DeviceCloseAuthority::FencedDeviceWrite,
-            self.nemu_close_check(token, connection_id)
+            DeviceCloseAuthority::FencedDeviceWrite(Arc::clone(&witness)),
+            self.nemu_close_check(token, Arc::clone(&witness), connection_id)
                 .map_err(RequestFailure::poison_without_terminal)?,
         ) {
             Ok(outcome) => {
@@ -190,14 +203,7 @@ impl HostShared {
                     links,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
-                lock(&self.scheduler, "finish_destructive_resource_close")?
-                    .finish_destructive_step(token, connection_id)
-                    .map_err(|error| {
-                        RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                            "finish_destructive_resource_close",
-                            &error,
-                        ))
-                    })?;
+                self.finish_destructive_input(Some(witness), connection_id)?;
                 Ok(Ok(()))
             }
             Err(execution_error) => {
@@ -220,14 +226,7 @@ impl HostShared {
                 }
                 lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
                 self.record_owner_resource_close()?;
-                lock(&self.scheduler, "finish_destructive_resource_close")?
-                    .finish_destructive_step(token, connection_id)
-                    .map_err(|scheduler_error| {
-                        RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                            "finish_destructive_resource_close",
-                            &scheduler_error,
-                        ))
-                    })?;
+                self.finish_destructive_input(Some(witness), connection_id)?;
                 Ok(Err(execution_error))
             }
         }
@@ -342,15 +341,19 @@ impl HostShared {
         &self,
         primary: ExecutionKernelError,
         token: &LeaseToken,
+        step: Option<Arc<FencedWrite>>,
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<ExecutionKernelError> {
+        if primary.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+            return Ok(primary);
+        }
         let close_result: RuntimeHostResult<Result<(), ExecutionKernelError>> = (|| {
             let instance_guard = self
                 .instance_guard(token.instance_id())
                 .map_err(|failure| *failure.error)?;
             let _admission = lock(&instance_guard, "lock_instance_admission")?;
-            self.finish_destructive_input(token, connection_id)
+            self.finish_destructive_input(step, connection_id)
                 .map_err(|failure| *failure.error)?;
             self.close_instance_resources_result(token, connection_id, links.clone())
                 .map_err(|failure| *failure.error)
