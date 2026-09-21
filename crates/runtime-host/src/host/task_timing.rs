@@ -679,6 +679,9 @@ fn writer_observation(
         },
         previous_command: previous.command.map(|command| match command {
             Command::ReleaseLabPin => TaskTimingWriterCommand::ReleaseLabPin,
+            Command::ReconcilePriorEpochCloses => {
+                TaskTimingWriterCommand::ReconcilePriorEpochCloses
+            }
             Command::RetentionCandidates => TaskTimingWriterCommand::RetentionCandidates,
             Command::AdmitArtifactEviction => TaskTimingWriterCommand::AdmitArtifactEviction,
             Command::FinishArtifactEviction => TaskTimingWriterCommand::FinishArtifactEviction,

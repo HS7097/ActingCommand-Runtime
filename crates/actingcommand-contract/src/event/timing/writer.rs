@@ -18,6 +18,7 @@ pub enum TaskTimingWriterEndpoint {
 #[serde(rename_all = "snake_case")]
 pub enum TaskTimingWriterCommand {
     ReleaseLabPin,
+    ReconcilePriorEpochCloses,
     RetentionCandidates,
     AdmitArtifactEviction,
     FinishArtifactEviction,

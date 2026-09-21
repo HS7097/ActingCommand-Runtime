@@ -2,7 +2,9 @@
 
 `actingd` parses configuration before entering `RuntimeHost::start_with_provider`.
 The Host invokes the one-shot assembly closure after acquiring its OwnerGuard
-and opening ArtifactStore and GlobalLedger. `ProviderStartup` borrows that
+and opening ArtifactStore and GlobalLedger. Pending eviction recovery, capacity
+preflight and proven prior-epoch scope reconciliation complete before assembly;
+any failure stops startup before providers or public service. `ProviderStartup` borrows that
 ledger and accepts only the typed Provider startup record. Its records share
 the owner epoch and startup request/correlation/action links. The existing
 `RuntimeHost::start` delegates to the same owner for already supplied backends;
