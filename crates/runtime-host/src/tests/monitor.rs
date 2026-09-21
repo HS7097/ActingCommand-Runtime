@@ -248,6 +248,7 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
             EventType::MonitorProbeStarted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::RuntimeLifecycleObserved,
             EventType::CaptureCompleted,
             EventType::ArtifactCreated,
             EventType::ArtifactVerified,
