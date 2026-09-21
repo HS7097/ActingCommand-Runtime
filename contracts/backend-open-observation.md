@@ -54,8 +54,9 @@ rules continue through the existing capture path.
 The original `runtime.lifecycle_observed` event has phase
 `backend_open_observed` and an optional `backend_open` typed payload. The event
 reuses the triggering request/correlation/frame/run/instance links and the Host
-owner epoch. Capture opens use the Capture module; input and paired opens use
-DeviceProxy. An open failure is Error severity. The primary operation outcome,
+owner epoch. Source/module follow the triggering capture or input operation,
+including its fixture/Lab provenance; a paired open retains that caller's origin.
+An open failure is Error severity. The primary operation outcome,
 its diagnostics, cleanup and vendor stdio keep their original paths.
 
 Readonly observations, capture sequences and Lab capture share the observation

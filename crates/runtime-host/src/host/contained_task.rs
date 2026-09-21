@@ -2301,6 +2301,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .append_backend_open_observations(
                             &std::mem::take(&mut frame.backend_open_observations),
                             links.clone(),
+                            source,
+                            module,
                         )
                         .map_err(RequestFailure::poison_without_terminal)?;
                     let material_started = self
@@ -2473,7 +2475,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 }
                 Err(error) => {
                     self.host
-                        .append_backend_open_failure_observations(&error, links.clone())
+                        .append_backend_open_failure_observations(
+                            &error,
+                            links.clone(),
+                            source,
+                            module,
+                        )
                         .map_err(RequestFailure::poison_without_terminal)?;
                     let error = self
                         .host

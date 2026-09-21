@@ -236,6 +236,8 @@ impl HostShared {
                         if let Err(error) = self.append_backend_open_observations(
                             &outcome.backend_open_observations,
                             lifecycle_links.clone(),
+                            source,
+                            module,
                         ) {
                             return CriticalActionReport::Failed {
                                 error: ActionFailure::poison(error),
@@ -269,6 +271,8 @@ impl HostShared {
                         if let Err(writer) = self.append_backend_open_failure_observations(
                             &error,
                             lifecycle_links.clone(),
+                            source,
+                            module,
                         ) {
                             return CriticalActionReport::Failed {
                                 error: ActionFailure::poison(writer),

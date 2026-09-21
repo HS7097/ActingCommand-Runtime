@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use actingcommand_contract::{BackendObservationStatus, BackendOpenEntry};
+use actingcommand_contract::BackendObservationStatus;
 use actingcommand_device::BackendOpenObservation;
 
 impl HostShared {
@@ -9,10 +9,14 @@ impl HostShared {
         &self,
         error: &ExecutionKernelError,
         links: EventLinksDraft,
+        source: EventSource,
+        module: OriginModule,
     ) -> RuntimeHostResult<()> {
         self.append_backend_open_observations(
             error.failure_context().backend_open_observations(),
             links,
+            source,
+            module,
         )
         .map_err(|writer| {
             writer.with_complete_failure(
@@ -26,6 +30,8 @@ impl HostShared {
         &self,
         observations: &[BackendOpenObservation],
         links: EventLinksDraft,
+        source: EventSource,
+        module: OriginModule,
     ) -> RuntimeHostResult<()> {
         if observations.is_empty() {
             return Ok(());
@@ -55,13 +61,8 @@ impl HostShared {
                     } else {
                         EventSeverity::Info
                     },
-                    EventSource::Device,
-                    match observation.report.entry {
-                        BackendOpenEntry::Capture => OriginModule::Capture,
-                        BackendOpenEntry::Input | BackendOpenEntry::NemuPair => {
-                            OriginModule::DeviceProxy
-                        }
-                    },
+                    source,
+                    module,
                     EventActor::Runtime,
                     links.clone(),
                     RuntimePayloadDraft::backend_open_observed(

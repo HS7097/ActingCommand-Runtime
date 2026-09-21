@@ -259,13 +259,20 @@ impl HostShared {
                 self.append_backend_open_observations(
                     &std::mem::take(&mut frame.backend_open_observations),
                     links.clone(),
+                    EventSource::Device,
+                    OriginModule::Capture,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
                 frame
             }
             Err(error) => {
-                self.append_backend_open_failure_observations(&error, links.clone())
-                    .map_err(RequestFailure::poison_without_terminal)?;
+                self.append_backend_open_failure_observations(
+                    &error,
+                    links.clone(),
+                    EventSource::Device,
+                    OriginModule::Capture,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
                 let error = self
                     .finish_capture_failure_while_guarded(error, links.clone(), admission)
                     .map_err(RequestFailure::poison_without_terminal)?;
