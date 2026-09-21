@@ -44,7 +44,7 @@ pub(super) struct ManifestInputs<'a> {
 
 pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, &'static str> {
     let device_diagnostic_mode = inputs.device_diagnostic_mode.unwrap_or_default();
-    let frame_retention_enabled = inputs.frame_retention_enabled.unwrap_or_default();
+    let frame_retention_enabled = inputs.frame_retention_enabled.unwrap_or(true);
     let capacity_thresholds = inputs.capacity_thresholds.unwrap_or_default();
     let performance_monitor = PerformanceMonitorConfig::default();
     let performance_control = PerformanceControlConfig::default();
