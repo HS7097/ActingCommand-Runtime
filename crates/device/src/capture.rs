@@ -52,6 +52,11 @@ const DEFAULT_CAPTURE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// Single-shot screenshot boundary for device capture backends.
 pub trait CaptureBackend {
+    /// Dimensions already obtained by construction/probing; this getter performs no I/O.
+    fn opened_dimensions(&self) -> Option<(u32, u32)> {
+        None
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame>;
 
     /// Read this producer's display geometry within the caller's absolute deadline.
@@ -139,6 +144,8 @@ impl CaptureBackendChoice {
 /// Device frame in a common raw-pixel contract.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
+    /// Open observations attached by the kernel to this request's result only.
+    pub backend_open_observations: Vec<crate::BackendOpenObservation>,
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
@@ -162,6 +169,7 @@ impl Frame {
             width,
             height,
             pixels: image.into_raw(),
+            backend_open_observations: Vec::new(),
             pixel_format: PixelFormat::Rgba8,
             original_png: Some(png),
             captured_at: SystemTime::now(),
@@ -191,6 +199,7 @@ impl Frame {
             width,
             height,
             pixels,
+            backend_open_observations: Vec::new(),
             pixel_format,
             original_png: None,
             captured_at: SystemTime::now(),
@@ -743,9 +752,12 @@ where
         let probe_outcome = match probe(name) {
             Ok(outcome) => outcome,
             Err(primary) => {
-                return Err(close_capture_candidates(
-                    successful,
-                    primary.with_resource_candidate_index(candidate_index),
+                return Err(crate::observe_open_failure(
+                    crate::backend_open::capture_open_report(requested, None, &attempts),
+                    close_capture_candidates(
+                        successful,
+                        primary.with_resource_candidate_index(candidate_index),
+                    ),
                 ));
             }
         };
@@ -792,17 +804,20 @@ where
         }
         if let Some(primary) = cleanup_error {
             let mut backend = backend;
-            return Err(match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-                Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
-                Err(winner_cleanup) => {
-                    if winner_cleanup.resource_quiescence()
-                        == Some(DeviceResourceQuiescence::Unconfirmed)
-                    {
-                        std::mem::forget(backend);
+            return Err(crate::observe_open_failure(
+                crate::backend_open::capture_open_report(requested, Some(used), &attempts),
+                match backend.close_once(DeviceCloseAuthority::LocalOnly) {
+                    Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+                    Err(winner_cleanup) => {
+                        if winner_cleanup.resource_quiescence()
+                            == Some(DeviceResourceQuiescence::Unconfirmed)
+                        {
+                            std::mem::forget(backend);
+                        }
+                        primary.merge_resource_cleanup(winner_cleanup)
                     }
-                    primary.merge_resource_cleanup(winner_cleanup)
-                }
-            });
+                },
+            ));
         }
         return Ok(SelectedCaptureBackend {
             selection: None,
@@ -815,11 +830,14 @@ where
         });
     }
 
-    Err(DeviceError::fatal(format!(
-        "{} capture backend selection failed; attempts: {}",
-        requested.as_str(),
-        format_backend_attempts(&attempts)
-    )))
+    Err(crate::observe_open_failure(
+        crate::backend_open::capture_open_report(requested, None, &attempts),
+        DeviceError::fatal(format!(
+            "{} capture backend selection failed; attempts: {}",
+            requested.as_str(),
+            format_backend_attempts(&attempts)
+        )),
+    ))
 }
 
 fn close_capture_candidates(
@@ -1083,6 +1101,12 @@ struct PrimedCaptureBackend {
 }
 
 impl CaptureBackend for PrimedCaptureBackend {
+    fn opened_dimensions(&self) -> Option<(u32, u32)> {
+        self.primed
+            .as_ref()
+            .map(|frame| (frame.width, frame.height))
+    }
+
     fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
         require_geometry_open(&self.close_result)?;
         self.inner.observe_geometry(deadline)
@@ -2532,6 +2556,10 @@ fn worker_state_result<T>(
 }
 
 impl CaptureBackend for NemuIpcBackend {
+    fn opened_dimensions(&self) -> Option<(u32, u32)> {
+        Some((self.frame_width, self.frame_height))
+    }
+
     fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
         require_geometry_open(&self.close_result)?;
         self.worker

@@ -46,6 +46,16 @@ pub struct AdbInputConnectGeometry {
 }
 
 impl AdbInputConnectGeometry {
+    pub(crate) fn open_observation(
+        self,
+    ) -> actingcommand_contract::BackendInputGeometryObservation {
+        actingcommand_contract::BackendInputGeometryObservation {
+            natural_max_x: self.natural_max_x,
+            natural_max_y: self.natural_max_y,
+            rotation_degrees: self.rotation_degrees,
+        }
+    }
+
     pub const fn new(natural_max_x: i32, natural_max_y: i32, rotation_degrees: u16) -> Self {
         Self {
             natural_max_x,

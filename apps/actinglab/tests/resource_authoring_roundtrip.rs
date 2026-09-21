@@ -139,22 +139,46 @@ impl ExecutionBackendProvider for SealedProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "sealed-authoring"))
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        if instance_alias != "ak" {
-            return Err(DeviceError::fatal("unexpected sealed authoring instance"));
-        }
-        Ok(Box::new(SealedInput {
-            state: Arc::clone(&self.state),
-        }))
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            if instance_alias != "ak" {
+                return Err(DeviceError::fatal("unexpected sealed authoring instance"));
+            }
+            Ok(Box::new(SealedInput {
+                state: Arc::clone(&self.state),
+            }))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        if instance_alias != "ak" {
-            return Err(DeviceError::fatal("unexpected sealed authoring instance"));
-        }
-        Ok(Box::new(SealedCapture {
-            state: Arc::clone(&self.state),
-        }))
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            if instance_alias != "ak" {
+                return Err(DeviceError::fatal("unexpected sealed authoring instance"));
+            }
+            Ok(Box::new(SealedCapture {
+                state: Arc::clone(&self.state),
+            }))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the

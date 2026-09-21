@@ -103,7 +103,7 @@ impl NemuIpcSession {
         capture: CaptureBackendConfig,
         application: NemuApplicationTarget,
         input: NemuInputConfig,
-    ) -> DeviceResult<NemuSessionBackends> {
+    ) -> DeviceResult<crate::OpenedBackend<NemuSessionBackends>> {
         if capture.requested != CaptureBackendChoice::NemuIpc
             || input.command_timeout.is_zero()
             || input.shutdown_timeout.is_zero()
@@ -138,24 +138,39 @@ impl NemuIpcSession {
             capture.capture_timeout,
             Some(NemuInputState::new(application, input.clone())),
         )?;
+        let mut report = actingcommand_contract::BackendOpenReport::unobserved(
+            actingcommand_contract::BackendOpenEntry::NemuPair,
+        );
+        report.source = actingcommand_contract::BackendOpenSource::Native;
+        report.requested = "nemu_ipc".into();
+        report.selected = Some("nemu_ipc".into());
+        report.status = actingcommand_contract::BackendObservationStatus::Passed;
+        report.connection = actingcommand_contract::BackendObservationStatus::Passed;
+        report.frame_width = Some(backend.frame_width);
+        report.frame_height = Some(backend.frame_height);
+        report.serial_configured = Some(selection.configured_serial.is_some());
+        report.installation_source = selection.mumu.as_ref().map(|context| context.source.into());
         let owner = Arc::new(Self {
             backend: Mutex::new(backend),
             input_config: input,
         });
-        Ok(NemuSessionBackends {
-            owner: Arc::clone(&owner),
-            input: Box::new(NemuInputView {
+        Ok(crate::OpenedBackend::new(
+            NemuSessionBackends {
                 owner: Arc::clone(&owner),
-                serial,
-                detached: false,
-            }),
-            capture: Box::new(NemuCaptureView {
-                owner,
-                selection,
-                vendor_stdio: Vec::new(),
-                detached: false,
-            }),
-        })
+                input: Box::new(NemuInputView {
+                    owner: Arc::clone(&owner),
+                    serial,
+                    detached: false,
+                }),
+                capture: Box::new(NemuCaptureView {
+                    owner,
+                    selection,
+                    vendor_stdio: Vec::new(),
+                    detached: false,
+                }),
+            },
+            report,
+        ))
     }
 
     fn lock(&self) -> DeviceResult<std::sync::MutexGuard<'_, NemuIpcBackend>> {

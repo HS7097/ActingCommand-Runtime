@@ -126,6 +126,14 @@ impl HostShared {
             | RuntimeLifecycleFailure::PolicyAdmission { error, .. } => Some(*error),
             _ => None,
         };
+        if let Some(error) = host_error
+            && error.projection().code != RuntimeErrorCode::LedgerFailure
+        {
+            self.append_backend_open_observations(
+                error.diagnostics().backend_open_observations(),
+                links.clone(),
+            )?;
+        }
         let failure_stage = host_error
             .and_then(|error| error.lifecycle.failure_stage)
             .unwrap_or_else(|| stage.as_str());

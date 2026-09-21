@@ -146,6 +146,7 @@ const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
 
 mod agent_control;
+mod backend_open;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;

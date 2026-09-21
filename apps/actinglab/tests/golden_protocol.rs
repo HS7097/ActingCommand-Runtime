@@ -1435,17 +1435,41 @@ impl ExecutionBackendProvider for GoldenRuntimeProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-golden>"))
     }
 
-    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        Err(DeviceError::fatal(
-            "recognize-only golden run must not open input",
-        ))
+    fn open_input(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            Err(DeviceError::fatal(
+                "recognize-only golden run must not open input",
+            ))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        if instance_alias != "fixture:5555" {
-            return Err(DeviceError::fatal("unexpected golden instance"));
-        }
-        Ok(Box::new(GoldenCapture))
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            if instance_alias != "fixture:5555" {
+                return Err(DeviceError::fatal("unexpected golden instance"));
+            }
+            Ok(Box::new(GoldenCapture))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the

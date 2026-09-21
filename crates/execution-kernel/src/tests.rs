@@ -315,29 +315,53 @@ impl ExecutionBackendProvider for FakeProvider {
         self.instances.get(instance_alias).cloned()
     }
 
-    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        let mut state = self.state.lock().expect("state");
-        state.input_opens += 1;
-        if state.fail_input_open {
-            return Err(DeviceError::fatal("private input open detail"));
-        }
-        drop(state);
-        Ok(Box::new(FakeInput {
-            state: Arc::clone(&self.state),
-        }))
+    fn open_input(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            let mut state = self.state.lock().expect("state");
+            state.input_opens += 1;
+            if state.fail_input_open {
+                return Err(DeviceError::fatal("private input open detail"));
+            }
+            drop(state);
+            Ok(Box::new(FakeInput {
+                state: Arc::clone(&self.state),
+            }))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        let mut state = self.state.lock().expect("state");
-        state.capture_opens += 1;
-        if state.fail_capture_open {
-            return Err(DeviceError::fatal("private capture open detail"));
-        }
-        drop(state);
-        Ok(Box::new(FakeCapture {
-            state: Arc::clone(&self.state),
-            closed: false,
-        }))
+    fn open_capture(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            let mut state = self.state.lock().expect("state");
+            state.capture_opens += 1;
+            if state.fail_capture_open {
+                return Err(DeviceError::fatal("private capture open detail"));
+            }
+            drop(state);
+            Ok(Box::new(FakeCapture {
+                state: Arc::clone(&self.state),
+                closed: false,
+            }))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     fn control_application(

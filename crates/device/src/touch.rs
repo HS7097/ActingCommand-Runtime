@@ -201,6 +201,12 @@ pub struct SelectedTouchBackend {
 }
 
 impl SelectedTouchBackend {
+    pub(crate) fn opened_input_geometry(
+        &self,
+    ) -> Option<actingcommand_contract::BackendInputGeometryObservation> {
+        self.active.backend.opened_geometry()
+    }
+
     pub fn backend_name(&self) -> TouchBackendName {
         self.active.name
     }
@@ -680,15 +686,18 @@ fn select_fixed_priority(
                     fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                 ));
                 if !err.is_fallback_eligible() {
-                    return Err(err);
+                    return Err(crate::observe_open_failure(diagnostics.open_report(), err));
                 }
             }
         }
     }
-    Err(DeviceError::fatal(format!(
-        "touch backend selection failed; diagnostics: {}",
-        format_touch_diagnostics(&diagnostics)
-    )))
+    Err(crate::observe_open_failure(
+        diagnostics.open_report(),
+        DeviceError::fatal(format!(
+            "touch backend selection failed; diagnostics: {}",
+            format_touch_diagnostics(&diagnostics)
+        )),
+    ))
 }
 
 fn select_fastest(
@@ -721,7 +730,10 @@ fn select_fastest(
                     backend.as_str()
                 ));
                 if !err.is_fallback_eligible() {
-                    return Err(close_connected_touch_backends(connected, err));
+                    return Err(crate::observe_open_failure(
+                        diagnostics.open_report(),
+                        close_connected_touch_backends(connected, err),
+                    ));
                 }
             }
         }
@@ -733,10 +745,13 @@ fn select_fastest(
         .min_by_key(|(_pos, (_index, elapsed_ms, _backend))| *elapsed_ms)
         .map(|(pos, _)| pos)
     else {
-        return Err(DeviceError::fatal(format!(
-            "touch backend fastest selection failed; diagnostics: {}",
-            format_touch_diagnostics(&diagnostics)
-        )));
+        return Err(crate::observe_open_failure(
+            diagnostics.open_report(),
+            DeviceError::fatal(format!(
+                "touch backend fastest selection failed; diagnostics: {}",
+                format_touch_diagnostics(&diagnostics)
+            )),
+        ));
     };
 
     let (selected_factory_index, _elapsed_ms, mut active) = connected.remove(selected_pos);
@@ -755,7 +770,8 @@ fn select_fastest(
         }
     }
     if let Some(primary) = cleanup_error {
-        return Err(
+        return Err(crate::observe_open_failure(
+            diagnostics.open_report(),
             match active.backend.close_once(DeviceCloseAuthority::LocalOnly) {
                 Ok(_) => primary,
                 Err(cleanup) => {
@@ -768,7 +784,7 @@ fn select_fastest(
                     error
                 }
             },
-        );
+        ));
     }
 
     diagnostics.selected = Some(active.name);
@@ -1182,6 +1198,11 @@ fn adb_shell_input_connect_error(
 }
 
 impl InputBackend for AdbShellInputBackend {
+    fn opened_geometry(&self) -> Option<actingcommand_contract::BackendInputGeometryObservation> {
+        self.connect_geometry
+            .map(AdbInputConnectGeometry::open_observation)
+    }
+
     fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
         self.recovery.take()
     }

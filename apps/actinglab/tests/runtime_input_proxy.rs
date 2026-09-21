@@ -1036,20 +1036,44 @@ impl ExecutionBackendProvider for FakeProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-test>"))
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        assert_eq!(instance_alias, self.instance_alias);
-        Ok(Box::new(FakeBackend {
-            state: Arc::clone(&self.state),
-            closed: false,
-        }))
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            assert_eq!(instance_alias, self.instance_alias);
+            Ok(Box::new(FakeBackend {
+                state: Arc::clone(&self.state),
+                closed: false,
+            }))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        assert_eq!(instance_alias, self.instance_alias);
-        Ok(Box::new(FakeCapture {
-            state: Arc::clone(&self.state),
-            frame_size: self.frame_size,
-        }))
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            assert_eq!(instance_alias, self.instance_alias);
+            Ok(Box::new(FakeCapture {
+                state: Arc::clone(&self.state),
+                frame_size: self.frame_size,
+            }))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the

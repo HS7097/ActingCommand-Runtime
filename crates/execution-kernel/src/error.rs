@@ -70,6 +70,7 @@ pub struct ExecutionKernelError {
 /// Clones retain the identities of the original failure, causes and stdio observations.
 #[derive(Clone, Default)]
 pub struct ExecutionFailureContext {
+    backend_open: Vec<actingcommand_device::BackendOpenObservation>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
     vendor_stdio: Vec<ExecutionStdioObservation>,
@@ -80,6 +81,10 @@ pub struct ExecutionFailureContext {
 }
 
 impl ExecutionFailureContext {
+    pub fn backend_open_observations(&self) -> &[actingcommand_device::BackendOpenObservation] {
+        &self.backend_open
+    }
+
     pub fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
         self.diagnostic_detail.as_deref()
     }
@@ -121,6 +126,15 @@ impl ExecutionFailureContext {
     }
 
     pub fn with_related_stdio(mut self, related: &Self) -> Self {
+        for observation in &related.backend_open {
+            if !self
+                .backend_open
+                .iter()
+                .any(|current| Arc::ptr_eq(&current.occurrence, &observation.occurrence))
+            {
+                self.backend_open.push(observation.clone());
+            }
+        }
         merge_stdio_observations(&mut self.vendor_stdio, &related.vendor_stdio);
         self
     }
@@ -144,6 +158,15 @@ impl ExecutionFailureContext {
     }
 
     fn merge(&mut self, secondary: &mut Self) -> bool {
+        for observation in &secondary.backend_open {
+            if !self
+                .backend_open
+                .iter()
+                .any(|current| Arc::ptr_eq(&current.occurrence, &observation.occurrence))
+            {
+                self.backend_open.push(observation.clone());
+            }
+        }
         merge_stdio_observations(&mut self.vendor_stdio, &secondary.vendor_stdio);
         let mut added_resource_cause = false;
         for cause in std::mem::take(&mut secondary.causes) {
@@ -178,6 +201,30 @@ impl PartialEq for ExecutionKernelError {
 impl Eq for ExecutionKernelError {}
 
 impl ExecutionKernelError {
+    pub(crate) fn with_backend_open_observations(
+        mut self,
+        observations: &[actingcommand_device::BackendOpenObservation],
+    ) -> Self {
+        for observation in observations {
+            if !self
+                .lifecycle
+                .backend_open
+                .iter()
+                .any(|current| Arc::ptr_eq(&current.occurrence, &observation.occurrence))
+            {
+                self.lifecycle.backend_open.push(observation.clone());
+            }
+        }
+        self
+    }
+
+    pub(crate) fn with_backend_session_generation(mut self, generation: u64) -> Self {
+        for observation in &mut self.lifecycle.backend_open {
+            observation.report.session_generation = generation;
+        }
+        self
+    }
+
     pub fn failure_context(&self) -> &ExecutionFailureContext {
         &self.lifecycle
     }
@@ -281,6 +328,7 @@ impl ExecutionKernelError {
             secondary_code: None,
             device_severity: Some(error.severity()),
             lifecycle: Box::new(ExecutionFailureContext {
+                backend_open: error.backend_open_observations().to_vec(),
                 diagnostic_detail: device_diagnostic_detail(error),
                 vendor_stdio: error
                     .vendor_stdio()

@@ -275,17 +275,41 @@ mod tests {
                 .then(|| ResolvedExecutionInstance::new(self.instance_id, "sealed-device"))
         }
 
-        fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-            Err(DeviceError::fatal(
-                "read-only adapter test must not open input",
-            ))
+        fn open_input(
+            &self,
+            _instance_alias: &str,
+        ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+            let open = || -> DeviceResult<Box<dyn InputBackend>> {
+                Err(DeviceError::fatal(
+                    "read-only adapter test must not open input",
+                ))
+            };
+            let result: DeviceResult<Box<dyn InputBackend>> = open();
+            result.map(|backend| {
+                actingcommand_device::OpenedBackend::unobserved(
+                    backend,
+                    actingcommand_contract::BackendOpenEntry::Input,
+                )
+            })
         }
 
-        fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-            if instance_alias != "ak.cn" {
-                return Err(DeviceError::fatal("unexpected sealed instance"));
-            }
-            Ok(Box::new(SealedCapture))
+        fn open_capture(
+            &self,
+            instance_alias: &str,
+        ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+            let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+                if instance_alias != "ak.cn" {
+                    return Err(DeviceError::fatal("unexpected sealed instance"));
+                }
+                Ok(Box::new(SealedCapture))
+            };
+            let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+            result.map(|backend| {
+                actingcommand_device::OpenedBackend::unobserved(
+                    backend,
+                    actingcommand_contract::BackendOpenEntry::Capture,
+                )
+            })
         }
 
         // Slice #316-B3: the fake device always reports its assigned application in the

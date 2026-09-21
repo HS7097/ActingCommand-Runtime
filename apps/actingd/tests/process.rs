@@ -3613,12 +3613,35 @@ impl ExecutionBackendProvider for PlanningSeedProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "local-planning-seed"))
     }
 
-    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        Err(DeviceError::fatal("planning seed opened input backend"))
+    fn open_input(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            Err(DeviceError::fatal("planning seed opened input backend"))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        Ok(Box::new(PlanningSeedCapture))
+    fn open_capture(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open =
+            || -> DeviceResult<Box<dyn CaptureBackend>> { Ok(Box::new(PlanningSeedCapture)) };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the
@@ -3656,14 +3679,38 @@ impl ExecutionBackendProvider for FakeProvider {
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "127.0.0.1:16384"))
     }
 
-    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        Err(DeviceError::fatal("fake input backend must not be opened"))
+    fn open_input(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            Err(DeviceError::fatal("fake input backend must not be opened"))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        Err(DeviceError::fatal(
-            "fake capture backend must not be opened",
-        ))
+    fn open_capture(
+        &self,
+        _instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            Err(DeviceError::fatal(
+                "fake capture backend must not be opened",
+            ))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the

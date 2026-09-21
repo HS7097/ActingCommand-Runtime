@@ -1168,7 +1168,9 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
     fn open_nemu_session(
         &self,
         instance_alias: &str,
-    ) -> DeviceResult<Option<actingcommand_device::NemuSessionBackends>> {
+    ) -> DeviceResult<
+        Option<actingcommand_device::OpenedBackend<actingcommand_device::NemuSessionBackends>>,
+    > {
         match self.mode_for_alias(instance_alias) {
             Some(ScheduledExecutionMode::DeviceRegistry) => {
                 let selected = self.device_input_backends.get(instance_alias).copied();
@@ -1184,8 +1186,8 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                         .ok_or_else(|| {
                             DeviceError::fatal("selected Nemu paired session is unavailable")
                         })?;
-                    pair.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
-                        pair.input,
+                    pair.backend.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
+                        pair.backend.input,
                         TouchBackendChoice::NemuIpc,
                     ));
                     Ok(Some(pair))
@@ -1212,7 +1214,10 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         }
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
         match self.mode_for_alias(instance_alias) {
             Some(ScheduledExecutionMode::DeviceRegistry) => {
                 let input_backend = self.device_input_backends.get(instance_alias).copied();
@@ -1225,10 +1230,12 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                         .as_ref()
                         .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
                         .open_input(instance_alias)?;
-                    Ok(Box::new(DeviceRegistryInputDiagnosticBackend::new(
-                        backend,
-                        input_backend,
-                    )) as Box<dyn InputBackend>)
+                    Ok(backend.map(|backend| {
+                        Box::new(DeviceRegistryInputDiagnosticBackend::new(
+                            backend,
+                            input_backend,
+                        )) as Box<dyn InputBackend>
+                    }))
                 })
             }
             Some(ScheduledExecutionMode::FixtureSimulation) => self
@@ -1242,7 +1249,10 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         }
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         match self.mode_for_alias(instance_alias) {
             Some(ScheduledExecutionMode::DeviceRegistry) => {
                 let capture_backend = self.device_capture_backends.get(instance_alias).copied();
@@ -1632,25 +1642,37 @@ impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
             .map(|backend| ResolvedExecutionInstance::fixture_simulation(backend.instance_id))
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
         let backend = self
             .instances
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("fixture instance is unknown"))?;
-        Ok(Box::new(FixtureInputBackend {
-            remaining: backend.max_inputs,
-            closed: false,
-        }))
+        Ok(actingcommand_device::OpenedBackend::simulation(
+            Box::new(FixtureInputBackend {
+                remaining: backend.max_inputs,
+                closed: false,
+            }) as Box<dyn InputBackend>,
+            actingcommand_contract::BackendOpenEntry::Input,
+        ))
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let backend = self
             .instances
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("fixture instance is unknown"))?;
-        Ok(Box::new(FixtureCaptureBackend {
-            frames: backend.frames.clone().into(),
-        }))
+        Ok(actingcommand_device::OpenedBackend::simulation(
+            Box::new(FixtureCaptureBackend {
+                frames: backend.frames.clone().into(),
+            }) as Box<dyn CaptureBackend>,
+            actingcommand_contract::BackendOpenEntry::Capture,
+        ))
     }
 
     fn control_application(

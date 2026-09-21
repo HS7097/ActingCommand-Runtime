@@ -481,55 +481,79 @@ impl ExecutionBackendProvider for FakeProvider {
         self.vision_provider.as_ref().map(Arc::clone)
     }
 
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        let entry = self
-            .entries
-            .get(instance_alias)
-            .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
-        entry.state.open_count.fetch_add(1, Ordering::AcqRel);
-        if let Some(error) = entry
-            .state
-            .input_open_error
-            .lock()
-            .expect("input open error")
-            .clone()
-        {
-            return Err(error);
-        }
-        Ok(Box::new(FakeBackend {
-            state: Arc::clone(&entry.state),
-            close_outcome: None,
-        }))
+    fn open_input(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
+        let open = || -> DeviceResult<Box<dyn InputBackend>> {
+            let entry = self
+                .entries
+                .get(instance_alias)
+                .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
+            entry.state.open_count.fetch_add(1, Ordering::AcqRel);
+            if let Some(error) = entry
+                .state
+                .input_open_error
+                .lock()
+                .expect("input open error")
+                .clone()
+            {
+                return Err(error);
+            }
+            Ok(Box::new(FakeBackend {
+                state: Arc::clone(&entry.state),
+                close_outcome: None,
+            }))
+        };
+        let result: DeviceResult<Box<dyn InputBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Input,
+            )
+        })
     }
 
-    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        let entry = self
-            .entries
-            .get(instance_alias)
-            .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
-        entry
-            .state
-            .capture_open_count
-            .fetch_add(1, Ordering::AcqRel);
-        if let Some(error) = entry
-            .state
-            .capture_open_error
-            .lock()
-            .expect("capture open error")
-            .as_ref()
-        {
-            return Err(error.clone());
-        }
-        Ok(Box::new(FakeCapture {
-            state: Arc::clone(&entry.state),
-            provenance: self.provenance,
-            audit_endpoint: self
-                .resolve(instance_alias)
-                .expect("resolved fake capture instance")
-                .audit_endpoint()
-                .to_owned(),
-            close_outcome: None,
-        }))
+    fn open_capture(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
+            let entry = self
+                .entries
+                .get(instance_alias)
+                .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
+            entry
+                .state
+                .capture_open_count
+                .fetch_add(1, Ordering::AcqRel);
+            if let Some(error) = entry
+                .state
+                .capture_open_error
+                .lock()
+                .expect("capture open error")
+                .as_ref()
+            {
+                return Err(error.clone());
+            }
+            Ok(Box::new(FakeCapture {
+                state: Arc::clone(&entry.state),
+                provenance: self.provenance,
+                audit_endpoint: self
+                    .resolve(instance_alias)
+                    .expect("resolved fake capture instance")
+                    .audit_endpoint()
+                    .to_owned(),
+                close_outcome: None,
+            }))
+        };
+        let result: DeviceResult<Box<dyn CaptureBackend>> = open();
+        result.map(|backend| {
+            actingcommand_device::OpenedBackend::unobserved(
+                backend,
+                actingcommand_contract::BackendOpenEntry::Capture,
+            )
+        })
     }
 
     fn observe_monitor(

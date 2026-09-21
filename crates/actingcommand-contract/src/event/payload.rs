@@ -947,6 +947,17 @@ impl std::fmt::Debug for LifecycleNativeDetail {
 }
 
 impl LifecycleNativeDetail {
+    pub fn bounded(text: &str) -> Option<Self> {
+        if text.is_empty() {
+            return None;
+        }
+        let mut end = text.len().min(MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        Some(Self::new(&text[..end], end < text.len()))
+    }
+
     pub fn new(text: impl Into<String>, truncated: bool) -> Self {
         Self {
             text: text.into(),
@@ -1686,6 +1697,7 @@ impl ArtifactFailureRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
+    BackendOpenObserved,
     PriorEpochOwnerImported,
     PriorEpochScopeClosed,
     VendorStdioClose {
@@ -1725,6 +1737,8 @@ pub enum RuntimeLifecyclePhase {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecyclePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend_open: Option<Box<crate::BackendOpenReport>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     prior_epoch_close: Option<Box<crate::PriorEpochCloseFact>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     vendor_stdio: Option<Box<VendorStdioFacts>>,
@@ -1739,6 +1753,10 @@ pub struct RuntimeLifecyclePayload {
 }
 
 impl RuntimeLifecyclePayload {
+    pub fn backend_open(&self) -> Option<&crate::BackendOpenReport> {
+        self.backend_open.as_deref()
+    }
+
     pub fn prior_epoch_close(&self) -> Option<&crate::PriorEpochCloseFact> {
         self.prior_epoch_close.as_deref()
     }
@@ -7404,6 +7422,7 @@ impl RuntimeInstanceBindingDraft {
 }
 
 struct RuntimeLifecycleDraft {
+    backend_open: Option<Box<crate::BackendOpenReport>>,
     prior_epoch_close: Option<Box<crate::PriorEpochCloseFact>>,
     vendor_stdio: Option<Box<VendorStdioFacts>>,
     adb_recovery: Option<Box<AdbTargetRecovery>>,
@@ -7422,6 +7441,7 @@ impl RuntimeLifecycleDraft {
             facts.validate()?;
         }
         Ok(RuntimeLifecyclePayload {
+            backend_open: self.backend_open,
             prior_epoch_close: self.prior_epoch_close,
             vendor_stdio: self.vendor_stdio,
             adb_recovery: self.adb_recovery,
@@ -7437,6 +7457,22 @@ impl RuntimeLifecycleDraft {
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
 
 impl RuntimePayloadDraft {
+    pub fn backend_open_observed(
+        owner_epoch: OwnerEpoch,
+        report: crate::BackendOpenReport,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: Some(Box::new(report)),
+            prior_epoch_close: None,
+            vendor_stdio: None,
+            adb_recovery: None,
+            owner_epoch,
+            phase: RuntimeLifecyclePhase::BackendOpenObserved,
+            device_diagnostics: None,
+            audit: AuditInput::new(),
+        }))
+    }
+
     pub fn prior_epoch_close(owner_epoch: OwnerEpoch, fact: crate::PriorEpochCloseFact) -> Self {
         let phase = match &fact {
             crate::PriorEpochCloseFact::OwnerImported(_) => {
@@ -7447,6 +7483,7 @@ impl RuntimePayloadDraft {
             }
         };
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: None,
             prior_epoch_close: Some(Box::new(fact)),
             vendor_stdio: None,
             adb_recovery: None,
@@ -7500,6 +7537,7 @@ impl RuntimePayloadDraft {
         summary: bool,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: None,
             prior_epoch_close: None,
             vendor_stdio: None,
             adb_recovery: None,
@@ -7536,6 +7574,7 @@ impl RuntimePayloadDraft {
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: None,
             prior_epoch_close: None,
             vendor_stdio: None,
             adb_recovery: None,
@@ -7609,6 +7648,7 @@ impl RuntimePayloadDraft {
 
     pub fn adb_target_recovery(owner_epoch: OwnerEpoch, recovery: AdbTargetRecovery) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: None,
             prior_epoch_close: None,
             vendor_stdio: None,
             owner_epoch,
@@ -7625,6 +7665,7 @@ impl RuntimePayloadDraft {
         facts: VendorStdioFacts,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: None,
             prior_epoch_close: None,
             vendor_stdio: Some(Box::new(facts)),
             owner_epoch,
@@ -10140,7 +10181,7 @@ impl EventPayload {
         if let Self::Artifact(ArtifactPayload::Retention(value)) = self {
             sensitivity = sensitivity.max(value.sensitivity());
         }
-        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some() || value.vendor_stdio.is_some())
+        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.adb_recovery.is_some() || value.vendor_stdio.is_some() || value.backend_open.is_some())
         {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -10356,6 +10397,17 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            if (value.phase == RuntimeLifecyclePhase::BackendOpenObserved)
+                != value.backend_open.is_some()
+            {
+                return Err(SanitizationError::new(
+                    "invalid_backend_open_phase",
+                    "runtime_payload",
+                ));
+            }
+            if let Some(report) = &value.backend_open {
+                report.validate()?;
+            }
             let expected = match value.prior_epoch_close.as_deref() {
                 Some(crate::PriorEpochCloseFact::OwnerImported(_)) => {
                     Some(RuntimeLifecyclePhase::PriorEpochOwnerImported)
@@ -10661,6 +10713,12 @@ impl EventPayload {
         let agent_wake = agent_wake(self);
         let agent_session = agent_session(self);
         let payload = PublicPayload {
+            backend_open: match self {
+                Self::Runtime(RuntimePayload::LifecycleObserved(value)) => value
+                    .backend_open()
+                    .map(|report| Box::new(report.public_summary())),
+                _ => None,
+            },
             prior_epoch_close: match self {
                 Self::Runtime(RuntimePayload::LifecycleObserved(value)) => value
                     .prior_epoch_close()
@@ -11099,6 +11157,8 @@ fn catalog_transition(payload: &EventPayload) -> Option<&CatalogTransitionPayloa
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend_open: Option<Box<crate::BackendOpenSummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     prior_epoch_close: Option<Box<crate::PriorEpochCloseSummary>>,
     event_type: EventType,
     action: EventAction,
@@ -11255,6 +11315,10 @@ pub struct PublicPayload {
 }
 
 impl PublicPayload {
+    pub fn backend_open(&self) -> Option<&crate::BackendOpenSummary> {
+        self.backend_open.as_deref()
+    }
+
     pub fn prior_epoch_close(&self) -> Option<&crate::PriorEpochCloseSummary> {
         self.prior_epoch_close.as_deref()
     }
