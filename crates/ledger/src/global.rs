@@ -130,6 +130,7 @@ impl LedgerAppendSpan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerWriterCommandKind {
+    ReconcilePriorEpochCloses,
     ReleaseLabPin,
     ResolveArtifact,
     RetentionCandidates,
@@ -664,6 +665,13 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 }
 
 enum WriterCommand {
+    ReconcilePriorEpochCloses {
+        writer: actingcommand_contract::OwnerEpoch,
+        journal: Arc<crate::owner_journal::RuntimeOwnerJournal>,
+        after: Option<actingcommand_contract::PriorEpochScope>,
+        deadline: Instant,
+        response: SyncSender<GlobalLedgerResult<Option<actingcommand_contract::PriorEpochScope>>>,
+    },
     ReleaseLabPin {
         target: actingcommand_contract::LabPinReleaseTarget,
         request: actingcommand_contract::TerminalEvent,
@@ -1570,6 +1578,9 @@ fn writer_loop<S: LedgerStore>(
                 LedgerWriterCommandKind::RetentionCandidates
             }
             WriterCommand::ReleaseLabPin { .. } => LedgerWriterCommandKind::ReleaseLabPin,
+            WriterCommand::ReconcilePriorEpochCloses { .. } => {
+                LedgerWriterCommandKind::ReconcilePriorEpochCloses
+            }
             WriterCommand::AdmitArtifactEviction { .. } => {
                 LedgerWriterCommandKind::AdmitArtifactEviction
             }
@@ -1646,6 +1657,29 @@ fn writer_loop<S: LedgerStore>(
                     }
                 }
             },
+            WriterCommand::ReconcilePriorEpochCloses {
+                writer,
+                journal,
+                after,
+                deadline,
+                response,
+            } => {
+                let result = store.reconcile_prior_epoch_closes(writer, &journal, after, deadline);
+                match result {
+                    Ok((next, appended)) => {
+                        command_succeeded = true;
+                        for event in &appended {
+                            deliver_live_event(&mut subscribers, event);
+                        }
+                        command_observation.replied(response.send(Ok(next)).is_ok());
+                    }
+                    Err(error) => {
+                        command_observation.replied(response.send(Err(error.clone())).is_ok());
+                        notify_terminal_failure(&mut subscribers, error.clone());
+                        return Err(error);
+                    }
+                }
+            }
             WriterCommand::RetentionCandidates {
                 after,
                 policy,

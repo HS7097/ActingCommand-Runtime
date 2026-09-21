@@ -52,6 +52,41 @@ quarantine and rotation remain owned by `storage.rs`. Commit statistics describe
 successful writes by the current owner; timings and the owner incarnation are
 observations, not event identity or portable equality inputs.
 
+## Proven prior-epoch scope close
+
+Before Provider assembly, Host completes pending eviction recovery and capacity
+preflight, then passes the opaque complete owner-journal read to the existing
+writer. The original exclusive OwnerGuard remains held. The reader preserves the
+4 MiB ceiling, consecutive revisions, fatal complete corruption and incomplete
+tail recovery. Only a v2 ConfirmedClosed suffix without later resource use,
+Unconfirmed, epoch reuse or contradictory identity supports an import. An inactive
+record, None, a v1 record or an available OS lock alone supplies no close evidence.
+
+The first `PriorEpochOwnerImported` lifecycle fact seals the native schema,
+subject epoch, positive/final revisions, complete-read bounds and SHA-256, and
+replayable positive suffix. It also fixes the authenticated Ledger prefix and the
+subject's contiguous epoch upper sequence. A later startup resumes that same
+sealed range; subsequent identifiers cannot extend it. Imports originate only
+from the native-reader capability, never an RPC or a caller-supplied verdict.
+
+The writer visits at most `RETENTION_ROUND_OBJECTS` original closure scopes per
+command, counting unknown and completed scopes, within the original maintenance
+deadline and command wait limit. It appends only missing typed scope closes,
+with fresh system identities, current writer epoch outside and exact old
+owner/instance/run/lease or request/correlation inside. A scope close references
+its exact import and original scope source. Replay checks each fact against only
+its preceding authenticated prefix. Errors or an exhausted deadline stop startup;
+uncertain commits are recovered from Ledger, never blindly resent.
+
+These facts close only Runtime-owned sessions and cached Unconfirmed resources
+covered by the native positive evidence. They add no task terminal, LeaseReleased,
+capture summary, settlement or device action. Retention keeps original verified
+and terminal owners, all success/K-T, Lab, warning, preinput, permanent and material
+protections. Synthetic close also requires the object's original references to
+remain within the sealed range; later references/pins restore protection. Explicit
+pin release and eviction Intent both check the exact synthetic close source.
+Ordinary close authority and historical Intent validation remain unchanged.
+
 ## Reads, projections and subscriptions
 
 `verify_transaction_event(&RuntimeDatabase, &RuntimeTransaction, &PersistedEvent)`

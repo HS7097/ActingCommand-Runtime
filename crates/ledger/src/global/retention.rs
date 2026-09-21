@@ -16,6 +16,7 @@ use actingcommand_contract::{
     VerifiedArtifactReference,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+mod prior_epoch;
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
 #[derive(Default)]
@@ -33,6 +34,13 @@ pub(super) struct RetentionIndex {
     run_terminals: BTreeMap<RunId, RunTerminal>,
     successful_runs: BTreeMap<InstanceId, BTreeMap<u64, RunId>>,
     owner_epochs: BTreeMap<u64, OwnerEpoch>,
+    owner_ends: BTreeMap<OwnerEpoch, u64>,
+    reopened_owners: BTreeSet<OwnerEpoch>,
+    scope_sources: BTreeMap<ClosureScope, (TerminalEvent, u64)>,
+    owner_imports:
+        BTreeMap<OwnerEpoch, (TerminalEvent, actingcommand_contract::PriorEpochOwnerImport)>,
+    prior_epoch_closes:
+        BTreeMap<ClosureScope, (TerminalEvent, actingcommand_contract::PriorEpochScopeClose)>,
     closures: BTreeMap<ClosureScope, ClosureFacts>,
     released_leases: BTreeMap<(OwnerEpoch, InstanceId, LeaseId), TerminalEvent>,
     quiescent_instances: BTreeMap<(OwnerEpoch, InstanceId), TerminalEvent>,
@@ -50,6 +58,7 @@ enum RetentionScope {
 
 struct RetainedObject {
     reference: ProjectedArtifactReference,
+    last_reference_sequence: u64,
     verified: Option<TerminalEvent>,
     summary: Option<TerminalEvent>,
     identity: Option<ArtifactRetentionIdentity>,
@@ -429,21 +438,31 @@ impl RetentionIndex {
     }
 
     fn close_for(&self, identity: &ArtifactRetentionIdentity) -> Option<&TerminalEvent> {
-        if identity.run_id.is_none() {
-            return match identity.lease_id {
-                Some(lease) => {
-                    self.released_leases
-                        .get(&(identity.owner_epoch, identity.instance_id, lease))
-                }
-                None => self
-                    .quiescent_instances
-                    .get(&(identity.owner_epoch, identity.instance_id)),
+        let scope = ClosureScope::from_identity(identity);
+        self.ordinary_close(&scope).or_else(|| {
+            let (source, close) = self.prior_epoch_closes.get(&scope)?;
+            let verified = self.objects.get(&identity.artifact.artifact_id)?.verified?;
+            (verified.sequence <= close.scope_upper_sequence
+                && self
+                    .objects
+                    .get(&identity.artifact.artifact_id)?
+                    .last_reference_sequence
+                    <= close.scope_upper_sequence
+                && self.scope_sources.get(&scope)?.1 <= close.scope_upper_sequence)
+                .then_some(source)
+        })
+    }
+
+    fn ordinary_close(&self, scope: &ClosureScope) -> Option<&TerminalEvent> {
+        if scope.run.is_none() {
+            return match scope.lease {
+                Some(lease) => self
+                    .released_leases
+                    .get(&(scope.owner, scope.instance, lease)),
+                None => self.quiescent_instances.get(&(scope.owner, scope.instance)),
             };
         }
-        self.closures
-            .get(&ClosureScope::from_identity(identity))?
-            .close
-            .as_ref()
+        self.closures.get(scope)?.close.as_ref()
     }
 
     pub(super) fn from_events<E: LedgerEventRead>(events: &[E]) -> GlobalLedgerResult<Self> {
@@ -492,6 +511,7 @@ impl RetentionIndex {
         if event.sequence() != self.through_sequence.saturating_add(1) {
             return Err(invalid("artifact_retention_snapshot_gap"));
         }
+        self.validate_prior_epoch(event, events, guarded_intent)?;
         // An outcome records the result of an already sealed identity, never a new use.
         let retention = event.payload().artifact_retention();
         for reference in material_references(event) {
@@ -611,8 +631,7 @@ impl RetentionIndex {
                     ArtifactPinReason::Explicit => {
                         if !same_close_scope(release_source, identity)
                             || !successful_close(release_source, identity)
-                            || self.owner_at(release_source.sequence())
-                                != Some(identity.owner_epoch)
+                            || !self.close_owner_matches(release_source, identity)
                         {
                             return Err(invalid("artifact_pin_release_not_closed"));
                         }
@@ -691,10 +710,11 @@ impl RetentionIndex {
             || !same_scope(success, &intent.identity)
             || !same_close_scope(close, &intent.identity)
             || self.lab_protected(object, verified, indexes)
-            || [verified, success, close]
+            || [verified, success]
                 .iter()
                 .any(|event| self.owner_at(event.sequence()) != Some(intent.identity.owner_epoch))
             || !successful_close(close, &intent.identity)
+            || !self.close_owner_matches(close, &intent.identity)
         {
             return Err(invalid("artifact_eviction_close_conflict"));
         }
@@ -758,8 +778,17 @@ impl RetentionIndex {
 
     pub(super) fn apply<E: LedgerEventRead>(&mut self, event: &E) {
         if let Some(epoch) = recorded_owner(event) {
+            if let Some(previous) = self.owner_at(self.through_sequence)
+                && previous != epoch
+            {
+                self.owner_ends.insert(previous, event.sequence() - 1);
+                if self.owner_ends.contains_key(&epoch) {
+                    self.reopened_owners.insert(epoch);
+                }
+            }
             self.owner_epochs.insert(event.sequence(), epoch);
         }
+        self.apply_prior_epoch(event);
         self.apply_run_terminal(event);
         if let EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload)) = event.payload()
             && let RuntimeLifecyclePhase::ResourceQuiescence {
@@ -792,6 +821,12 @@ impl RetentionIndex {
             .owner_at(event.sequence())
             .and_then(|owner| ClosureScope::from_event(event, owner))
         {
+            if event.payload().artifact_retention().is_none() {
+                self.scope_sources
+                    .entry(scope)
+                    .and_modify(|value| value.1 = event.sequence())
+                    .or_insert((terminal(event), event.sequence()));
+            }
             let closure = self.closures.entry(scope).or_default();
             let successful = match event.payload() {
                 EventPayload::Task(TaskPayload::Semantic(payload)) => matches!(
@@ -815,7 +850,8 @@ impl RetentionIndex {
             }
             if matches!(event.payload(), EventPayload::Lease(LeasePayload::Released(payload))
                 if payload.effect_disposition() == EffectDisposition::Performed)
-                || matches!(event.payload(), EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload))
+                || scope.lease.is_none()
+                    && matches!(event.payload(), EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload))
                     if matches!(payload.phase(), RuntimeLifecyclePhase::ResourceQuiescence {
                         instance_id, resource_count, quiescence: actingcommand_contract::ResourceQuiescence::Confirmed,
                         owner_disposition: actingcommand_contract::OwnerResourceDisposition::ConfirmedClosed,
@@ -912,6 +948,7 @@ impl RetentionIndex {
                 .entry(reference.artifact_id)
                 .or_insert_with(|| RetainedObject {
                     reference,
+                    last_reference_sequence: event.sequence(),
                     verified: None,
                     summary: None,
                     identity: None,
@@ -922,6 +959,9 @@ impl RetentionIndex {
                     proof: None,
                 });
             object.permanently_protected |= protect;
+            if event.payload().artifact_retention().is_none() {
+                object.last_reference_sequence = event.sequence();
+            }
             object.reference_scopes.extend(scopes(event));
             if event.event_type() == EventType::ArtifactVerified {
                 object.verified.get_or_insert_with(|| terminal(event));
@@ -935,6 +975,9 @@ impl RetentionIndex {
                 for id in ids {
                     if let Some(object) = self.objects.get_mut(id) {
                         object.reference_scopes.extend(scopes(event));
+                        if event.payload().artifact_retention().is_none() {
+                            object.last_reference_sequence = event.sequence();
+                        }
                     }
                 }
             }
@@ -949,6 +992,7 @@ impl RetentionIndex {
                 .get_or_insert_with(|| fact.identity().clone());
             match fact {
                 ArtifactRetentionFact::PinRecorded(pin) => {
+                    object.last_reference_sequence = event.sequence();
                     object
                         .pins
                         .insert(*event.event_id(), (terminal(event), pin.reason));
@@ -1258,6 +1302,11 @@ fn same_links<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentit
 }
 
 fn same_close_scope<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
+    if let Some(actingcommand_contract::PriorEpochCloseFact::ScopeClosed(close)) =
+        prior_epoch::fact(event)
+    {
+        return ClosureScope::from_subject(close.subject) == ClosureScope::from_identity(identity);
+    }
     if identity.run_id.is_none() {
         return event.links().instance_id() == Some(&identity.instance_id)
             && match identity.lease_id {
@@ -1275,6 +1324,11 @@ fn same_close_scope<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionI
 }
 
 fn successful_close<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
+    if let Some(actingcommand_contract::PriorEpochCloseFact::ScopeClosed(close)) =
+        prior_epoch::fact(event)
+    {
+        return ClosureScope::from_subject(close.subject) == ClosureScope::from_identity(identity);
+    }
     match (identity.lease_id, event.payload()) {
         (Some(_), EventPayload::Lease(LeasePayload::Released(payload))) => {
             payload.effect_disposition() == EffectDisposition::Performed

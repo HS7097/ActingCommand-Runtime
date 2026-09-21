@@ -1686,6 +1686,8 @@ impl ArtifactFailureRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
+    PriorEpochOwnerImported,
+    PriorEpochScopeClosed,
     VendorStdioClose {
         instance_id: Option<InstanceId>,
     },
@@ -1723,6 +1725,8 @@ pub enum RuntimeLifecyclePhase {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecyclePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    prior_epoch_close: Option<Box<crate::PriorEpochCloseFact>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     vendor_stdio: Option<Box<VendorStdioFacts>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_recovery: Option<Box<AdbTargetRecovery>>,
@@ -1735,6 +1739,9 @@ pub struct RuntimeLifecyclePayload {
 }
 
 impl RuntimeLifecyclePayload {
+    pub fn prior_epoch_close(&self) -> Option<&crate::PriorEpochCloseFact> {
+        self.prior_epoch_close.as_deref()
+    }
     pub fn vendor_stdio(&self) -> Option<&VendorStdioFacts> {
         self.vendor_stdio.as_deref()
     }
@@ -7397,6 +7404,7 @@ impl RuntimeInstanceBindingDraft {
 }
 
 struct RuntimeLifecycleDraft {
+    prior_epoch_close: Option<Box<crate::PriorEpochCloseFact>>,
     vendor_stdio: Option<Box<VendorStdioFacts>>,
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
@@ -7414,6 +7422,7 @@ impl RuntimeLifecycleDraft {
             facts.validate()?;
         }
         Ok(RuntimeLifecyclePayload {
+            prior_epoch_close: self.prior_epoch_close,
             vendor_stdio: self.vendor_stdio,
             adb_recovery: self.adb_recovery,
             action: EventAction::RuntimeAction,
@@ -7428,6 +7437,25 @@ impl RuntimeLifecycleDraft {
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
 
 impl RuntimePayloadDraft {
+    pub fn prior_epoch_close(owner_epoch: OwnerEpoch, fact: crate::PriorEpochCloseFact) -> Self {
+        let phase = match &fact {
+            crate::PriorEpochCloseFact::OwnerImported(_) => {
+                RuntimeLifecyclePhase::PriorEpochOwnerImported
+            }
+            crate::PriorEpochCloseFact::ScopeClosed(_) => {
+                RuntimeLifecyclePhase::PriorEpochScopeClosed
+            }
+        };
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            prior_epoch_close: Some(Box::new(fact)),
+            vendor_stdio: None,
+            adb_recovery: None,
+            owner_epoch,
+            phase,
+            device_diagnostics: None,
+            audit: AuditInput::new(),
+        }))
+    }
     pub fn resource_declaration_rejected(rejection: crate::ResourceDeclarationRejection) -> Self {
         let mut outcome = DiagnosticOutcomeDraft::new_with_detail(
             EventAction::RuntimeAction,
@@ -7472,6 +7500,7 @@ impl RuntimePayloadDraft {
         summary: bool,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            prior_epoch_close: None,
             vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
@@ -7507,6 +7536,7 @@ impl RuntimePayloadDraft {
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            prior_epoch_close: None,
             vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
@@ -7579,6 +7609,7 @@ impl RuntimePayloadDraft {
 
     pub fn adb_target_recovery(owner_epoch: OwnerEpoch, recovery: AdbTargetRecovery) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            prior_epoch_close: None,
             vendor_stdio: None,
             owner_epoch,
             phase: RuntimeLifecyclePhase::AdbTargetRecovery,
@@ -7594,6 +7625,7 @@ impl RuntimePayloadDraft {
         facts: VendorStdioFacts,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            prior_epoch_close: None,
             vendor_stdio: Some(Box::new(facts)),
             owner_epoch,
             phase: RuntimeLifecyclePhase::VendorStdioClose { instance_id },
@@ -10101,6 +10133,10 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
+        if matches!(self, Self::Runtime(RuntimePayload::LifecycleObserved(value)) if value.prior_epoch_close.is_some())
+        {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
         if let Self::Artifact(ArtifactPayload::Retention(value)) = self {
             sensitivity = sensitivity.max(value.sensitivity());
         }
@@ -10320,6 +10356,31 @@ impl EventPayload {
             config.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
+            let expected = match value.prior_epoch_close.as_deref() {
+                Some(crate::PriorEpochCloseFact::OwnerImported(_)) => {
+                    Some(RuntimeLifecyclePhase::PriorEpochOwnerImported)
+                }
+                Some(crate::PriorEpochCloseFact::ScopeClosed(_)) => {
+                    Some(RuntimeLifecyclePhase::PriorEpochScopeClosed)
+                }
+                None => None,
+            };
+            if expected.is_some_and(|phase| phase != value.phase)
+                || expected.is_none()
+                    && matches!(
+                        value.phase,
+                        RuntimeLifecyclePhase::PriorEpochOwnerImported
+                            | RuntimeLifecyclePhase::PriorEpochScopeClosed
+                    )
+            {
+                return Err(SanitizationError::new(
+                    "invalid_prior_epoch_close_phase",
+                    "runtime_payload",
+                ));
+            }
+            if let Some(fact) = &value.prior_epoch_close {
+                fact.validate(value.owner_epoch)?;
+            }
             if matches!(value.phase, RuntimeLifecyclePhase::VendorStdioClose { .. })
                 != value.vendor_stdio.is_some()
             {
@@ -10600,6 +10661,12 @@ impl EventPayload {
         let agent_wake = agent_wake(self);
         let agent_session = agent_session(self);
         let payload = PublicPayload {
+            prior_epoch_close: match self {
+                Self::Runtime(RuntimePayload::LifecycleObserved(value)) => value
+                    .prior_epoch_close()
+                    .map(|fact| Box::new(fact.public_summary(value.owner_epoch()))),
+                _ => None,
+            },
             event_type,
             action: detail.action(),
             device_diagnostic_config: detail.device_diagnostic_config(),
@@ -11031,6 +11098,8 @@ fn catalog_transition(payload: &EventPayload) -> Option<&CatalogTransitionPayloa
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prior_epoch_close: Option<Box<crate::PriorEpochCloseSummary>>,
     event_type: EventType,
     action: EventAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11186,6 +11255,9 @@ pub struct PublicPayload {
 }
 
 impl PublicPayload {
+    pub fn prior_epoch_close(&self) -> Option<&crate::PriorEpochCloseSummary> {
+        self.prior_epoch_close.as_deref()
+    }
     pub fn device_diagnostics(&self) -> Option<&DeviceDiagnosticBudgetRecord> {
         self.device_diagnostics.as_deref()
     }
