@@ -416,6 +416,11 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
             }
         }
         let store = ArtifactStore::open(state_root).unwrap();
+        let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+        admission.capacity_root = Some(store.root().to_path_buf());
+        store
+            .install_capacity_admission(std::sync::Arc::new(admission))
+            .expect("fixture capacity owner");
         let correlation = identifiers.mint_correlation_id().unwrap();
         let task = identifiers.mint_task_id().unwrap();
         let run_id = identifiers.mint_run_id().unwrap();
@@ -1049,7 +1054,21 @@ fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
             1_752_147_200_200,
         ),
     };
-    let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+    let export_store =
+        actingcommand_artifact_store::ArtifactStore::open(temp.path().join("artifacts"))
+            .expect("export store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(
+        export_store
+            .root()
+            .parent()
+            .expect("fixture root")
+            .to_path_buf(),
+    );
+    export_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
+    let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
     let receipt = exporter
         .export(request, &mut LedgerSink { ledger: &ledger })
         .expect("sealed export");
@@ -1449,6 +1468,11 @@ fn stability_cli_pages_errors_and_source_files_are_explicit() {
         "consecutive_unchanged_threshold": 2, "terminal_reason": null
     });
     let store = ArtifactStore::open(root).expect("store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(store.root().to_path_buf());
+    store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     let mut references = Vec::new();
     for schema in [
         "actingcommand.runtime.contained-task-stability-comparison.v1",

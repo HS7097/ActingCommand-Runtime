@@ -230,15 +230,16 @@ pub struct CapturePipeline {
 }
 
 impl CapturePipeline {
+    /// Retains the supplied store with the standalone capture provenance and retention profile.
     pub fn open(
-        artifact_root: impl AsRef<Path>,
+        artifact_store: Arc<ArtifactStore>,
         frame_temp_root: impl AsRef<Path>,
         config: CapturePipelineConfig,
         run_context: ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<Self> {
         Self::open_shared_inner(
-            Arc::new(ArtifactStore::open(artifact_root)?),
+            artifact_store,
             frame_temp_root,
             config,
             run_context,
@@ -775,8 +776,72 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingSink {
+        capacity_root: Option<std::path::PathBuf>,
+        capacity_fact: std::sync::OnceLock<actingcommand_contract::CapacityFactReference>,
         event_types: Vec<EventType>,
         fail_artifact_created: bool,
+    }
+
+    impl crate::ArtifactCapacityAdmission for RecordingSink {
+        fn decide(
+            &self,
+            path: &std::path::Path,
+            bytes: u64,
+        ) -> ArtifactStoreResult<actingcommand_contract::CapacityDecision> {
+            use actingcommand_contract::{CapacityAdmissionOutcome, CapacityAdmissionReason};
+            let root = self.capacity_root.as_deref().ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "fixture_capacity_unconfigured",
+                    "fixture_capacity_admission",
+                    "the existing fixture must name its admitted target root",
+                )
+            })?;
+            let root = root.to_str().expect("fixture root is UTF-8");
+            let path = path.to_str().expect("fixture target is UTF-8");
+            let root = std::path::Path::new(root.strip_prefix(r"\\?\").unwrap_or(root));
+            let path = std::path::Path::new(path.strip_prefix(r"\\?\").unwrap_or(path));
+            let fact = self.capacity_fact.get_or_init(|| {
+                let ids =
+                    actingcommand_contract::IdentifierIssuer::new().expect("fixture identity");
+                actingcommand_contract::CapacityFactReference {
+                    event_id: *ids.mint_event_id().expect("capacity event").transport(),
+                    sequence: 1,
+                    owner_epoch: *ids.mint_owner_epoch().expect("capacity owner").transport(),
+                    observed_at_unix_ms: 1,
+                    observed_at_monotonic_ms: 0,
+                }
+            });
+            let (outcome, reason) = if !path.starts_with(root)
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                (
+                    CapacityAdmissionOutcome::Unknown,
+                    CapacityAdmissionReason::BindingChanged,
+                )
+            } else if bytes > 64 * 1024 * 1024 {
+                (
+                    CapacityAdmissionOutcome::HardPressure,
+                    CapacityAdmissionReason::HardThreshold,
+                )
+            } else {
+                (
+                    CapacityAdmissionOutcome::Allowed,
+                    CapacityAdmissionReason::FreshSample,
+                )
+            };
+            Ok(actingcommand_contract::CapacityDecision {
+                owner_epoch: fact.owner_epoch,
+                decided_at_unix_ms: 1,
+                decided_at_monotonic_ms: 0,
+                requested_bytes: bytes,
+                target_volume: Some("fixture-volume".to_owned()),
+                outcome,
+                reason,
+                fact: Some(fact.clone()),
+            })
+        }
     }
 
     impl ArtifactEventSink for RecordingSink {
@@ -812,8 +877,16 @@ mod tests {
     fn default_policy_is_300_ms_and_ledger_visible() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(1_000_000),
             context(1),
@@ -829,8 +902,16 @@ mod tests {
     fn explicit_pinned_frame_bypasses_same_page_dedup_and_persists_immediately() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(7_000),
             context(1),
@@ -865,8 +946,16 @@ mod tests {
     fn summary_builder_is_deterministic_and_fail_closed_for_counts_and_pin_pairs() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(7_000),
             context(1),
@@ -969,8 +1058,16 @@ mod tests {
     fn ordinary_same_page_frame_is_deduplicated_but_not_pressure_dropped() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(7_000),
             context(1),
@@ -995,8 +1092,16 @@ mod tests {
     fn tier3_pause_is_ledger_visible_and_pressure_skip_is_partial() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(1_200),
             context(1),
@@ -1024,8 +1129,16 @@ mod tests {
     fn pinned_frame_persists_immediately_while_tier3_is_paused() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(1_200),
             context(1),
@@ -1061,8 +1174,16 @@ mod tests {
     fn pinned_persistence_failure_is_ledger_visible_and_evidence_failed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut sink = RecordingSink::default();
+        let artifact_store =
+            Arc::new(ArtifactStore::open(temp.path().join("artifacts")).expect("store"));
+        artifact_store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(artifact_store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut pipeline = CapturePipeline::open(
-            temp.path().join("artifacts"),
+            artifact_store,
             temp.path().join("frames"),
             config(7_000),
             context(1),

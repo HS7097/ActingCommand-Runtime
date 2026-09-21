@@ -2665,7 +2665,7 @@ mod forensics_read_only;
 #[path = "tests/process.rs"]
 mod process;
 #[path = "tests/sealed_global_ledger.rs"]
-mod sealed_global_ledger;
+pub(super) mod sealed_global_ledger;
 
 #[path = "tests/sqlite_contract.rs"]
 pub(super) mod sqlite_contract;

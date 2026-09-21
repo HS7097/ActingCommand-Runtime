@@ -381,6 +381,11 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
         )
         .unwrap();
     let store = ArtifactStore::open(state_root).unwrap();
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(store.root().to_path_buf());
+    store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     store
         .put(
             ArtifactWriteRequest::new(
@@ -939,6 +944,11 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     );
 
     let store = ArtifactStore::open(state_root).unwrap();
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(store.root().to_path_buf());
+    store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     let writer = GlobalLedger::open_with_artifact_verifier(
         GlobalLedgerConfig::new(&ledger_root, "task-evidence-source"),
         |reference| store.verify_recovery_reference(reference).ok(),
@@ -1687,7 +1697,20 @@ fn replays_a_sealed_archive_through_the_canonical_verifier() {
             1_752_147_200_200,
         ),
     };
-    let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+    let export_store =
+        actingcommand_artifact_store::ArtifactStore::open(&artifact_root).expect("export store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(
+        export_store
+            .root()
+            .parent()
+            .expect("fixture root")
+            .to_path_buf(),
+    );
+    export_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
+    let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
     let receipt = exporter
         .export(request, &mut LedgerSink { ledger: &ledger })
         .expect("sealed export");
@@ -2144,6 +2167,11 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
             .append(event(EventLinksDraft::default()))
             .expect("prefix");
         let store = ArtifactStore::open(root).expect("store");
+        let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+        admission.capacity_root = Some(store.root().to_path_buf());
+        store
+            .install_capacity_admission(std::sync::Arc::new(admission))
+            .expect("fixture capacity owner");
         let mut bytes = serde_json::to_vec(&expected).expect("JSON");
         if name == "declared-large" {
             bytes.resize(MAX_STABILITY_ARTIFACT_BYTES as usize + 1, b' ');

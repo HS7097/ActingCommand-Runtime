@@ -1022,8 +1022,72 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingSink {
+        capacity_root: Option<std::path::PathBuf>,
+        capacity_fact: std::sync::OnceLock<actingcommand_contract::CapacityFactReference>,
         event_types: Vec<EventType>,
         fail_next: Option<EventType>,
+    }
+
+    impl crate::ArtifactCapacityAdmission for RecordingSink {
+        fn decide(
+            &self,
+            path: &std::path::Path,
+            bytes: u64,
+        ) -> ArtifactStoreResult<actingcommand_contract::CapacityDecision> {
+            use actingcommand_contract::{CapacityAdmissionOutcome, CapacityAdmissionReason};
+            let root = self.capacity_root.as_deref().ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "fixture_capacity_unconfigured",
+                    "fixture_capacity_admission",
+                    "the existing fixture must name its admitted target root",
+                )
+            })?;
+            let root = root.to_str().expect("fixture root is UTF-8");
+            let path = path.to_str().expect("fixture target is UTF-8");
+            let root = std::path::Path::new(root.strip_prefix(r"\\?\").unwrap_or(root));
+            let path = std::path::Path::new(path.strip_prefix(r"\\?\").unwrap_or(path));
+            let fact = self.capacity_fact.get_or_init(|| {
+                let ids =
+                    actingcommand_contract::IdentifierIssuer::new().expect("fixture identity");
+                actingcommand_contract::CapacityFactReference {
+                    event_id: *ids.mint_event_id().expect("capacity event").transport(),
+                    sequence: 1,
+                    owner_epoch: *ids.mint_owner_epoch().expect("capacity owner").transport(),
+                    observed_at_unix_ms: 1,
+                    observed_at_monotonic_ms: 0,
+                }
+            });
+            let (outcome, reason) = if !path.starts_with(root)
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                (
+                    CapacityAdmissionOutcome::Unknown,
+                    CapacityAdmissionReason::BindingChanged,
+                )
+            } else if bytes > 64 * 1024 * 1024 {
+                (
+                    CapacityAdmissionOutcome::HardPressure,
+                    CapacityAdmissionReason::HardThreshold,
+                )
+            } else {
+                (
+                    CapacityAdmissionOutcome::Allowed,
+                    CapacityAdmissionReason::FreshSample,
+                )
+            };
+            Ok(actingcommand_contract::CapacityDecision {
+                owner_epoch: fact.owner_epoch,
+                decided_at_unix_ms: 1,
+                decided_at_monotonic_ms: 0,
+                requested_bytes: bytes,
+                target_volume: Some("fixture-volume".to_owned()),
+                outcome,
+                reason,
+                fact: Some(fact.clone()),
+            })
+        }
     }
 
     impl ArtifactEventSink for RecordingSink {
@@ -1092,6 +1156,20 @@ mod tests {
             );
             let mut exporter =
                 EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+            exporter
+                .artifact_store
+                .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                    capacity_root: Some(
+                        exporter
+                            .artifact_store
+                            .root()
+                            .parent()
+                            .expect("fixture root")
+                            .to_path_buf(),
+                    ),
+                    ..RecordingSink::default()
+                }))
+                .expect("fixture capacity owner");
 
             let receipt = exporter.export(request, &mut sink).expect("export");
             let verified = verify_evidence_archive(receipt.output_path(), receipt.zip_sha256())
@@ -1138,6 +1216,20 @@ mod tests {
             .retain(|event| event.event_type == EventType::CaptureSummaryCommitted);
         assert_eq!(request.events.len(), 1);
         let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
 
         let error = exporter
             .export(request, &mut sink)
@@ -1172,6 +1264,20 @@ mod tests {
             complete_summary(vec![(1, frame)], None),
         );
         let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let receipt = exporter.export(request, &mut sink).expect("export");
         fs::remove_file(receipt.output_path()).expect("remove exported archive");
 
@@ -1201,6 +1307,20 @@ mod tests {
             complete_summary(vec![(1, frame)], None),
         );
         let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let receipt = exporter.export(request, &mut sink).expect("export");
         let mut mismatched_hash = receipt
             .zip_sha256()
@@ -1248,6 +1368,20 @@ mod tests {
             complete_summary(vec![(1, first), (2, second)], None),
         );
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
 
         let receipt = exporter.export(request, &mut sink).expect("export");
         let names = receipt
@@ -1291,6 +1425,20 @@ mod tests {
             partial_summary,
         );
         let mut partial_exporter = EvidenceExporter::open(&partial_root).expect("exporter");
+        partial_exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    partial_exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let partial = partial_exporter
             .export(partial_request, &mut partial_sink)
             .expect("partial export");
@@ -1327,6 +1475,20 @@ mod tests {
         );
         let mut failed_exporter =
             EvidenceExporter::open(failed_temp.path().join("artifacts")).expect("exporter");
+        failed_exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    failed_exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let failed = failed_exporter
             .export(failed_request, &mut failed_sink)
             .expect("failed-evidence export");
@@ -1394,6 +1556,20 @@ mod tests {
                 .into_iter()
                 .collect::<BTreeSet<_>>();
             let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+            exporter
+                .artifact_store
+                .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                    capacity_root: Some(
+                        exporter
+                            .artifact_store
+                            .root()
+                            .parent()
+                            .expect("fixture root")
+                            .to_path_buf(),
+                    ),
+                    ..RecordingSink::default()
+                }))
+                .expect("fixture capacity owner");
 
             let error = exporter
                 .export(request, &mut sink)
@@ -1444,6 +1620,20 @@ mod tests {
             complete_summary(vec![(1, frame)], None),
         );
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
 
         let error = exporter
             .export(request, &mut sink)
@@ -1482,6 +1672,20 @@ mod tests {
             complete_summary(vec![(1, frame)], None),
         );
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
 
         let error = exporter
             .export(request, &mut sink)
@@ -1517,6 +1721,20 @@ mod tests {
         let source_files = all_files(&material_root).len();
         sink.fail_next = Some(EventType::ArtifactExportCompleted);
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
 
         let error = exporter
             .export(request, &mut sink)
@@ -1557,6 +1775,20 @@ mod tests {
             complete_summary(vec![(1, frame)], None),
         );
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
 
         let error = exporter
             .export(request, &mut sink)
@@ -1593,6 +1825,20 @@ mod tests {
             complete_summary(vec![(1, frame)], None),
         );
         let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+        exporter
+            .artifact_store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(
+                    exporter
+                        .artifact_store
+                        .root()
+                        .parent()
+                        .expect("fixture root")
+                        .to_path_buf(),
+                ),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let receipt = exporter.export(request, &mut sink).expect("export");
         let (mut entries, manifest) = read_zip_entries(receipt.output_path());
         let screenshot_path = entries
@@ -1654,6 +1900,12 @@ mod tests {
         let identifiers = IdentifierIssuer::new().expect("identifiers");
         let frame = identifiers.mint_frame_id().expect("frame");
         let store = ArtifactStore::open(artifact_root).expect("store");
+        store
+            .install_capacity_admission(std::sync::Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         store
             .put(
                 ArtifactWriteRequest::new(

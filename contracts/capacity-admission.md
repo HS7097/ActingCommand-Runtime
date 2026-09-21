@@ -74,6 +74,8 @@ with capacity fact references as context. A real cleanup or Ledger failure is
 fatal even when its primary admission refusal was nonfatal.
 
 Runtime evidence exports share this projection, including ZIP output writes. A
+capture pipeline receives its caller's existing ArtifactStore; its standalone
+constructor keeps the original capture provenance and retention profile. A
 target on a volume absent from the committed sample is Unknown. The ZIP writer
 retains its first write refusal/error through finalization and cleanup.
 The same decision accompanies output-directory preparation, temporary-file

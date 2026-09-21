@@ -693,9 +693,19 @@ impl ArtifactStore {
             ))
         })?;
         // Already-written bytes drain through the owner retained when this stream opened.
-        stream.for_drain();
-        admit_bytes(stream.capacity.as_deref(), &mut stream.context, &path, 0)
-            .map_err(|error| stream.fail(error))?;
+        let Some(admission) = stream.capacity.clone() else {
+            stream.context.capacity = None;
+            return Err(stream.fail(ArtifactStoreError::fatal(
+                "capacity_owner_missing",
+                "admit_artifact_bytes",
+                "artifact writes require the committed capacity owner",
+            )));
+        };
+        stream.context.capacity = Some(
+            admission
+                .decide(&path, 0)
+                .map_err(|error| stream.fail(error))?,
+        );
         stream.file.take();
         let publication = (|| {
             let parent = path.parent().ok_or_else(|| {
@@ -1560,10 +1570,74 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingSink {
+        capacity_root: Option<std::path::PathBuf>,
+        capacity_fact: std::sync::OnceLock<actingcommand_contract::CapacityFactReference>,
         event_types: Vec<EventType>,
         references: Vec<ArtifactReference>,
         payloads: Vec<actingcommand_contract::EventPayload>,
         fail_at: Option<usize>,
+    }
+
+    impl crate::ArtifactCapacityAdmission for RecordingSink {
+        fn decide(
+            &self,
+            path: &std::path::Path,
+            bytes: u64,
+        ) -> ArtifactStoreResult<actingcommand_contract::CapacityDecision> {
+            use actingcommand_contract::{CapacityAdmissionOutcome, CapacityAdmissionReason};
+            let root = self.capacity_root.as_deref().ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "fixture_capacity_unconfigured",
+                    "fixture_capacity_admission",
+                    "the existing fixture must name its admitted target root",
+                )
+            })?;
+            let root = root.to_str().expect("fixture root is UTF-8");
+            let path = path.to_str().expect("fixture target is UTF-8");
+            let root = std::path::Path::new(root.strip_prefix(r"\\?\").unwrap_or(root));
+            let path = std::path::Path::new(path.strip_prefix(r"\\?\").unwrap_or(path));
+            let fact = self.capacity_fact.get_or_init(|| {
+                let ids =
+                    actingcommand_contract::IdentifierIssuer::new().expect("fixture identity");
+                actingcommand_contract::CapacityFactReference {
+                    event_id: *ids.mint_event_id().expect("capacity event").transport(),
+                    sequence: 1,
+                    owner_epoch: *ids.mint_owner_epoch().expect("capacity owner").transport(),
+                    observed_at_unix_ms: 1,
+                    observed_at_monotonic_ms: 0,
+                }
+            });
+            let (outcome, reason) = if !path.starts_with(root)
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                (
+                    CapacityAdmissionOutcome::Unknown,
+                    CapacityAdmissionReason::BindingChanged,
+                )
+            } else if bytes > 64 * 1024 * 1024 {
+                (
+                    CapacityAdmissionOutcome::HardPressure,
+                    CapacityAdmissionReason::HardThreshold,
+                )
+            } else {
+                (
+                    CapacityAdmissionOutcome::Allowed,
+                    CapacityAdmissionReason::FreshSample,
+                )
+            };
+            Ok(actingcommand_contract::CapacityDecision {
+                owner_epoch: fact.owner_epoch,
+                decided_at_unix_ms: 1,
+                decided_at_monotonic_ms: 0,
+                requested_bytes: bytes,
+                target_volume: Some("fixture-volume".to_owned()),
+                outcome,
+                reason,
+                fact: Some(fact.clone()),
+            })
+        }
     }
 
     impl ArtifactEventSink for RecordingSink {
@@ -1605,6 +1679,12 @@ mod tests {
     fn prepared_artifact_has_no_material_or_event_until_committed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let prepared = store
             .prepare(request(b"prepared artifact bytes"))
@@ -1628,6 +1708,12 @@ mod tests {
     fn prepared_artifact_rejects_different_bytes_before_publication() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let prepared = store
             .prepare(request(b"expected artifact bytes"))
@@ -1645,6 +1731,12 @@ mod tests {
     fn put_atomically_writes_verifies_and_emits_created_then_verified() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let stored = store
             .put(request(b"trusted artifact bytes"), &mut sink)
@@ -1752,6 +1844,12 @@ mod tests {
     fn projected_reference_reads_only_verified_artifact_bytes() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let stored = store
             .put(request(b"trusted projected bytes"), &mut sink)
@@ -1839,6 +1937,12 @@ mod tests {
     fn recovery_verifier_promotes_only_matching_persisted_artifacts() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let stored = store
             .put(request(b"durable recovery bytes"), &mut sink)
@@ -1864,6 +1968,12 @@ mod tests {
     fn projected_reference_without_safe_object_key_is_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let stored = store
             .put(request(b"trusted projected bytes"), &mut sink)
@@ -1891,6 +2001,12 @@ mod tests {
     fn empty_artifact_fails_before_any_event_or_file() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink::default();
         let error = store
             .put(request(b""), &mut sink)
@@ -1907,6 +2023,12 @@ mod tests {
         // First red: Workflow #269, issuecomment-5576835769 (ARTIFACT-PERSIST-v2).
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink {
             fail_at: Some(0),
             ..RecordingSink::default()
@@ -1951,6 +2073,12 @@ mod tests {
     fn required_verified_event_failure_preserves_published_file_and_returns_error() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let mut sink = RecordingSink {
             fail_at: Some(1),
             ..RecordingSink::default()
@@ -2026,6 +2154,12 @@ mod tests {
         let error = verify_file(&path, issued.reference()).expect_err("mismatch");
         assert_eq!(error.code(), "artifact_hash_mismatch");
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let prepared = store.prepare(request(b"expected")).expect("prepared");
         store
             .write_and_verify(b"expected", &prepared.path, prepared.reference())
@@ -2083,6 +2217,12 @@ mod tests {
         assert_eq!(error.code(), "artifact_sync_failed");
         assert!(!path.exists());
         let store = ArtifactStore::open(temp.path()).expect("store");
+        store
+            .install_capacity_admission(Arc::new(RecordingSink {
+                capacity_root: Some(store.root().to_path_buf()),
+                ..RecordingSink::default()
+            }))
+            .expect("fixture capacity owner");
         let prepared = store.prepare(request(b"partial")).expect("prepared");
         let cleanup_block = temp.path().join("cleanup-block");
         fs::create_dir(&cleanup_block).expect("cleanup failure target");
