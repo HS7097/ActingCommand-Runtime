@@ -31,21 +31,86 @@ struct SealedIdentity {
     correlation: IssuedCorrelationId,
 }
 
-struct GlobalLedgerSink<'a> {
-    ledger: &'a GlobalLedger,
+pub(in crate::global) struct GlobalLedgerSink<'a> {
+    ledger: Option<&'a GlobalLedger>,
     fail_next: Option<EventType>,
+    pub(in crate::global) capacity_root: Option<PathBuf>,
+    capacity_fact: std::sync::OnceLock<actingcommand_contract::CapacityFactReference>,
 }
 
 impl<'a> GlobalLedgerSink<'a> {
-    fn new(ledger: &'a GlobalLedger) -> Self {
+    pub(in crate::global) fn new(ledger: Option<&'a GlobalLedger>) -> Self {
         Self {
             ledger,
             fail_next: None,
+            capacity_root: None,
+            capacity_fact: Default::default(),
         }
     }
 
     fn fail_next(&mut self, event_type: EventType) {
         self.fail_next = Some(event_type);
+    }
+}
+
+impl actingcommand_artifact_store::ArtifactCapacityAdmission for GlobalLedgerSink<'_> {
+    fn decide(
+        &self,
+        path: &std::path::Path,
+        bytes: u64,
+    ) -> ArtifactStoreResult<actingcommand_contract::CapacityDecision> {
+        use actingcommand_contract::{CapacityAdmissionOutcome, CapacityAdmissionReason};
+        let root = self.capacity_root.as_deref().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "fixture_capacity_unconfigured",
+                "fixture_capacity_admission",
+                "the existing fixture must name its admitted target root",
+            )
+        })?;
+        let root = root.to_str().expect("fixture root is UTF-8");
+        let path = path.to_str().expect("fixture target is UTF-8");
+        let root = std::path::Path::new(root.strip_prefix(r"\\?\").unwrap_or(root));
+        let path = std::path::Path::new(path.strip_prefix(r"\\?\").unwrap_or(path));
+        let fact = self.capacity_fact.get_or_init(|| {
+            let ids = actingcommand_contract::IdentifierIssuer::new().expect("fixture identity");
+            actingcommand_contract::CapacityFactReference {
+                event_id: *ids.mint_event_id().expect("capacity event").transport(),
+                sequence: 1,
+                owner_epoch: *ids.mint_owner_epoch().expect("capacity owner").transport(),
+                observed_at_unix_ms: 1,
+                observed_at_monotonic_ms: 0,
+            }
+        });
+        let (outcome, reason) = if !path.starts_with(root)
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            (
+                CapacityAdmissionOutcome::Unknown,
+                CapacityAdmissionReason::BindingChanged,
+            )
+        } else if bytes > 64 * 1024 * 1024 {
+            (
+                CapacityAdmissionOutcome::HardPressure,
+                CapacityAdmissionReason::HardThreshold,
+            )
+        } else {
+            (
+                CapacityAdmissionOutcome::Allowed,
+                CapacityAdmissionReason::FreshSample,
+            )
+        };
+        Ok(actingcommand_contract::CapacityDecision {
+            owner_epoch: fact.owner_epoch,
+            decided_at_unix_ms: 1,
+            decided_at_monotonic_ms: 0,
+            requested_bytes: bytes,
+            target_volume: Some("fixture-volume".to_owned()),
+            outcome,
+            reason,
+            fact: Some(fact.clone()),
+        })
     }
 }
 
@@ -66,13 +131,17 @@ impl ArtifactEventSink for GlobalLedgerSink<'_> {
                 "injected required global-ledger append failure",
             ));
         }
-        self.ledger.append(sanitized).map(|_| ()).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "global_ledger_append_failed",
-                "append_sealed_event",
-                format!("{} during {}", error.code(), error.operation()),
-            )
-        })
+        self.ledger
+            .expect("event sink has its original ledger")
+            .append(sanitized)
+            .map(|_| ())
+            .map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "global_ledger_append_failed",
+                    "append_sealed_event",
+                    format!("{} during {}", error.code(), error.operation()),
+                )
+            })
     }
 }
 
@@ -94,7 +163,7 @@ fn sealed_pipeline_round_trips_through_real_global_ledger_and_verified_export() 
     let ledger = open_ledger(temp.path(), "c2-sealed-success");
     let identity = sealed_identity();
     let artifact_root = temp.path().join("artifacts");
-    let mut sink = GlobalLedgerSink::new(&ledger);
+    let mut sink = GlobalLedgerSink::new(Some(&ledger));
     let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
     append_capture_summary(&mut sink, identity, &summary);
     append_terminal(&mut sink, identity, TaskOutcome::Success);
@@ -109,7 +178,20 @@ fn sealed_pipeline_round_trips_through_real_global_ledger_and_verified_export() 
         pre_export_events.clone(),
         terminal,
     );
-    let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+    let export_store =
+        actingcommand_artifact_store::ArtifactStore::open(&artifact_root).expect("export store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(
+        export_store
+            .root()
+            .parent()
+            .expect("fixture root")
+            .to_path_buf(),
+    );
+    export_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
+    let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
 
     let receipt = exporter.export(request, &mut sink).expect("sealed export");
     let verified = verify_evidence_archive(receipt.output_path(), receipt.zip_sha256())
@@ -196,7 +278,7 @@ fn required_global_ledger_failure_preserves_referenced_archive_without_success()
     let ledger = open_ledger(temp.path(), "c2-sealed-event-failure");
     let identity = sealed_identity();
     let artifact_root = temp.path().join("artifacts");
-    let mut sink = GlobalLedgerSink::new(&ledger);
+    let mut sink = GlobalLedgerSink::new(Some(&ledger));
     let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
     append_capture_summary(&mut sink, identity, &summary);
     append_terminal(&mut sink, identity, TaskOutcome::Failure);
@@ -212,7 +294,20 @@ fn required_global_ledger_failure_preserves_referenced_archive_without_success()
         terminal,
     );
     sink.fail_next(EventType::ArtifactExportCompleted);
-    let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+    let export_store =
+        actingcommand_artifact_store::ArtifactStore::open(&artifact_root).expect("export store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(
+        export_store
+            .root()
+            .parent()
+            .expect("fixture root")
+            .to_path_buf(),
+    );
+    export_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
+    let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
 
     let error = exporter
         .export(request, &mut sink)
@@ -244,6 +339,11 @@ fn required_global_ledger_failure_preserves_referenced_archive_without_success()
     }
 
     let store = ArtifactStore::open(&artifact_root).expect("store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(store.root().to_path_buf());
+    store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     // Reuse the native sink's single append failure at both publication records.
     for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
         sink.fail_next(event_type);
@@ -267,6 +367,11 @@ fn required_global_ledger_failure_preserves_referenced_archive_without_success()
     // An ordinary directory I/O failure must not attach its issued, absent object.
     let blocked = temp.path().join("blocked-store");
     let blocked_store = ArtifactStore::open(&blocked).expect("store issuer");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(blocked_store.root().to_path_buf());
+    blocked_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     fs::write(blocked.join("artifacts"), b"not a directory").expect("block object directory");
     let error = blocked_store
         .put(
@@ -316,7 +421,7 @@ fn corrupted_frame_artifact_cannot_publish_archive_and_is_ledger_visible() {
     let ledger = open_ledger(temp.path(), "c2-sealed-artifact-failure");
     let identity = sealed_identity();
     let artifact_root = temp.path().join("artifacts");
-    let mut sink = GlobalLedgerSink::new(&ledger);
+    let mut sink = GlobalLedgerSink::new(Some(&ledger));
     let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
     append_capture_summary(&mut sink, identity, &summary);
     append_terminal(&mut sink, identity, TaskOutcome::Failure);
@@ -337,7 +442,20 @@ fn corrupted_frame_artifact_cannot_publish_archive_and_is_ledger_visible() {
         events,
         terminal,
     );
-    let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+    let export_store =
+        actingcommand_artifact_store::ArtifactStore::open(&artifact_root).expect("export store");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(
+        export_store
+            .root()
+            .parent()
+            .expect("fixture root")
+            .to_path_buf(),
+    );
+    export_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
+    let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
 
     let error = exporter
         .export(request, &mut sink)
@@ -368,7 +486,7 @@ fn read_only_global_ledger_verifies_artifacts_without_mutation() {
     let ledger = open_ledger(temp.path(), "read-only-artifact-writer");
     let identity = sealed_identity();
     let summary = {
-        let mut sink = GlobalLedgerSink::new(&ledger);
+        let mut sink = GlobalLedgerSink::new(Some(&ledger));
         let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
         append_capture_summary(&mut sink, identity, &summary);
         summary
@@ -484,8 +602,14 @@ fn run_capture_pipeline(
     identity: SealedIdentity,
     sink: &mut GlobalLedgerSink<'_>,
 ) -> CapturePipelineSummary {
+    let artifact_store = std::sync::Arc::new(ArtifactStore::open(artifact_root).expect("store"));
+    let mut admission = GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(artifact_store.root().to_path_buf());
+    artifact_store
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     let mut pipeline = CapturePipeline::open(
-        artifact_root,
+        artifact_store,
         temp_root.join("frames"),
         pipeline_config(),
         write_context(identity, None, 1_752_147_200_000),

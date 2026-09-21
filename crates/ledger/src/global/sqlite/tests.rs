@@ -384,6 +384,11 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
     let artifacts =
         actingcommand_artifact_store::ArtifactStore::open(fixture.path().join("objects"))
             .expect("artifact owner");
+    let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
+    admission.capacity_root = Some(artifacts.root().to_path_buf());
+    artifacts
+        .install_capacity_admission(std::sync::Arc::new(admission))
+        .expect("fixture capacity owner");
     let ids = IdentifierIssuer::new().expect("identity issuer");
     let run = ids.mint_run_id().expect("run");
     let frame = ids.mint_frame_id().expect("frame");

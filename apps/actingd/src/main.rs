@@ -1706,7 +1706,71 @@ mod tests {
         let execution = initialize_policy(&host, &policy).expect("formal scheduled Recovery cycle");
         assert_eq!(execution.cycle.pending_dispatch_intents.len(), 1);
         let [wake] = execution.recompute_wakes.as_slice() else {
-            panic!("one exact mapped-outcome wake")
+            let forensic_context = match RuntimeClient::connect(
+                RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
+                    .with_io_timeout(Duration::from_secs(1)),
+            ) {
+                Ok(client) => {
+                    let snapshot = match RuntimeEventQueryPageRequest::new(1, None) {
+                        Ok(request) => client
+                            .query_event_page(
+                                EventQuery::default(),
+                                ProjectionProfile::Forensic,
+                                request,
+                            )
+                            .map_err(|error| format!("snapshot_read_error={error:#?}")),
+                        Err(error) => Err(format!("snapshot_request_error={error:#?}")),
+                    };
+                    match snapshot {
+                        Ok(snapshot) if snapshot.snapshot_ledger_position() > 0 => {
+                            let position = snapshot.snapshot_ledger_position();
+                            let from_sequence = position.saturating_sub(63).max(1);
+                            let tail = match RuntimeEventQueryPageRequest::new(64, None)
+                                .and_then(|request| request.at_snapshot(position))
+                            {
+                                Ok(request) => client
+                                    .query_event_page(
+                                        EventQuery {
+                                            from_sequence: Some(from_sequence),
+                                            to_sequence: Some(position),
+                                            ..EventQuery::default()
+                                        },
+                                        ProjectionProfile::Forensic,
+                                        request,
+                                    )
+                                    .map_err(|error| format!("tail_read_error={error:#?}")),
+                                Err(error) => Err(format!("tail_request_error={error:#?}")),
+                            };
+                            format!(
+                                "snapshot_request_limit=1; snapshot={snapshot:#?}; \
+                                 L={position}; tail_request_range={from_sequence}..={position}; \
+                                 tail_request_limit=64; tail={tail:#?}"
+                            )
+                        }
+                        Ok(snapshot) => format!(
+                            "snapshot_request_limit=1; snapshot={snapshot:#?}; \
+                             L=0; tail_not_read=empty_snapshot"
+                        ),
+                        Err(error) => format!(
+                            "snapshot_request_limit=1; {error}; \
+                             L=unavailable; tail_not_read=snapshot_unavailable"
+                        ),
+                    }
+                }
+                Err(error) => format!(
+                    "forensic_client_connect_error={error:#?}; \
+                     L=unavailable; snapshot_and_tail_not_read=client_unavailable"
+                ),
+            };
+            panic!(
+                "one exact mapped-outcome wake\nactual_count={}\ncycle={:#?}\n\
+                 recompute_wakes={:#?}\nforensic_context={forensic_context}\n\
+                 coverage=one bounded tail, not the complete ledger; \
+                 events outside returned pages remain unobserved; no cursor follow or retry",
+                execution.recompute_wakes.len(),
+                execution.cycle,
+                execution.recompute_wakes,
+            )
         };
         assert_eq!(
             wake.projection.outcome().identity().catalog_task_id(),
