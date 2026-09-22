@@ -673,7 +673,16 @@ impl HostShared {
         if matches!(stage, MonitorFailureStage::Artifact) {
             self.record_required_failure(&error, &failed, links.clone())?;
         }
-        if error.code() == "monitor_observation_invalid" {
+        if error.code() == "monitor_observation_invalid"
+            || (error.is_fatal()
+                && matches!(
+                    error.code(),
+                    "frame_workspace_unavailable"
+                        | "frame_memory_owner_missing_or_mismatched"
+                        | "frame_memory_accounting_invalid"
+                        | "frame_memory_budget_source_failed"
+                ))
+        {
             return Err(error);
         }
         Ok(())
