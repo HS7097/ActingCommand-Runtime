@@ -117,6 +117,8 @@ impl SessionBackends {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionInputOutcome {
+    /// The successful synchronous action call only, before outcome metadata is collected.
+    pub touch_response_us: Option<u64>,
     pub backend_open_observations: Vec<actingcommand_device::BackendOpenObservation>,
     pub selection: Option<actingcommand_device::InputSelectionContext>,
     pub recovery: Option<actingcommand_contract::AdbTargetRecovery>,
@@ -1229,7 +1231,12 @@ fn execute_input(
             }
         };
         let recovery = backend.take_adb_recovery();
-        execute_action(backend, &action, context.as_ref()).map_err(|error| {
+        let started = Instant::now();
+        let executed = execute_action(backend, &action, context.as_ref());
+        let touch_response_us = Instant::now()
+            .checked_duration_since(started)
+            .and_then(|span| u64::try_from(span.as_micros()).ok());
+        executed.map_err(|error| {
             let error = match &recovery {
                 Some(report) => error.with_adb_recovery(report.clone()),
                 None => error,
@@ -1237,6 +1244,7 @@ fn execute_input(
             ExecutionKernelError::device("input_backend_operation_failed", &error)
         })?;
         Ok(ExecutionInputOutcome {
+            touch_response_us,
             backend_open_observations: Vec::new(),
             selection: backend.selection_context(),
             recovery: recovery.as_ref().map(crate::error::adb_recovery_record),
@@ -1286,8 +1294,30 @@ fn execute_capture(
                 return Err(ExecutionKernelError::fatal("capture_backend_missing"));
             }
         };
-        backend
-            .capture()
+        let captured = backend.capture_timed();
+        // These reports have not left this Capture request. A reused session has
+        // no new open occurrence, so its historical report is never rewritten.
+        for observation in &mut observations {
+            use actingcommand_contract::{
+                BackendObservationStatus, BackendOpenEntry, BackendOpenSource,
+            };
+            let report = &mut observation.report;
+            if matches!(
+                report.entry,
+                BackendOpenEntry::Capture | BackendOpenEntry::NemuPair
+            ) && report.source == BackendOpenSource::Native
+            {
+                report.capture_check = match &captured {
+                    Ok(frame) if frame.validate_layout().is_ok() => {
+                        report.frame_width = Some(frame.width);
+                        report.frame_height = Some(frame.height);
+                        BackendObservationStatus::Passed
+                    }
+                    _ => BackendObservationStatus::Failed,
+                };
+            }
+        }
+        captured
             .and_then(|mut frame| {
                 if let Some(memory) = memory {
                     frame.admit_memory(memory)?;

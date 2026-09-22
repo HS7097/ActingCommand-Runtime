@@ -8,20 +8,38 @@ absent from the legacy wire: an old event without the field decodes as `None`.
 ## Payload fields
 
 - `input.committed` (`InputPayload::Committed`, the shared `OutcomePayload`)
-  gains `touch_response_us`. It is the span of the host's input backend call.
-  Until the kernel-level backend span lands, the host measures around its call
-  into the execution kernel, so the value includes the host→kernel channel
-  round-trip on top of the backend write itself. MaaTouch/Minitouch backends
-  measure their local write+flush; for AdbShellInput the child process exit is
-  the real acknowledgement. `InputPayloadDraft::committed_with_touch_response`
+  gains `touch_response_us`. The kernel measures the original `execute_action`
+  call after prepare, committed-frame checks and backend open, and before
+  collecting selection/recovery metadata. `ExecutionInputOutcome` carries the
+  optional successful span to the shared Host input consumer. It includes the
+  synchronous backend action's validation, hold/segmented delays, write/flush
+  and worker or child-process wait. MaaTouch/Minitouch have no action-completion
+  acknowledgement; this is a program-side call span, not physical device
+  response. ADB tap retains its original child termination and output-drain
+  boundary. `InputPayloadDraft::committed_with_touch_response`
   carries it; `InputPayloadDraft::committed` leaves it unset.
 - `capture.completed` (`CapturePayload::Completed`, the shared
   `ObservationResultPayload`) gains `capture_acquire_us`. It is the span of one
-  backend frame acquisition, measured host-side around the capture call in the
-  read-only observation, the monitor probe capture, and the contained task's
-  `CaptureBackend` boundary (the boundary's own span, not a second clock read).
+  backend frame acquisition. `CaptureBackend::capture_timed` measures the
+  original real `capture` call, including its existing dimension reads, decode
+  or worker round-trip. Selected/primed/Nemu view wrappers forward the original
+  scalar stored in `Frame`; taking a prime does not measure the take. Automatic
+  probes measure each existing candidate's acquisition separately, while their
+  selection `elapsed_ms` retains its complete construction/probe/budget scope
+  and ranking. The successful chosen frame supplies the event measurement.
+  Normal, explicit, cached-selection and Nemu capture use their current call.
+  `Frame::try_clone` carries the scalar without sampling or changing the copy's
+  independent memory admission. Readonly/sequence/Lab, monitor and contained
+  consumers use `Frame::capture_acquire_us`; contained tasks retain their outer
+  `TaskTimingBoundary` measurement and its attribution/budget meaning separately.
   `CapturePayloadDraft::completed_with_capture_acquire` carries it;
   `recognition.completed` shares the payload type but never carries the field.
+
+Both clocks use checked monotonic differences and checked microsecond conversion.
+Unavailable measurements remain `None`; they do not fall back to a Host/channel
+span or retained-frame take. Failed actions/captures keep the existing failure
+path and do not publish these success fields. Timing holds no device authority
+and changes no native call, cancellation, deadline, cleanup or event count.
 
 Family scope is enforced by `EventPayload::validate`:
 

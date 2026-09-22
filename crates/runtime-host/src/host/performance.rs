@@ -313,14 +313,6 @@ impl HostShared {
     }
 }
 
-/// `Unavailable` spans never become a zero; they leave the typed field unset.
-pub(super) const fn measured_microseconds(observed: ObservedMicroseconds) -> Option<u64> {
-    match observed {
-        ObservedMicroseconds::Measured { value } => Some(value),
-        ObservedMicroseconds::Unavailable { .. } => None,
-    }
-}
-
 const fn is_pipeline_event(event_type: EventType) -> bool {
     matches!(
         event_type,

@@ -26,7 +26,7 @@ The registry observes the selected backend's existing connection metadata:
   without observation data reports Unknown.
 
 `status` describes the return of the open, `connection` the observed connection,
-and `capture_check` the actual capture probe. A constructed backend can therefore
+and `capture_check` the actual capture/layout check. A constructed backend can therefore
 have Passed open status and Unknown connection/capture status. These observations
 are not dispatch eligibility or evidence of an input effect. Existing connect,
 capture, input, cleanup, cancellation and deadline operations retain their order
@@ -88,3 +88,39 @@ scope. No new timing sample is taken. They do not populate `touch_response_us`
 or `capture_acquire_us`; the original Input/Capture events remain the only source
 of those performance samples. This event does not publish a RuntimeFactStore
 availability record or change policy admission.
+
+## First actual capture in the opening request
+
+Before the kernel returns the original Capture result, it completes any native
+Capture/NemuPair open report created in that same command from the actual frame
+and `Frame::validate_layout`. A valid frame records Passed and its dimensions;
+an acquisition or layout failure records Failed. This changes only the
+`capture_check` and valid frame dimensions. Construct/Connect/CachedSelection
+attempts, open status, connection status and their elapsed values keep their
+original meanings. In particular, a cached selection remains Unknown with no
+current selection duration even when its new actual frame passes. Simulation
+remains SimulationNotApplicable; an unobserved provider remains Unknown.
+
+The check runs before frame memory admission so a later budget refusal retains
+the capture/layout result that actually occurred. Layout failure still reaches
+the original consumer's request/material failure handling; it is not reclassified
+by this observation. Host records a Failed capture check at Error severity in
+the original lifecycle event, with the original operation failure and cleanup
+facts unchanged. No extra acquisition or separate performance sample is emitted.
+
+Every reachable successful first capture currently has this same-command open
+report: independent input opens no capture backend; its first Capture opens it.
+A fresh paired Nemu open in Input cannot have a committed frame and fails through
+the existing retained-close path. Capture and Input are the only prepare callers;
+geometry observation opens nothing. Thus a prior Input cannot establish a usable
+paired session whose first capture needs a new event carrier. A reused session
+returns no new open report or first-check claim; its old occurrence is not copied
+or mutated. Independent backends reopened after application invalidation supply
+their new actual open report, while an existing paired owner retains its history.
+
+The kernel stamps the original session generation and all formal Host consumers
+drain the report under the current request/correlation/frame/run/instance links.
+The existing strict codec, sanitizer, Sensitive native details and public summary
+already carry the closed capture-check enum and dimensions; no wire field or
+event type is added. This is a capture/layout observation, not a complete
+connection self-check or dispatch availability.
