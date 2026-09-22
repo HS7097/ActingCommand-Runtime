@@ -103,7 +103,7 @@ fn invalidation_scope_matches(
         ),
     }
 }
-const MAX_ACTIVE_FACTS: usize = 256;
+pub(crate) const MAX_ACTIVE_FACTS: usize = 256;
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
 
 #[derive(Clone, Copy)]
@@ -418,8 +418,16 @@ impl InstanceFactStore {
             .query(Default::default())
             .map_err(|_| fact_fatal("fact_store_recovery_failed", "recover_fact_store"))?;
         let mut history = HistoricalFactProjection::default();
+        let mut applied = 0_u64;
         for event in &events {
+            if applied.checked_add(1) != Some(event.sequence()) {
+                return Err(fact_fatal(
+                    "fact_sync_prefix_unavailable",
+                    "recover_fact_store",
+                ));
+            }
             history.replay(event)?;
+            applied = event.sequence();
         }
         store
             .state
@@ -432,6 +440,30 @@ impl InstanceFactStore {
     }
 
     pub(crate) fn synchronize(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
+        let position = ledger
+            .latest_sequence()
+            .map_err(|_| fact_fatal("fact_store_sync_failed", "synchronize_fact_store"))?;
+        self.synchronize_to(ledger, position)
+    }
+
+    pub(crate) fn applied_position(&self) -> u64 {
+        self.last_sequence
+    }
+
+    pub(crate) fn synchronize_to(
+        &mut self,
+        ledger: &GlobalLedger,
+        position: u64,
+    ) -> RuntimeHostResult<()> {
+        if position < self.last_sequence {
+            return Err(fact_fatal(
+                "fact_sequence_invalid",
+                "synchronize_fact_store",
+            ));
+        }
+        if position == self.last_sequence {
+            return Ok(());
+        }
         let from_sequence = self
             .last_sequence
             .checked_add(1)
@@ -439,11 +471,29 @@ impl InstanceFactStore {
         let events = ledger
             .query(EventQuery {
                 from_sequence: Some(from_sequence),
+                to_sequence: Some(position),
                 ..EventQuery::default()
             })
             .map_err(|_| fact_fatal("fact_store_sync_failed", "synchronize_fact_store"))?;
         for event in events {
+            if event.sequence()
+                != self
+                    .last_sequence
+                    .checked_add(1)
+                    .ok_or_else(|| fact_fatal("fact_sequence_overflow", "synchronize_fact_store"))?
+            {
+                return Err(fact_fatal(
+                    "fact_sync_prefix_unavailable",
+                    "synchronize_fact_store",
+                ));
+            }
             self.replay_event(&event, ledger)?;
+        }
+        if self.last_sequence != position {
+            return Err(fact_fatal(
+                "fact_sync_prefix_unavailable",
+                "synchronize_fact_store",
+            ));
         }
         Ok(())
     }
@@ -478,6 +528,7 @@ impl InstanceFactStore {
             ));
         }
         let mut history = HistoricalFactProjection::default();
+        let mut applied = 0_u64;
         for event in ledger
             .query(EventQuery {
                 to_sequence: Some(position),
@@ -485,7 +536,20 @@ impl InstanceFactStore {
             })
             .map_err(|_| fact_fatal("fact_history_read_failed", "project_fact_history"))?
         {
+            if applied.checked_add(1) != Some(event.sequence()) {
+                return Err(fact_fatal(
+                    "fact_sync_prefix_unavailable",
+                    "project_fact_history",
+                ));
+            }
             history.replay(&event)?;
+            applied = event.sequence();
+        }
+        if applied != position {
+            return Err(fact_fatal(
+                "fact_sync_prefix_unavailable",
+                "project_fact_history",
+            ));
         }
         let active = history
             .active
@@ -1608,6 +1672,7 @@ mod tests {
                 game_id: "game-a".to_owned(),
                 host_id: "host-a".to_owned(),
                 available: true,
+                unavailable_reason: None,
                 capability_operation_ids: vec!["operation-a".to_owned()],
                 preferred_task_ids: vec!["task-a".to_owned()],
             }],

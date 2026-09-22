@@ -2356,6 +2356,7 @@ mod tests {
                 game_id: "fixture-game-a".to_string(),
                 host_id: "fixture-host-a".to_string(),
                 available: true,
+                unavailable_reason: None,
                 capability_operation_ids: vec!["operation.observe".to_string()],
                 preferred_task_ids: Vec::new(),
             }],

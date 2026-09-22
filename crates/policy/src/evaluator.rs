@@ -82,8 +82,23 @@ pub struct InstanceSnapshot {
     pub game_id: String,
     pub host_id: String,
     pub available: bool,
+    /// A producer's explicit unavailable cause; absent on ordinary configured instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
     pub capability_operation_ids: Vec<String>,
     pub preferred_task_ids: Vec<String>,
+}
+
+impl InstanceSnapshot {
+    /// Validates the instance-owned fields, independently of a catalog or host list.
+    pub fn validate_metadata(&self) -> PolicyEvaluationResult<()> {
+        validate_instance_alias(&self.instance_id)?;
+        validate_id("instance server id", &self.server_id)?;
+        validate_id("instance game id", &self.game_id)?;
+        validate_id("instance host id", &self.host_id)?;
+        validate_unique_ids("instance capability", &self.capability_operation_ids)?;
+        validate_unique_ids("instance affinity", &self.preferred_task_ids)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1151,7 +1166,10 @@ fn build_candidate(
     if !instance.available {
         return Ok(PlacementResult::Blocked(reason(
             "instance_unavailable",
-            "the instance is unavailable",
+            instance
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("the instance is unavailable"),
         )));
     }
     if !instance
@@ -2700,10 +2718,7 @@ fn validate_inputs(
 
     let mut instance_ids = BTreeSet::new();
     for instance in &facts.instances {
-        validate_instance_alias(&instance.instance_id)?;
-        validate_id("instance server id", &instance.server_id)?;
-        validate_id("instance game id", &instance.game_id)?;
-        validate_id("instance host id", &instance.host_id)?;
+        instance.validate_metadata()?;
         if !instance_ids.insert(instance.instance_id.as_str()) {
             return Err(PolicyEvaluationError::invalid(format!(
                 "duplicate instance '{}'",
@@ -2716,8 +2731,6 @@ fn validate_inputs(
                 instance.instance_id, instance.host_id
             )));
         }
-        validate_unique_ids("instance capability", &instance.capability_operation_ids)?;
-        validate_unique_ids("instance affinity", &instance.preferred_task_ids)?;
         for task_id in &instance.preferred_task_ids {
             if !task_ids.contains(task_id.as_str()) {
                 return Err(PolicyEvaluationError::invalid(format!(
@@ -3868,6 +3881,7 @@ mod tests {
             game_id: "fixture-game-a".to_owned(),
             host_id: "fixture-host-a".to_owned(),
             available: true,
+            unavailable_reason: None,
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: vec!["fixture.observe".to_owned()],
         });
@@ -3994,6 +4008,7 @@ mod tests {
             game_id: "fixture-game-a".to_owned(),
             host_id: "fixture-host-a".to_owned(),
             available: true,
+            unavailable_reason: None,
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         });
@@ -4855,6 +4870,7 @@ mod tests {
                 game_id: "fixture-game-a".to_owned(),
                 host_id: "fixture-host-a".to_owned(),
                 available: true,
+                unavailable_reason: None,
                 capability_operation_ids: vec!["operation.observe".to_owned()],
                 preferred_task_ids: Vec::new(),
             }],
