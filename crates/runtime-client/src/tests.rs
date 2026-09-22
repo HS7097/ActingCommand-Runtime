@@ -1152,20 +1152,15 @@ impl CaptureBackend for FakeCapture {
             return Err(DeviceError::fatal("injected capture failure"));
         }
         if self.state.invalid_capture.load(Ordering::Acquire) {
-            return Ok(Frame {
-                backend_open_observations: Vec::new(),
-                width: 2,
-                height: 1,
-                pixels: Vec::new(),
-                pixel_format: PixelFormat::Rgb8,
-                original_png: None,
-                captured_at: std::time::SystemTime::now(),
-                backend_name: CaptureBackendName::AdbScreencap,
-                selection: None,
-                geometry: actingcommand_contract::CaptureGeometryObservation::Unknown(
-                    actingcommand_contract::CaptureGeometryUnknownReason::ProducerObservationAbsent,
-                ),
-            });
+            let mut frame = Frame::from_pixels(
+                2,
+                1,
+                vec![0; 6],
+                PixelFormat::Rgb8,
+                CaptureBackendName::AdbScreencap,
+            )?;
+            frame.pixels = Vec::new();
+            return Ok(frame);
         }
         Frame::from_pixels(
             2,
@@ -1260,6 +1255,7 @@ impl ExecutionBackendProvider for FakeProvider {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
             assert_eq!(instance_alias, "node.a");
@@ -1332,6 +1328,7 @@ impl ExecutionBackendProvider for NeutralProjectProvider {
     fn open_capture(
         &self,
         _instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
             self.state.capture_opens.fetch_add(1, Ordering::AcqRel);

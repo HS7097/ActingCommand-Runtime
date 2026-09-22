@@ -1297,11 +1297,15 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         "Provider checker internal dependency boundary changed"
     );
     // DEVICE-TEST-B-READ-v1: the named non-production tool also consumes B.
+    // Its capture factory uses FrameStore and the existing memory source for prime admission.
+    // First red: https://github.com/HS7097/ActingCommand-Runtime/actions/runs/35676181277/attempts/1
     assert_eq!(
         internal_dependencies(device_test),
         vec![
+            "actingcommand-artifact-store".to_owned(),
             "actingcommand-device".to_owned(),
             "actingcommand-execution-kernel".to_owned(),
+            "actingcommand-host-metrics".to_owned(),
             "actingcommand-ledger-forensics".to_owned(),
             "actingcommand-page-detector".to_owned(),
             "actingcommand-recognition".to_owned(),
@@ -1502,8 +1506,8 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
         .next()
         .expect("monitor probe boundary");
     assert!(monitor_probe.contains("self.artifacts"));
-    assert!(monitor_probe.contains("ArtifactWriteRequest::new"));
-    assert!(monitor_probe.contains("ArtifactProducer::CaptureStore"));
+    assert!(monitor_probe.contains("CapturePipeline::open_with_frame_store"));
+    assert!(monitor_probe.contains("pipeline.persist_frame"));
     assert!(monitor_probe.contains("let error = RuntimeHostError::artifact(error)"));
     assert!(monitor_control.contains("fn record_monitor_recovery_coordination"));
     assert!(monitor_control.contains("fn monitor_recovery_admission"));

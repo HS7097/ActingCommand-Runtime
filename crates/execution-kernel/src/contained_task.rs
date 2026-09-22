@@ -6197,7 +6197,7 @@ mod post_admission_ocr_tests {
             .unwrap();
             let mut runtime = CallbackRuntime {
                 inner: super::retry_wiring_tests::ScriptedRuntime {
-                    frames: VecDeque::from([frame.clone()]),
+                    frames: VecDeque::from([frame.try_clone().expect("copy fixture frame")]),
                     last_frame: frame,
                     captures: 0,
                     inputs: 0,
@@ -6228,10 +6228,10 @@ mod post_admission_ocr_tests {
                     actingcommand_device::CaptureBackendName::FixtureSimulation,
                 )
                 .unwrap();
-                runtime
-                    .inner
-                    .frames
-                    .extend([unknown.clone(), unknown.clone()]);
+                runtime.inner.frames.extend([
+                    unknown.try_clone().expect("copy fixture frame"),
+                    unknown.try_clone().expect("copy fixture frame"),
+                ]);
                 runtime.inner.last_frame = if case == "wait_timeout" {
                     unknown
                 } else {
@@ -6649,9 +6649,9 @@ mod post_admission_ocr_tests {
             .unwrap();
             let mut runtime = super::retry_wiring_tests::ScriptedRuntime {
                 frames: if result_first {
-                    VecDeque::from([result.clone()])
+                    VecDeque::from([result.try_clone().expect("copy fixture frame")])
                 } else {
-                    VecDeque::from([home, result.clone()])
+                    VecDeque::from([home, result.try_clone().expect("copy fixture frame")])
                 },
                 last_frame: result,
                 captures: 0,
@@ -7679,7 +7679,11 @@ mod post_admission_ocr_tests {
             fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
                 Ok(match self.frames.pop_front() {
                     Some(frame) => frame.into(),
-                    None => self.last_frame.clone().into(),
+                    None => self
+                        .last_frame
+                        .try_clone()
+                        .expect("copy fixture frame")
+                        .into(),
                 })
             }
 
@@ -7846,9 +7850,9 @@ mod post_admission_ocr_tests {
         let mut runtime = StabilityOcrRuntime {
             frames: VecDeque::from([
                 frame([1, 1, 1]),
-                final_frame.clone(),
-                final_frame.clone(),
-                final_frame.clone(),
+                final_frame.try_clone().expect("copy fixture frame"),
+                final_frame.try_clone().expect("copy fixture frame"),
+                final_frame.try_clone().expect("copy fixture frame"),
             ]),
             last_frame: final_frame,
             inputs: 0,
@@ -8665,7 +8669,11 @@ mod retry_wiring_tests {
         fn from_pages(initial_page: &str, after_effect_page: &str) -> Self {
             let last_frame = page_frame(after_effect_page);
             Self {
-                frames: [page_frame(initial_page), last_frame.clone()].into(),
+                frames: [
+                    page_frame(initial_page),
+                    last_frame.try_clone().expect("copy fixture frame"),
+                ]
+                .into(),
                 last_frame,
                 captures: 0,
                 inputs: 0,
@@ -8686,7 +8694,11 @@ mod retry_wiring_tests {
             self.captures += 1;
             Ok(match self.frames.pop_front() {
                 Some(frame) => frame.into(),
-                None => self.last_frame.clone().into(),
+                None => self
+                    .last_frame
+                    .try_clone()
+                    .expect("copy fixture frame")
+                    .into(),
             })
         }
 
@@ -9137,7 +9149,12 @@ mod retry_wiring_tests {
         task.program.operations[0].post_delay_ms = Some(DELAY_MS);
         let terminal = page_frame("terminal");
         let inner = ScriptedRuntime {
-            frames: [page_frame("home"), unrecognized_frame(), terminal.clone()].into(),
+            frames: [
+                page_frame("home"),
+                unrecognized_frame(),
+                terminal.try_clone().expect("copy fixture frame"),
+            ]
+            .into(),
             last_frame: terminal,
             captures: 0,
             inputs: 0,
@@ -9250,7 +9267,12 @@ mod retry_wiring_tests {
         assert!(task.program.operations[0].expect_after.is_none());
         let terminal = page_frame("terminal");
         let mut runtime = ScriptedRuntime {
-            frames: [page_frame("home"), page_frame("home"), terminal.clone()].into(),
+            frames: [
+                page_frame("home"),
+                page_frame("home"),
+                terminal.try_clone().expect("copy fixture frame"),
+            ]
+            .into(),
             last_frame: terminal,
             captures: 0,
             inputs: 0,
@@ -9525,7 +9547,12 @@ mod retry_wiring_tests {
         operation.retry_interval_ms = Some(1);
         let unknown = unrecognized_frame();
         let mut runtime = ScriptedRuntime {
-            frames: [page_frame("home"), page_frame("home"), unknown.clone()].into(),
+            frames: [
+                page_frame("home"),
+                page_frame("home"),
+                unknown.try_clone().expect("copy fixture frame"),
+            ]
+            .into(),
             last_frame: unknown,
             captures: 0,
             inputs: 0,
@@ -10081,7 +10108,11 @@ mod retry_wiring_tests {
     }
 
     fn stability_runtime(frames: Vec<Frame>) -> ScriptedRuntime {
-        let last_frame = frames.last().expect("at least one frame").clone();
+        let last_frame = frames
+            .last()
+            .expect("at least one frame")
+            .try_clone()
+            .expect("copy fixture frame");
         ScriptedRuntime {
             frames: frames.into(),
             last_frame,

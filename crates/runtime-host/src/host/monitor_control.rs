@@ -237,15 +237,31 @@ impl HostShared {
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
 
+        let frame_id = links.frame_id().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "monitor_frame_identity_missing",
+                "run_monitor_capture",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let frame_store = actingcommand_artifact_store::FrameStore::new(
+            frame_retention::spill_root(self.artifacts.root(), frame_id)
+                .map_err(RuntimeHostError::artifact)?,
+            frame_retention::capture_frame_store_config(),
+        )
+        .map_err(RuntimeHostError::artifact)?;
+        let memory = frame_store.memory_budget();
         let registration = self.mark_resources_in_use()?;
         let capture_started = Instant::now();
-        let captured = self
-            .execution
-            .capture_retained_with_registration_guard(&probe.instance_alias, registration);
+        let captured = self.execution.capture_retained_with_registration_guard(
+            &probe.instance_alias,
+            registration,
+            memory.clone(),
+        );
         let capture_acquire_us = performance::measured_microseconds(
             actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
         );
-        let frame = match captured {
+        let mut frame = match captured {
             Ok(mut frame) => {
                 self.append_backend_open_observations(
                     &std::mem::take(&mut frame.backend_open_observations),
@@ -277,23 +293,36 @@ impl HostShared {
                 );
             }
         };
-        let artifact_png = match frame.png_for_artifact() {
-            Ok(png) => png,
-            Err(_) => {
-                let error = RuntimeHostError::request(
+        let prepared = (|| -> actingcommand_device::DeviceResult<()> {
+            frame.validate_layout()?;
+            let required = frame.artifact_png_workspace_bytes()?;
+            let mut workspace = memory.reserve(required)?;
+            if let std::borrow::Cow::Owned(png) = frame.png_for_artifact_with_budget(required)? {
+                frame.retain_admitted_png(png, &mut workspace)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = prepared {
+            let error = if error.frame_memory_failure().is_some() {
+                RuntimeHostError::artifact(ArtifactStoreError::incoming_frame(error))
+            } else {
+                RuntimeHostError::request(
                     "capture_frame_invalid",
                     "run_monitor_capture",
                     RuntimeErrorCode::CaptureFailed,
-                );
-                return self.finish_monitor_failure(
-                    probe,
-                    &links,
-                    started_at_unix_ms,
-                    error,
-                    MonitorFailureStage::Capture,
-                );
+                )
+            };
+            if error.is_fatal() {
+                return Err(error);
             }
-        };
+            return self.finish_monitor_failure(
+                probe,
+                &links,
+                started_at_unix_ms,
+                error,
+                MonitorFailureStage::Capture,
+            );
+        }
         self.append_event_raw(
             EventSeverity::Info,
             EventSource::Device,
@@ -315,19 +344,38 @@ impl HostShared {
             ledger: &self.ledger,
             events: &self.events,
         };
-        if let Err(error) = self.artifacts.put(
-            ArtifactWriteRequest::new(
-                ArtifactKind::CaptureFrame,
-                &artifact_png,
-                write_context,
-                ArtifactIssuePolicy::new(
-                    ArtifactProducer::CaptureStore,
-                    RetentionClass::Adaptive,
-                    ArtifactRedactionState::NotRequired,
-                ),
-            ),
-            &mut sink,
-        ) {
+        let persisted = (|| -> ArtifactStoreResult<()> {
+            let mut pipeline = CapturePipeline::open_with_frame_store(
+                Arc::clone(&self.artifacts),
+                frame_store,
+                CapturePipelineConfig {
+                    frame_store: frame_retention::capture_frame_store_config(),
+                    retention_class: RetentionClass::Adaptive,
+                    redaction_state: ArtifactRedactionState::NotRequired,
+                    ..CapturePipelineConfig::default()
+                },
+                write_context.clone(),
+                &mut sink,
+            )?;
+            pipeline.with_frame_copy(&frame, |pipeline, frame| -> ArtifactStoreResult<()> {
+                pipeline.record_frame(
+                    FrameStoreFrameInput {
+                        frame_index: 0,
+                        file_name: "frame-0.png".to_owned(),
+                        label: "initial".to_owned(),
+                        recognition_state: RecognitionState::Pending,
+                        pinned_reason: None,
+                        frame,
+                    },
+                    write_context,
+                    &mut sink,
+                )?;
+                pipeline.persist_frame(0, &mut sink)?;
+                pipeline.cleanup_spills()?;
+                Ok(())
+            })?
+        })();
+        if let Err(error) = persisted {
             let error = RuntimeHostError::artifact(error);
             if error.is_fatal() {
                 return Err(error);
@@ -558,7 +606,14 @@ impl HostShared {
             let payload = CapturePayloadDraft::failed_with_causes(
                 EventAction::CaptureObserve,
                 diagnostic,
-                EffectDisposition::NotPerformed,
+                if matches!(
+                    error.code(),
+                    "capture_frame_invalid" | "frame_workspace_unavailable"
+                ) {
+                    EffectDisposition::Indeterminate
+                } else {
+                    EffectDisposition::NotPerformed
+                },
                 error.diagnostic_detail().cloned(),
                 error.cleanup_cause().cloned(),
                 AuditInput::new(),
@@ -618,7 +673,16 @@ impl HostShared {
         if matches!(stage, MonitorFailureStage::Artifact) {
             self.record_required_failure(&error, &failed, links.clone())?;
         }
-        if error.code() == "monitor_observation_invalid" {
+        if error.code() == "monitor_observation_invalid"
+            || (error.is_fatal()
+                && matches!(
+                    error.code(),
+                    "frame_workspace_unavailable"
+                        | "frame_memory_owner_missing_or_mismatched"
+                        | "frame_memory_accounting_invalid"
+                        | "frame_memory_budget_source_failed"
+                ))
+        {
             return Err(error);
         }
         Ok(())

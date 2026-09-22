@@ -436,6 +436,7 @@ pub struct DeviceError {
 
 #[derive(Clone, Default)]
 struct StoredDeviceEvidence {
+    frame_memory: Option<crate::FrameMemoryFailure>,
     backend_open: Vec<crate::BackendOpenObservation>,
     vendor_stdio: Vec<DeviceStdioObservation>,
     command: Option<crate::AdbCommandEvidence>,
@@ -443,6 +444,36 @@ struct StoredDeviceEvidence {
 }
 
 impl DeviceError {
+    pub fn frame_memory(failure: crate::FrameMemoryFailure) -> Self {
+        let mut error = match failure {
+            crate::FrameMemoryFailure::Capacity => Self::transient("frame_workspace_unavailable"),
+            crate::FrameMemoryFailure::Owner => {
+                Self::fatal("frame_memory_owner_missing_or_mismatched")
+            }
+            crate::FrameMemoryFailure::Accounting => Self::fatal("frame_memory_accounting_invalid"),
+            crate::FrameMemoryFailure::BudgetSource => {
+                Self::fatal("frame_memory_budget_source_failed")
+            }
+        };
+        error
+            .evidence
+            .get_or_insert_with(Default::default)
+            .frame_memory = Some(failure);
+        error
+    }
+
+    pub fn frame_memory_failure(&self) -> Option<crate::FrameMemoryFailure> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.frame_memory)
+    }
+
+    pub fn with_frame_memory_failure(mut self, failure: crate::FrameMemoryFailure) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .frame_memory = Some(failure);
+        self
+    }
     pub(crate) fn with_backend_open_configuration(
         mut self,
         report: &actingcommand_contract::BackendOpenReport,

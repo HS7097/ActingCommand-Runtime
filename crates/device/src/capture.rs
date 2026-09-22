@@ -142,7 +142,7 @@ impl CaptureBackendChoice {
 }
 
 /// Device frame in a common raw-pixel contract.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct Frame {
     /// Open observations attached by the kernel to this request's result only.
     pub backend_open_observations: Vec<crate::BackendOpenObservation>,
@@ -157,9 +157,131 @@ pub struct Frame {
     pub selection: Option<Arc<CaptureSelectionContext>>,
     /// Observation made by this frame's producer, without an additional capture.
     pub geometry: CaptureGeometryObservation,
+    /// Dropped after the owned pixel/PNG buffers; never shared by a physical copy.
+    memory_charge: Option<crate::FrameMemoryCharge>,
+}
+
+impl PartialEq for Frame {
+    fn eq(&self, other: &Self) -> bool {
+        self.backend_open_observations == other.backend_open_observations
+            && self.width == other.width
+            && self.height == other.height
+            && self.pixels == other.pixels
+            && self.pixel_format == other.pixel_format
+            && self.original_png == other.original_png
+            && self.captured_at == other.captured_at
+            && self.backend_name == other.backend_name
+            && self.selection == other.selection
+            && self.geometry == other.geometry
+    }
 }
 
 impl Frame {
+    pub fn memory_charge(&self) -> Option<&crate::FrameMemoryCharge> {
+        self.memory_charge.as_ref()
+    }
+    pub fn validate_layout(&self) -> DeviceResult<()> {
+        validate_pixel_buffer(
+            self.width,
+            self.height,
+            self.pixel_format,
+            self.pixels.len(),
+        )
+    }
+    pub fn payload_capacity(&self) -> DeviceResult<u64> {
+        (self.pixels.capacity() as u64)
+            .checked_add(
+                self.original_png
+                    .as_ref()
+                    .map_or(0, |png| png.capacity() as u64),
+            )
+            .ok_or_else(|| DeviceError::frame_memory(crate::FrameMemoryFailure::Accounting))
+    }
+
+    pub fn admit_memory(&mut self, owner: &crate::FrameMemoryBudget) -> DeviceResult<()> {
+        let bytes = self.payload_capacity()?;
+        match &self.memory_charge {
+            Some(charge) if charge.owner().same_owner(owner) && charge.bytes() == bytes => Ok(()),
+            Some(_) => Err(DeviceError::frame_memory(crate::FrameMemoryFailure::Owner)),
+            None => {
+                self.memory_charge = Some(owner.reserve(bytes)?);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn try_clone(&self) -> DeviceResult<Self> {
+        self.try_clone_with_budget(self.memory_charge.as_ref().map(|charge| charge.owner()))
+    }
+
+    pub fn try_clone_with_budget(
+        &self,
+        owner: Option<&crate::FrameMemoryBudget>,
+    ) -> DeviceResult<Self> {
+        if let Some(charge) = &self.memory_charge
+            && owner.is_none_or(|owner| !charge.owner().same_owner(owner))
+        {
+            return Err(DeviceError::frame_memory(crate::FrameMemoryFailure::Owner));
+        }
+        validate_pixel_buffer(
+            self.width,
+            self.height,
+            self.pixel_format,
+            self.pixels.len(),
+        )?;
+        let charge = owner
+            .map(|owner| owner.reserve(self.payload_capacity()?))
+            .transpose()?;
+        let mut copy = Self {
+            backend_open_observations: self.backend_open_observations.clone(),
+            width: self.width,
+            height: self.height,
+            pixels: self.pixels.clone(),
+            pixel_format: self.pixel_format,
+            original_png: self.original_png.clone(),
+            captured_at: self.captured_at,
+            backend_name: self.backend_name,
+            selection: self.selection.clone(),
+            geometry: self.geometry.clone(),
+            memory_charge: charge,
+        };
+        if let Some(charge) = &mut copy.memory_charge {
+            let actual = (copy.pixels.capacity() as u64)
+                .checked_add(
+                    copy.original_png
+                        .as_ref()
+                        .map_or(0, |png| png.capacity() as u64),
+                )
+                .ok_or_else(|| DeviceError::frame_memory(crate::FrameMemoryFailure::Accounting))?;
+            if actual > charge.bytes() {
+                let mut extra = charge.owner().reserve(actual - charge.bytes())?;
+                let bytes = extra.bytes();
+                extra.transfer_to(charge, bytes)?;
+            } else if actual < charge.bytes() {
+                charge.shrink_to(actual)?;
+            }
+        }
+        Ok(copy)
+    }
+
+    pub fn retain_admitted_png(
+        &mut self,
+        png: Vec<u8>,
+        workspace: &mut crate::FrameMemoryCharge,
+    ) -> DeviceResult<()> {
+        if self.original_png.is_some() {
+            return Err(DeviceError::frame_memory(
+                crate::FrameMemoryFailure::Accounting,
+            ));
+        }
+        let charge = self
+            .memory_charge
+            .as_mut()
+            .ok_or_else(|| DeviceError::frame_memory(crate::FrameMemoryFailure::Owner))?;
+        workspace.transfer_to(charge, png.capacity() as u64)?;
+        self.original_png = Some(png);
+        Ok(())
+    }
     pub fn from_png(png: Vec<u8>, backend_name: CaptureBackendName) -> DeviceResult<Self> {
         let (width, height) = parse_png_dimensions(&png)?;
         let image = image::load_from_memory(&png)
@@ -170,6 +292,7 @@ impl Frame {
             height,
             pixels: image.into_raw(),
             backend_open_observations: Vec::new(),
+            memory_charge: None,
             pixel_format: PixelFormat::Rgba8,
             original_png: Some(png),
             captured_at: SystemTime::now(),
@@ -200,6 +323,7 @@ impl Frame {
             height,
             pixels,
             backend_open_observations: Vec::new(),
+            memory_charge: None,
             pixel_format,
             original_png: None,
             captured_at: SystemTime::now(),
@@ -455,6 +579,13 @@ impl CaptureBackend for SelectedCaptureBackend {
 pub fn create_capture_backend(
     config: CaptureBackendConfig,
 ) -> DeviceResult<SelectedCaptureBackend> {
+    create_capture_backend_with_memory(config, None)
+}
+
+pub fn create_capture_backend_with_memory(
+    config: CaptureBackendConfig,
+    memory: Option<&crate::FrameMemoryBudget>,
+) -> DeviceResult<SelectedCaptureBackend> {
     let configured_adb = config.adb_config.adb_path.clone();
     let configured_serial = config.target.serial.clone();
     let config = prepare_capture_backend_config(config)?;
@@ -468,8 +599,8 @@ pub fn create_capture_backend(
         nemu_frame: None,
     };
     let mut selected = match config.requested {
-        CaptureBackendChoice::Auto => create_auto_capture_backend(config),
-        CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config),
+        CaptureBackendChoice::Auto => create_auto_capture_backend(config, memory),
+        CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config, memory),
         CaptureBackendChoice::Adb => {
             let used = CaptureBackendName::AdbScreencap;
             Ok(SelectedCaptureBackend {
@@ -706,14 +837,16 @@ const AUTO_CAPTURE_BACKEND_ORDER: [CaptureBackendName; 3] = [
 
 fn create_auto_capture_backend(
     config: CaptureBackendConfig,
+    memory: Option<&crate::FrameMemoryBudget>,
 ) -> DeviceResult<SelectedCaptureBackend> {
-    create_auto_capture_backend_with_mode(config, AutoCaptureMode::Priority)
+    create_auto_capture_backend_with_mode(config, AutoCaptureMode::Priority, memory)
 }
 
 fn create_auto_fastest_capture_backend(
     config: CaptureBackendConfig,
+    memory: Option<&crate::FrameMemoryBudget>,
 ) -> DeviceResult<SelectedCaptureBackend> {
-    create_auto_capture_backend_with_mode(config, AutoCaptureMode::Fastest)
+    create_auto_capture_backend_with_mode(config, AutoCaptureMode::Fastest, memory)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -725,9 +858,10 @@ enum AutoCaptureMode {
 fn create_auto_capture_backend_with_mode(
     config: CaptureBackendConfig,
     mode: AutoCaptureMode,
+    memory: Option<&crate::FrameMemoryBudget>,
 ) -> DeviceResult<SelectedCaptureBackend> {
     select_auto_capture_backend_with_probe(mode, AUTO_CAPTURE_BACKEND_ORDER, |name| {
-        probe_or_cached_capture_backend(&config, name)
+        probe_or_cached_capture_backend(&config, name, memory)
     })
 }
 
@@ -863,6 +997,7 @@ fn close_capture_candidates(
 fn probe_or_cached_capture_backend(
     config: &CaptureBackendConfig,
     name: CaptureBackendName,
+    memory: Option<&crate::FrameMemoryBudget>,
 ) -> DeviceResult<CaptureProbeOutcome> {
     let key = CaptureProbeCacheKey::new(config, name);
     if let Some(cached) = capture_probe_cache_lookup(&key, DEFAULT_CAPTURE_PROBE_CACHE_TTL)? {
@@ -893,7 +1028,7 @@ fn probe_or_cached_capture_backend(
 
     let started = Instant::now();
     match build_capture_backend(config, name) {
-        Ok(backend) => match prime_capture_backend(name, backend) {
+        Ok(backend) => match prime_capture_backend(name, backend, memory) {
             Ok((backend, message, vendor_stdio)) => {
                 let elapsed_ms = started.elapsed().as_millis();
                 let attempt =
@@ -905,7 +1040,10 @@ fn probe_or_cached_capture_backend(
                 Ok(CaptureProbeOutcome::Available(backend, attempt, elapsed_ms))
             }
             Err(error) => {
-                if error.resource_quiescence().is_some()
+                if error.diagnostic().is_some_and(|diagnostic| {
+                    diagnostic.category() == crate::DeviceErrorCategory::FrameLayout
+                }) || error.frame_memory_failure().is_some()
+                    || error.resource_quiescence().is_some()
                     || !error.resource_close_causes().is_empty()
                 {
                     return Err(error);
@@ -1150,11 +1288,28 @@ impl CaptureBackend for PrimedCaptureBackend {
 fn prime_capture_backend(
     name: CaptureBackendName,
     mut backend: Box<dyn CaptureBackend>,
+    memory: Option<&crate::FrameMemoryBudget>,
 ) -> DeviceResult<PrimedCaptureResult> {
+    let Some(memory) = memory else {
+        return Err(close_capture_backend_after_error(
+            backend,
+            DeviceError::frame_memory(crate::FrameMemoryFailure::Owner),
+        ));
+    };
     let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.capture()))
         .unwrap_or_else(|_| Err(DeviceError::fatal("capture probe panicked")));
     match captured {
-        Ok(frame) => {
+        Ok(mut frame) => {
+            if let Err(primary) = validate_pixel_buffer(
+                frame.width,
+                frame.height,
+                frame.pixel_format,
+                frame.pixels.len(),
+            )
+            .and_then(|()| frame.admit_memory(memory))
+            {
+                return Err(close_capture_backend_after_error(backend, primary));
+            }
             let vendor_stdio = backend.vendor_stdio().to_vec();
             let message = format!(
                 "auto selected available {} backend after probe capture {}x{}",

@@ -258,6 +258,28 @@ impl ExecutionKernelError {
     }
 
     pub(crate) fn device(code: &'static str, error: &DeviceError) -> Self {
+        let code = match error.frame_memory_failure() {
+            Some(actingcommand_device::FrameMemoryFailure::Capacity) => {
+                "frame_workspace_unavailable"
+            }
+            Some(actingcommand_device::FrameMemoryFailure::Owner) => {
+                "frame_memory_owner_missing_or_mismatched"
+            }
+            Some(actingcommand_device::FrameMemoryFailure::Accounting) => {
+                "frame_memory_accounting_invalid"
+            }
+            Some(actingcommand_device::FrameMemoryFailure::BudgetSource) => {
+                "frame_memory_budget_source_failed"
+            }
+            None if code.starts_with("capture_backend_")
+                && error.diagnostic().is_some_and(|diagnostic| {
+                    diagnostic.category() == actingcommand_device::DeviceErrorCategory::FrameLayout
+                }) =>
+            {
+                "capture_frame_invalid"
+            }
+            None => code,
+        };
         let mut causes = error
             .close_causes()
             .iter()

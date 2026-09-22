@@ -353,7 +353,14 @@ mod tests {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
         let frames = vec![home_frame(true)];
-        let offline = simulate_contained_task(&task, frames.clone()).expect("offline simulation");
+        let offline = simulate_contained_task(
+            &task,
+            frames
+                .iter()
+                .map(|frame| frame.try_clone().expect("copy fixture frame"))
+                .collect(),
+        )
+        .expect("offline simulation");
         let offline_action = match &offline.decision {
             OfflineDecision::WouldClick { action, .. } => action.clone(),
             other => panic!("expected would-click, got {other:?}"),
@@ -422,8 +429,14 @@ mod tests {
         let navigable = package(PackageOptions::default());
         let navigable = prepare(&navigable);
         let frames = vec![terminal_frame()];
-        let offline =
-            simulate_contained_task(&navigable, frames.clone()).expect("offline completion");
+        let offline = simulate_contained_task(
+            &navigable,
+            frames
+                .iter()
+                .map(|frame| frame.try_clone().expect("copy fixture frame"))
+                .collect(),
+        )
+        .expect("offline completion");
         let effecting = effecting_decision(&navigable, frames);
         assert_eq!(effecting.decision, offline.decision);
         assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
@@ -458,7 +471,9 @@ mod tests {
         let unknown_frame = solid_frame([0, 0, 0], [0, 0, 0]);
         assert_same_refusal(
             &unknown,
-            vec![unknown_frame; 16],
+            (0..16)
+                .map(|_| unknown_frame.try_clone().expect("copy fixture frame"))
+                .collect(),
             "contained_task_page_unknown",
         );
 
@@ -525,8 +540,13 @@ mod tests {
             ..PackageOptions::default()
         }));
         let unknown_frame = solid_frame([0, 0, 0], [0, 0, 0]);
-        let unknown = simulate_contained_task(&unknown_task, vec![unknown_frame; 16])
-            .expect("unknown-page refusal receipt");
+        let unknown = simulate_contained_task(
+            &unknown_task,
+            (0..16)
+                .map(|_| unknown_frame.try_clone().expect("copy fixture frame"))
+                .collect(),
+        )
+        .expect("unknown-page refusal receipt");
         assert_refusal(&unknown, "contained_task_page_unknown");
         let guard =
             simulate_contained_task(&task, vec![home_frame(false)]).expect("guard refusal receipt");
@@ -586,8 +606,14 @@ mod tests {
     }
 
     fn assert_same_refusal(task: &PreparedContainedTask, frames: Vec<Frame>, expected: &str) {
-        let offline =
-            simulate_contained_task(task, frames.clone()).expect("offline refusal result");
+        let offline = simulate_contained_task(
+            task,
+            frames
+                .iter()
+                .map(|frame| frame.try_clone().expect("copy fixture frame"))
+                .collect(),
+        )
+        .expect("offline refusal result");
         let effecting = effecting_decision(task, frames);
         assert_refusal(&offline, expected);
         assert!(matches!(

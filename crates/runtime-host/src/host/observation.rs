@@ -240,6 +240,16 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
+        let frame_id = links.frame_id().ok_or_else(|| {
+            online_observation::observation_integrity_failure("observation_frame_identity_missing")
+        })?;
+        let frame_store = actingcommand_artifact_store::FrameStore::new(
+            frame_retention::spill_root(self.artifacts.root(), frame_id)
+                .map_err(online_observation::observation_artifact_failure)?,
+            frame_retention::capture_frame_store_config(),
+        )
+        .map_err(online_observation::observation_artifact_failure)?;
+        let memory = frame_store.memory_budget();
         let registration = self
             .mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -250,6 +260,7 @@ impl HostShared {
                 instance_alias,
                 links.frame_id().copied(),
                 registration,
+                memory,
             );
         let capture_acquire_us = performance::measured_microseconds(
             actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
@@ -276,7 +287,7 @@ impl HostShared {
                 let error = self
                     .finish_capture_failure_while_guarded(error, links.clone(), admission)
                     .map_err(RequestFailure::poison_without_terminal)?;
-                let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
+                let runtime_error = RuntimeHostError::readonly_capture(&error);
                 if self
                     .retain_unconfirmed_resources(&runtime_error, links.clone())
                     .map_err(RequestFailure::poison_without_terminal)?
@@ -286,7 +297,14 @@ impl HostShared {
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,
                     DiagnosticCode::CaptureFailed,
-                    EffectDisposition::NotPerformed,
+                    if matches!(
+                        runtime_error.code(),
+                        "capture_frame_invalid" | "frame_workspace_unavailable"
+                    ) {
+                        EffectDisposition::Indeterminate
+                    } else {
+                        EffectDisposition::NotPerformed
+                    },
                     runtime_error.diagnostic_detail().cloned(),
                     runtime_error.cleanup_cause().cloned(),
                     AuditInput::new(),
@@ -337,10 +355,9 @@ impl HostShared {
         let frame_id = links.frame_id().ok_or_else(|| {
             online_observation::observation_integrity_failure("observation_frame_identity_missing")
         })?;
-        let mut pipeline = CapturePipeline::open_with_store(
+        let mut pipeline = CapturePipeline::open_with_frame_store(
             Arc::clone(&self.artifacts),
-            frame_retention::spill_root(self.artifacts.root(), frame_id)
-                .map_err(online_observation::observation_artifact_failure)?,
+            frame_store,
             CapturePipelineConfig {
                 frame_store: frame_retention::capture_frame_store_config(),
                 retention_class: if request.actor() == EventActor::Lab

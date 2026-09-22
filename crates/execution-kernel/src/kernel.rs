@@ -140,18 +140,23 @@ impl ExecutionKernel {
 
     /// Host retains the session while deciding whether a real close lease is available.
     pub fn capture_retained(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
-        self.capture_retained_with_registration_guard(instance_alias, ())
+        let session = self.session(instance_alias)?;
+        session
+            .capture_retained()
+            .map_err(|error| error.with_instance_id(session.resolved().instance_id()))
     }
 
     pub fn capture_retained_with_registration_guard<G>(
         &self,
         instance_alias: &str,
         registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<Frame> {
         self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
             None,
             registration_guard,
+            memory,
         )
         .map(|(frame, _)| frame)
     }
@@ -161,11 +166,13 @@ impl ExecutionKernel {
         instance_alias: &str,
         frame_id: Option<FrameId>,
         registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<Frame> {
         self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
             frame_id,
             registration_guard,
+            memory,
         )
         .map(|(frame, _)| frame)
     }
@@ -175,11 +182,13 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
         self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
             None,
             registration_guard,
+            memory,
         )
     }
 
@@ -189,11 +198,12 @@ impl ExecutionKernel {
         instance_alias: &str,
         frame_id: Option<FrameId>,
         registration_guard: G,
+        memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         let frame = session
-            .capture_frame_retained(frame_id)
+            .capture_frame_retained(frame_id, Some(memory))
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))?;
         let reference = CaptureGeometrySessionRef {
             instance_id: session.resolved().instance_id(),

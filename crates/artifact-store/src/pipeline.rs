@@ -244,14 +244,11 @@ impl CapturePipeline {
         run_context: ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<Self> {
-        Self::open_shared_inner(
-            artifact_store,
-            frame_temp_root,
-            config,
-            run_context,
-            sink,
-            0,
-        )
+        let frame_store = FrameStore::new(
+            frame_temp_root.as_ref().to_path_buf(),
+            config.frame_store.clone(),
+        )?;
+        Self::open_shared_inner(artifact_store, frame_store, config, run_context, sink, 0)
     }
 
     /// Host capture shares its existing material owner and protects its severity backtrace.
@@ -262,19 +259,27 @@ impl CapturePipeline {
         run_context: ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<Self> {
-        Self::open_shared_inner(
-            artifact_store,
-            frame_temp_root,
-            config,
-            run_context,
-            sink,
-            8,
-        )
+        let frame_store = FrameStore::new(
+            frame_temp_root.as_ref().to_path_buf(),
+            config.frame_store.clone(),
+        )?;
+        Self::open_with_frame_store(artifact_store, frame_store, config, run_context, sink)
+    }
+
+    /// Takes the same pure-memory owner that admitted capture probe frames.
+    pub fn open_with_frame_store(
+        artifact_store: Arc<ArtifactStore>,
+        frame_store: FrameStore,
+        config: CapturePipelineConfig,
+        run_context: ArtifactWriteContext,
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<Self> {
+        Self::open_shared_inner(artifact_store, frame_store, config, run_context, sink, 8)
     }
 
     fn open_shared_inner(
         artifact_store: Arc<ArtifactStore>,
-        frame_temp_root: impl AsRef<Path>,
+        frame_store: FrameStore,
         config: CapturePipelineConfig,
         run_context: ArtifactWriteContext,
         sink: &mut dyn ArtifactEventSink,
@@ -282,10 +287,7 @@ impl CapturePipeline {
     ) -> ArtifactStoreResult<Self> {
         config.validate()?;
         let mut pipeline = Self {
-            frame_store: FrameStore::new(
-                frame_temp_root.as_ref().to_path_buf(),
-                config.frame_store,
-            )?,
+            frame_store,
             artifact_store,
             event_ids: IdentifierIssuer::new().map_err(|error| {
                 ArtifactStoreError::fatal(
@@ -337,6 +339,10 @@ impl CapturePipeline {
         self.counts
     }
 
+    pub fn memory_budget(&self) -> actingcommand_device::FrameMemoryBudget {
+        self.frame_store.memory_budget()
+    }
+
     /// The caller retains the original throughout this synchronous material operation.
     /// Sample before cloning and keep that original charged through every publication.
     pub fn with_frame_copy<T>(
@@ -344,9 +350,12 @@ impl CapturePipeline {
         frame: &actingcommand_device::Frame,
         operation: impl FnOnce(&mut Self, actingcommand_device::Frame) -> T,
     ) -> ArtifactStoreResult<T> {
-        let previous = self.frame_store.admit_frame_copy(frame)?;
-        let result = operation(self, frame.clone());
-        self.frame_store.release_frame_copy(previous);
+        let original = self.frame_store.admit_frame_copy(frame)?;
+        let copy = frame
+            .try_clone_with_budget(Some(&self.frame_store.memory_budget()))
+            .map_err(ArtifactStoreError::incoming_frame)?;
+        let result = operation(self, copy);
+        drop(original);
         Ok(result)
     }
 

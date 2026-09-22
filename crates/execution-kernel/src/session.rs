@@ -49,7 +49,7 @@ impl InputFrameContext {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct ObservedFrame {
     pub frame: Frame,
     /// Capture request data; the committed context is obtained after CaptureCompleted.
@@ -182,6 +182,7 @@ enum SessionCommand {
     },
     Capture {
         frame_id: Option<FrameId>,
+        memory: Option<actingcommand_device::FrameMemoryBudget>,
         response: SyncSender<ExecutionKernelResult<Frame>>,
     },
     CommitFrame {
@@ -388,12 +389,13 @@ impl ExecutionSession {
     }
 
     pub(crate) fn capture_retained(&self) -> ExecutionKernelResult<Frame> {
-        self.capture_frame_retained(None)
+        self.capture_frame_retained(None, None)
     }
 
     pub(crate) fn capture_frame_retained(
         &self,
         frame_id: Option<FrameId>,
+        memory: Option<actingcommand_device::FrameMemoryBudget>,
     ) -> ExecutionKernelResult<Frame> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
@@ -402,7 +404,11 @@ impl ExecutionSession {
             .sender
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
-            .send(SessionCommand::Capture { frame_id, response })
+            .send(SessionCommand::Capture {
+                frame_id,
+                memory,
+                response,
+            })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
@@ -794,17 +800,26 @@ fn run_session(
                     ));
                 }
             }
-            SessionCommand::Capture { frame_id, response } => {
+            SessionCommand::Capture {
+                frame_id,
+                memory,
+                response,
+            } => {
                 pending_frame = None;
                 committed_frame = None;
-                let result = execute_capture(provider.as_ref(), &instance_alias, backends)
-                    .map(|mut frame| {
-                        for observation in &mut frame.backend_open_observations {
-                            observation.report.session_generation = generation;
-                        }
-                        frame
-                    })
-                    .map_err(|error| error.with_backend_session_generation(generation));
+                let result = execute_capture(
+                    provider.as_ref(),
+                    &instance_alias,
+                    backends,
+                    memory.as_ref(),
+                )
+                .map(|mut frame| {
+                    for observation in &mut frame.backend_open_observations {
+                        observation.report.session_generation = generation;
+                    }
+                    frame
+                })
+                .map_err(|error| error.with_backend_session_generation(generation));
                 if let (Some(frame_id), Ok(frame)) = (frame_id, &result) {
                     pending_frame = Some(InputFrameContext::captured(frame_id, frame));
                 }
@@ -1241,19 +1256,23 @@ fn execute_capture(
     provider: &dyn ExecutionBackendProvider,
     instance_alias: &str,
     backends: &mut SessionBackends,
+    memory: Option<&actingcommand_device::FrameMemoryBudget>,
 ) -> ExecutionKernelResult<Frame> {
     let mut observations = backends.prepare(provider, instance_alias)?;
     let mut execute = || -> ExecutionKernelResult<Frame> {
         let backend = match backends {
             SessionBackends::Independent { capture, .. } => {
                 if capture.is_none() {
-                    let opened = provider.open_capture(instance_alias).map_err(|error| {
-                        observed_open_error(
-                            "capture_backend_open_failed",
-                            actingcommand_contract::BackendOpenEntry::Capture,
-                            error,
-                        )
-                    })?;
+                    let opened =
+                        provider
+                            .open_capture(instance_alias, memory)
+                            .map_err(|error| {
+                                observed_open_error(
+                                    "capture_backend_open_failed",
+                                    actingcommand_contract::BackendOpenEntry::Capture,
+                                    error,
+                                )
+                            })?;
                     observations.push(opened.observation);
                     *capture = Some(opened.backend);
                 }
@@ -1267,9 +1286,17 @@ fn execute_capture(
                 return Err(ExecutionKernelError::fatal("capture_backend_missing"));
             }
         };
-        backend.capture().map_err(|error| {
-            ExecutionKernelError::device("capture_backend_operation_failed", &error)
-        })
+        backend
+            .capture()
+            .and_then(|mut frame| {
+                if let Some(memory) = memory {
+                    frame.admit_memory(memory)?;
+                }
+                Ok(frame)
+            })
+            .map_err(|error| {
+                ExecutionKernelError::device("capture_backend_operation_failed", &error)
+            })
     };
     let result = execute();
     match result {
