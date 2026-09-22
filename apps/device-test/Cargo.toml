@@ -9,6 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-artifact-store = { workspace = true }
+actingcommand-host-metrics = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }
 actingcommand-ledger-forensics = { workspace = true }

@@ -333,9 +333,11 @@ impl RuntimeHostError {
 
     pub(crate) fn execution(operation: &'static str, error: &ExecutionKernelError) -> Self {
         let runtime_code = match error.code() {
+            "frame_workspace_unavailable" => RuntimeErrorCode::InvalidRequest,
             "input_backend_open_failed" => RuntimeErrorCode::BackendOpenFailed,
             "input_backend_operation_failed" => RuntimeErrorCode::BackendOperationFailed,
             "capture_backend_open_failed"
+            | "capture_frame_invalid"
             | "capture_backend_operation_failed"
             | "execution_session_close_pending"
             | "capture_geometry_kernel_busy"
@@ -368,6 +370,19 @@ impl RuntimeHostError {
         } else {
             runtime_error
         }
+    }
+
+    pub(crate) fn readonly_capture(error: &ExecutionKernelError) -> Self {
+        let mut result = Self::execution("execute_capture_backend", error);
+        if error.code() == "capture_frame_invalid"
+            && error.secondary_code().is_none()
+            && error.lifecycle_causes().is_empty()
+            && error.cleanup_cause().is_none()
+            && error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
+        {
+            result.projection = RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+        }
+        result
     }
 
     pub(crate) fn state(error: &RuntimeStateError) -> Self {

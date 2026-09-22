@@ -1456,6 +1456,7 @@ impl ExecutionBackendProvider for GoldenRuntimeProvider {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
             if instance_alias != "fixture:5555" {

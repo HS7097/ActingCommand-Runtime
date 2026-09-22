@@ -2,12 +2,12 @@
 
 use crate::{ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome};
 use actingcommand_contract::{ArtifactReference, CapturePressureState, PinnedFrameReason};
-use actingcommand_device::{Frame, PixelFormat};
+use actingcommand_device::{Frame, FrameMemoryBudget, FrameMemoryCharge, PixelFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.95;
@@ -412,13 +412,14 @@ pub enum FrameStoreEvent {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FramePersistenceCandidate<'a> {
     pub frame_index: usize,
     pub file_name: String,
     pub captured_at: SystemTime,
     pub pinned_reason: Option<PinnedFrameReason>,
     pub png: Cow<'a, [u8]>,
+    _workspace: FrameMemoryCharge,
 }
 
 pub type FramePersistencePublisher<'a> = dyn FnMut(&FramePersistenceCandidate<'_>) -> CliOutcome<(Arc<ArtifactStore>, ArtifactReference)>
@@ -452,8 +453,8 @@ pub struct FrameStore {
     fixture_capacity_limit: Option<u64>,
     budget: MemoryBudget,
     resident_bytes: u64,
-    caller_frame_bytes: u64,
-    pending_input_bytes: u64,
+    memory: FrameMemoryBudget,
+    memory_config: Arc<Mutex<FrameStoreConfig>>,
     payload_bytes: u64,
     metadata_estimated_bytes: u64,
     thumbnail_estimated_bytes: u64,
@@ -476,6 +477,18 @@ pub struct FrameStore {
 impl FrameStore {
     pub fn new(_frame_root: PathBuf, config: FrameStoreConfig) -> CliOutcome<Self> {
         let budget = MemoryBudget::build(&config)?;
+        let memory_config = Arc::new(Mutex::new(config.clone()));
+        let policy = Arc::clone(&memory_config);
+        let memory = FrameMemoryBudget::new(move || {
+            let config = policy.lock().map_err(|_| {
+                actingcommand_device::DeviceError::frame_memory(
+                    actingcommand_device::FrameMemoryFailure::Accounting,
+                )
+            })?;
+            MemoryBudget::build(&config)
+                .map(|budget| budget.budget_bytes)
+                .map_err(|error| actingcommand_device::DeviceError::fatal(error.to_string()))
+        });
         Ok(Self {
             config,
             #[cfg(test)]
@@ -484,8 +497,8 @@ impl FrameStore {
             fixture_capacity_limit: None,
             budget,
             resident_bytes: 0,
-            caller_frame_bytes: 0,
-            pending_input_bytes: 0,
+            memory,
+            memory_config,
             payload_bytes: 0,
             metadata_estimated_bytes: 0,
             thumbnail_estimated_bytes: 0,
@@ -504,6 +517,10 @@ impl FrameStore {
             spill_warning_count: 0,
             last_failure: None,
         })
+    }
+
+    pub fn memory_budget(&self) -> FrameMemoryBudget {
+        self.memory.clone()
     }
 
     /// Configure before accepting frames; the window keeps each original materializable.
@@ -587,6 +604,10 @@ impl FrameStore {
 
     pub fn set_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
         let budget = MemoryBudget::build(&config)?;
+        *self
+            .memory_config
+            .lock()
+            .map_err(|_| CliError::device("frame memory config poisoned"))? = config.clone();
         self.config = config;
         self.budget = budget;
         Ok(())
@@ -594,24 +615,33 @@ impl FrameStore {
 
     pub fn add_frame(
         &mut self,
-        input: FrameStoreFrameInput,
+        mut input: FrameStoreFrameInput,
         publish: &mut FramePersistencePublisher<'_>,
     ) -> CliOutcome<FrameStoreOutcome> {
         self.last_failure = None;
         self.refresh_budget()?;
         let estimate = estimate_entry(&input)?;
-        // This input is already alive while history is published. Keep its full
-        // stored charge until ownership moves into the resident entry below.
-        self.pending_input_bytes = estimate.stored_bytes();
-        let result = self.add_frame_admitted(input, estimate, publish);
-        self.pending_input_bytes = 0;
-        result
+        input
+            .frame
+            .admit_memory(&self.memory)
+            .map_err(CliError::incoming_frame)?;
+        let memory_metadata = self
+            .memory
+            .reserve(
+                estimate
+                    .metadata
+                    .checked_add(estimate.thumbnail)
+                    .ok_or_else(CliError::frame_workspace_refused)?,
+            )
+            .map_err(CliError::incoming_frame)?;
+        self.add_frame_admitted(input, estimate, memory_metadata, publish)
     }
 
     fn add_frame_admitted(
         &mut self,
         mut input: FrameStoreFrameInput,
         mut estimate: ResidentEstimate,
+        memory_metadata: FrameMemoryCharge,
         publish: &mut FramePersistencePublisher<'_>,
     ) -> CliOutcome<FrameStoreOutcome> {
         self.release_watermarks_if_needed();
@@ -629,14 +659,10 @@ impl FrameStore {
         }
         // The already-returned frame stays with its caller on refusal. No encoding or
         // resident accounting commit precedes reservation of the complete live set.
-        if self
-            .live_bytes()
-            .and_then(|bytes| bytes.checked_add(estimate.encoder_workspace))
-            .is_none_or(|bytes| bytes > self.budget.budget_bytes)
-        {
-            self.activate_tier3(self.resident_bytes.saturating_add(estimate.total()));
-            return Err(CliError::frame_workspace_refused());
-        }
+        let mut workspace = self
+            .memory
+            .reserve(estimate.encoder_workspace)
+            .map_err(CliError::incoming_frame)?;
         let file = format!("screenshots/{}", input.file_name);
         let thumb = thumbnail(&input.frame);
         let png = input
@@ -649,8 +675,12 @@ impl FrameStore {
             sha256: crate::store::canonical_sha256(&png),
         };
         if let Cow::Owned(png) = png {
-            input.frame.original_png = Some(png);
+            input
+                .frame
+                .retain_admitted_png(png, &mut workspace)
+                .map_err(CliError::incoming_frame)?;
         }
+        drop(workspace);
         estimate = estimate_entry(&input)?;
         let key_frame = self.is_key_frame(&input);
         let entry = FrameEntry {
@@ -680,9 +710,9 @@ impl FrameStore {
             resident_estimate: estimate,
             thumb,
             spill_failed: false,
+            memory_metadata,
         };
         self.add_estimate(entry.resident_estimate);
-        self.pending_input_bytes = 0;
         self.entries.push(entry);
         let index = self.entries.len() - 1;
         self.timeline.push(json!({
@@ -875,8 +905,18 @@ impl FrameStore {
         Ok(failures)
     }
 
-    pub(crate) fn admit_frame_copy(&mut self, frame: &Frame) -> CliOutcome<u64> {
+    pub(crate) fn admit_frame_copy(&mut self, frame: &Frame) -> CliOutcome<FrameMemoryCharge> {
         self.refresh_budget()?;
+        if let Some(charge) = frame.memory_charge()
+            && (!charge.owner().same_owner(&self.memory)
+                || charge.bytes() != frame.payload_capacity().map_err(CliError::incoming_frame)?)
+        {
+            return Err(CliError::incoming_frame(
+                actingcommand_device::DeviceError::frame_memory(
+                    actingcommand_device::FrameMemoryFailure::Owner,
+                ),
+            ));
+        }
         let payload = (frame.pixels.capacity() as u64).checked_add(
             frame
                 .original_png
@@ -886,13 +926,22 @@ impl FrameStore {
         let workspace = frame
             .artifact_png_workspace_bytes()
             .map_err(CliError::incoming_frame)?;
+        let original = self
+            .memory
+            .reserve(
+                if frame.memory_charge().is_some() {
+                    Some(0)
+                } else {
+                    payload
+                }
+                .and_then(|bytes| bytes.checked_add(ENTRY_BASE_METADATA_BYTES))
+                .ok_or_else(CliError::frame_workspace_refused)?,
+            )
+            .map_err(CliError::incoming_frame)?;
         let required = payload
-            .and_then(|bytes| bytes.checked_mul(2))
             .and_then(|bytes| bytes.checked_add(workspace.max(WRITER_BUFFER_BYTES)))
             .and_then(|bytes| {
-                bytes.checked_add(
-                    ENTRY_BASE_METADATA_BYTES * 2 + (THUMB_WIDTH * THUMB_HEIGHT) as u64,
-                )
+                bytes.checked_add(ENTRY_BASE_METADATA_BYTES + (THUMB_WIDTH * THUMB_HEIGHT) as u64)
             });
         if required
             .and_then(|bytes| self.live_bytes()?.checked_add(bytes))
@@ -900,22 +949,11 @@ impl FrameStore {
         {
             return Err(CliError::frame_workspace_refused());
         }
-        let previous = self.caller_frame_bytes;
-        self.caller_frame_bytes = payload
-            .and_then(|bytes| bytes.checked_add(ENTRY_BASE_METADATA_BYTES))
-            .and_then(|bytes| previous.checked_add(bytes))
-            .ok_or_else(CliError::frame_workspace_refused)?;
-        Ok(previous)
-    }
-
-    pub(crate) fn release_frame_copy(&mut self, previous: u64) {
-        self.caller_frame_bytes = previous;
+        Ok(original)
     }
 
     fn live_bytes(&self) -> Option<u64> {
-        self.resident_bytes
-            .checked_add(self.caller_frame_bytes)?
-            .checked_add(self.pending_input_bytes)
+        Some(self.memory.live_bytes())
     }
 
     pub(crate) fn persistence_candidate_indexes(&self, include_all_retained: bool) -> Vec<usize> {
@@ -954,19 +992,21 @@ impl FrameStore {
         } else {
             Some(0)
         };
-        if material_read
-            .and_then(|bytes| bytes.checked_add(WRITER_BUFFER_BYTES))
-            .and_then(|bytes| self.live_bytes()?.checked_add(bytes))
-            .is_none_or(|bytes| bytes > self.budget.budget_bytes)
-        {
-            return Err(CliError::frame_workspace_refused());
-        }
+        let workspace = self
+            .memory
+            .reserve(
+                material_read
+                    .and_then(|bytes| bytes.checked_add(WRITER_BUFFER_BYTES))
+                    .ok_or_else(CliError::frame_workspace_refused)?,
+            )
+            .map_err(CliError::incoming_frame)?;
         Ok(FramePersistenceCandidate {
             frame_index,
             file_name: entry.file_name.clone(),
             captured_at: entry.captured_at,
             pinned_reason: entry.pinned_reason,
             png: entry.original_png()?,
+            _workspace: workspace,
         })
     }
 
@@ -1208,6 +1248,10 @@ impl FrameStore {
                 FrameStorage::Dropped => 0,
             };
         self.entries[index].thumb.values = Vec::new();
+        self.entries[index]
+            .memory_metadata
+            .shrink_to(metadata)
+            .expect("frame metadata charge covers its retained metadata");
         released
     }
 
@@ -1423,6 +1467,7 @@ struct FrameEntry {
     resident_estimate: ResidentEstimate,
     thumb: Thumbnail,
     spill_failed: bool,
+    memory_metadata: FrameMemoryCharge,
 }
 
 #[derive(Debug, Clone)]
@@ -1891,7 +1936,7 @@ mod tests {
             Some(0)
         );
         if let FrameStorage::Resident(frame) = &store.entries[0].storage {
-            let mut raw = frame.clone();
+            let mut raw = frame.try_clone().expect("copy fixture frame");
             raw.original_png = None;
             assert!(raw.artifact_png_workspace_bytes().expect("codec workspace") > 0);
         }

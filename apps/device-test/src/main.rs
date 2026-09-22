@@ -4,8 +4,8 @@ use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
     EmulatorCapabilityAvailability, Frame, InputBackend, MaaTouchValidationConfig, PixelFormat,
     TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName,
-    combine_operation_and_close, create_capture_backend, create_touch_backend,
-    discover_mumu_instances, mumu_capability_profile, resolve_adb_path,
+    combine_operation_and_close, create_touch_backend, discover_mumu_instances,
+    mumu_capability_profile, resolve_adb_path,
 };
 use actingcommand_execution_kernel::{
     DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
@@ -426,6 +426,32 @@ fn has_probe_run_command(commands: &[DeviceCommand]) -> bool {
     commands
         .iter()
         .any(|command| matches!(command, DeviceCommand::ProbeRun { .. }))
+}
+
+fn create_capture_backend(
+    config: CaptureBackendConfig,
+) -> DeviceResult<actingcommand_device::SelectedCaptureBackend> {
+    use actingcommand_artifact_store::{
+        FrameStore, FrameStoreConfig, MemorySample, MemorySampleSource,
+    };
+    let store = FrameStore::new(
+        PathBuf::new(),
+        FrameStoreConfig::default().with_memory_source(MemorySampleSource::live(|| {
+            let sample = actingcommand_host_metrics::sample_physical_memory().map_err(|code| {
+                actingcommand_artifact_store::ArtifactStoreError::fatal(
+                    code,
+                    "sample_capture_memory",
+                    code,
+                )
+            })?;
+            Ok(MemorySample {
+                total_bytes: sample.total_bytes,
+                available_bytes: sample.available_bytes,
+            })
+        })),
+    )
+    .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    actingcommand_device::create_capture_backend_with_memory(config, Some(&store.memory_budget()))
 }
 
 fn run_capture_command(

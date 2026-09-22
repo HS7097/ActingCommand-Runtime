@@ -2079,6 +2079,7 @@ mod tests {
         fn open_capture(
             &self,
             _instance_alias: &str,
+            _memory: Option<&actingcommand_device::FrameMemoryBudget>,
         ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
             let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
                 Ok(Box::new(RecordingCapture {

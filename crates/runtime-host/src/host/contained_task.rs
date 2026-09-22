@@ -197,6 +197,7 @@ impl Drop for ActiveContainedRun<'_> {
 #[derive(Default)]
 struct CaptureEvidenceAccumulator {
     pipeline: Option<CapturePipeline>,
+    frame_store: Option<actingcommand_artifact_store::FrameStore>,
     pipeline_failure: Option<ArtifactStoreError>,
     counts: CapturePipelineCounts,
     next_frame_index: usize,
@@ -2274,6 +2275,30 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 links.clone(),
                 CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
             )?;
+            if self.capture_evidence.pipeline.is_none()
+                && self.capture_evidence.frame_store.is_none()
+            {
+                self.capture_evidence.frame_store = Some(
+                    actingcommand_artifact_store::FrameStore::new(
+                        frame_retention::spill_root(
+                            self.host.artifacts.root(),
+                            self.run_id.transport(),
+                        )
+                        .map_err(online_observation::observation_artifact_failure)?,
+                        frame_retention::capture_frame_store_config(),
+                    )
+                    .map_err(online_observation::observation_artifact_failure)?,
+                );
+            }
+            let memory = match &self.capture_evidence.pipeline {
+                Some(pipeline) => pipeline.memory_budget(),
+                None => self
+                    .capture_evidence
+                    .frame_store
+                    .as_ref()
+                    .expect("capture memory owner prepared")
+                    .memory_budget(),
+            };
             let registration = self.host.mark_resources_in_use()?;
             let identity = task_timing::BoundaryIdentity {
                 frame_id: Some(*frame_id.transport()),
@@ -2289,6 +2314,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     self.instance_alias,
                     Some(*frame_id.transport()),
                     registration,
+                    memory,
                 );
             // The same CaptureBackend boundary span feeds the typed payload field: no second clock read.
             let capture_acquire_us = performance::measured_microseconds(
@@ -2338,12 +2364,12 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         let persistence: ArtifactStoreResult<_> = (|| {
                             if self.capture_evidence.pipeline.is_none() {
                                 self.capture_evidence.pipeline =
-                                    Some(CapturePipeline::open_with_store(
+                                    Some(CapturePipeline::open_with_frame_store(
                                         Arc::clone(&self.host.artifacts),
-                                        frame_retention::spill_root(
-                                            self.host.artifacts.root(),
-                                            self.run_id.transport(),
-                                        )?,
+                                        self.capture_evidence
+                                            .frame_store
+                                            .take()
+                                            .expect("capture memory owner prepared"),
                                         CapturePipelineConfig {
                                             frame_store:
                                                 frame_retention::capture_frame_store_config(),
@@ -2497,7 +2523,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     let payload = CapturePayloadDraft::failed_with_causes(
                         EventAction::CaptureObserve,
                         DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
+                        if matches!(
+                            runtime_error.code(),
+                            "capture_frame_invalid" | "frame_workspace_unavailable"
+                        ) {
+                            EffectDisposition::Indeterminate
+                        } else {
+                            EffectDisposition::NotPerformed
+                        },
                         runtime_error.diagnostic_detail().cloned(),
                         runtime_error.cleanup_cause().cloned(),
                         AuditInput::new(),

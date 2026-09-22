@@ -193,6 +193,7 @@ impl ExecutionBackendProvider for FileProvider {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         if instance_alias != self.instance_alias {
             return Err(DeviceError::fatal("sealed C4 instance mismatch"));

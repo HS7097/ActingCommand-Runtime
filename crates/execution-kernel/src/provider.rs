@@ -856,6 +856,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>>;
 
     fn open_nemu_session(

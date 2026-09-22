@@ -3632,6 +3632,7 @@ impl ExecutionBackendProvider for PlanningSeedProvider {
     fn open_capture(
         &self,
         _instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let open =
             || -> DeviceResult<Box<dyn CaptureBackend>> { Ok(Box::new(PlanningSeedCapture)) };
@@ -3698,6 +3699,7 @@ impl ExecutionBackendProvider for FakeProvider {
     fn open_capture(
         &self,
         _instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
             Err(DeviceError::fatal(

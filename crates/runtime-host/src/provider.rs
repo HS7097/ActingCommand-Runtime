@@ -11,8 +11,7 @@ use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
     DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, DeviceTarget, InputBackend,
     NemuAppIndex, NemuApplicationTarget, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
-    TouchBackendChoice, TouchBackendConfig, create_capture_backend,
-    create_touch_backend_for_fenced_input, mumu_state_wait,
+    TouchBackendChoice, TouchBackendConfig, create_touch_backend_for_fenced_input, mumu_state_wait,
 };
 pub use actingcommand_execution_kernel::{
     DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
@@ -526,6 +525,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let entry = self
             .entries
@@ -546,7 +546,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .resolved_mumu
             .as_ref()
             .map(|context| context.source.into());
-        create_capture_backend(capture)
+        actingcommand_device::create_capture_backend_with_memory(capture, _memory)
             .map(|selected| {
                 let report = selected.open_report();
                 actingcommand_device::OpenedBackend::new(

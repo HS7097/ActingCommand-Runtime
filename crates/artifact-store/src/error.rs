@@ -142,7 +142,11 @@ impl ArtifactStoreError {
     }
 
     #[cfg(feature = "capture")]
-    pub(crate) fn incoming_frame(error: actingcommand_device::DeviceError) -> Self {
+    pub fn incoming_frame(error: actingcommand_device::DeviceError) -> Self {
+        if error.frame_memory_failure() == Some(actingcommand_device::FrameMemoryFailure::Capacity)
+        {
+            return Self::frame_workspace_refused();
+        }
         let invalid_layout = error.diagnostic().is_some_and(|diagnostic| {
             diagnostic.category() == actingcommand_device::DeviceErrorCategory::FrameLayout
         });

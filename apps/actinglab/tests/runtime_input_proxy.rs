@@ -1059,6 +1059,7 @@ impl ExecutionBackendProvider for FakeProvider {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let open = || -> DeviceResult<Box<dyn CaptureBackend>> {
             assert_eq!(instance_alias, self.instance_alias);

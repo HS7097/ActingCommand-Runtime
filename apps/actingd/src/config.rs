@@ -1252,6 +1252,7 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         match self.mode_for_alias(instance_alias) {
             Some(ScheduledExecutionMode::DeviceRegistry) => {
@@ -1263,14 +1264,14 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                     self.devices
                         .as_ref()
                         .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
-                        .open_capture(instance_alias)
+                        .open_capture(instance_alias, _memory)
                 })
             }
             Some(ScheduledExecutionMode::FixtureSimulation) => self
                 .fixtures
                 .as_ref()
                 .ok_or_else(|| DeviceError::fatal("fixture registry is unavailable"))?
-                .open_capture(instance_alias),
+                .open_capture(instance_alias, _memory),
             None => Err(DeviceError::fatal(
                 "execution backend instance is not registered",
             )),
@@ -1662,6 +1663,7 @@ impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
     fn open_capture(
         &self,
         instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let backend = self
             .instances
@@ -1669,7 +1671,11 @@ impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
             .ok_or_else(|| DeviceError::fatal("fixture instance is unknown"))?;
         Ok(actingcommand_device::OpenedBackend::simulation(
             Box::new(FixtureCaptureBackend {
-                frames: backend.frames.clone().into(),
+                frames: backend
+                    .frames
+                    .iter()
+                    .map(Frame::try_clone)
+                    .collect::<DeviceResult<VecDeque<_>>>()?,
             }) as Box<dyn CaptureBackend>,
             actingcommand_contract::BackendOpenEntry::Capture,
         ))

@@ -133,7 +133,7 @@ fn production_runtime_missing_sampling_seed_fails_before_input() {
         type Error = RuntimeHostError;
 
         fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
-            Ok(self.frame.clone().into())
+            Ok(self.frame.try_clone().expect("copy fixture frame").into())
         }
 
         fn action_seed(
@@ -208,7 +208,7 @@ fn execution_kernel_no_seed_caller_retains_center_fallback() {
             Ok(self
                 .frames
                 .pop_front()
-                .unwrap_or_else(|| self.last_frame.clone())
+                .unwrap_or_else(|| self.last_frame.try_clone().expect("copy fixture frame"))
                 .into())
         }
 
@@ -251,7 +251,7 @@ fn execution_kernel_no_seed_caller_retains_center_fallback() {
     )
     .expect("terminal frame");
     let mut runtime = NoSeedRuntime {
-        frames: [home, terminal.clone()].into(),
+        frames: [home, terminal.try_clone().expect("copy fixture frame")].into(),
         last_frame: terminal,
         actions: Vec::new(),
         traces: Vec::new(),
