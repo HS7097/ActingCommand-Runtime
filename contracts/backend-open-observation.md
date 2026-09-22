@@ -89,6 +89,62 @@ or `capture_acquire_us`; the original Input/Capture events remain the only sourc
 of those performance samples. This event does not publish a RuntimeFactStore
 availability record or change policy admission.
 
+## Input parameters from the original connection
+
+`input_check` in BackendOpenReport and its public Summary is the original
+connection's parameter-check state. Missing historical fields decode as Unknown;
+Unknown is omitted when encoding. Simulation input/pair reports use
+SimulationNotApplicable. Capture-only reports always leave this check Unknown.
+These observations do not grant input authority, availability or bootstrap.
+
+The producer records Passed only at the following existing success points:
+
+- MaaTouch: parsed positive contacts/x/y and the original pressure-range check,
+  before saving the successful handshake. A nonpositive maximum pressure still
+  takes the original default-pressure failure path. Invalid maxima are never
+  placed in a successful handshake observation.
+- Minitouch: the original four positive maxima and configured pressure check.
+  A later screen/coordinate-mapping failure retains this completed parameter
+  check while the connection still fails.
+- ADB shell input: the original device-state, positive natural bounds and
+  rotation chain. Read/transport failure before a value is checked stays Unknown;
+  an observed invalid state, parsed bounds or rotation rejection records Failed.
+  Original fenced recovery and cleanup remain unchanged. The shared ADB
+  prerequisite of MaaTouch/Minitouch does not stand in for their handshake check.
+- Nemu paired input/capture: the original version gate, positive handle,
+  get-display/down/up symbols, nonnegative display and positive resolution.
+  Construction and capture-only dimensions do not imply an input check. Actual
+  parameter or required-symbol rejection retains Failed through original error
+  and cleanup propagation; missing installation/transport observations remain
+  Unknown. The capture-triggered pair reports its checked input role as well.
+
+The checked pressure comes from the producer's actual start result. Registry
+does not fill it from an assumed default. PID remains original handshake metadata;
+this check neither queries process liveness nor adds a touch protocol-version
+compatibility decision. No new handshake, command, tap/reset or timing is taken.
+
+Each original bounded Connect attempt may also carry `input_parameters`: the
+typed check and its valid handshake/pressure/geometry data. This is needed when
+a successful check is followed by connection, selection or cleanup failure, or
+an earlier candidate's check must survive a bounded fallback. Attempt order,
+selection status, elapsed scope and native operation counts are unchanged.
+The selected connection supplies the successful report's top-level check;
+without a selection, the last actual attempt supplies that observation and its
+metadata. Earlier attempts retain their own checks. A Passed parameter check
+does not change a Failed candidate or Failed open.
+
+These scalars travel in the original ConnectedTouchBackend/DeviceError and open
+report. They retain no Frame, charge, SDK handle, FencedWrite or persistent owner.
+Kernel generation assignment and all Host success/failure consumers use the
+original request/correlation/frame/run/instance and occurrence receipt. Host
+records actual Failed checks at Error severity; original Ledger write failure
+remains fatal. The existing raw diagnostics stay Sensitive, while public attempt
+summaries retain only these typed parameters. Strict serde and sanitization
+enforce source/role, positive successful handshake/geometry/dimensions, legal
+pressure and rotation, and the matching backend. Unknown and Simulation are not
+failures. Original PR462 timings, capture checks, budget/charge, failure classes,
+I1 step/finish/close and single performance samples are unchanged.
+
 ## First actual capture in the opening request
 
 Before the kernel returns the original Capture result, it completes any native

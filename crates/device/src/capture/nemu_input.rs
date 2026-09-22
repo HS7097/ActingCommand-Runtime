@@ -146,6 +146,7 @@ impl NemuIpcSession {
         report.selected = Some("nemu_ipc".into());
         report.status = actingcommand_contract::BackendObservationStatus::Passed;
         report.connection = actingcommand_contract::BackendObservationStatus::Passed;
+        report.input_check = actingcommand_contract::BackendObservationStatus::Passed;
         report.frame_width = Some(backend.frame_width);
         report.frame_height = Some(backend.frame_height);
         report.serial_configured = Some(selection.configured_serial.is_some());
@@ -429,7 +430,8 @@ impl NemuIpcWorkerState {
         if display < 0 {
             let native = Err(DeviceError::fatal(format!(
                 "Nemu application display query failed with code {display}"
-            )));
+            ))
+            .input_parameter_failure());
             return merge_input_snapshot(
                 merge_input_snapshot(native, snapshot),
                 input.invalidate(),
@@ -752,28 +754,33 @@ fn require_input_version(root: &Path, timeout: Duration) -> DeviceResult<()> {
         manager.parent().ok_or_else(unsupported)?,
     )?;
     if output.stdout_lossy_decode || output.stdout.len() > 4096 {
-        return Err(DeviceError::fatal("MuMuManager version output is invalid"));
+        return Err(
+            DeviceError::fatal("MuMuManager version output is invalid").input_parameter_failure()
+        );
     }
-    let value: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
-        DeviceError::fatal(format!("MuMuManager version JSON is invalid: {error}"))
-    })?;
-    let version = value
-        .get("version")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(unsupported)?;
-    let mut parts = version.split('.');
-    let mut parsed = [0_u32; 4];
-    for part in &mut parsed {
-        *part = parts
-            .next()
-            .ok_or_else(unsupported)?
-            .parse()
-            .map_err(|_| unsupported())?;
-    }
-    if parts.next().is_some() || parsed < [6, 3, 2, 0] {
-        return Err(DeviceError::fatal(
-            "Nemu input requires MuMuManager version 6.3.2.0 or later",
-        ));
-    }
-    Ok(())
+    let checked = (|| -> DeviceResult<()> {
+        let value: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
+            DeviceError::fatal(format!("MuMuManager version JSON is invalid: {error}"))
+        })?;
+        let version = value
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(unsupported)?;
+        let mut parts = version.split('.');
+        let mut parsed = [0_u32; 4];
+        for part in &mut parsed {
+            *part = parts
+                .next()
+                .ok_or_else(unsupported)?
+                .parse()
+                .map_err(|_| unsupported())?;
+        }
+        if parts.next().is_some() || parsed < [6, 3, 2, 0] {
+            return Err(DeviceError::fatal(
+                "Nemu input requires MuMuManager version 6.3.2.0 or later",
+            ));
+        }
+        Ok(())
+    })();
+    checked.map_err(DeviceError::input_parameter_failure)
 }

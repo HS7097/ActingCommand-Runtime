@@ -498,8 +498,6 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             endpoint.input.clone()
         };
         let serial_configured = input.target.serial.is_some();
-        let maatouch_pressure = input.maatouch_config.default_pressure;
-        let minitouch_pressure = input.minitouch_config.default_pressure;
         let mut report = actingcommand_contract::BackendOpenReport::unobserved(
             actingcommand_contract::BackendOpenEntry::Input,
         );
@@ -508,12 +506,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         report.serial_configured = Some(serial_configured);
         create_touch_backend_for_fenced_input(input)
             .map(|backend| {
-                let mut report = backend.open_report(serial_configured);
-                report.configured_pressure = match backend.backend_name() {
-                    actingcommand_device::TouchBackendName::MaaTouch => Some(maatouch_pressure),
-                    actingcommand_device::TouchBackendName::Minitouch => Some(minitouch_pressure),
-                    _ => None,
-                };
+                let report = backend.open_report(serial_configured);
                 actingcommand_device::OpenedBackend::new(
                     Box::new(backend) as Box<dyn InputBackend>,
                     report,
