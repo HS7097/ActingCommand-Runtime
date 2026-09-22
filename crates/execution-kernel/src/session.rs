@@ -1236,7 +1236,9 @@ fn execute_input(
         let touch_response_us = Instant::now()
             .checked_duration_since(started)
             .and_then(|span| u64::try_from(span.as_micros()).ok());
-        executed.map_err(|error| {
+        observations.extend(backend.take_backend_open_observations());
+        executed.map_err(|mut error| {
+            observations.extend(error.take_backend_open_observations());
             let error = match &recovery {
                 Some(report) => error.with_adb_recovery(report.clone()),
                 None => error,

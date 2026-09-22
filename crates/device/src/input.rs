@@ -135,6 +135,12 @@ pub struct InputSelectionContext {
 }
 
 pub trait InputBackend {
+    /// Move observations of connections performed by the just-completed action.
+    /// This reads no device state and carries no write authority.
+    fn take_backend_open_observations(&mut self) -> Vec<crate::BackendOpenObservation> {
+        Vec::new()
+    }
+
     fn opened_geometry(&self) -> Option<actingcommand_contract::BackendInputGeometryObservation> {
         None
     }

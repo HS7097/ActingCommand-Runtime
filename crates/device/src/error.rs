@@ -548,6 +548,13 @@ impl DeviceError {
             .map_or(&[], |value| value.backend_open.as_slice())
     }
 
+    /// Transfer the same occurrences into the enclosing command's ordered result.
+    pub fn take_backend_open_observations(&mut self) -> Vec<crate::BackendOpenObservation> {
+        self.evidence.as_mut().map_or_else(Vec::new, |evidence| {
+            std::mem::take(&mut evidence.backend_open)
+        })
+    }
+
     pub fn with_backend_open_observation(
         mut self,
         observation: crate::BackendOpenObservation,

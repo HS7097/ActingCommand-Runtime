@@ -207,6 +207,8 @@ pub trait TouchBackendFactory {
 }
 
 pub struct SelectedTouchBackend {
+    // Bounded by the original remaining factory chain; moved out by this action.
+    action_open_observations: Vec<crate::BackendOpenObservation>,
     active: ConnectedTouchBackend,
     remaining: Vec<Box<dyn TouchBackendFactory>>,
     diagnostics: TouchBackendDiagnostics,
@@ -256,6 +258,21 @@ impl SelectedTouchBackend {
         &mut self,
         action: &'static str,
         points: &[(i32, i32)],
+        run: impl FnMut(&mut dyn InputBackend) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        self.run_touch_action_inner(action, points, run)
+            .map_err(|mut error| {
+                for observation in self.take_backend_open_observations() {
+                    error = error.with_backend_open_observation(observation);
+                }
+                error
+            })
+    }
+
+    fn run_touch_action_inner(
+        &mut self,
+        action: &'static str,
+        points: &[(i32, i32)],
         mut run: impl FnMut(&mut dyn InputBackend) -> DeviceResult<()>,
     ) -> DeviceResult<()> {
         self.validate_action_points(action, points)?;
@@ -293,12 +310,22 @@ impl SelectedTouchBackend {
             let factory = self.remaining.remove(0);
             let backend_name = factory.name();
             let started = Instant::now();
-            match factory.connect() {
+            let connected = factory.connect();
+            self.action_open_observations.push(
+                crate::backend_open::observe_touch_action_connection(
+                    self.diagnostics.requested,
+                    backend_name,
+                    &connected,
+                ),
+            );
+            match connected {
                 Ok(mut connected) => match run(connected.backend.as_mut()) {
                     Ok(()) => {
                         let elapsed_ms = started.elapsed().as_millis();
                         self.diagnostics
                             .push_success(connected.name, elapsed_ms, action, true);
+                        self.diagnostics
+                            .record_input_parameters(connected.input_parameters.as_ref());
                         if let Err(cleanup) = self
                             .active
                             .backend
@@ -334,6 +361,8 @@ impl SelectedTouchBackend {
                             action,
                             fallback_backend,
                         );
+                        self.diagnostics
+                            .record_input_parameters(connected.input_parameters.as_ref());
                         self.diagnostics.warnings.push(format!(
                             "WARNING touch backend {} failed during {action}; fallback_backend={}; reason={reason}",
                             connected.name.as_str(),
@@ -367,6 +396,8 @@ impl SelectedTouchBackend {
                         action,
                         fallback_backend,
                     );
+                    self.diagnostics
+                        .record_input_parameters(err.input_parameters());
                     self.diagnostics.warnings.push(format!(
                         "WARNING touch backend {} could not be selected for {action}; fallback_backend={}; reason={reason}",
                         backend_name.as_str(),
@@ -436,6 +467,10 @@ impl SelectedTouchBackend {
 }
 
 impl InputBackend for SelectedTouchBackend {
+    fn take_backend_open_observations(&mut self) -> Vec<crate::BackendOpenObservation> {
+        std::mem::take(&mut self.action_open_observations)
+    }
+
     fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
         self.active.backend.take_adb_recovery()
     }
@@ -687,6 +722,7 @@ fn select_fixed_priority(
                 diagnostics.selected = Some(active.name);
                 diagnostics.record_input_parameters(active.input_parameters.as_ref());
                 return Ok(SelectedTouchBackend {
+                    action_open_observations: Vec::new(),
                     active,
                     remaining: factories,
                     diagnostics,
@@ -826,6 +862,7 @@ fn select_fastest(
         .collect::<Vec<_>>();
 
     Ok(SelectedTouchBackend {
+        action_open_observations: Vec::new(),
         active,
         remaining,
         diagnostics,
@@ -2181,6 +2218,7 @@ mod tests {
     fn selected_adb_shell_input_defers_stale_natural_bounds_to_concrete_backend() {
         let actions = Rc::new(RefCell::new(vec![Ok(())]));
         let mut selected = SelectedTouchBackend {
+            action_open_observations: Vec::new(),
             active: ConnectedTouchBackend {
                 name: TouchBackendName::AdbShellInput,
                 input_parameters: None,

@@ -1498,6 +1498,12 @@ impl DeviceRegistryInputDiagnosticBackend {
 }
 
 impl InputBackend for DeviceRegistryInputDiagnosticBackend {
+    fn take_backend_open_observations(
+        &mut self,
+    ) -> Vec<actingcommand_device::BackendOpenObservation> {
+        self.backend.take_backend_open_observations()
+    }
+
     fn selection_context(&self) -> Option<actingcommand_device::InputSelectionContext> {
         self.backend.selection_context()
     }

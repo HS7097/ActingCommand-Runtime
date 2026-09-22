@@ -145,6 +145,32 @@ pressure and rotation, and the matching backend. Unknown and Simulation are not
 failures. Original PR462 timings, capture checks, budget/charge, failure classes,
 I1 step/finish/close and single performance samples are unchanged.
 
+### Connections inside an existing input action
+
+The original bounded `run_touch_action` fallback can open another backend after
+the session's initial provider open. Each such actual `factory.connect` creates
+one new observation from its returned ConnectedTouchBackend or DeviceError,
+including the check and valid parameters. It contains only this connection's
+attempt, not the accumulated diagnostics or an old open occurrence. A successful
+connection remains a successful connection observation if the later action or
+cleanup fails; that operation's original error and disposition remain intact.
+Failed connect remains Failed, including when its parameter check had completed.
+The existing combined fallback/action elapsed value stays in its original
+diagnostics; the new connection-only duration is unknown, with no extra timer.
+
+Success observations are moved out through `InputBackend::take_backend_open_observations`;
+every action error, including fallback exhaustion and cleanup failure, carries
+them in the original DeviceError. Storage is bounded by the original remaining
+factory chain and holds only typed reports/occurrence receipts. The actingd
+diagnostic wrapper forwards the success transfer and preserves error evidence.
+Kernel drains after the original action timer ends on both success and failure,
+orders the initial provider observation before action connections and applies
+the same current session generation. Host's original shared input consumer writes
+them once under the triggering request and occurrence, before its existing
+success/failure receipt. Later session reuse drains no prior connection. No
+extra connection, action, fallback, cleanup, write witness or performance sample
+is introduced.
+
 ## First actual capture in the opening request
 
 Before the kernel returns the original Capture result, it completes any native
