@@ -1698,7 +1698,8 @@ mod tests {
 
         add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
-        assert_eq!(SAMPLE_CALLS.load(Ordering::SeqCst), 2);
+        // Owner creation, frame refresh, then payload, metadata and encoder admissions.
+        assert_eq!(SAMPLE_CALLS.load(Ordering::SeqCst), 5);
     }
 
     #[test]
