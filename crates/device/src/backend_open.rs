@@ -6,6 +6,51 @@ use actingcommand_contract::{
 };
 use std::sync::Arc;
 
+/// An actual prime attempt's check, retained through admission/cleanup failure.
+/// Absence on DeviceError means no check was observed, not a failed check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureProbeCheck {
+    Passed {
+        backend: crate::CaptureBackendName,
+        width: u32,
+        height: u32,
+    },
+    Failed {
+        backend: crate::CaptureBackendName,
+    },
+}
+
+impl CaptureProbeCheck {
+    pub(crate) fn apply_failure(self, report: &mut BackendOpenReport, error: &DeviceError) {
+        use actingcommand_contract::{BackendOpenAttempt, BackendOpenStage, LifecycleNativeDetail};
+        let backend = match self {
+            Self::Passed {
+                backend,
+                width,
+                height,
+            } => {
+                report.capture_check = BackendObservationStatus::Passed;
+                report.frame_width = Some(width);
+                report.frame_height = Some(height);
+                backend
+            }
+            Self::Failed { backend } => {
+                report.capture_check = BackendObservationStatus::Failed;
+                backend
+            }
+        };
+        // The frame check and the candidate outcome are distinct: admission or
+        // cleanup still failed, and no backend was selected by this return.
+        report.push_attempt(BackendOpenAttempt {
+            backend: backend.as_str().into(),
+            stage: BackendOpenStage::CaptureProbe,
+            status: BackendObservationStatus::Failed,
+            elapsed_ms: None,
+            detail: LifecycleNativeDetail::bounded(error.message()),
+        });
+    }
+}
+
 impl From<crate::MumuInstallSource> for actingcommand_contract::BackendInstallationSource {
     fn from(source: crate::MumuInstallSource) -> Self {
         match source {

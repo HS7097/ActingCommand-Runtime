@@ -253,7 +253,6 @@ impl HostShared {
         let registration = self
             .mark_resources_in_use()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let capture_started = Instant::now();
         let captured = self
             .execution
             .capture_frame_retained_with_registration_guard(
@@ -262,9 +261,6 @@ impl HostShared {
                 registration,
                 memory,
             );
-        let capture_acquire_us = performance::measured_microseconds(
-            actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
-        );
         let frame = match captured {
             Ok(mut frame) => {
                 self.append_backend_open_observations(
@@ -430,7 +426,7 @@ impl HostShared {
             links.clone(),
             observation.width(),
             observation.height(),
-            capture_acquire_us,
+            frame.capture_acquire_us(),
         )?;
         let event = self.append_event(
             EventSeverity::Info,

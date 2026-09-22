@@ -2316,11 +2316,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     registration,
                     memory,
                 );
-            // The same CaptureBackend boundary span feeds the typed payload field: no second clock read.
-            let capture_acquire_us = performance::measured_microseconds(
-                self.task_timing
-                    .finish_boundary(backend_started, captured.is_ok()),
-            );
+            self.task_timing
+                .finish_boundary(backend_started, captured.is_ok());
             match captured {
                 Ok((mut frame, geometry_session)) => {
                     self.host
@@ -2454,7 +2451,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         self.capture_evidence.persisted(frame_index, &reference)?;
                         self.last_frame_id = Some(frame_id);
                         self.last_capture_input_action_id = input_action_id;
-                        self.last_capture_acquire_us = capture_acquire_us;
+                        self.last_capture_acquire_us = frame.capture_acquire_us();
                         if self.configuration_records > 0 && !self.configuration_capture_recorded {
                             let selection = frame.selection.as_ref().map(|selection| {
                                 EffectiveCaptureSelection {

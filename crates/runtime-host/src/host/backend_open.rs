@@ -48,7 +48,9 @@ impl HostShared {
             }
             let event = self
                 .append_event_under_fact_gate(
-                    if observation.report.status == BackendObservationStatus::Failed {
+                    if observation.report.status == BackendObservationStatus::Failed
+                        || observation.report.capture_check == BackendObservationStatus::Failed
+                    {
                         EventSeverity::Error
                     } else if !observation.report.warnings.is_empty()
                         || observation

@@ -210,9 +210,6 @@ impl HostShared {
                         };
                     }
                 };
-                // Host-side span until the kernel-level backend span lands: it includes the
-                // host→kernel channel round-trip on top of the backend write itself.
-                let backend_started = Instant::now();
                 let backend_result = self.execution.input_prepared_in_frame(
                     &instance_alias,
                     action_for_worker,
@@ -224,12 +221,6 @@ impl HostShared {
                     }),
                     destructive_step.as_ref().map(Arc::clone),
                     registration,
-                );
-                let touch_response_us = performance::measured_microseconds(
-                    actingcommand_execution_kernel::observe_instant_span(
-                        backend_started,
-                        Instant::now(),
-                    ),
                 );
                 match backend_result {
                     Ok(outcome) => {
@@ -263,7 +254,7 @@ impl HostShared {
                             };
                         }
                         CriticalActionReport::Succeeded {
-                            value: (outcome.selection, touch_response_us),
+                            value: (outcome.selection, outcome.touch_response_us),
                             effect: success_effect,
                         }
                     }

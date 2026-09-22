@@ -74,7 +74,7 @@ pub struct BackendInputGeometryObservation {
     pub rotation_degrees: u16,
 }
 
-/// Observations of the original open only. None/Unknown never grants availability.
+/// Original open and its same-command first capture. None/Unknown never grants availability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackendOpenReport {

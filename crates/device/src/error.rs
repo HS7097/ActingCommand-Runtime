@@ -437,6 +437,7 @@ pub struct DeviceError {
 #[derive(Clone, Default)]
 struct StoredDeviceEvidence {
     frame_memory: Option<crate::FrameMemoryFailure>,
+    capture_probe_check: Option<crate::backend_open::CaptureProbeCheck>,
     backend_open: Vec<crate::BackendOpenObservation>,
     vendor_stdio: Vec<DeviceStdioObservation>,
     command: Option<crate::AdbCommandEvidence>,
@@ -444,6 +445,22 @@ struct StoredDeviceEvidence {
 }
 
 impl DeviceError {
+    pub(crate) fn with_capture_probe_check(
+        mut self,
+        check: crate::backend_open::CaptureProbeCheck,
+    ) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .capture_probe_check = Some(check);
+        self
+    }
+
+    pub(crate) fn capture_probe_check(&self) -> Option<crate::backend_open::CaptureProbeCheck> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.capture_probe_check)
+    }
+
     pub fn frame_memory(failure: crate::FrameMemoryFailure) -> Self {
         let mut error = match failure {
             crate::FrameMemoryFailure::Capacity => Self::transient("frame_workspace_unavailable"),

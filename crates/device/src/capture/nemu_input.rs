@@ -232,12 +232,16 @@ struct NemuCaptureView {
 }
 
 impl CaptureBackend for NemuCaptureView {
+    fn capture_timed(&mut self) -> DeviceResult<Frame> {
+        self.capture()
+    }
+
     fn capture(&mut self) -> DeviceResult<Frame> {
         if self.detached {
             return Err(DeviceError::fatal("Nemu capture view is detached"));
         }
         let mut backend = self.owner.lock()?;
-        let mut frame = backend.capture()?;
+        let mut frame = backend.capture_timed()?;
         self.vendor_stdio = backend.vendor_stdio.clone();
         let mut selection = self.selection.as_ref().clone();
         selection.nemu_frame = frame

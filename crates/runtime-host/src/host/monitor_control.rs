@@ -252,14 +252,10 @@ impl HostShared {
         .map_err(RuntimeHostError::artifact)?;
         let memory = frame_store.memory_budget();
         let registration = self.mark_resources_in_use()?;
-        let capture_started = Instant::now();
         let captured = self.execution.capture_retained_with_registration_guard(
             &probe.instance_alias,
             registration,
             memory.clone(),
-        );
-        let capture_acquire_us = performance::measured_microseconds(
-            actingcommand_execution_kernel::observe_instant_span(capture_started, Instant::now()),
         );
         let mut frame = match captured {
             Ok(mut frame) => {
@@ -334,7 +330,7 @@ impl HostShared {
                 EffectDisposition::Performed,
                 frame.width,
                 frame.height,
-                capture_acquire_us,
+                frame.capture_acquire_us(),
                 AuditInput::new(),
             ),
         )?;

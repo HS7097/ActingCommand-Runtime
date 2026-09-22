@@ -59,6 +59,19 @@ pub trait CaptureBackend {
 
     fn capture(&mut self) -> DeviceResult<Frame>;
 
+    /// Time this actual acquisition. Wrappers that return a retained frame must
+    /// forward its original measurement, including an unavailable measurement.
+    fn capture_timed(&mut self) -> DeviceResult<Frame> {
+        let started = Instant::now();
+        let result = self.capture();
+        let elapsed = Instant::now().checked_duration_since(started);
+        result.map(|mut frame| {
+            frame.capture_acquire_us =
+                elapsed.and_then(|span| u64::try_from(span.as_micros()).ok());
+            frame
+        })
+    }
+
     /// Read this producer's display geometry within the caller's absolute deadline.
     /// Unsupported implementations report unknown without creating a producer.
     fn observe_geometry(&mut self, _deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
@@ -157,6 +170,8 @@ pub struct Frame {
     pub selection: Option<Arc<CaptureSelectionContext>>,
     /// Observation made by this frame's producer, without an additional capture.
     pub geometry: CaptureGeometryObservation,
+    /// The original producer call, excluding selection, retained-frame take and material work.
+    capture_acquire_us: Option<u64>,
     /// Dropped after the owned pixel/PNG buffers; never shared by a physical copy.
     memory_charge: Option<crate::FrameMemoryCharge>,
 }
@@ -173,10 +188,15 @@ impl PartialEq for Frame {
             && self.backend_name == other.backend_name
             && self.selection == other.selection
             && self.geometry == other.geometry
+            && self.capture_acquire_us == other.capture_acquire_us
     }
 }
 
 impl Frame {
+    pub fn capture_acquire_us(&self) -> Option<u64> {
+        self.capture_acquire_us
+    }
+
     pub fn memory_charge(&self) -> Option<&crate::FrameMemoryCharge> {
         self.memory_charge.as_ref()
     }
@@ -243,6 +263,7 @@ impl Frame {
             backend_name: self.backend_name,
             selection: self.selection.clone(),
             geometry: self.geometry.clone(),
+            capture_acquire_us: self.capture_acquire_us,
             memory_charge: charge,
         };
         if let Some(charge) = &mut copy.memory_charge {
@@ -292,6 +313,7 @@ impl Frame {
             height,
             pixels: image.into_raw(),
             backend_open_observations: Vec::new(),
+            capture_acquire_us: None,
             memory_charge: None,
             pixel_format: PixelFormat::Rgba8,
             original_png: Some(png),
@@ -323,6 +345,7 @@ impl Frame {
             height,
             pixels,
             backend_open_observations: Vec::new(),
+            capture_acquire_us: None,
             memory_charge: None,
             pixel_format,
             original_png: None,
@@ -547,12 +570,16 @@ pub struct SelectedCaptureBackend {
 }
 
 impl CaptureBackend for SelectedCaptureBackend {
+    fn capture_timed(&mut self) -> DeviceResult<Frame> {
+        self.capture()
+    }
+
     fn observe_geometry(&mut self, deadline: Instant) -> DeviceResult<CaptureGeometryObservation> {
         self.backend.observe_geometry(deadline)
     }
 
     fn capture(&mut self) -> DeviceResult<Frame> {
-        let mut frame = self.backend.capture()?;
+        let mut frame = self.backend.capture_timed()?;
         if let Some(selection) = &self.selection {
             let mut selection = selection.as_ref().clone();
             selection.nemu_frame = frame
@@ -886,8 +913,13 @@ where
         let probe_outcome = match probe(name) {
             Ok(outcome) => outcome,
             Err(primary) => {
+                let mut report =
+                    crate::backend_open::capture_open_report(requested, None, &attempts);
+                if let Some(check) = primary.capture_probe_check() {
+                    check.apply_failure(&mut report, &primary);
+                }
                 return Err(crate::observe_open_failure(
-                    crate::backend_open::capture_open_report(requested, None, &attempts),
+                    report,
                     close_capture_candidates(
                         successful,
                         primary.with_resource_candidate_index(candidate_index),
@@ -1239,6 +1271,10 @@ struct PrimedCaptureBackend {
 }
 
 impl CaptureBackend for PrimedCaptureBackend {
+    fn capture_timed(&mut self) -> DeviceResult<Frame> {
+        self.capture()
+    }
+
     fn opened_dimensions(&self) -> Option<(u32, u32)> {
         self.primed
             .as_ref()
@@ -1254,7 +1290,7 @@ impl CaptureBackend for PrimedCaptureBackend {
         if let Some(frame) = self.primed.take() {
             return Ok(frame);
         }
-        self.inner.capture()
+        self.inner.capture_timed()
     }
 
     fn vendor_stdio(&self) -> &[VendorStdioCapture] {
@@ -1296,19 +1332,26 @@ fn prime_capture_backend(
             DeviceError::frame_memory(crate::FrameMemoryFailure::Owner),
         ));
     };
-    let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.capture()))
-        .unwrap_or_else(|_| Err(DeviceError::fatal("capture probe panicked")));
+    let captured =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.capture_timed()))
+            .unwrap_or_else(|_| Err(DeviceError::fatal("capture probe panicked")));
     match captured {
         Ok(mut frame) => {
-            if let Err(primary) = validate_pixel_buffer(
-                frame.width,
-                frame.height,
-                frame.pixel_format,
-                frame.pixels.len(),
-            )
-            .and_then(|()| frame.admit_memory(memory))
-            {
-                return Err(close_capture_backend_after_error(backend, primary));
+            let layout = frame.validate_layout();
+            let check = if layout.is_ok() {
+                crate::backend_open::CaptureProbeCheck::Passed {
+                    backend: name,
+                    width: frame.width,
+                    height: frame.height,
+                }
+            } else {
+                crate::backend_open::CaptureProbeCheck::Failed { backend: name }
+            };
+            if let Err(primary) = layout.and_then(|()| frame.admit_memory(memory)) {
+                return Err(close_capture_backend_after_error(
+                    backend,
+                    primary.with_capture_probe_check(check),
+                ));
             }
             let vendor_stdio = backend.vendor_stdio().to_vec();
             let message = format!(
@@ -1327,15 +1370,22 @@ fn prime_capture_backend(
                 vendor_stdio,
             ))
         }
-        Err(primary) => match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-            Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
-            Err(cleanup) => {
-                if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    std::mem::forget(backend);
+        Err(primary) => {
+            let primary =
+                primary.with_capture_probe_check(crate::backend_open::CaptureProbeCheck::Failed {
+                    backend: name,
+                });
+            match backend.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
+                Err(cleanup) => {
+                    if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                    {
+                        std::mem::forget(backend);
+                    }
+                    Err(primary.merge_resource_cleanup(cleanup))
                 }
-                Err(primary.merge_resource_cleanup(cleanup))
             }
-        },
+        }
     }
 }
 
