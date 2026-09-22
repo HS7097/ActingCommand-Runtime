@@ -6228,10 +6228,10 @@ mod post_admission_ocr_tests {
                     actingcommand_device::CaptureBackendName::FixtureSimulation,
                 )
                 .unwrap();
-                runtime
-                    .inner
-                    .frames
-                    .extend([unknown.clone(), unknown.clone()]);
+                runtime.inner.frames.extend([
+                    unknown.try_clone().expect("copy fixture frame"),
+                    unknown.try_clone().expect("copy fixture frame"),
+                ]);
                 runtime.inner.last_frame = if case == "wait_timeout" {
                     unknown
                 } else {
@@ -6649,9 +6649,9 @@ mod post_admission_ocr_tests {
             .unwrap();
             let mut runtime = super::retry_wiring_tests::ScriptedRuntime {
                 frames: if result_first {
-                    VecDeque::from([result.clone()])
+                    VecDeque::from([result.try_clone().expect("copy fixture frame")])
                 } else {
-                    VecDeque::from([home, result.clone()])
+                    VecDeque::from([home, result.try_clone().expect("copy fixture frame")])
                 },
                 last_frame: result,
                 captures: 0,
@@ -9547,7 +9547,12 @@ mod retry_wiring_tests {
         operation.retry_interval_ms = Some(1);
         let unknown = unrecognized_frame();
         let mut runtime = ScriptedRuntime {
-            frames: [page_frame("home"), page_frame("home"), unknown.clone()].into(),
+            frames: [
+                page_frame("home"),
+                page_frame("home"),
+                unknown.try_clone().expect("copy fixture frame"),
+            ]
+            .into(),
             last_frame: unknown,
             captures: 0,
             inputs: 0,
