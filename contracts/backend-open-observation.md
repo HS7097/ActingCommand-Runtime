@@ -108,6 +108,16 @@ by this observation. Host records a Failed capture check at Error severity in
 the original lifecycle event, with the original operation failure and cleanup
 facts unchanged. No extra acquisition or separate performance sample is emitted.
 
+Automatic prime admission failures retain the actual check and valid dimensions
+in the original DeviceError evidence before cleanup. Selection transfers those
+scalars into its one open failure report even when open returns before the kernel
+capture loop. The current candidate attempt remains Failed and the open has no
+selected backend; a passed frame check cannot turn a rejected candidate into a
+successful selection. Earlier attempts retain their order and details. Owner or
+build failure before acquisition carries no capture-check evidence. Invalid
+layout/acquisition on these early error returns records Failed without invented valid dimensions. This is
+ephemeral metadata only; it retains no Frame, charge, permission or cached result.
+
 Every reachable successful first capture currently has this same-command open
 report: independent input opens no capture backend; its first Capture opens it.
 A fresh paired Nemu open in Input cannot have a committed frame and fails through

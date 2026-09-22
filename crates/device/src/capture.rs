@@ -913,8 +913,13 @@ where
         let probe_outcome = match probe(name) {
             Ok(outcome) => outcome,
             Err(primary) => {
+                let mut report =
+                    crate::backend_open::capture_open_report(requested, None, &attempts);
+                if let Some(check) = primary.capture_probe_check() {
+                    check.apply_failure(&mut report, &primary);
+                }
                 return Err(crate::observe_open_failure(
-                    crate::backend_open::capture_open_report(requested, None, &attempts),
+                    report,
                     close_capture_candidates(
                         successful,
                         primary.with_resource_candidate_index(candidate_index),
@@ -1332,15 +1337,21 @@ fn prime_capture_backend(
             .unwrap_or_else(|_| Err(DeviceError::fatal("capture probe panicked")));
     match captured {
         Ok(mut frame) => {
-            if let Err(primary) = validate_pixel_buffer(
-                frame.width,
-                frame.height,
-                frame.pixel_format,
-                frame.pixels.len(),
-            )
-            .and_then(|()| frame.admit_memory(memory))
-            {
-                return Err(close_capture_backend_after_error(backend, primary));
+            let layout = frame.validate_layout();
+            let check = if layout.is_ok() {
+                crate::backend_open::CaptureProbeCheck::Passed {
+                    backend: name,
+                    width: frame.width,
+                    height: frame.height,
+                }
+            } else {
+                crate::backend_open::CaptureProbeCheck::Failed { backend: name }
+            };
+            if let Err(primary) = layout.and_then(|()| frame.admit_memory(memory)) {
+                return Err(close_capture_backend_after_error(
+                    backend,
+                    primary.with_capture_probe_check(check),
+                ));
             }
             let vendor_stdio = backend.vendor_stdio().to_vec();
             let message = format!(
@@ -1359,15 +1370,22 @@ fn prime_capture_backend(
                 vendor_stdio,
             ))
         }
-        Err(primary) => match backend.close_once(DeviceCloseAuthority::LocalOnly) {
-            Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
-            Err(cleanup) => {
-                if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    std::mem::forget(backend);
+        Err(primary) => {
+            let primary =
+                primary.with_capture_probe_check(crate::backend_open::CaptureProbeCheck::Failed {
+                    backend: name,
+                });
+            match backend.close_once(DeviceCloseAuthority::LocalOnly) {
+                Ok(outcome) => Err(primary.with_stdio_observations(outcome.vendor_stdio())),
+                Err(cleanup) => {
+                    if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                    {
+                        std::mem::forget(backend);
+                    }
+                    Err(primary.merge_resource_cleanup(cleanup))
                 }
-                Err(primary.merge_resource_cleanup(cleanup))
             }
-        },
+        }
     }
 }
 
