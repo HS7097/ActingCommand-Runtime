@@ -78,12 +78,12 @@ observation, lab operation frame and monitor probe paths all feed the monitor
 without a call of their own; only paths that append under the fact write gate
 or straight to the ledger (contained task, input receipt, lifecycle,
 governance, planning, release control, policy catalog) observe explicitly once
-the gate is dropped. The pipeline maxima therefore appear only
-in the 60 s counters `perf.summary` (context `sample_count` > 0), never in the
-2 s capacity fact `perf.summary` (`capacity` present, context
-`PerformanceContext::unavailable`, all fourteen metrics listed as unavailable),
-which is the ledger commit of the capacity admission fact and not a monitor
-reading.
+the gate is dropped. The pipeline maxima therefore appear in the host-level
+`perf.summary`. It has one producer, recorded on the summary interval (60 s) or
+on a material capacity change (see `capacity-admission.md`), never on every
+sample; each recorded summary carries both the monitor context of that moment
+and the capacity admission fact. Its context is `PerformanceContext::unavailable`
+only when counters are disabled or the window holds no data.
 
 ## Summary instance semantics
 

@@ -96,9 +96,10 @@ I/O; readers use `try_lock`, never the writer command queue, and retain the
 existing nonblocking writer-health check. The statistics lock spans no I/O or
 PerformanceMonitor work.
 
-PerformanceMonitor samples these counters only when its existing periodic
-summary is due, before appending that tick's events. Its own summary is therefore
-included in the next window. There is one previous sample, no additional queue,
+PerformanceMonitor samples these counters only when its single summary is due
+(on the summary interval or a material capacity change, see
+`capacity-admission.md`), before appending that summary. Its own summary is
+therefore included in the next window. There is one previous sample, no additional queue,
 thread, per-commit event or persistent statistics store.
 
 The optional `ledger_commits` field in `perf.summary` has `status: "available"`
