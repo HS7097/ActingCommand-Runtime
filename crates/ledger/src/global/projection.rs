@@ -492,6 +492,7 @@ fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bo
         && query
             .event_type
             .is_none_or(|value| event.event_type() == value)
+        && !query.exclude_event_types.contains(&event.event_type())
         && query
             .minimum_severity
             .is_none_or(|value| event.severity() >= value)

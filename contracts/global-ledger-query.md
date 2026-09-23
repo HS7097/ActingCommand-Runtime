@@ -44,6 +44,7 @@ idle response and next-cursor semantics remain the subscription owner's contract
 actinglab lab watch --origin-module capture --diagnostic-code capture.failed --after 0 --max-events 64
 actinglab lab watch --req <correlation-id> --after <sequence> --wait-ms 1000
 actingledger --state-root <root> events --origin-module capture --diagnostic-code capture.failed --severity error --after 0 --through <sequence> --limit 64
+actingledger --state-root <root> events --exclude-event-type perf.summary --exclude-event-type monitor.probe_completed --after 0 --limit 64
 ```
 
 Offline `actingledger events` converts its existing module, diagnostic and
@@ -122,6 +123,13 @@ emulator instance, so every `instance_id` ever bound to the same port through
 per instance id and the port map (port to every instance id ever bound as
 HOST:PORT, in first-binding order); serial-configured instances and instances
 without a port stay out of the port map and are listed separately.
+
+`EventQuery.exclude_event_types` excludes every event whose type is in the set,
+AND with every other condition (an empty set is no constraint and leaves the
+serialized query unchanged; the in-memory predicate and the SQLite
+`e.event_type NOT IN (...)` apply the same test), and more than 32 entries, a
+duplicate or the selected `event_type` is rejected with
+`invalid_event_query_event_type_filter`.
 
 `RuntimeEventQueryPage.read_scope` separates source completeness from `has_more`.
 It gives the formal Runtime/offline source, material read state, actual

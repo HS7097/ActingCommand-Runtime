@@ -87,6 +87,8 @@ pub struct ForensicEventFilter {
     pub diagnostic_code: Option<String>,
     pub severity: Option<String>,
     pub correlation_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub exclude_event_types: Vec<String>,
 }
 
 impl ForensicEventFilter {
@@ -101,18 +103,27 @@ impl ForensicEventFilter {
             diagnostic_code,
             severity,
             correlation_id,
+            exclude_event_types: Vec::new(),
         };
         filter.query()?;
         Ok(filter)
     }
 
+    /// Replaces the excluded wire event types; the typed query validates the set.
+    pub fn with_exclude_event_types(mut self, event_types: Vec<String>) -> ForensicResult<Self> {
+        self.exclude_event_types = event_types;
+        self.query()?;
+        Ok(self)
+    }
+
     fn query(&self) -> ForensicResult<EventQuery> {
-        serde_json::from_value(json!({
+        let query: EventQuery = serde_json::from_value(json!({
             "origin_module": self.origin_module,
             "diagnostic_code": self.diagnostic_code,
             "minimum_severity": self.severity,
             "maximum_severity": self.severity,
             "correlation_id": self.correlation_id,
+            "exclude_event_types": self.exclude_event_types,
         }))
         .map_err(|_| {
             ForensicError::new(
@@ -120,7 +131,15 @@ impl ForensicEventFilter {
                 "validate_event_filter",
                 "event filter contains an unknown enum or invalid token",
             )
-        })
+        })?;
+        query.validate().map_err(|error| {
+            ForensicError::new(
+                error.code(),
+                "validate_event_filter",
+                "event filter violates the typed query rules",
+            )
+        })?;
+        Ok(query)
     }
 }
 

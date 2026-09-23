@@ -235,6 +235,25 @@ pub(super) fn select_sequences(
         ));
         values.extend(bindings);
     }
+    if let Some(event_types) = query_value
+        .get("exclude_event_types")
+        .and_then(serde_json::Value::as_array)
+        .filter(|event_types| !event_types.is_empty())
+    {
+        // AND with every other predicate; one typed binding per excluded event type.
+        let mut bindings = Vec::with_capacity(event_types.len());
+        for event_type in event_types {
+            let Some(event_type) = event_type.as_str() else {
+                return Err(failure("invalid_event_query_value", "encode_ledger_query"));
+            };
+            bindings.push(SqlValue::Text(event_type.to_owned()));
+        }
+        sql.push_str(&format!(
+            " AND e.event_type NOT IN ({})",
+            vec!["?"; bindings.len()].join(",")
+        ));
+        values.extend(bindings);
+    }
     if query.minimum_severity.is_some() || query.maximum_severity.is_some() {
         let allowed: Vec<_> = SEVERITIES
             .into_iter()

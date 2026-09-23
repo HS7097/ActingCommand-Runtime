@@ -335,6 +335,7 @@ pub(super) fn query_filters_by_sequence_and_all_typed_correlation_ids(
         from_sequence: Some(correlated.sequence()),
         to_sequence: Some(correlated.sequence()),
         event_type: Some(correlated.event_type()),
+        exclude_event_types: Vec::new(),
         minimum_severity: Some(EventSeverity::Warning),
         source: Some(EventSource::Runtime),
         origin_module: Some(OriginModule::Runtime),

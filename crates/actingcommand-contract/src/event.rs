@@ -598,6 +598,10 @@ pub struct EventQuery {
     pub from_sequence: Option<u64>,
     pub to_sequence: Option<u64>,
     pub event_type: Option<EventType>,
+    /// Excludes every listed event type: AND with every other condition.
+    /// An empty set is no constraint and leaves the serialized query unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_event_types: Vec<EventType>,
     pub minimum_severity: Option<EventSeverity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_severity: Option<EventSeverity>,
@@ -622,11 +626,28 @@ pub struct EventQuery {
     pub recognition_id: Option<RecognitionId>,
 }
 
+const MAX_EXCLUDED_EVENT_TYPES: usize = 32;
+
 impl EventQuery {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.instance_id.is_some() && !self.instance_ids.is_empty() {
             return Err(SanitizationError::new(
                 "invalid_event_query_instance_filter",
+                "query",
+            ));
+        }
+        let excluded = &self.exclude_event_types;
+        if excluded.len() > MAX_EXCLUDED_EVENT_TYPES
+            || self
+                .event_type
+                .is_some_and(|event_type| excluded.contains(&event_type))
+            || excluded
+                .iter()
+                .enumerate()
+                .any(|(index, event_type)| excluded[..index].contains(event_type))
+        {
+            return Err(SanitizationError::new(
+                "invalid_event_query_event_type_filter",
                 "query",
             ));
         }
