@@ -288,6 +288,8 @@ actingctl emulator restart --state-root <state-root> --instance <alias>
 `status` is the existing `Status` read filtered to the alias (that instance's
 `RuntimeInstanceStatus`, or `instance_unknown`); `start` / `stop` / `restart` print the result
 JSON above. All four require `--instance`.
+`RuntimeInstanceStatus` also carries `resource_package { path, kind }` when the instance declares a
+default resource package (`contracts/actingd-check-config.md`), and omits the key otherwise.
 
 ## Instance discovery query
 
