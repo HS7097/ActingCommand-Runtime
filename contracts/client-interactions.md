@@ -104,6 +104,14 @@ received receipt. A latched error retains its original receipt and original IDs.
 Contained-task completed/cancelled results must also identify the current request
 in their `task_request_id` before reaching flow projection or receipt retention.
 
+A Denied/Failed receipt's error projection may also carry the optional, additive
+`host_code` and `host_operation` fields, the host's closed static failure code and
+operation (`[a-z0-9_.-]`, at most 128 bytes, never native text), filled when a
+dispatched request fails and absent on earlier refusals and the fatal-state replay;
+`RuntimeClientError::host_failure()` returns them, its display appends
+`host code <code> during <operation>`, and a client built before these fields
+cannot decode a receipt that carries them (`deny_unknown_fields`).
+
 `committed_receipt()` keeps its original narrower eligibility and consumers:
 contained-task/shutdown failures with a terminal, the material failure receipt
 carried by the material-read contract, and the original after-commit projection

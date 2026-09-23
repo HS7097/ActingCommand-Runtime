@@ -199,7 +199,10 @@ Host codes: `emulator_control_busy` (`runtime_busy`, denied), `emulator_control_
 and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_control_wait_timeout`,
 `emulator_control_failed`, `emulator_control_endpoint_unresolved` and
 `emulator_control_adb_not_ready` (`backend_operation_failed`, failed). Device-facing requests on a pending instance are denied with `instance_not_running`
-(`invalid_request`), see "Cold start".
+(`invalid_request`), see "Cold start". The receipt carries the host code and its operation
+in the optional, additive `host_code`/`host_operation` error-projection fields (closed static
+codes; a client built before them cannot decode such a receipt, `deny_unknown_fields`), so
+`actingctl` shows, for example, `host code emulator_control_busy during control_emulator_instance`.
 
 ## The `device.connected` program fact
 

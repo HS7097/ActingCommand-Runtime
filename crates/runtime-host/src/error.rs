@@ -47,7 +47,7 @@ pub(crate) enum PpocrFailureSource {
 pub struct RuntimeHostError {
     code: &'static str,
     operation: &'static str,
-    projection: RuntimeErrorProjection,
+    projection: Box<RuntimeErrorProjection>,
     pub(crate) lifecycle: Box<RuntimeHostFailureContext>,
 }
 
@@ -260,7 +260,7 @@ impl RuntimeHostError {
         self.projection.fatal
     }
 
-    pub const fn projection(&self) -> &RuntimeErrorProjection {
+    pub fn projection(&self) -> &RuntimeErrorProjection {
         &self.projection
     }
 
@@ -296,7 +296,7 @@ impl RuntimeHostError {
         Self {
             code,
             operation,
-            projection: RuntimeErrorProjection::new(runtime_code, true),
+            projection: Box::new(RuntimeErrorProjection::new(runtime_code, true)),
             lifecycle: Box::default(),
         }
     }
@@ -309,7 +309,7 @@ impl RuntimeHostError {
         Self {
             code,
             operation,
-            projection: RuntimeErrorProjection::new(runtime_code, false),
+            projection: Box::new(RuntimeErrorProjection::new(runtime_code, false)),
             lifecycle: Box::default(),
         }
     }
@@ -322,7 +322,7 @@ impl RuntimeHostError {
         Self {
             code,
             operation,
-            projection,
+            projection: Box::new(projection),
             lifecycle: Box::default(),
         }
     }
@@ -357,7 +357,7 @@ impl RuntimeHostError {
         let runtime_error = Self {
             code: error.code(),
             operation,
-            projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
+            projection: Box::new(RuntimeErrorProjection::new(runtime_code, error.is_fatal())),
             lifecycle: Box::new(RuntimeHostFailureContext {
                 diagnostics: error.failure_context().clone(),
                 instance_id: error.instance_id(),
@@ -380,7 +380,8 @@ impl RuntimeHostError {
             && error.cleanup_cause().is_none()
             && error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
         {
-            result.projection = RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+            *result.projection =
+                RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
         }
         result
     }
@@ -393,7 +394,8 @@ impl RuntimeHostError {
     ) -> Self {
         let mut result = Self::execution(operation, error);
         if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
-            result.projection = RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+            *result.projection =
+                RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
         }
         result
     }

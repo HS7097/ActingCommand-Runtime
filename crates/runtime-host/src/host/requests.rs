@@ -83,6 +83,11 @@ impl HostShared {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
                 }
+                let projection = failure
+                    .error
+                    .projection()
+                    .clone()
+                    .with_host_failure(failure.error.code(), failure.error.operation());
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
                     let rejected = if let Some(event) =
                         failure.error.lifecycle.resource_declaration_event
@@ -106,17 +111,12 @@ impl HostShared {
                         request,
                         failure.state,
                         failure.terminal,
-                        failure.error.projection().clone(),
+                        projection,
                     )?
                     .with_resource_declaration(rejection, rejected)
                     .map_err(|_| receipt_error());
                 }
-                runtime_error_receipt(
-                    request,
-                    failure.state,
-                    failure.terminal,
-                    failure.error.projection().clone(),
-                )
+                runtime_error_receipt(request, failure.state, failure.terminal, projection)
             }
         }
     }

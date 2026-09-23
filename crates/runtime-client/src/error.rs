@@ -54,7 +54,7 @@ impl RuntimeReceiptHeaderIo {
 pub struct RuntimeClientError {
     code: &'static str,
     operation: &'static str,
-    projection: Option<RuntimeErrorProjection>,
+    projection: Option<Box<RuntimeErrorProjection>>,
     related: Option<Box<RuntimeClientError>>,
     committed_receipt: Option<Box<RuntimeReceipt>>,
     received_receipt: Option<Box<RuntimeReceipt>>,
@@ -87,8 +87,14 @@ impl RuntimeClientError {
         })
     }
 
-    pub const fn projection(&self) -> Option<&RuntimeErrorProjection> {
-        self.projection.as_ref()
+    pub fn projection(&self) -> Option<&RuntimeErrorProjection> {
+        self.projection.as_deref()
+    }
+
+    /// The Runtime's closed failure code and operation, when its receipt carried both.
+    pub fn host_failure(&self) -> Option<(&str, &str)> {
+        let projection = self.projection.as_ref()?;
+        Some((projection.host_code()?, projection.host_operation()?))
     }
 
     pub fn committed_receipt(&self) -> Option<&RuntimeReceipt> {
@@ -152,14 +158,11 @@ impl RuntimeClientError {
         }
     }
 
-    pub(crate) const fn rejected(
-        operation: &'static str,
-        projection: RuntimeErrorProjection,
-    ) -> Self {
+    pub(crate) fn rejected(operation: &'static str, projection: RuntimeErrorProjection) -> Self {
         Self {
             code: "runtime_request_rejected",
             operation,
-            projection: Some(projection),
+            projection: Some(Box::new(projection)),
             related: None,
             committed_receipt: None,
             received_receipt: None,
@@ -237,6 +240,9 @@ impl fmt::Display for RuntimeClientError {
                 write!(formatter, " fatal={}", projection.fatal)?;
                 if let Some(retry_after_ms) = projection.retry_after_ms {
                     write!(formatter, " retry_after_ms={retry_after_ms}")?;
+                }
+                if let Some((code, operation)) = self.host_failure() {
+                    write!(formatter, " host code {code} during {operation}")?;
                 }
                 if let Some(related) = &self.related {
                     write!(formatter, "; related failure: {related}")?;

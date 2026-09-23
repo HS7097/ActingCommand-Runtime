@@ -94,7 +94,9 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   `status` shows `adb_port: null`, device requests are denied with
   `instance_not_running`) and is started with
   `.\actingctl.exe emulator start --state-root <private-state-root> --instance <alias>`;
-  declare no `port` for such an instance.
+  declare no `port` for such an instance. `actingctl` reports that denial as
+  `host code instance_not_running during require_bound_adb_endpoint`, from
+  optional receipt fields an `actingctl` older than this daemon cannot decode.
 
 The parser rejects unknown fields and configuration files larger than 1 MiB.
 The blank state root and salt must be filled before startup. Use your existing

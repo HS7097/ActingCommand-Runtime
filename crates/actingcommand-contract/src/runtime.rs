@@ -3463,6 +3463,12 @@ pub struct RuntimeErrorProjection {
     pub current_lease_id: Option<LeaseId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
+    /// The Runtime's closed static failure code behind `code`; never native text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_code: Option<String>,
+    /// The Runtime operation that produced `host_code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_operation: Option<String>,
 }
 
 impl RuntimeErrorProjection {
@@ -3473,6 +3479,8 @@ impl RuntimeErrorProjection {
             current_holder_id: None,
             current_lease_id: None,
             retry_after_ms: None,
+            host_code: None,
+            host_operation: None,
         }
     }
 
@@ -3485,6 +3493,37 @@ impl RuntimeErrorProjection {
     pub const fn with_retry_after(mut self, retry_after_ms: u64) -> Self {
         self.retry_after_ms = Some(retry_after_ms);
         self
+    }
+
+    pub fn with_host_failure(mut self, code: &str, operation: &str) -> Self {
+        self.host_code = Some(code.to_owned());
+        self.host_operation = Some(operation.to_owned());
+        self
+    }
+
+    pub fn host_code(&self) -> Option<&str> {
+        self.host_code.as_deref()
+    }
+
+    pub fn host_operation(&self) -> Option<&str> {
+        self.host_operation.as_deref()
+    }
+
+    fn validate(&self) -> RuntimeContractResult<()> {
+        for value in [&self.host_code, &self.host_operation]
+            .into_iter()
+            .flatten()
+        {
+            if value.is_empty()
+                || value.len() > 128
+                || !value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+                })
+            {
+                return Err(RuntimeContractError::new("invalid_host_failure"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -3942,6 +3981,9 @@ impl RuntimeReceipt {
         }
         if self.terminal.is_some_and(|terminal| terminal.sequence == 0) {
             return Err(RuntimeContractError::new("invalid_terminal_event"));
+        }
+        if let Some(error) = &self.error {
+            error.validate()?;
         }
         if let Some(rejection) = &self.resource_declaration {
             if !matches!(
