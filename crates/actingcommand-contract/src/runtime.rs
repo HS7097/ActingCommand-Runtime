@@ -1413,9 +1413,6 @@ pub struct RuntimeDiscoveredInstance {
     pub android_version: Option<String>,
 }
 
-/// Longest instance name a `DiscoverInstances` answer carries.
-const MAX_DISCOVERY_INSTANCE_NAME_BYTES: usize = 128;
-
 /// The answer of `RuntimeOperation::DiscoverInstances`: the provider version and every
 /// instance it reported, ordered by index, with the committed observation as `source`. Tool
 /// paths, install roots and the resolution source are not part of it.
@@ -1449,15 +1446,16 @@ impl RuntimeInstanceDiscovery {
         Self::validate_instances(&self.instances)
     }
 
-    /// Names are non-empty and at most `MAX_DISCOVERY_INSTANCE_NAME_BYTES`, indexes strictly
-    /// ascending, and a present `bound_alias` is a valid instance alias.
+    /// Names are non-empty and at most `MAX_DISCOVERED_INSTANCE_NAME_BYTES` (the startup
+    /// binding's bound), indexes strictly ascending, and a present `bound_alias` is a valid
+    /// instance alias.
     pub fn validate_instances(
         instances: &[RuntimeDiscoveredInstance],
     ) -> RuntimeContractResult<()> {
         let mut previous = None;
         for instance in instances {
             if instance.instance_name.is_empty()
-                || instance.instance_name.len() > MAX_DISCOVERY_INSTANCE_NAME_BYTES
+                || instance.instance_name.len() > crate::MAX_DISCOVERED_INSTANCE_NAME_BYTES
                 || previous.is_some_and(|index| index >= instance.instance_index)
             {
                 return Err(RuntimeContractError::new("invalid_instance_discovery"));

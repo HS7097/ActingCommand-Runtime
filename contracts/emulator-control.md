@@ -326,11 +326,11 @@ involved, and nothing is bound, rebound or registered.
 }
 ```
 
-Instances are ordered by index without duplicates; each name is 1-128 bytes. `adb_host`,
-`adb_port`, `bound_alias` and `android_version` are omitted when absent. `bound_alias` is the
-registered instance whose discovery binding carries this index, else the explicit HOST:PORT
-instance configured with this ADB port. No `MuMuManager` path, install root or resolution source
-is on the wire. The request records one `command.validated` event carrying the
+Instances are ordered by index without duplicates; each name is 1-256 bytes (the startup
+binding's `MAX_DISCOVERED_INSTANCE_NAME_BYTES`). `adb_host`, `adb_port`, `bound_alias` and
+`android_version` are omitted when absent. `bound_alias` is the registered instance whose
+discovery binding carries this index, else the explicit HOST:PORT instance configured with this
+ADB port. No `MuMuManager` path, install root or resolution source is on the wire. The request records one `command.validated` event carrying the
 `InstanceDiscovery` state observation (`runtime-state-observation.md`) and `source` points at
 it; the receipt is `completed` without a terminal, like `Status`.
 
