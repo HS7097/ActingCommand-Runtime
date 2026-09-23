@@ -351,3 +351,7 @@ discover_instances}` is a controlled template declared Sensitive. Host operation
 `RuntimeClient::discover_instances()` (and `RuntimeProjectClient::discover_instances()`) waits
 25 s for the receipt: two vendor commands (`version`, `info -v all`) of at most 10 s each, plus
 the IO margin.
+
+`actingctl emulator discover --state-root <state-root>` (no `--instance`) prints the
+`RuntimeInstanceDiscovery` above as one JSON line and exits 0; a refusal is the usual
+`FATAL actingctl:` line with a non-zero exit.

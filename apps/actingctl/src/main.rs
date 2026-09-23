@@ -124,6 +124,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .control_emulator_instance(instance()?, action)
                 .map_err(ActingctlError::runtime)?,
         ),
+        Command::EmulatorDiscover => serde_json::to_value(
+            client
+                .discover_instances()
+                .map_err(ActingctlError::runtime)?,
+        ),
         Command::Stream { spec } => serde_json::to_value(
             client
                 .capture_sequence(instance()?, spec)
@@ -214,6 +219,7 @@ enum Command {
     EmulatorControl {
         action: EmulatorInstanceAction,
     },
+    EmulatorDiscover,
     Stream {
         spec: CaptureSequenceSpec,
     },
@@ -350,6 +356,7 @@ impl Invocation {
                 Some("restart") => Command::EmulatorControl {
                     action: EmulatorInstanceAction::Restart,
                 },
+                Some("discover") => Command::EmulatorDiscover,
                 _ => return Err(ActingctlError::Usage),
             },
             "stream" => Command::Stream {
@@ -398,6 +405,7 @@ impl Command {
             Self::Status
                 | Self::ProgramFacts
                 | Self::MonitorStatus
+                | Self::EmulatorDiscover
                 | Self::RequestShutdown
                 | Self::AgentPublishFacts { .. }
         )
@@ -447,7 +455,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
