@@ -7,6 +7,7 @@
 mod check_config;
 mod config;
 mod ledger_maintenance;
+mod owner_unlock;
 
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
@@ -60,6 +61,12 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         .is_some_and(|argument| argument == "check-config")
     {
         return check_config::run(arguments);
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "unlock-owner")
+    {
+        return owner_unlock::run(arguments);
     }
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {

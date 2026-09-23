@@ -137,6 +137,40 @@ impl ClientActionValue {
     }
 }
 
+/// The operator named by `actingd unlock-owner --actor`, held to the same path-safe
+/// discipline as `ClientActionValue::PathSafeString`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OwnerUnlockActor(String);
+
+impl OwnerUnlockActor {
+    pub fn new(value: impl Into<String>) -> Result<Self, SanitizationError> {
+        let actor = Self(value.into());
+        actor.validate()?;
+        Ok(actor)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), SanitizationError> {
+        if path_safe_string(&self.0) {
+            return Ok(());
+        }
+        Err(SanitizationError::new(
+            "invalid_owner_unlock_actor",
+            "owner_unlock_actor",
+        ))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for OwnerUnlockActor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OwnerUnlockActor(<typed-redacted>)")
+    }
+}
+
 /// The authorization effect represented by one approval fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -159,6 +159,7 @@ closed_code!(EventAction {
     SignatureRegister => "signature.register",
     SignatureMatch => "signature.match",
     SignatureRetire => "signature.retire",
+    OwnerUnlock => "owner.unlock",
 });
 
 closed_code!(DiagnosticCode {

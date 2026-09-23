@@ -51,18 +51,7 @@ impl OwnerGuard {
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
-        file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => RuntimeHostError::fatal(
-                "owner_conflict",
-                "acquire_owner_file",
-                RuntimeErrorCode::OwnerConflict,
-            ),
-            std::fs::TryLockError::Error(_) => RuntimeHostError::fatal(
-                "owner_lock_failed",
-                "acquire_owner_file",
-                RuntimeErrorCode::RuntimeFatal,
-            ),
-        })?;
+        try_lock_owner_file(&file, "owner_conflict", "acquire_owner_file")?;
         let journal = read_owner_journal(&mut file)?;
         let previous = journal.last().cloned();
         if previous.as_ref().is_some_and(|record| {
@@ -294,6 +283,75 @@ impl OwnerGuard {
     }
 }
 
+/// A retained owner epoch whose resources the operator confirmed released. The owner file
+/// stays exclusively locked until this value is dropped.
+pub(crate) struct OwnerUnlock {
+    _file: File,
+    pub(crate) owner_epoch: OwnerEpoch,
+    pub(crate) previous_resource_disposition: OwnerResourceDisposition,
+    pub(crate) revision: u64,
+}
+
+/// Offline `actingd unlock-owner`: when the last record is a v2 InUse/Unconfirmed epoch,
+/// appends one record to that same epoch (same pid, started_at and active instances, still
+/// active) whose `ConfirmedClosed` disposition is the operator's confirmation, so the next
+/// start takes it over automatically. Every refusal returns before any write.
+pub(crate) fn unlock_retained_owner(
+    state_root: &Path,
+    confirmed: bool,
+) -> RuntimeHostResult<OwnerUnlock> {
+    const OPERATION: &str = "unlock_owner_file";
+    let refused = |code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::InvalidRequest);
+    // Not created here: a state root without an owner journal has nothing to unlock.
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(state_root.join(OWNER_FILE_NAME))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(refused("owner_unlock_not_required"));
+        }
+        Err(_) => {
+            return Err(RuntimeHostError::fatal(
+                "owner_file_open_failed",
+                "open_owner_file",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+    };
+    try_lock_owner_file(&file, "owner_unlock_daemon_active", OPERATION)?;
+    let Some((mut record, previous_resource_disposition)) =
+        read_last_record(&mut file)?.and_then(|record| match record.resource_disposition {
+            Some(
+                disposition @ (OwnerResourceDisposition::InUse
+                | OwnerResourceDisposition::Unconfirmed),
+            ) if record.schema_version == OWNER_SCHEMA_VERSION => Some((record, disposition)),
+            _ => None,
+        })
+    else {
+        return Err(refused("owner_unlock_not_required"));
+    };
+    if !confirmed {
+        return Err(refused("owner_unlock_confirmation_missing"));
+    }
+    record.revision = record.revision.checked_add(1).ok_or_else(|| {
+        RuntimeHostError::fatal(
+            "owner_revision_overflow",
+            OPERATION,
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    })?;
+    record.resource_disposition = Some(OwnerResourceDisposition::ConfirmedClosed);
+    append_record(&mut file, &record)?;
+    Ok(OwnerUnlock {
+        _file: file,
+        owner_epoch: record.owner_epoch,
+        previous_resource_disposition,
+        revision: record.revision,
+    })
+}
+
 impl Drop for OwnerGuard {
     fn drop(&mut self) {
         if self.closed || self.retained_unconfirmed || std::thread::panicking() {
@@ -312,9 +370,25 @@ fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal>
     })
 }
 
-#[cfg(test)]
 fn read_last_record(file: &mut File) -> RuntimeHostResult<Option<OwnerRecord>> {
     Ok(read_owner_journal(file)?.last().cloned())
+}
+
+fn try_lock_owner_file(
+    file: &File,
+    conflict: &'static str,
+    operation: &'static str,
+) -> RuntimeHostResult<()> {
+    file.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => {
+            RuntimeHostError::fatal(conflict, operation, RuntimeErrorCode::OwnerConflict)
+        }
+        std::fs::TryLockError::Error(_) => RuntimeHostError::fatal(
+            "owner_lock_failed",
+            operation,
+            RuntimeErrorCode::RuntimeFatal,
+        ),
+    })
 }
 
 fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()> {
