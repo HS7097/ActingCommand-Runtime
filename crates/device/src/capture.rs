@@ -786,19 +786,58 @@ where
                 let resolver_adb = if explicit_capture_identity {
                     None
                 } else {
-                    configured_adb
+                    configured_adb.clone()
                 };
                 let resolution_detail = if resolver_adb.is_some() {
                     NemuCaptureResolutionDetail::Identity
                 } else {
                     NemuCaptureResolutionDetail::Installation
                 };
-                resolve_mumu(resolver_adb, explicit_root, explicit_dll).map_err(|error| {
-                    with_nemu_capture_resolution_detail(
-                        error.with_nemu_resolution_provenance(adb_class, has_root, has_dll),
-                        resolution_detail,
-                    )
-                })?
+                let running_target_root = explicit_root.clone();
+                match (
+                    resolve_mumu(resolver_adb, explicit_root, explicit_dll),
+                    configured_adb,
+                ) {
+                    // A shared ADB cannot pick one of several nx_device/<version> DLLs; the
+                    // target instance's running kernel can. Explicit DLL input never reaches here.
+                    (Err(error), Some(configured_adb))
+                        if error.nemu_resolution_context().is_some_and(|context| {
+                            context.reason() == NemuResolutionReason::SharedAdbMultipleDllVersions
+                        }) =>
+                    {
+                        let target_serial = config.target.resolved_serial();
+                        match resolve_running_target(
+                            configured_adb,
+                            &target_serial,
+                            config.nemu.instance_id,
+                            running_target_root,
+                            None,
+                        ) {
+                            Ok(paths) => Some(paths),
+                            Err(running_error) => {
+                                let message = format!(
+                                    "{}; running target DLL selection also failed: {}",
+                                    error.message(),
+                                    running_error.message()
+                                );
+                                return Err(with_nemu_capture_resolution_detail(
+                                    error
+                                        .with_nemu_resolution_provenance(
+                                            adb_class, has_root, has_dll,
+                                        )
+                                        .with_message(message),
+                                    resolution_detail,
+                                ));
+                            }
+                        }
+                    }
+                    (resolved, _) => resolved.map_err(|error| {
+                        with_nemu_capture_resolution_detail(
+                            error.with_nemu_resolution_provenance(adb_class, has_root, has_dll),
+                            resolution_detail,
+                        )
+                    })?,
+                }
             };
             match resolved {
                 Some(paths) => {

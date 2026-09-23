@@ -375,6 +375,9 @@ fn resolve_mumu_backend_paths_for_running_executable_inner(
         )
     })?;
     let installation = explicit_installation(running_root, MumuInstallSource::RunningProcess)?;
+    if let Some(adb_root) = mumu_root_from_path(&configured_adb) {
+        ensure_same_install_root("configured ADB", &adb_root, &installation)?;
+    }
 
     if let Some(explicit_root) = explicit_root {
         let explicit = explicit_installation(explicit_root, MumuInstallSource::ExplicitFolder)?;
