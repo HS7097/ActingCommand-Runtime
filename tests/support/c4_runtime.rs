@@ -57,28 +57,8 @@ impl CaptureBackend for FileCaptureBackend {
         &mut self,
         _deadline: std::time::Instant,
     ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
-        use actingcommand_contract::{
-            CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
-            CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
-        };
-        // The same 16x9 extent of the sealed frame file; no device is queried
-        // and no backend event is recorded.
-        let extent = CaptureExtent::new(16, 9).expect("positive sealed extent");
-        Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
-            backend: CaptureBackendName::AdbScreencap,
-            source: CaptureGeometrySource::AdbDefaultDisplay {
-                serial: "<sealed-c4-process>".to_string(),
-                wm_extent: extent,
-                wm_size_kind: CaptureWmSizeKind::Physical,
-            },
-            logical_display_extent: extent,
-            rotation: CaptureRotationObservation::Observed {
-                rotation: CaptureRotation::R0,
-                source: CaptureRotationSource::DumpsysDisplayOrientation,
-            },
-            sampled_at: std::time::SystemTime::now(),
-            frame_transform: None,
-        }))
+        // The same 16x9 extent of the sealed frame file; no backend event is recorded.
+        Ok(physical_geometry_16x9("<sealed-c4-process>"))
     }
 
     fn close_once(
@@ -215,12 +195,7 @@ impl ExecutionBackendProvider for FileProvider {
         &self,
         _instance_alias: &str,
     ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
-        Ok(
-            actingcommand_runtime_host::ForegroundApplicationObservation {
-                foreground: Some("neutral.application".to_owned()),
-                assigned: "neutral.application".to_owned(),
-            },
-        )
+        Ok(neutral_foreground())
     }
 
     fn control_application(
@@ -439,6 +414,38 @@ pub fn write_sealed_frame(path: &Path) {
 fn write_frame(path: &Path, first_pixel: [u8; 3]) -> DeviceResult<()> {
     fs::write(path, page_frame(first_pixel)?.encode_png_fast()?)
         .map_err(|error| DeviceError::fatal(format!("write sealed frame: {error}")))
+}
+
+/// The fake device reports its assigned application in the foreground.
+pub fn neutral_foreground() -> actingcommand_runtime_host::ForegroundApplicationObservation {
+    actingcommand_runtime_host::ForegroundApplicationObservation {
+        foreground: Some("neutral.application".to_owned()),
+        assigned: "neutral.application".to_owned(),
+    }
+}
+
+/// A physical 16x9 default-display geometry matching `page_frame`; no device is queried.
+pub fn physical_geometry_16x9(serial: &str) -> actingcommand_contract::CaptureGeometryObservation {
+    use actingcommand_contract::{
+        CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
+        CaptureRotation, CaptureRotationObservation, CaptureRotationSource, CaptureWmSizeKind,
+    };
+    let extent = CaptureExtent::new(16, 9).expect("positive fixture extent");
+    CaptureGeometryObservation::Observed(CaptureGeometry {
+        backend: CaptureBackendName::AdbScreencap,
+        source: CaptureGeometrySource::AdbDefaultDisplay {
+            serial: serial.to_string(),
+            wm_extent: extent,
+            wm_size_kind: CaptureWmSizeKind::Physical,
+        },
+        logical_display_extent: extent,
+        rotation: CaptureRotationObservation::Observed {
+            rotation: CaptureRotation::R0,
+            source: CaptureRotationSource::DumpsysDisplayOrientation,
+        },
+        sampled_at: std::time::SystemTime::now(),
+        frame_transform: None,
+    })
 }
 
 /// Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
