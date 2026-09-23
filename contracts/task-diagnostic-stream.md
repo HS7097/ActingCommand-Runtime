@@ -138,8 +138,10 @@ The fixed stages are `admission` (original bounds and initial budget check),
 `verify_snapshot`, `prepare_events`, `select_sequences`, `project_page`, `commit`
 and `rollback`. `with_connection` ends before the original connection guard drops.
 Verification includes the original prefix lookup and fixed boundary checks;
-preparation consumes metadata authenticated in this same read transaction and
-retains its original per-item budget checks and retention annotation; page projection
+preparation consumes the writer's verified prefix plus the tail authenticated in
+this read transaction, both under the same head/boundary re-check (a fallback or
+offline read consumes its fully authenticated snapshot instead), and retains its
+original per-item budget checks and retention annotation; page projection
 includes index creation and its original final budget check. Only the original
 explicit transaction calls can complete commit/rollback observations.
 
