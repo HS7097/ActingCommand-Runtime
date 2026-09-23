@@ -2202,6 +2202,19 @@ impl RuntimeClient {
                             "material_read_source_changed",
                         );
                     }
+                    if chunk.actual_length == 0
+                        || chunk.bytes.len() != chunk.actual_length as usize
+                        || request
+                            .offset
+                            .checked_add(u64::from(chunk.actual_length))
+                            .is_none_or(|end| end > request.byte_count)
+                    {
+                        return client_failure(
+                            Some(source),
+                            State::IntegrityFailed,
+                            "material_read_chunk_invalid",
+                        );
+                    }
                     request.offset += u64::from(chunk.actual_length);
                     bytes.extend_from_slice(&chunk.bytes);
                     assembled_source = Some(source);
