@@ -437,18 +437,21 @@ pub fn write_sealed_frame(path: &Path) {
 }
 
 fn write_frame(path: &Path, first_pixel: [u8; 3]) -> DeviceResult<()> {
-    // Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
-    let mut pixels = vec![first_pixel[0], first_pixel[1], first_pixel[2], 0, 255, 0];
+    fs::write(path, page_frame(first_pixel)?.encode_png_fast()?)
+        .map_err(|error| DeviceError::fatal(format!("write sealed frame: {error}")))
+}
+
+/// Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
+pub fn page_frame(page_pixel: [u8; 3]) -> DeviceResult<Frame> {
+    let mut pixels = vec![page_pixel[0], page_pixel[1], page_pixel[2], 0, 255, 0];
     pixels.resize(16 * 9 * 3, 0);
-    let frame = Frame::from_pixels(
+    Frame::from_pixels(
         16,
         9,
         pixels,
         PixelFormat::Rgb8,
         CaptureBackendName::AdbScreencap,
-    )?;
-    fs::write(path, frame.encode_png_fast()?)
-        .map_err(|error| DeviceError::fatal(format!("write sealed frame: {error}")))
+    )
 }
 
 pub fn backend_events(root: &Path) -> Vec<String> {

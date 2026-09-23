@@ -9,6 +9,12 @@ mod config;
 mod ledger_maintenance;
 mod owner_unlock;
 
+// Test-only: the shared sealed C4 fixture support, reused for its 16x9 page frames.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../tests/support/c4_runtime.rs"]
+mod c4_support;
+
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
     EventFamily, EventPayload, EventQuery, EventSource, EventType, MAX_RUNTIME_SUBSCRIPTION_EVENTS,
@@ -1409,7 +1415,6 @@ mod tests {
     };
     use actingcommand_device::{
         CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend,
-        PixelFormat,
     };
     use actingcommand_policy::{
         CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources,
@@ -2092,8 +2097,8 @@ mod tests {
                 Ok(Box::new(RecordingCapture {
                     count: Arc::clone(&self.capture_count),
                     frames: VecDeque::from([
-                        recording_frame([255, 0, 0]).expect("home frame"),
-                        recording_frame([0, 0, 255]).expect("terminal frame"),
+                        crate::c4_support::page_frame([255, 0, 0]).expect("home frame"),
+                        crate::c4_support::page_frame([0, 0, 255]).expect("terminal frame"),
                     ]),
                 }))
             };
@@ -2129,19 +2134,6 @@ mod tests {
                 "recording provider application control is forbidden",
             ))
         }
-    }
-
-    /// Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
-    fn recording_frame(page_pixel: [u8; 3]) -> DeviceResult<Frame> {
-        let mut pixels = vec![page_pixel[0], page_pixel[1], page_pixel[2], 0, 255, 0];
-        pixels.resize(16 * 9 * 3, 0);
-        Frame::from_pixels(
-            16,
-            9,
-            pixels,
-            PixelFormat::Rgb8,
-            CaptureBackendName::AdbScreencap,
-        )
     }
 
     struct RecordingCapture {

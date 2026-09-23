@@ -48,6 +48,7 @@ dependencies = [
  "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
+ "actingcommand-scheduler",
  "actingcommand-vision-ffi",
  "serde",
  "serde_json",
