@@ -231,6 +231,13 @@ impl fmt::Display for RuntimeClientError {
                     "runtime client error {} during {} with runtime code {:?}",
                     self.code, self.operation, projection.code
                 )?;
+                if let Some(receipt) = self.received_receipt() {
+                    write!(formatter, " state={:?}", receipt.state())?;
+                }
+                write!(formatter, " fatal={}", projection.fatal)?;
+                if let Some(retry_after_ms) = projection.retry_after_ms {
+                    write!(formatter, " retry_after_ms={retry_after_ms}")?;
+                }
                 if let Some(related) = &self.related {
                     write!(formatter, "; related failure: {related}")?;
                 }
