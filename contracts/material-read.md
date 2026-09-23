@@ -118,6 +118,8 @@ runtime-client's complete-read helper `RuntimeClient::read_material_complete`, w
 returns the offline `read_material_complete` result shape and verifies the assembled
 length and SHA-256; the UI does not assemble segments itself. When a Runtime denies
 a range above 64 KiB as an invalid request, the helper continues at 64 KiB ranges.
+Its caller may also cancel cooperatively: the check runs between ranges, not inside
+one exchange, and a cancelled read returns no bytes, only `material_read_cancelled`.
 There are no other automatic retries, cross-call interaction linking or control
 approval consumption. Existing client-action/approval authorization and replay stay
 with their original owners.

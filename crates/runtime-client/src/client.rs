@@ -2085,12 +2085,14 @@ impl RuntimeClient {
     /// offline `read_material_complete` result semantics. Every range must verify under one
     /// source identity, and the assembled length and SHA-256 must match the selection. A Runtime
     /// that refuses ranges above 64 KiB as invalid is read at 64 KiB; nothing else is retried.
-    /// The deadline is cooperative: it is checked between ranges, not inside one exchange.
+    /// The deadline and `should_continue` are cooperative: both are checked between ranges, not
+    /// inside one exchange. A false `should_continue` ends the read as `material_read_cancelled`.
     pub fn read_material_complete(
         &self,
         selection: RuntimeMaterialSelection,
         max_material_bytes: usize,
         deadline: Instant,
+        should_continue: &dyn Fn() -> bool,
     ) -> RuntimeMaterialCompleteResult {
         use RuntimeMaterialCompleteResult::{Failed, NotProvided, Verified};
         use actingcommand_contract::{
@@ -2102,11 +2104,11 @@ impl RuntimeClient {
         };
         const OPERATION: &str = "read_runtime_material_complete";
         const LEGACY_CHUNK_BYTES: u32 = 64 * 1024;
-        let budget_exceeded = |source| NotProvided {
+        let budget_exceeded = |source, code: &str| NotProvided {
             source,
             limit: RuntimeMaterialReadLimit::BudgetExceeded,
             failure: Some(RuntimeMaterialReadFailure {
-                code: "material_read_budget_exceeded".to_owned(),
+                code: code.to_owned(),
                 operation: OPERATION.to_owned(),
                 error: RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
             }),
@@ -2139,7 +2141,7 @@ impl RuntimeClient {
             return client_failure(None, State::RequestDenied, "material_read_request_invalid");
         }
         if selection.byte_count > max_material_bytes as u64 {
-            return budget_exceeded(None);
+            return budget_exceeded(None, "material_read_budget_exceeded");
         }
         let mut bytes = Vec::with_capacity(selection.byte_count as usize);
         let mut request = RuntimeMaterialReadRequest {
@@ -2159,7 +2161,10 @@ impl RuntimeClient {
         let mut assembled_source: Option<RuntimeMaterialReadSource> = None;
         while request.offset < request.byte_count {
             if Instant::now() >= deadline {
-                return budget_exceeded(assembled_source);
+                return budget_exceeded(assembled_source, "material_read_budget_exceeded");
+            }
+            if !should_continue() {
+                return budget_exceeded(assembled_source, "material_read_cancelled");
             }
             let (result, error) = match self.read_material(request.clone()) {
                 Ok(result) => (result, None),
@@ -2257,7 +2262,10 @@ impl RuntimeClient {
             }
         }
         if Instant::now() >= deadline {
-            return budget_exceeded(assembled_source);
+            return budget_exceeded(assembled_source, "material_read_budget_exceeded");
+        }
+        if !should_continue() {
+            return budget_exceeded(assembled_source, "material_read_cancelled");
         }
         match assembled_source {
             Some(source)
