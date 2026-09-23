@@ -422,6 +422,7 @@ where
     let mut diagnostic_code = None;
     let mut severity = None;
     let mut correlation_id = None;
+    let mut exclude_event_types = Vec::new();
     let mut record_cursor = None;
     let mut record_limit = None;
     let mut include_private = false;
@@ -474,6 +475,7 @@ where
             "--diagnostic-code" if diagnostic_code.is_none() => diagnostic_code = Some(value),
             "--severity" if severity.is_none() => severity = Some(value),
             "--correlation-id" if correlation_id.is_none() => correlation_id = Some(value),
+            "--exclude-event-type" => exclude_event_types.push(value),
             "--after" | "--through" | "--limit" | "--origin-module" | "--diagnostic-code"
             | "--severity" | "--correlation-id" | "--record-cursor" | "--record-limit" => {
                 return Err(invalid_arguments(format!(
@@ -484,6 +486,7 @@ where
         }
     }
     let filter = ForensicEventFilter::new(origin_module, diagnostic_code, severity, correlation_id)
+        .and_then(|filter| filter.with_exclude_event_types(exclude_event_types))
         .map_err(|error| invalid_arguments(error.to_string()))?;
     let events = ForensicEventsRequest::new(
         filter,
