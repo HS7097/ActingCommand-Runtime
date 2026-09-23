@@ -1489,6 +1489,7 @@ fn concurrent_mapped_terminals_commit_exactly_one_disposition() {
             matched_page: Some("neutral/terminal".to_owned()),
             frame_width: 2,
             frame_height: 1,
+            targets: Vec::new(),
         },
     )
     .expect("same-run final observation");
@@ -1602,6 +1603,7 @@ fn comparison_selected_outcome_reuses_mapped_terminal_owner_and_conflicts_fail_c
                 matched_page: Some("neutral/terminal".to_owned()),
                 frame_width: 2,
                 frame_height: 1,
+                targets: Vec::new(),
             },
         )
         .expect("same-run final observation");

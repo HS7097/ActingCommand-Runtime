@@ -13,21 +13,23 @@ use actingcommand_contract::{
     EffectiveTimingSource, EffectiveTimingValue, InputAction, InputSamplingEvidence,
     InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA, OcrFieldDictionary, OcrFieldReason,
     OcrFieldRecord, OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration,
-    OcrFieldsReport, PHASED_CONTROL_SCHEMA, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
-    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome, TaskPhase,
+    OcrFieldsReport, PHASED_CONTROL_SCHEMA, RecognizedTarget, RecognizedTargetRole,
+    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
+    SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
     TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage, validate_task_phases,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
 use actingcommand_page_detector::{
-    PageBatchResult, PageDetector, PageOutcome, PageSet, require_all_page_evaluations,
+    PageBatchResult, PageDetector, PageEvaluation, PageOutcome, PageSet, PageTargetRole,
+    require_all_page_evaluations,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    OcrProviderExecutionEvidence, OcrTextEvidence, PackRegion, RecognitionEvaluator,
+    OcrProviderExecutionEvidence, OcrTextEvidence, PackRect, PackRegion, RecognitionEvaluator,
     RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -1445,6 +1447,7 @@ pub enum ContainedTaskTrace {
         page_label: Option<String>,
         width: u32,
         height: u32,
+        targets: Vec<RecognizedTarget>,
     },
     RecognitionStarted {
         candidate_pages: Vec<String>,
@@ -1901,7 +1904,7 @@ impl PreparedContainedTask {
         runtime
             .record_page_evaluations("home_preflight", &results, None)
             .map_err(ContainedTaskRunError::Boundary)?;
-        let matched = results
+        let evaluation = results
             .into_iter()
             .flatten()
             .next()
@@ -1913,14 +1916,16 @@ impl PreparedContainedTask {
                     error.to_string(),
                 )
                 .with_ppocr_diagnostics(error.ppocr_diagnostics())
-            })?
-            .matched;
+            })?;
+        let matched = evaluation.matched;
+        let targets = recognized_targets(&self.evaluator, &evaluation)?;
         runtime
             .record(ContainedTaskTrace::RecognitionCompleted {
                 candidate_pages,
                 page_label: matched.then(|| page.to_owned()),
                 width: frame.width,
                 height: frame.height,
+                targets,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         Ok(matched)
@@ -2993,7 +2998,7 @@ impl PreparedContainedTask {
                     .collect(),
                 Err(error) => error.ppocr_diagnostics(),
             };
-            let matched_pages = results
+            let evaluations = results
                 .map_err(|error| {
                     actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
                         .with_ppocr_diagnostics(error.ppocr_diagnostics())
@@ -3005,10 +3010,11 @@ impl PreparedContainedTask {
                         error.to_string(),
                     )
                     .with_ppocr_diagnostics(error.ppocr_diagnostics())
-                })?
-                .into_iter()
+                })?;
+            let matched_pages = evaluations
+                .iter()
                 .filter(|evaluation| evaluation.matched)
-                .map(|evaluation| evaluation.page_id)
+                .map(|evaluation| evaluation.page_id.clone())
                 .collect::<Vec<_>>();
             if matched_pages.len() > 1 {
                 return Err(ContainedTaskError::with_detail(
@@ -3019,12 +3025,19 @@ impl PreparedContainedTask {
                 .into());
             }
             let page = matched_pages.into_iter().next();
+            let targets = recognized_page_targets(
+                &self.evaluator,
+                &evaluations,
+                page.as_deref(),
+                &candidate_pages,
+            )?;
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
                     candidate_pages,
                     page_label: page.clone(),
                     width: frame.width,
                     height: frame.height,
+                    targets,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             if let Some(required_page) = required_entry_page {
@@ -4201,6 +4214,134 @@ fn validate_post_admission_ocr_page_set(
         }
     }
     Ok(())
+}
+
+/// Targets of the matched page, or of the first candidate page when no page matched.
+fn recognized_page_targets(
+    evaluator: &RecognitionEvaluator,
+    evaluations: &[PageEvaluation],
+    matched_page: Option<&str>,
+    candidate_pages: &[String],
+) -> Result<Vec<RecognizedTarget>, ContainedTaskError> {
+    let Some(page_id) = matched_page.or_else(|| candidate_pages.first().map(String::as_str)) else {
+        return Ok(Vec::new());
+    };
+    let evaluation = evaluations
+        .iter()
+        .find(|evaluation| evaluation.page_id == page_id)
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                "contained_task_recognition_targets_unavailable",
+                page_id.to_owned(),
+            )
+        })?;
+    recognized_targets(evaluator, evaluation)
+}
+
+/// One entry per evaluated page target, in evaluation order, truncated to the contract limit.
+fn recognized_targets(
+    evaluator: &RecognitionEvaluator,
+    evaluation: &PageEvaluation,
+) -> Result<Vec<RecognizedTarget>, ContainedTaskError> {
+    evaluation
+        .target_results
+        .iter()
+        .take(TASK_RECOGNITION_TARGET_LIMIT)
+        .map(|target| {
+            Ok(RecognizedTarget {
+                target_id: target.target_id.clone(),
+                role: match target.role {
+                    PageTargetRole::Required => RecognizedTargetRole::Required,
+                    PageTargetRole::AnyOf => RecognizedTargetRole::AnyOf,
+                    PageTargetRole::Optional => RecognizedTargetRole::Optional,
+                    PageTargetRole::Forbidden => RecognizedTargetRole::Forbidden,
+                },
+                passed: target.passed,
+                region: recognized_target_region(evaluator, &target.evaluation)?,
+            })
+        })
+        .collect()
+}
+
+/// The rectangle the evaluator actually used, in frame pixels; `None` when it used no fixed one.
+fn recognized_target_region(
+    evaluator: &RecognitionEvaluator,
+    evaluation: &TargetEvaluation,
+) -> Result<Option<actingcommand_contract::page_projection::Rect>, ContainedTaskError> {
+    let rect = match evaluation.kind {
+        TargetKind::Template => match evaluation.template {
+            Some(matched) if evaluation.passed => Some(PackRect {
+                x: matched.x,
+                y: matched.y,
+                width: matched.width,
+                height: matched.height,
+            }),
+            _ => declared_target_rect(evaluator, &evaluation.id)?,
+        },
+        TargetKind::Color => declared_target_rect(evaluator, &evaluation.id)?,
+        TargetKind::Ocr => evaluation
+            .ocr
+            .as_ref()
+            .and_then(|ocr| ocr.region.roi)
+            .map(|roi| PackRect {
+                x: roi.x,
+                y: roi.y,
+                width: roi.width,
+                height: roi.height,
+            }),
+        TargetKind::Nn => evaluation.nn.as_ref().map(|nn| nn.requested_region),
+        TargetKind::ClickOnly => None,
+    };
+    rect.map(|rect| {
+        match (
+            u32::try_from(rect.x),
+            u32::try_from(rect.y),
+            u32::try_from(rect.width),
+            u32::try_from(rect.height),
+        ) {
+            (Ok(x), Ok(y), Ok(width), Ok(height)) => {
+                Ok(actingcommand_contract::page_projection::Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                })
+            }
+            _ => Err(ContainedTaskError::with_detail(
+                "contained_task_recognition_target_region_invalid",
+                evaluation.id.clone(),
+            )),
+        }
+    })
+    .transpose()
+}
+
+/// A template's static search rectangle or a color target's sampled rectangle.
+fn declared_target_rect(
+    evaluator: &RecognitionEvaluator,
+    target_id: &str,
+) -> Result<Option<PackRect>, ContainedTaskError> {
+    let target = evaluator
+        .pack()
+        .targets
+        .iter()
+        .find(|target| recognition_target_id(target) == target_id)
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                "contained_task_recognition_target_region_invalid",
+                target_id.to_owned(),
+            )
+        })?;
+    Ok(match target {
+        RecognitionTarget::Template(target) => match &target.region {
+            PackRegion::Rect(rect) => Some(*rect),
+            PackRegion::TemplateRelative(_) | PackRegion::Keyword(_) => None,
+        },
+        RecognitionTarget::Color(target) => Some(target.region),
+        RecognitionTarget::ClickOnly(_) | RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_) => {
+            None
+        }
+    })
 }
 
 fn recognition_target_id(target: &RecognitionTarget) -> &str {

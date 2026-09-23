@@ -2061,7 +2061,20 @@
                         "frame_height": 9,
                         "frame_width": 16,
                         "kind": "recognition_completed",
-                        "matched_page": "arknights/home"
+                        "matched_page": "arknights/home",
+                        "targets": [
+                          {
+                            "passed": true,
+                            "region": {
+                              "height": 2,
+                              "width": 2,
+                              "x": 0,
+                              "y": 0
+                            },
+                            "role": "required",
+                            "target_id": "page/home"
+                          }
+                        ]
                       }
                     },
                     "kind": "semantic"
