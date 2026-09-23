@@ -428,13 +428,17 @@ impl PerformanceMonitor {
             return capacity.record_transitions(&sample, now, ledger, events);
         }
         let mut tick = PerformanceTick {
-            events: vec![PerformanceSemanticEvent::Summary(Box::new(
-                self.summary(now.unix_ms, Some(sample.clone()))?,
-            ))],
+            events: Vec::new(),
             stop_sampling: false,
         };
-        let event = self.attach_ledger_sample(&mut tick, ledger).and_then(|()| {
-            match tick.events.as_slice() {
+        let event = self
+            .summary(now.unix_ms, Some(sample.clone()))
+            .and_then(|summary| {
+                tick.events
+                    .push(PerformanceSemanticEvent::Summary(Box::new(summary)));
+                self.attach_ledger_sample(&mut tick, ledger)
+            })
+            .and_then(|()| match tick.events.as_slice() {
                 [PerformanceSemanticEvent::Summary(summary)] => append(
                     ledger,
                     events,
@@ -442,8 +446,7 @@ impl PerformanceMonitor {
                     PerformancePayloadDraft::summary(summary.as_ref().clone(), AuditInput::new()),
                 ),
                 _ => Err(failure("capacity_summary_missing")),
-            }
-        });
+            });
         let capacity = self
             .capacity
             .as_mut()
