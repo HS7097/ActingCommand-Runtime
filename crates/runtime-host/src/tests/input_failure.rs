@@ -344,15 +344,9 @@ fn input_failure_persists_adb_bounds_context() {
             .collect::<Vec<_>>();
         if let Some(baseline) = &baseline_types {
             let mut expected = baseline.clone();
-            let position = expected.len();
-            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause and M4 detail are real facts.
-            expected.splice(
-                position..position,
-                [
-                    EventType::RuntimeFailed,
-                    EventType::RuntimeLifecycleObserved,
-                ],
-            );
+            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause is a real fact; its detail
+            // is only counted into the close summary (Workflow #328).
+            expected.push(EventType::RuntimeFailed);
             assert_eq!(types, expected);
         } else {
             baseline_types = Some(types);

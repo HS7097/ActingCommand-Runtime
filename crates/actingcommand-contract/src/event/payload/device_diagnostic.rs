@@ -4,7 +4,9 @@ use super::{DiagnosticDetailRecord, EventId, SanitizationError, Sensitivity};
 use crate::{OriginModule, OwnerEpoch};
 use serde::{Deserialize, Serialize};
 
-pub const DEVICE_DIAGNOSTIC_DETAIL_LIMIT: u8 = 16;
+/// Detail limit recorded in [`DeviceDiagnosticConfig`]: no per-occurrence detail fact is
+/// written any more (Workflow #328); detail fields are only counted into the close summary.
+pub const DEVICE_DIAGNOSTIC_DETAIL_LIMIT: u8 = 0;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,13 +28,6 @@ impl DeviceDiagnosticConfig {
             mode,
             detail_limit: DEVICE_DIAGNOSTIC_DETAIL_LIMIT,
         }
-    }
-
-    pub(super) fn validate(&self) -> Result<(), SanitizationError> {
-        if self.detail_limit != DEVICE_DIAGNOSTIC_DETAIL_LIMIT {
-            return Err(invalid_budget());
-        }
-        Ok(())
     }
 }
 
@@ -63,7 +58,10 @@ pub struct DeviceDiagnosticSample {
 pub struct DeviceDiagnosticBudgetRecord {
     pub owner_epoch: OwnerEpoch,
     pub configuration: DeviceDiagnosticConfig,
-    pub emitted_count: u8,
+    /// Detail fields counted in the epoch. Records written before Workflow #328 counted only
+    /// the first 16 here, each of which was also written as a `device_diagnostic_detail` fact.
+    pub emitted_count: u64,
+    /// Always 0 since Workflow #328; older records counted the fields beyond the first 16 here.
     pub folded_count: u64,
     pub declared_sensitivity: Sensitivity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,13 +84,11 @@ impl DeviceDiagnosticBudgetRecord {
     }
 
     pub(super) fn validate(&self, summary: bool) -> Result<(), SanitizationError> {
-        self.configuration.validate()?;
-        let total = u64::from(self.emitted_count)
+        let total = self
+            .emitted_count
             .checked_add(self.folded_count)
             .ok_or_else(invalid_budget)?;
-        if self.emitted_count > DEVICE_DIAGNOSTIC_DETAIL_LIMIT
-            || (self.folded_count > 0 && self.emitted_count != DEVICE_DIAGNOSTIC_DETAIL_LIMIT)
-            || self.declared_sensitivity < Sensitivity::Internal
+        if self.declared_sensitivity < Sensitivity::Internal
             || (!summary && (total == 0 || self.folded_count != 0))
         {
             return Err(invalid_budget());

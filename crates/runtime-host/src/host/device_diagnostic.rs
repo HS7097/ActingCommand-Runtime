@@ -2,8 +2,8 @@
 
 use super::*;
 use actingcommand_contract::{
-    DEVICE_DIAGNOSTIC_DETAIL_LIMIT, DeviceDiagnosticBudgetRecord, DeviceDiagnosticMode,
-    DeviceDiagnosticSample, DeviceDiagnosticSourceField, DiagnosticDetailRecord, RuntimePayload,
+    DeviceDiagnosticBudgetRecord, DeviceDiagnosticMode, DeviceDiagnosticSample,
+    DeviceDiagnosticSourceField, DiagnosticDetailRecord, RuntimePayload,
 };
 
 pub(super) struct DeviceDiagnosticBudget {
@@ -27,7 +27,6 @@ impl HostShared {
     pub(super) fn observe_device_diagnostics_under_fact_gate(
         &self,
         event: &PersistedEvent,
-        links: &EventLinksDraft,
     ) -> RuntimeHostResult<()> {
         let mut details = [None, None, None];
         match event.payload() {
@@ -61,15 +60,16 @@ impl HostShared {
             _ => return Ok(()),
         }
         for (field, detail) in details.into_iter().flatten() {
-            self.observe_device_detail_under_fact_gate(event, links, field, detail)?;
+            self.observe_device_detail_under_fact_gate(event, field, detail)?;
         }
         Ok(())
     }
 
+    /// Counts one detail field into the epoch slot; the close summary is the only device
+    /// diagnostic fact, so this path writes nothing to the ledger (Workflow #328).
     fn observe_device_detail_under_fact_gate(
         &self,
         event: &PersistedEvent,
-        links: &EventLinksDraft,
         field: DeviceDiagnosticSourceField,
         detail: &DiagnosticDetailRecord,
     ) -> RuntimeHostResult<()> {
@@ -92,37 +92,20 @@ impl HostShared {
         record.declared_sensitivity = record
             .declared_sensitivity
             .max(detail.declared_sensitivity());
-        if record.emitted_count < DEVICE_DIAGNOSTIC_DETAIL_LIMIT {
-            let mut emitted = record.clone();
-            emitted.emitted_count += 1;
-            self.append_device_diagnostic_record_under_fact_gate(emitted, false, links.clone())?;
-            record.emitted_count += 1;
-        } else {
-            // Reserve room for the emitted count so the total remains representable.
-            record.folded_count = record
-                .folded_count
-                .checked_add(1)
-                .filter(|count| count.checked_add(u64::from(record.emitted_count)).is_some())
-                .ok_or_else(|| ledger_error("device_diagnostic_count_overflow"))?;
-        }
+        record.emitted_count = record
+            .emitted_count
+            .checked_add(1)
+            .ok_or_else(|| ledger_error("device_diagnostic_count_overflow"))?;
         Ok(())
     }
 
     fn append_device_diagnostic_record_under_fact_gate(
         &self,
         record: DeviceDiagnosticBudgetRecord,
-        summary: bool,
-        links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
         // This is an additional ledger fact; it never re-enters the observation hook.
-        let result = append_device_diagnostic_record(
-            &self.ledger,
-            &self.events,
-            self.owner_epoch,
-            record,
-            summary,
-            links,
-        );
+        let result =
+            append_device_diagnostic_record(&self.ledger, &self.events, self.owner_epoch, record);
         if let Err(error) = &result {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
@@ -139,11 +122,7 @@ impl HostShared {
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
             return Err(ledger_error("close_device_diagnostic_budget"));
         }
-        self.append_device_diagnostic_record_under_fact_gate(
-            budget.record.clone(),
-            true,
-            EventLinksDraft::default(),
-        )?;
+        self.append_device_diagnostic_record_under_fact_gate(budget.record.clone())?;
         budget.closed = true;
         Ok(())
     }
@@ -184,8 +163,6 @@ pub(super) fn append_device_diagnostic_record(
     events: &RuntimeEvents,
     owner_epoch: actingcommand_contract::OwnerEpoch,
     record: DeviceDiagnosticBudgetRecord,
-    summary: bool,
-    links: EventLinksDraft,
 ) -> RuntimeHostResult<()> {
     events
         .draft(
@@ -193,8 +170,8 @@ pub(super) fn append_device_diagnostic_record(
             EventSource::Runtime,
             OriginModule::Runtime,
             EventActor::Runtime,
-            links,
-            RuntimePayloadDraft::device_diagnostics(owner_epoch, record, summary),
+            EventLinksDraft::default(),
+            RuntimePayloadDraft::device_diagnostics(owner_epoch, record),
         )
         .and_then(|draft| events.sanitize(draft))
         .and_then(|draft| {

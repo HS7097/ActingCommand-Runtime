@@ -299,7 +299,7 @@ impl HostShared {
         if let Some(value) = observation.as_mut() {
             value.device_diagnostics.begin();
         }
-        let diagnostic = self.observe_device_diagnostics_under_fact_gate(&event, &links);
+        let diagnostic = self.observe_device_diagnostics_under_fact_gate(&event);
         if let Some(value) = observation.as_mut() {
             value.device_diagnostics.finish(diagnostic.is_ok());
         }
@@ -347,9 +347,7 @@ impl HostShared {
                     })?;
                 facts
                     .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
-                    .and_then(|()| {
-                        self.observe_device_diagnostics_under_fact_gate(&persisted, &links)
-                    })
+                    .and_then(|()| self.observe_device_diagnostics_under_fact_gate(&persisted))
                     .inspect_err(|error| {
                         self.lifecycle_append_failed.store(true, Ordering::Release);
                         let _ = error

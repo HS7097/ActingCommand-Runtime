@@ -488,15 +488,11 @@ fn required_failure_events_preserve_cleanup_detail() {
                     continue;
                 }
                 if let ProjectionPayload::Full(payload) = &event.payload
-                    && let Some(budget) = payload.device_diagnostics()
+                    && payload.device_diagnostics().is_some()
                 {
                     payload
                         .validate()
                         .expect("supplemental detail preserves admission");
-                    assert!(
-                        budget.emitted_count
-                            <= actingcommand_contract::DEVICE_DIAGNOSTIC_DETAIL_LIMIT
-                    );
                     assert!(
                         !serde_json::to_string(&payload.public_projection())
                             .unwrap()
