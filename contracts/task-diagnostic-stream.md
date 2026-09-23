@@ -149,9 +149,13 @@ remain explicit; observation performs no extra query, traversal, serialization
 or hash pass. Stages and scale belong to that preceding writer command, without
 current-append task/frame identity or query/record content. These remain in the
 existing TaskTiming snapshot/terminal or permitted lifecycle carrier, with no
-additional event, diagnostic channel or command history. The original complete
-snapshot, excluded-row integrity checks, physical read transaction, selection,
-projection, replies and all limits retain their original behavior.
+additional event, diagnostic channel or command history. The writer keeps a
+verified prefix seeded by its full verification at open; each Runtime-source read
+re-checks the head and boundary rows and verifies only the tail after that prefix,
+and any mismatch falls back to the full read and verification with the same error
+codes. Offline and read-only snapshots still verify everything. The physical read
+transaction, selection, projection, replies and all limits retain their original
+behavior.
 
 Scale fields retain request/selection and original event/byte/recovery-context
 limits; raw bytes and event/link/artifact row counts; verified/prepared/selected
