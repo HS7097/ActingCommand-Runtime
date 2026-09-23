@@ -399,6 +399,14 @@ impl ExecutionKernel {
         self.provider.control_instance(instance_alias, action)
     }
 
+    /// Re-runs the provider's instance discovery on demand, driven on the provider directly
+    /// like `control_instance`: no session is opened or touched and nothing is bound.
+    pub fn discover_instances(
+        &self,
+    ) -> Result<crate::ProviderInstanceDiscovery, Box<crate::InstanceDiscoveryFailure>> {
+        self.provider.discover_instances()
+    }
+
     /// Rebinds the provider's endpoint after emulator control. A retained session would keep
     /// the previous endpoint identity, so one still open here is an invariant violation: the
     /// host closes the instance's session before every control action.

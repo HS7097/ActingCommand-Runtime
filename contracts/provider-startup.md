@@ -97,7 +97,7 @@ discovered facts plus the host the binding will be completed with (the reported
 it is never bound with a guessed port, and `actingctl emulator start` resolves
 the port (`emulator-control.md`, "Cold start"). Startup discovery runs once
 per startup and startup re-probes nothing later. A later explicit instance
-discovery query (its operation is added separately) re-runs the same
+discovery query (`RuntimeOperation::DiscoverInstances`) re-runs the same
 resolution on demand through the provider's `discover_instances` and reports
 the provider version and each instance's index, name, ADB host and port,
 `running` and `android_version`; it never binds, rebinds or registers anything,

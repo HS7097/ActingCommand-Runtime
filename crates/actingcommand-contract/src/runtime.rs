@@ -1394,6 +1394,93 @@ impl RuntimeControlPlaneStatus {
     }
 }
 
+/// One instance an instance discovery query reported. `bound_alias` is the registered
+/// instance bound to it: the discovery binding with this index, else the explicit HOST:PORT
+/// instance with this ADB port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDiscoveredInstance {
+    pub instance_index: u16,
+    pub instance_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb_port: Option<u16>,
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub android_version: Option<String>,
+}
+
+/// The answer of `RuntimeOperation::DiscoverInstances`: the provider version and every
+/// instance it reported, ordered by index, with the committed observation as `source`. Tool
+/// paths, install roots and the resolution source are not part of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInstanceDiscovery {
+    provider_version: String,
+    source: crate::RuntimeStateSource,
+    instances: Vec<RuntimeDiscoveredInstance>,
+}
+
+impl RuntimeInstanceDiscovery {
+    pub fn new(
+        provider_version: impl Into<String>,
+        source: crate::RuntimeStateSource,
+        instances: Vec<RuntimeDiscoveredInstance>,
+    ) -> RuntimeContractResult<Self> {
+        let discovery = Self {
+            provider_version: provider_version.into(),
+            source,
+            instances,
+        };
+        discovery.validate()?;
+        Ok(discovery)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        self.source
+            .validate()
+            .map_err(|_| RuntimeContractError::new("invalid_runtime_state_source"))?;
+        Self::validate_instances(&self.instances)
+    }
+
+    /// Names are non-empty and at most `MAX_DISCOVERED_INSTANCE_NAME_BYTES` (the startup
+    /// binding's bound), indexes strictly ascending, and a present `bound_alias` is a valid
+    /// instance alias.
+    pub fn validate_instances(
+        instances: &[RuntimeDiscoveredInstance],
+    ) -> RuntimeContractResult<()> {
+        let mut previous = None;
+        for instance in instances {
+            if instance.instance_name.is_empty()
+                || instance.instance_name.len() > crate::MAX_DISCOVERED_INSTANCE_NAME_BYTES
+                || previous.is_some_and(|index| index >= instance.instance_index)
+            {
+                return Err(RuntimeContractError::new("invalid_instance_discovery"));
+            }
+            if let Some(alias) = &instance.bound_alias {
+                validate_instance_alias(alias)?;
+            }
+            previous = Some(instance.instance_index);
+        }
+        Ok(())
+    }
+
+    pub fn provider_version(&self) -> &str {
+        &self.provider_version
+    }
+
+    pub const fn source(&self) -> &crate::RuntimeStateSource {
+        &self.source
+    }
+
+    pub fn instances(&self) -> &[RuntimeDiscoveredInstance] {
+        &self.instances
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadonlyObservationStage {
@@ -2657,6 +2744,10 @@ pub enum RuntimeOperation {
         instance_alias: String,
         action: EmulatorInstanceAction,
     },
+    /// Re-runs the provider's instance discovery on demand and reports every instance with
+    /// its bound alias. Spawns the vendor tool, so the origin gate is the emulator control
+    /// one; binds, leases and opens nothing and records one `command.validated` observation.
+    DiscoverInstances,
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -2805,6 +2896,7 @@ impl RuntimeOperation {
             | Self::Status
             | Self::MonitorStatus
             | Self::RuntimeFactSnapshot
+            | Self::DiscoverInstances
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::CancelContainedTask { .. } => Ok(()),
@@ -3017,6 +3109,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::ControlEmulatorInstance { .. } => {
                 "RuntimeOperation::ControlEmulatorInstance(<redacted>)"
             }
+            Self::DiscoverInstances => "RuntimeOperation::DiscoverInstances",
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
@@ -3172,11 +3265,12 @@ impl RuntimeRequest {
         {
             return Err(RuntimeContractError::new("invalid_governance_origin"));
         }
-        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator;
-        // Adapter/Agent origins are excluded so no scheduler or agent path can restart it.
+        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator or
+        // spawn its discovery tool; Adapter/Agent origins are excluded so no scheduler or
+        // agent path can restart it.
         if matches!(
             self.operation,
-            RuntimeOperation::ControlEmulatorInstance { .. }
+            RuntimeOperation::ControlEmulatorInstance { .. } | RuntimeOperation::DiscoverInstances
         ) && !matches!(
             (self.actor, self.source),
             (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
@@ -3685,6 +3779,10 @@ pub enum RuntimeResult {
         #[serde(default)]
         startup_package: StartupPackageDisposition,
     },
+    /// The provider's on-demand instance discovery answer (`DiscoverInstances`).
+    InstancesDiscovered {
+        discovery: RuntimeInstanceDiscovery,
+    },
     ContainedTaskCompleted {
         run_id: RunId,
         task_id: crate::TaskId,
@@ -4069,6 +4167,7 @@ impl RuntimeReceipt {
                 }
             }
             Some(RuntimeResult::Status { status }) => status.validate()?,
+            Some(RuntimeResult::InstancesDiscovered { discovery }) => discovery.validate()?,
             Some(RuntimeResult::ProjectInterface { response }) => response
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_response"))?,

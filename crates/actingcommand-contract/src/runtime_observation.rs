@@ -3,8 +3,9 @@
 //! Typed state facts committed by the existing Runtime and monitor owners.
 
 use crate::{
-    EventId, OwnerEpoch, RuntimeControlPlaneStatus, RuntimeMonitorInstanceStatus,
-    RuntimeMonitorRegistryStatus, RuntimeMonitorState, SanitizationError,
+    EventId, OwnerEpoch, RuntimeControlPlaneStatus, RuntimeDiscoveredInstance,
+    RuntimeInstanceDiscovery, RuntimeMonitorInstanceStatus, RuntimeMonitorRegistryStatus,
+    RuntimeMonitorState, SanitizationError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,13 @@ pub enum RuntimeObservedState {
         status: RuntimeControlPlaneStatus,
         fatal: bool,
     },
+    /// One `DiscoverInstances` answer. It has no `source` field: the response adds the
+    /// committed one (`RuntimeInstanceDiscovery`).
+    InstanceDiscovery {
+        owner_epoch: OwnerEpoch,
+        provider_version: String,
+        instances: Vec<RuntimeDiscoveredInstance>,
+    },
 }
 
 impl RuntimeObservedState {
@@ -54,6 +62,7 @@ impl RuntimeObservedState {
                 status.owner_epoch()
             }
             Self::Monitor { status } => status.owner_epoch(),
+            Self::InstanceDiscovery { owner_epoch, .. } => *owner_epoch,
         }
     }
 
@@ -72,6 +81,11 @@ impl RuntimeObservedState {
                     return Err(invalid("sample_source"));
                 }
                 status.instances().len()
+            }
+            Self::InstanceDiscovery { instances, .. } => {
+                RuntimeInstanceDiscovery::validate_instances(instances)
+                    .map_err(|_| invalid("instance_discovery"))?;
+                instances.len()
             }
         };
         if count > MAX_RUNTIME_OBSERVED_INSTANCES {

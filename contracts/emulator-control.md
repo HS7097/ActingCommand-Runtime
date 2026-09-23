@@ -288,3 +288,70 @@ actingctl emulator restart --state-root <state-root> --instance <alias>
 `status` is the existing `Status` read filtered to the alias (that instance's
 `RuntimeInstanceStatus`, or `instance_unknown`); `start` / `stop` / `restart` print the result
 JSON above. All four require `--instance`.
+
+## Instance discovery query
+
+`RuntimeOperation::DiscoverInstances` (`{"operation": "discover_instances"}`, no fields) re-runs
+the provider's instance discovery on demand (`ExecutionBackendProvider::discover_instances`, the
+same `MuMuManager` resolution as startup, see `provider-startup.md`). It spawns the vendor tool,
+so its origin gate is the emulator control one: only `(User, Ui)` or `(Cli, Cli)`, otherwise
+`invalid_emulator_control_origin`. No lease, admission guard, fence or device session is
+involved, and nothing is bound, rebound or registered.
+
+`RuntimeResult::InstancesDiscovered`:
+
+```json
+{
+  "kind": "instances_discovered",
+  "discovery": {
+    "provider_version": "<MuMuManager version>",
+    "source": {
+      "event_id": "<command.validated event>",
+      "sequence": 42,
+      "sampled_started_at_unix_ms": 1790000000000,
+      "sampled_completed_at_unix_ms": 1790000000800
+    },
+    "instances": [
+      {
+        "instance_index": 0,
+        "instance_name": "<name>",
+        "adb_host": "127.0.0.1",
+        "adb_port": 16384,
+        "running": true,
+        "bound_alias": "<alias>",
+        "android_version": "12"
+      }
+    ]
+  }
+}
+```
+
+Instances are ordered by index without duplicates; each name is 1-256 bytes (the startup
+binding's `MAX_DISCOVERED_INSTANCE_NAME_BYTES`). `adb_host`, `adb_port`, `bound_alias` and
+`android_version` are omitted when absent. `bound_alias` is the registered instance whose
+discovery binding carries this index, else the explicit HOST:PORT instance configured with this
+ADB port. No `MuMuManager` path, install root or resolution source is on the wire. The request records one `command.validated` event carrying the
+`InstanceDiscovery` state observation (`runtime-state-observation.md`) and `source` points at
+it; the receipt is `completed` without a terminal, like `Status`.
+
+A refusal appends `command.rejected` (the receipt terminal, diagnostic
+`backend.operation_failed` or `runtime.diagnostic`, effect `not_performed`) plus one
+`runtime.failed` (stage `operation_cleanup`) whose `native_detail` keeps the provider's device
+error; the primary detail `{category, stage, backend: execution_backend_provider, operation:
+discover_instances}` is a controlled template declared Sensitive. Host operation
+`discover_instances`:
+
+| Provider refusal | Host code | Projection | Receipt |
+| --- | --- | --- | --- |
+| `instance_discovery_unavailable`, stage `instance_discovery.unsupported` (no discovery surface) | `instance_discovery_unavailable` | `invalid_request` | `denied` |
+| `instance_discovery_unavailable`, any other stage (no install, tool spawn, exit, timeout, decode, JSON) | `instance_discovery_unavailable` | `backend_operation_failed` | `failed` |
+| `mumu_manager_version_unsupported` | `mumu_manager_version_unsupported` | `backend_operation_failed` | `failed` |
+| An answer the contract refuses (duplicate index, empty or over-long name) | `instance_discovery_unavailable` | `backend_operation_failed` | `failed` |
+
+`RuntimeClient::discover_instances()` (and `RuntimeProjectClient::discover_instances()`) waits
+25 s for the receipt: two vendor commands (`version`, `info -v all`) of at most 10 s each, plus
+the IO margin.
+
+`actingctl emulator discover --state-root <state-root>` (no `--instance`) prints the
+`RuntimeInstanceDiscovery` above as one JSON line and exits 0; a refusal is the usual
+`FATAL actingctl:` line with a non-zero exit.
