@@ -17,7 +17,7 @@ use crate::{
     fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
 };
 use actingcommand_contract::{
-    EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState, LedgerReadScope,
+    EventId, EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState, LedgerReadScope,
     LedgerReadSource, ProjectedArtifactReference, ProjectionProfile, RecoveryReason,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, VerifiedArtifactReference,
 };
@@ -28,6 +28,7 @@ use rusqlite::{
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -395,7 +396,8 @@ where
     if marker.state != "ready" {
         return Err(failure("ledger_migration_required", "open_runtime_ledger"));
     }
-    let (events, head_hash) = verify_snapshot(&database, raw, &mut Some(&mut verifier))?;
+    let (events, prefix) = verify_snapshot_prefix(&database, raw, &mut Some(&mut verifier))?;
+    let head_hash = prefix.head_hash.clone();
     let head = events.last().map_or(0, PersistedEvent::sequence);
     upgrade_views(&database, head, head_hash.as_deref())?;
     let next = increment_sequence(head)?;
@@ -406,6 +408,7 @@ where
         head,
         head_hash,
         marker,
+        prefix: Cell::new(Some(prefix)),
     };
     let mut store = EventStore::recovered(backend, next, events)?;
     if let Some(owner) = stale
@@ -570,6 +573,8 @@ pub(super) struct SqliteStorage {
     head: u64,
     head_hash: Option<String>,
     marker: SqliteMarker,
+    /// Seeded by open; each Runtime view read takes it and restores it only once verified.
+    prefix: Cell<Option<VerifiedPrefix>>,
 }
 
 impl From<RuntimeDatabaseError> for GlobalLedgerError {
@@ -612,15 +617,15 @@ impl SqliteLedgerStore {
                     "open_sqlite_candidate",
                 ));
             }
-            let (events, hash) = verify_snapshot(&database, raw, &mut verifier)?;
+            let (events, prefix) = verify_snapshot_prefix(&database, raw, &mut verifier)?;
             upgrade_views(
                 &database,
                 events.last().map_or(0, PersistedEvent::sequence),
-                hash.as_deref(),
+                prefix.head_hash.as_deref(),
             )?;
-            Ok((events, hash))
+            Ok((events, prefix))
         })();
-        let (events, head_hash) = match recovered {
+        let (events, prefix) = match recovered {
             Ok(recovered) => recovered,
             Err(error) => {
                 return Err(error.with_close_result(ownership.close()));
@@ -632,8 +637,9 @@ impl SqliteLedgerStore {
             database,
             ownership,
             head,
-            head_hash,
+            head_hash: prefix.head_hash.clone(),
             marker: SqliteMarker::candidate(),
+            prefix: Cell::new(Some(prefix)),
         };
         let mut store = Self::recovered(backend, next, events)?;
         if let Some(previous_owner) = stale_owner
@@ -836,7 +842,7 @@ impl DurableStorage for SqliteStorage {
                 budget: None,
                 source: LedgerReadSource::Runtime,
             }
-            .resolve_artifact(selection, deadline),
+            .resolve_artifact(selection, deadline, &self.prefix),
         )
     }
 
@@ -855,7 +861,13 @@ impl DurableStorage for SqliteStorage {
                 budget: None,
                 source: LedgerReadSource::Runtime,
             }
-            .project_view_page_observed(query, profile, request, observation),
+            .project_view_page_observed(
+                query,
+                profile,
+                request,
+                observation,
+                Some(&self.prefix),
+            ),
         )
     }
 
@@ -900,6 +912,7 @@ pub(super) fn open_metadata(
         records,
         metadata,
         head_hash,
+        ..
     } = verified;
     drop(records);
     for event in metadata {
@@ -922,7 +935,8 @@ pub(super) fn open_metadata(
     ))
 }
 
-/// Retains the physical owner and authenticates the opened prefix on each read transaction.
+/// Retains the physical owner and authenticates the opened prefix on each read transaction
+/// (Runtime reads: the writer's verified prefix plus the rows after it).
 pub(super) struct SqliteViewSnapshot {
     database: Arc<RuntimeDatabase>,
     pub(super) through_sequence: u64,
@@ -932,13 +946,50 @@ pub(super) struct SqliteViewSnapshot {
 }
 
 impl SqliteViewSnapshot {
+    /// Runtime-only: resolves against the writer's prefix, verified through this snapshot.
     fn resolve_artifact(
         &self,
         selection: &super::LedgerArtifactSelection,
         deadline: Instant,
+        cache: &Cell<Option<VerifiedPrefix>>,
     ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
         selection.validate()?;
         let budget = Some(super::evidence::artifact_read_budget(self.budget, deadline));
+        let mut slot = cache.take();
+        let resolved = (|| {
+            let (bytes, prefix) = self.refresh_artifact_prefix(&mut slot, budget)?;
+            let retention = super::retention::RetentionIndex::from_events_checked(
+                &prefix.metadata,
+                &mut |count| check_read_budget(budget, bytes, count),
+            )?;
+            let resolved = super::evidence::resolve_artifact_from_events(
+                &prefix.metadata,
+                selection,
+                prefix.through,
+                true,
+                deadline,
+                Some(&retention),
+            )?;
+            check_read_budget(budget, bytes, prefix.metadata.len())?;
+            Ok(resolved)
+        })();
+        cache.set(slot);
+        resolved
+    }
+
+    /// Only the tail after a still-matching prefix, in its own read transaction; any
+    /// tail failure discards the prefix and repeats the original full read, whose
+    /// success seeds a new prefix. Returns the bytes read by the path that succeeded.
+    fn refresh_artifact_prefix<'a>(
+        &self,
+        slot: &'a mut Option<VerifiedPrefix>,
+        budget: ReadBudget,
+    ) -> GlobalLedgerResult<(u64, &'a VerifiedPrefix)> {
+        if let Some(mut prefix) = slot.take()
+            && let Ok(bytes) = self.read_artifact_tail(&mut prefix, budget)
+        {
+            return Ok((bytes, slot.insert(prefix)));
+        }
         let raw = read_snapshot(&self.database, budget)?;
         let bytes = raw.bytes;
         let prefix_hash = raw
@@ -947,10 +998,11 @@ impl SqliteViewSnapshot {
             .find(|row| row.first() == Some(&SqlValue::Integer(encode(self.through_sequence))))
             .and_then(|row| row.get(11))
             .cloned();
-        let VerifiedSnapshotRecords {
-            records, metadata, ..
-        } = verify_snapshot_records(&self.database, raw)?;
-        let through_sequence = records.last().map_or(0, StoredEventRecord::sequence);
+        let verified = verify_snapshot_records(&self.database, raw)?;
+        let through_sequence = verified
+            .records
+            .last()
+            .map_or(0, StoredEventRecord::sequence);
         if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
             || through_sequence < self.through_sequence
         {
@@ -959,21 +1011,35 @@ impl SqliteViewSnapshot {
                 "resolve_ledger_artifact",
             ));
         }
-        drop(records);
-        let retention =
-            super::retention::RetentionIndex::from_events_checked(&metadata, &mut |count| {
-                check_read_budget(budget, bytes, count)
-            })?;
-        let resolved = super::evidence::resolve_artifact_from_events(
-            &metadata,
-            selection,
-            through_sequence,
-            true,
-            deadline,
-            Some(&retention),
+        Ok((bytes, slot.insert(VerifiedPrefix::from(verified))))
+    }
+
+    fn read_artifact_tail(
+        &self,
+        prefix: &mut VerifiedPrefix,
+        budget: ReadBudget,
+    ) -> GlobalLedgerResult<u64> {
+        check_read_budget(budget, 0, 0)?;
+        let (boundary, raw) = {
+            let mut connection = self.database.connection("read_sqlite_snapshot")?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+            let read = prefix.read_tail(&transaction, budget)?;
+            transaction
+                .commit()
+                .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+            read
+        };
+        let bytes = raw.bytes;
+        prefix.verify_tail(
+            &self.database,
+            boundary,
+            raw,
+            self.through_sequence,
+            self.head_hash.as_deref(),
         )?;
-        check_read_budget(budget, bytes, metadata.len())?;
-        Ok(resolved)
+        Ok(bytes)
     }
 
     pub(super) fn project_view_page(
@@ -982,15 +1048,18 @@ impl SqliteViewSnapshot {
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        self.project_view_page_observed(query, profile, request, &mut None)
+        self.project_view_page_observed(query, profile, request, &mut None, None)
     }
 
-    pub(super) fn project_view_page_observed(
+    /// `cache` is the writer's verified prefix (Runtime reads only); without it every
+    /// read is the original full read and verification.
+    fn project_view_page_observed(
         &self,
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
         observation: &mut Option<LedgerProjectViewObservation>,
+        cache: Option<&Cell<Option<VerifiedPrefix>>>,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         if let Some(value) = observation {
             *value = LedgerProjectViewObservation {
@@ -1036,6 +1105,7 @@ impl SqliteViewSnapshot {
         if let Some(value) = observation {
             value.with_connection.begin(Instant::now());
         }
+        let mut slot = cache.map(Cell::take);
         let completed = (|| {
             if let Some(value) = observation {
                 value.begin_transaction.begin(Instant::now());
@@ -1049,61 +1119,30 @@ impl SqliteViewSnapshot {
                     .finish(Instant::now(), begun.is_ok());
             }
             let transaction = begun?;
-            let result = (|| {
-                if let Some(value) = observation {
-                    value.read_snapshot.begin(Instant::now());
-                }
-                let read = read_snapshot_connection(&transaction, self.budget);
-                if let Some(value) = observation {
-                    value.read_snapshot.finish(Instant::now(), read.is_ok());
-                }
-                let raw = read?;
-                let bytes = raw.bytes;
-                if let Some(value) = observation {
-                    value.raw_bytes = LedgerProjectViewCount::Observed(raw.bytes);
-                    value.raw_event_rows = LedgerProjectViewCount::from_len(raw.events.len());
-                    value.raw_link_rows = LedgerProjectViewCount::from_len(raw.links.len());
-                    value.raw_artifact_rows = LedgerProjectViewCount::from_len(raw.artifacts.len());
-                    value.verify_snapshot.begin(Instant::now());
-                }
-                let prefix_hash = raw
-                    .events
-                    .iter()
-                    .find(|row| {
-                        row.first() == Some(&SqlValue::Integer(encode(self.through_sequence)))
-                    })
-                    .and_then(|row| row.get(11))
-                    .cloned();
-                let verified = verify_snapshot_records(&self.database, raw);
-                if let Some(value) = observation
-                    && verified.is_err()
-                {
-                    value.verify_snapshot.finish(Instant::now(), false);
-                }
-                let VerifiedSnapshotRecords {
-                    records, metadata, ..
-                } = verified?;
-                if let Some(value) = observation {
-                    value.verified_records = LedgerProjectViewCount::from_len(records.len());
-                }
-                if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
-                    || records.last().map_or(0, StoredEventRecord::sequence) < self.through_sequence
-                {
-                    if let Some(value) = observation {
-                        value.verify_snapshot.finish(Instant::now(), false);
-                    }
-                    return Err(failure(
-                        "ledger_snapshot_boundary_mismatch",
-                        "query_ledger_view",
-                    ));
-                }
+            let result: GlobalLedgerResult<_> = (|| {
+                let (bytes, verified) =
+                    self.verify_view_snapshot(&transaction, slot.as_mut(), observation)?;
                 if let Some(value) = observation {
                     value.verify_snapshot.finish(Instant::now(), true);
                     value.prepare_events.begin(Instant::now());
                 }
-                // Release the original records inside the preparation boundary;
-                // the metadata is from this same fully authenticated snapshot.
-                drop(records);
+                let metadata = match verified {
+                    // Release the original records inside the preparation boundary;
+                    // the metadata is from this same fully authenticated snapshot.
+                    ViewMetadata::Full(VerifiedSnapshotRecords {
+                        records, metadata, ..
+                    }) => {
+                        drop(records);
+                        metadata
+                    }
+                    // The writer's prefix, authenticated through this same snapshot.
+                    ViewMetadata::Prefix(prefix) => prefix
+                        .metadata
+                        .iter()
+                        .take_while(|event| event.sequence() <= self.through_sequence)
+                        .cloned()
+                        .collect(),
+                };
                 let mut events = Vec::new();
                 if let Some(value) = observation {
                     value.prepared_events = LedgerProjectViewCount::from_len(events.len());
@@ -1212,6 +1251,9 @@ impl SqliteViewSnapshot {
                 }
             }
         })();
+        if let Some(cache) = cache {
+            cache.set(slot.flatten());
+        }
         if let Some(value) = observation {
             value
                 .with_connection
@@ -1224,6 +1266,299 @@ impl SqliteViewSnapshot {
             }
         }
         completed
+    }
+
+    /// The read_snapshot/verify_snapshot stages of one view read, returning the bytes
+    /// read. Without a writer prefix (`slot`) this is the original full read. A writer
+    /// prefix is extended by its tail only; any tail failure discards it and repeats the
+    /// original full read, whose success seeds a new prefix and whose error is returned.
+    fn verify_view_snapshot<'a>(
+        &self,
+        connection: &Connection,
+        slot: Option<&'a mut Option<VerifiedPrefix>>,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<(u64, ViewMetadata<'a>)> {
+        let Some(slot) = slot else {
+            let (bytes, verified) = self.verify_view_full(connection, observation)?;
+            return Ok((bytes, ViewMetadata::Full(verified)));
+        };
+        if let Some(mut prefix) = slot.take()
+            && let Ok(bytes) = self.verify_view_tail(connection, &mut prefix, observation)
+        {
+            return Ok((bytes, ViewMetadata::Prefix(slot.insert(prefix))));
+        }
+        let (bytes, verified) = self.verify_view_full(connection, observation)?;
+        Ok((
+            bytes,
+            ViewMetadata::Prefix(slot.insert(VerifiedPrefix::from(verified))),
+        ))
+    }
+
+    fn verify_view_full(
+        &self,
+        connection: &Connection,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<(u64, VerifiedSnapshotRecords)> {
+        if let Some(value) = observation {
+            value.read_snapshot.begin(Instant::now());
+        }
+        let read = read_snapshot_connection(connection, self.budget);
+        if let Some(value) = observation {
+            value.read_snapshot.finish(Instant::now(), read.is_ok());
+        }
+        let raw = read?;
+        let bytes = raw.bytes;
+        observe_raw_snapshot(observation, &raw);
+        let prefix_hash = raw
+            .events
+            .iter()
+            .find(|row| row.first() == Some(&SqlValue::Integer(encode(self.through_sequence))))
+            .and_then(|row| row.get(11))
+            .cloned();
+        let verified = verify_snapshot_records(&self.database, raw);
+        if let Some(value) = observation
+            && verified.is_err()
+        {
+            value.verify_snapshot.finish(Instant::now(), false);
+        }
+        let verified = verified?;
+        if let Some(value) = observation {
+            value.verified_records = LedgerProjectViewCount::from_len(verified.records.len());
+        }
+        if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
+            || verified
+                .records
+                .last()
+                .map_or(0, StoredEventRecord::sequence)
+                < self.through_sequence
+        {
+            if let Some(value) = observation {
+                value.verify_snapshot.finish(Instant::now(), false);
+            }
+            return Err(failure(
+                "ledger_snapshot_boundary_mismatch",
+                "query_ledger_view",
+            ));
+        }
+        Ok((bytes, verified))
+    }
+
+    /// Raw and verified counts then describe only this tail read.
+    fn verify_view_tail(
+        &self,
+        connection: &Connection,
+        prefix: &mut VerifiedPrefix,
+        observation: &mut Option<LedgerProjectViewObservation>,
+    ) -> GlobalLedgerResult<u64> {
+        if let Some(value) = observation {
+            value.read_snapshot.begin(Instant::now());
+        }
+        let read = prefix.read_tail(connection, self.budget);
+        if let Some(value) = observation {
+            value.read_snapshot.finish(Instant::now(), read.is_ok());
+        }
+        let (boundary, raw) = read?;
+        let bytes = raw.bytes;
+        observe_raw_snapshot(observation, &raw);
+        let verified = prefix.verify_tail(
+            &self.database,
+            boundary,
+            raw,
+            self.through_sequence,
+            self.head_hash.as_deref(),
+        );
+        if let Some(value) = observation {
+            match &verified {
+                Ok(records) => {
+                    value.verified_records = LedgerProjectViewCount::from_len(*records);
+                }
+                Err(_) => value.verify_snapshot.finish(Instant::now(), false),
+            }
+        }
+        verified.map(|_| bytes)
+    }
+}
+
+fn observe_raw_snapshot(observation: &mut Option<LedgerProjectViewObservation>, raw: &RawSnapshot) {
+    if let Some(value) = observation {
+        value.raw_bytes = LedgerProjectViewCount::Observed(raw.bytes);
+        value.raw_event_rows = LedgerProjectViewCount::from_len(raw.events.len());
+        value.raw_link_rows = LedgerProjectViewCount::from_len(raw.links.len());
+        value.raw_artifact_rows = LedgerProjectViewCount::from_len(raw.artifacts.len());
+        value.verify_snapshot.begin(Instant::now());
+    }
+}
+
+/// Authenticated metadata for one view read.
+enum ViewMetadata<'a> {
+    /// The original owned result of a full read, for reads without a writer prefix.
+    Full(VerifiedSnapshotRecords),
+    /// The writer's verified prefix, now authenticated through this snapshot.
+    Prefix(&'a VerifiedPrefix),
+}
+
+/// Writer-owned metadata of the ledger prefix already authenticated in full, by the
+/// writer's open or a later Runtime read. A Runtime read trusts it only after its
+/// boundary row and the head row still match, and reads and authenticates just the
+/// rows after it. Offline and read-only snapshots never use one.
+struct VerifiedPrefix {
+    through: u64,
+    head_hash: Option<String>,
+    marker: SqliteMarker,
+    ids: BTreeSet<EventId>,
+    metadata: Vec<LedgerEventMetadata>,
+}
+
+impl From<VerifiedSnapshotRecords> for VerifiedPrefix {
+    fn from(verified: VerifiedSnapshotRecords) -> Self {
+        Self::new(verified.marker, verified.metadata, verified.head_hash)
+    }
+}
+
+impl VerifiedPrefix {
+    fn new(
+        marker: SqliteMarker,
+        metadata: Vec<LedgerEventMetadata>,
+        head_hash: Option<String>,
+    ) -> Self {
+        Self {
+            through: metadata.last().map_or(0, LedgerEventRead::sequence),
+            head_hash,
+            marker,
+            ids: metadata.iter().map(|event| *event.event_id()).collect(),
+            metadata,
+        }
+    }
+
+    /// Reads the head row, this prefix's boundary hash and only the rows after it.
+    fn read_tail(
+        &self,
+        connection: &Connection,
+        budget: ReadBudget,
+    ) -> GlobalLedgerResult<(Vec<SqlRow>, RawSnapshot)> {
+        views::installed(connection)?;
+        let mut bytes = 0;
+        let meta = read_meta_with_budget(connection, budget, &mut bytes)?;
+        let boundary = if self.through == 0 {
+            Vec::new()
+        } else {
+            let through = encode(self.through);
+            read_rows(
+                connection,
+                &format!("SELECT record_sha256 FROM ledger_events WHERE sequence={through}"),
+                budget,
+                &mut bytes,
+                false,
+            )?
+        };
+        let first = encode(increment_sequence(self.through)?);
+        let events = read_rows(
+            connection,
+            &format!(
+                "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence>={first} ORDER BY sequence"
+            ),
+            budget,
+            &mut bytes,
+            true,
+        )?;
+        let links = read_rows(
+            connection,
+            &format!(
+                "SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence>={first} ORDER BY sequence"
+            ),
+            budget,
+            &mut bytes,
+            false,
+        )?;
+        let artifacts = read_rows(
+            connection,
+            &format!(
+                "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence>={first} ORDER BY sequence,ordinal"
+            ),
+            budget,
+            &mut bytes,
+            false,
+        )?;
+        Ok((
+            boundary,
+            RawSnapshot {
+                format_version: format_version(connection)?,
+                events,
+                links,
+                artifacts,
+                meta,
+                budget,
+                bytes,
+            },
+        ))
+    }
+
+    /// Authenticates the tail with the checks of `verify_snapshot_records`, continuing
+    /// the chain from this prefix, then the requested snapshot boundary, and appends
+    /// it. Returns the number of records verified. After an error, discard the prefix.
+    fn verify_tail(
+        &mut self,
+        database: &RuntimeDatabase,
+        boundary: Vec<SqlRow>,
+        raw: RawSnapshot,
+        through_sequence: u64,
+        head_hash: Option<&str>,
+    ) -> GlobalLedgerResult<usize> {
+        let mismatch = || failure("ledger_snapshot_boundary_mismatch", "verify_ledger_prefix");
+        let expected_format = if self.marker.state == "ready" {
+            FORMAL_FORMAT_VERSION
+        } else {
+            0
+        };
+        let cached_boundary = self
+            .head_hash
+            .iter()
+            .map(|hash| vec![SqlValue::Text(hash.clone())])
+            .collect::<Vec<_>>();
+        if boundary != cached_boundary
+            || raw.format_version != expected_format
+            || through_sequence < self.through
+        {
+            return Err(mismatch());
+        }
+        let prefix_hash = if through_sequence == self.through {
+            self.head_hash.clone().map(SqlValue::Text)
+        } else {
+            raw.events
+                .iter()
+                .find(|row| row.first() == Some(&SqlValue::Integer(encode(through_sequence))))
+                .and_then(|row| row.get(11))
+                .cloned()
+        };
+        let mut next = increment_sequence(self.through)?;
+        let mut chain_hash = self.head_hash.clone();
+        let rows = verify_event_rows(
+            database,
+            raw.events,
+            raw.budget,
+            raw.bytes,
+            &mut next,
+            &mut chain_hash,
+            &mut self.ids,
+        )?;
+        let head = rows
+            .metadata
+            .last()
+            .map_or(self.through, LedgerEventRead::sequence);
+        if raw.links != rows.links
+            || raw.artifacts != rows.artifacts
+            || raw.meta
+                != meta_row_with_marker(database, next, head, chain_hash.as_deref(), &self.marker)
+            || prefix_hash != head_hash.map(|hash| SqlValue::Text(hash.to_owned()))
+            || head < through_sequence
+        {
+            return Err(mismatch());
+        }
+        let verified = rows.metadata.len();
+        self.metadata.extend(rows.metadata);
+        self.through = head;
+        self.head_hash = chain_hash;
+        Ok(verified)
     }
 }
 
@@ -1584,12 +1919,35 @@ where
     Ok((events, hash))
 }
 
+/// `verify_snapshot` for a writer open, which also keeps the authenticated metadata
+/// as the writer's verified view prefix.
+fn verify_snapshot_prefix<F>(
+    database: &RuntimeDatabase,
+    raw: RawSnapshot,
+    verifier: &mut Option<F>,
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, VerifiedPrefix)>
+where
+    F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+{
+    let budget = raw.budget;
+    let bytes = raw.bytes;
+    let verified = verify_snapshot_records(database, raw)?;
+    let events = super::retention::restore_records(verified.records, verifier, |count| {
+        check_read_budget(budget, bytes, count)
+    })?;
+    Ok((
+        events,
+        VerifiedPrefix::new(verified.marker, verified.metadata, verified.head_hash),
+    ))
+}
+
 /// Returned only after complete row, relation, head and marker authentication.
 /// A query still checks its requested prefix before consuming the retained metadata.
 struct VerifiedSnapshotRecords {
     records: Vec<StoredEventRecord>,
     metadata: Vec<LedgerEventMetadata>,
     head_hash: Option<String>,
+    marker: SqliteMarker,
 }
 
 /// Authenticates the complete ledger snapshot without opening referenced material.
@@ -1609,15 +1967,73 @@ fn verify_snapshot_records(
             "verify_database_format",
         ));
     }
-    let mut events = Vec::with_capacity(raw.events.len());
-    let mut metadata = Vec::with_capacity(raw.events.len());
     let mut ids = BTreeSet::new();
     let mut next = 1;
     let mut head_hash: Option<String> = None;
+    let VerifiedRows {
+        records: events,
+        metadata,
+        links: expected_links,
+        artifacts: expected_artifacts,
+    } = verify_event_rows(
+        database,
+        raw.events,
+        raw.budget,
+        raw.bytes,
+        &mut next,
+        &mut head_hash,
+        &mut ids,
+    )?;
+    if raw.links != expected_links || raw.artifacts != expected_artifacts {
+        return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
+    }
+    if raw.meta
+        != meta_row_with_marker(
+            database,
+            next,
+            events.last().map_or(0, StoredEventRecord::sequence),
+            head_hash.as_deref(),
+            &marker,
+        )
+    {
+        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+    }
+    marker.verify_records(&events)?;
+    Ok(VerifiedSnapshotRecords {
+        records: events,
+        metadata,
+        head_hash,
+        marker,
+    })
+}
+
+/// Rows authenticated as one continuation of a hash chain, with the link and artifact
+/// rows their records project.
+struct VerifiedRows {
+    records: Vec<StoredEventRecord>,
+    metadata: Vec<LedgerEventMetadata>,
+    links: Vec<SqlRow>,
+    artifacts: Vec<SqlRow>,
+}
+
+/// The per-row checks shared by full and tail verification: record schema, sequence
+/// continuity from `next`, unique event ids, and each row equal to its projection
+/// chained from `head_hash`. Budget event counts are those of `rows`.
+fn verify_event_rows(
+    database: &RuntimeDatabase,
+    rows: Vec<SqlRow>,
+    budget: ReadBudget,
+    read_bytes: u64,
+    next: &mut u64,
+    head_hash: &mut Option<String>,
+    ids: &mut BTreeSet<EventId>,
+) -> GlobalLedgerResult<VerifiedRows> {
+    let mut events = Vec::with_capacity(rows.len());
+    let mut metadata = Vec::with_capacity(rows.len());
     let mut expected_links = Vec::new();
     let mut expected_artifacts = Vec::new();
-    for row in raw.events {
-        check_read_budget(raw.budget, raw.bytes, events.len() + 1)?;
+    for row in rows {
+        check_read_budget(budget, read_bytes, events.len() + 1)?;
         let Some(SqlValue::Blob(bytes)) = row.get(10) else {
             return Err(failure("corrupt_ledger_record", "read_canonical_record"));
         };
@@ -1643,7 +2059,7 @@ fn verify_snapshot_records(
         if decode(*stored_sequence) != event.sequence() {
             return Err(failure("ledger_record_mismatch", "recover_sqlite_sequence"));
         }
-        if event.sequence() != next {
+        if event.sequence() != *next {
             return Err(failure("sequence_discontinuity", "recover_sequence"));
         }
         if !ids.insert(*event.event_id()) {
@@ -1653,33 +2069,19 @@ fn verify_snapshot_records(
         if row != projected.event {
             return Err(failure("ledger_record_mismatch", "verify_sqlite_record"));
         }
-        check_read_budget(raw.budget, raw.bytes, events.len() + 1)?;
+        check_read_budget(budget, read_bytes, events.len() + 1)?;
         expected_links.push(projected.links);
         expected_artifacts.extend(projected.artifacts);
-        head_hash = Some(projected.hash);
+        *head_hash = Some(projected.hash);
         events.push(stored);
         metadata.push(event);
-        next = increment_sequence(next)?;
+        *next = increment_sequence(*next)?;
     }
-    if raw.links != expected_links || raw.artifacts != expected_artifacts {
-        return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
-    }
-    if raw.meta
-        != meta_row_with_marker(
-            database,
-            next,
-            events.last().map_or(0, StoredEventRecord::sequence),
-            head_hash.as_deref(),
-            &marker,
-        )
-    {
-        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
-    }
-    marker.verify_records(&events)?;
-    Ok(VerifiedSnapshotRecords {
+    Ok(VerifiedRows {
         records: events,
         metadata,
-        head_hash,
+        links: expected_links,
+        artifacts: expected_artifacts,
     })
 }
 

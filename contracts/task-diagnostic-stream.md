@@ -138,8 +138,10 @@ The fixed stages are `admission` (original bounds and initial budget check),
 `verify_snapshot`, `prepare_events`, `select_sequences`, `project_page`, `commit`
 and `rollback`. `with_connection` ends before the original connection guard drops.
 Verification includes the original prefix lookup and fixed boundary checks;
-preparation consumes metadata authenticated in this same read transaction and
-retains its original per-item budget checks and retention annotation; page projection
+preparation consumes the writer's verified prefix plus the tail authenticated in
+this read transaction, both under the same head/boundary re-check (a fallback or
+offline read consumes its fully authenticated snapshot instead), and retains its
+original per-item budget checks and retention annotation; page projection
 includes index creation and its original final budget check. Only the original
 explicit transaction calls can complete commit/rollback observations.
 
@@ -149,9 +151,13 @@ remain explicit; observation performs no extra query, traversal, serialization
 or hash pass. Stages and scale belong to that preceding writer command, without
 current-append task/frame identity or query/record content. These remain in the
 existing TaskTiming snapshot/terminal or permitted lifecycle carrier, with no
-additional event, diagnostic channel or command history. The original complete
-snapshot, excluded-row integrity checks, physical read transaction, selection,
-projection, replies and all limits retain their original behavior.
+additional event, diagnostic channel or command history. The writer keeps a
+verified prefix seeded by its full verification at open; each Runtime-source read
+re-checks the head and boundary rows and verifies only the tail after that prefix,
+and any mismatch falls back to the full read and verification with the same error
+codes. Offline and read-only snapshots still verify everything. The physical read
+transaction, selection, projection, replies and all limits retain their original
+behavior.
 
 Scale fields retain request/selection and original event/byte/recovery-context
 limits; raw bytes and event/link/artifact row counts; verified/prepared/selected
