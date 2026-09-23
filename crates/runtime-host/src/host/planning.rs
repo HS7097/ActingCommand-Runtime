@@ -57,7 +57,7 @@ impl HostShared {
             policy.publish_planning_signal(staged_quota);
             drop(policy);
             let observed = self
-                .observe_device_diagnostics_under_fact_gate(&persisted, &links)
+                .observe_device_diagnostics_under_fact_gate(&persisted)
                 .and_then(|()| self.synchronize_fact_store_under_gate());
             drop(fact_gate);
             observed.and_then(|()| self.observe_pipeline_event(&persisted))?;

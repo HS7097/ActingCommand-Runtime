@@ -173,42 +173,11 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
         17,
         "all required failures survive the supplemental budget"
     );
-    let details = observed
-        .iter()
-        .filter_map(|event| {
-            let ProjectionPayload::Full(payload) = &event.payload else {
-                return None;
-            };
-            payload
-                .device_diagnostics()
-                .map(|budget| (event, payload, budget))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(details.len(), 16);
-    for (index, (event, payload, budget)) in details.iter().enumerate() {
-        assert_eq!(budget.emitted_count as usize, index + 1);
-        assert_eq!(budget.folded_count, 0);
-        let first = budget.first.as_ref().expect("first source");
-        let last = budget.last.as_ref().expect("last source");
-        assert_eq!(first.source_event_id, sources[0].event_id);
-        assert_eq!(last.source_event_id, sources[index].event_id);
-        assert_eq!(last.source_sequence, sources[index].sequence);
-        assert!(last.source_sequence < event.sequence);
-        assert_eq!(
-            last.detail.as_ref().expect("full detail").message(),
-            "injected capture failure"
-        );
-        assert_eq!(event.links, sources[index].links);
-        payload.validate().expect("valid supplemental payload");
-        let public = serde_json::to_string(&payload.public_projection()).expect("public budget");
-        assert!(!public.contains("injected capture failure"));
-        let mut invalid = serde_json::to_value(payload).expect("budget JSON");
-        invalid["payload"]["data"]["device_diagnostics"]["emitted_count"] = serde_json::json!(17);
-        // Full typed admission remains authoritative; malformed transport cannot admit an over-budget record.
-        let invalid = serde_json::from_value::<EventPayload>(invalid)
-            .expect("structurally typed over-budget payload");
-        assert!(invalid.validate().is_err());
-    }
+    // Workflow #328: detail fields are only counted; no per-occurrence diagnostic fact is written.
+    assert!(!observed.iter().any(|event| matches!(
+        &event.payload,
+        ProjectionPayload::Full(payload) if payload.device_diagnostics().is_some()
+    )));
     let epoch = host.runtime_info().owner_epoch();
     drop(client);
     host.close().expect("close host");
@@ -236,7 +205,7 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
         panic!("one close summary");
     };
     assert_eq!(budget.owner_epoch, epoch);
-    assert_eq!((budget.emitted_count, budget.folded_count), (16, 1));
+    assert_eq!((budget.emitted_count, budget.folded_count), (17, 0));
     assert_eq!(
         budget.first.as_ref().unwrap().source_event_id,
         sources[0].event_id
@@ -249,11 +218,23 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
         budget.last.as_ref().unwrap().source_sequence,
         sources[16].sequence
     );
+    assert_eq!(
+        budget
+            .last
+            .as_ref()
+            .and_then(|last| last.detail.as_ref())
+            .expect("full detail")
+            .message(),
+        "injected capture failure"
+    );
     assert_eq!(closed.last().unwrap().event_id(), summary.event_id());
     summary
         .payload()
         .validate()
         .expect("complete validated summary");
+    let public =
+        serde_json::to_string(&summary.payload().public_projection()).expect("public budget");
+    assert!(!public.contains("injected capture failure"));
 }
 
 #[test]
@@ -321,14 +302,9 @@ fn capture_failure_persists_nemu_resolution_context() {
                 .iter()
                 .position(|kind| *kind == EventType::RecognitionFailed)
                 .expect("recognition terminal");
-            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause and M4 detail are real facts.
-            expected.splice(
-                position..position,
-                [
-                    EventType::RuntimeFailed,
-                    EventType::RuntimeLifecycleObserved,
-                ],
-            );
+            // DEVICE-DIAGNOSTIC-v1 first CI34148715017: the native cause is a real fact; its detail
+            // is only counted into the close summary (Workflow #328).
+            expected.insert(position, EventType::RuntimeFailed);
             assert_eq!(types, expected);
         } else {
             baseline_types = Some(types);

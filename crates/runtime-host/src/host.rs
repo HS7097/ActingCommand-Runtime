@@ -1064,8 +1064,6 @@ impl RuntimeHost {
                             owner_epoch,
                             config.device_diagnostic_mode,
                         ),
-                        true,
-                        EventLinksDraft::default(),
                     ) {
                         return Err(device_diagnostic::summary_incomplete(
                             Some(original),

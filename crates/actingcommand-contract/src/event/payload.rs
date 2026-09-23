@@ -1706,6 +1706,8 @@ pub enum RuntimeLifecyclePhase {
         instance_id: Option<InstanceId>,
     },
     AdbTargetRecovery,
+    /// Per-occurrence device diagnostic detail, decoded from older ledgers; no longer
+    /// produced since Workflow #328.
     DeviceDiagnosticDetail,
     DeviceDiagnosticSummary,
     PolicyForwardEntered,
@@ -7536,10 +7538,10 @@ impl RuntimePayloadDraft {
         })
     }
 
+    /// The close summary of one owner epoch's device diagnostic budget.
     pub fn device_diagnostics(
         owner_epoch: OwnerEpoch,
         record: DeviceDiagnosticBudgetRecord,
-        summary: bool,
     ) -> Self {
         Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
             backend_open: None,
@@ -7547,11 +7549,7 @@ impl RuntimePayloadDraft {
             vendor_stdio: None,
             adb_recovery: None,
             owner_epoch,
-            phase: if summary {
-                RuntimeLifecyclePhase::DeviceDiagnosticSummary
-            } else {
-                RuntimeLifecyclePhase::DeviceDiagnosticDetail
-            },
+            phase: RuntimeLifecyclePhase::DeviceDiagnosticSummary,
             device_diagnostics: Some(Box::new(record)),
             audit: AuditInput::new(),
         }))
@@ -10396,17 +10394,16 @@ impl EventPayload {
                 "capture_acquire_us",
             ));
         }
-        if let Some(config) = detail.device_diagnostic_config() {
-            if !matches!(
+        if detail.device_diagnostic_config().is_some()
+            && !matches!(
                 self.event_type(),
                 EventType::RuntimeStarted | EventType::RuntimeTakeover
-            ) {
-                return Err(SanitizationError::new(
-                    "invalid_device_diagnostic_config_owner",
-                    "runtime_payload",
-                ));
-            }
-            config.validate()?;
+            )
+        {
+            return Err(SanitizationError::new(
+                "invalid_device_diagnostic_config_owner",
+                "runtime_payload",
+            ));
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self {
             if (value.phase == RuntimeLifecyclePhase::BackendOpenObserved)

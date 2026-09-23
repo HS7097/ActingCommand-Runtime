@@ -100,7 +100,7 @@ impl HostShared {
                 }
             })?;
         let observed = self
-            .observe_device_diagnostics_under_fact_gate(&persisted, &links)
+            .observe_device_diagnostics_under_fact_gate(&persisted)
             .and_then(|()| self.synchronize_fact_store_under_gate());
         drop(fact_gate);
         observed

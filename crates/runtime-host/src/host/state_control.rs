@@ -44,7 +44,7 @@ impl HostShared {
                     .ledger
                     .append_transaction(draft, Box::new(ReleaseTransaction { state: Ok(work) }))
                     .map_err(release_transaction_error)?;
-                self.observe_device_diagnostics_under_fact_gate(&outcome, &links)?;
+                self.observe_device_diagnostics_under_fact_gate(&outcome)?;
                 self.synchronize_fact_store_under_gate()?;
                 drop(fact_gate);
                 self.observe_pipeline_event(&outcome)?;
