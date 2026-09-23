@@ -220,7 +220,7 @@ The result `ForensicRuntimeFactsResult` is one of:
   `position`).
 - `not_available { position, latest_sequence, reason }` — `ledger_empty` (the
   snapshot holds no event) or `position_beyond_snapshot`.
-- `failed { position, code, operation, detail }` — position 0
+- `failed { position, code, operation, detail, io_kind? }` — position 0
   (`runtime_fact_ledger_position_invalid`), an empty state root
   (`invalid_state_root`), the ledger's own open and read codes (`ledger_io` for
   an absent ledger, `ledger_read_budget_exceeded`), a source that is not

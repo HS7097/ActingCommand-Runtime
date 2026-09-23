@@ -16,8 +16,8 @@ pub use actingcommand_contract::{MAX_SIGNATURE_PAGE_ROWS, SignaturePageRequest};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerEvidence,
     GlobalLedgerEvidenceConfig, GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot,
-    GlobalLedgerWriterMetadataObservation, PerformanceLedgerSample, PerformanceProcessOwnership,
-    PerformanceProcessSummary, PersistedEvent,
+    GlobalLedgerWriterMetadataObservation, LedgerIoKind, PerformanceLedgerSample,
+    PerformanceProcessOwnership, PerformanceProcessSummary, PersistedEvent,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -553,6 +553,7 @@ pub struct ForensicError {
     code: &'static str,
     operation: &'static str,
     detail: String,
+    io_kind: Option<LedgerIoKind>,
 }
 
 impl ForensicError {
@@ -561,6 +562,7 @@ impl ForensicError {
             code,
             operation,
             detail: detail.into(),
+            io_kind: None,
         }
     }
 
@@ -570,6 +572,11 @@ impl ForensicError {
 
     pub fn operation(&self) -> &'static str {
         self.operation
+    }
+
+    /// Kind of the `std::io::Error` behind a ledger failure, if any.
+    pub fn io_kind(&self) -> Option<LedgerIoKind> {
+        self.io_kind
     }
 }
 
@@ -1811,7 +1818,9 @@ fn render_export(snapshot: &GlobalLedgerEvidence, root: &Path) -> ForensicResult
 }
 
 fn map_ledger_error(error: GlobalLedgerError) -> ForensicError {
-    ForensicError::new(error.code(), error.operation(), error.to_string())
+    let mut mapped = ForensicError::new(error.code(), error.operation(), error.to_string());
+    mapped.io_kind = error.io_kind();
+    mapped
 }
 
 fn map_artifact_store_error(error: ArtifactStoreError) -> ForensicError {

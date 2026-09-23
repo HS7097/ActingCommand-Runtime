@@ -7,7 +7,9 @@ use actingcommand_contract::{
     RUNTIME_FACT_SCHEMA_VERSION, RuntimeEventQueryPageRequest, RuntimeFactRecord, RuntimeFactScope,
     RuntimeFactSnapshot, RuntimePayload,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata};
+use actingcommand_ledger::{
+    GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, LedgerIoKind,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -37,6 +39,9 @@ pub enum ForensicRuntimeFactsResult {
         code: &'static str,
         operation: &'static str,
         detail: String,
+        /// Present only when the failure came from a `std::io::Error`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        io_kind: Option<LedgerIoKind>,
     },
 }
 
@@ -64,6 +69,7 @@ pub fn runtime_facts_at(
             code: error.code,
             operation: error.operation,
             detail: error.detail,
+            io_kind: error.io_kind,
         }
     })
 }

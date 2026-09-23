@@ -34,7 +34,12 @@ The Segment implementation serializes the typed stored record, writes a complete
 line and syncs the active file before publishing the event to its in-memory
 indexes and recording successful commit statistics. Only then does append return
 success. Sequence overflow, malformed facts and I/O failures retain their current
-errors. A duplicate EventId is the nonfatal `duplicate_event_id / append_event`
+errors. An error built from a `std::io::Error` (`ledger_io`, `writer_spawn_failed`)
+also carries `io_kind()`, a closed `LedgerIoKind` (`not_found`,
+`permission_denied`, `already_exists`, `invalid_input`, `invalid_data`,
+`timed_out`, `interrupted`, `unexpected_eof`, `unsupported`, `out_of_memory`,
+`other` for every other kind), so callers never parse the OS text in `detail`.
+A duplicate EventId is the nonfatal `duplicate_event_id / append_event`
 request error, consumes no sequence and leaves the writer usable. Error severity
 is taken from the returned error, not inferred from a scenario's historical name.
 
