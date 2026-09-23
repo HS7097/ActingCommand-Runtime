@@ -1439,6 +1439,15 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         }
     }
 
+    fn discover_instances(
+        &self,
+    ) -> Result<
+        actingcommand_execution_kernel::ProviderInstanceDiscovery,
+        Box<actingcommand_execution_kernel::InstanceDiscoveryFailure>,
+    > {
+        self.discover_instances_on_demand()
+    }
+
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
         self.devices
             .as_ref()

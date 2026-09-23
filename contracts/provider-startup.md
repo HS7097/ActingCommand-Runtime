@@ -95,8 +95,16 @@ endpoint) is registered with a PENDING binding instead of being refused: the
 discovered facts plus the host the binding will be completed with (the reported
 `adb_host_ip` if any, else the declared `host`, else `127.0.0.1`), but no port;
 it is never bound with a guessed port, and `actingctl emulator start` resolves
-the port (`emulator-control.md`, "Cold start"). Discovery runs once per
-startup; nothing is re-probed later.
+the port (`emulator-control.md`, "Cold start"). Startup discovery runs once
+per startup and startup re-probes nothing later. A later explicit instance
+discovery query (its operation is added separately) re-runs the same
+resolution on demand through the provider's `discover_instances` and reports
+the provider version and each instance's index, name, ADB host and port,
+`running` and `android_version`; it never binds, rebinds or registers anything,
+records no startup observation, and refuses with the same
+`instance_discovery_unavailable` / `mumu_manager_version_unsupported`
+classification (a provider without discovery refuses with
+`instance_discovery_unavailable`).
 
 Between the discovery answer and the first instance binding, still inside the
 `instance_discovery` bracket, the same closure records `started`/`completed`

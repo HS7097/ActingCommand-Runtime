@@ -177,6 +177,8 @@ pub struct DiscoveredMumuInstance {
     pub running: bool,
     /// Undocumented vendor field, recorded opaquely; absent for a stopped instance.
     pub player_state: Option<String>,
+    /// `android_version`, trimmed and otherwise opaque; `None` when absent, not a string or blank.
+    pub android_version: Option<String>,
     pub mumu_version: MumuManagerVersion,
 }
 
@@ -644,6 +646,12 @@ fn parse_instance(
     let player_state = reported("player_state")
         .then(|| text("player_state", MAX_MUMU_PLAYER_STATE_BYTES))
         .transpose()?;
+    let android_version = entry
+        .get("android_version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(str::to_owned);
     Ok(DiscoveredMumuInstance {
         install_root: manager.install_root.clone(),
         mumu_manager_path: manager.mumu_manager_path.clone(),
@@ -654,6 +662,7 @@ fn parse_instance(
         adb_port,
         running,
         player_state,
+        android_version,
         mumu_version,
     })
 }

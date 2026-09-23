@@ -843,6 +843,37 @@ pub struct ForegroundApplicationObservation {
     pub assigned: String,
 }
 
+/// One on-demand instance discovery answer of a provider: the provider version and every
+/// instance it reported. Install roots, tool paths and the resolution source are not part of
+/// it; they stay in the ledger and in native failure detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderInstanceDiscovery {
+    pub provider_version: String,
+    pub instances: Vec<ProviderDiscoveredInstance>,
+}
+
+/// One instance an on-demand discovery reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderDiscoveredInstance {
+    pub instance_index: u16,
+    pub instance_name: String,
+    /// Present while `running`; otherwise only when reported.
+    pub adb_host: Option<String>,
+    /// Present while `running`; otherwise only when reported.
+    pub adb_port: Option<u16>,
+    pub running: bool,
+    pub android_version: Option<String>,
+}
+
+/// Typed refusal of an on-demand instance discovery. `code` is one of the startup discovery
+/// codes (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`); `error`
+/// keeps the native device detail.
+#[derive(Debug, Clone)]
+pub struct InstanceDiscoveryFailure {
+    pub code: &'static str,
+    pub error: DeviceError,
+}
+
 pub trait ExecutionBackendProvider: Send + Sync + 'static {
     fn instance_aliases(&self) -> Vec<String>;
 
@@ -971,6 +1002,27 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
+    }
+
+    /// Re-runs the provider's instance discovery on demand and reports what it finds. Binds,
+    /// rebinds and registers nothing and opens no device session. Providers without an
+    /// instance-discovery surface keep this typed refusal.
+    fn discover_instances(
+        &self,
+    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
+        Err(Box::new(InstanceDiscoveryFailure {
+            code: "instance_discovery_unavailable",
+            error: DeviceError::fatal("instance discovery unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "instance_discovery.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    "discover_instances",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        }))
     }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {

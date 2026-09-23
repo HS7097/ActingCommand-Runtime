@@ -10,6 +10,9 @@ use actingcommand_device::{
     EmulatorCapabilityProfile, MUMU_CAPABILITY_PROVIDER_ID, MumuDiscoveryReport,
     MumuEmulatorCapabilityBackend, NemuResolutionReason, discover_mumu_instances,
 };
+use actingcommand_execution_kernel::{
+    InstanceDiscoveryFailure, ProviderDiscoveredInstance, ProviderInstanceDiscovery,
+};
 use actingcommand_runtime_host::{
     DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
 };
@@ -53,22 +56,10 @@ impl ConfiguredExecutionBackendRegistry {
             .as_deref()
             .map_or_else(|| "<unset>".to_owned(), |root| root.display().to_string());
         let report = discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
-            let reason = error
+            let classification = discovery_refusal_code(&error);
+            let code = error
                 .nemu_resolution_context()
-                .map(|context| context.reason());
-            let classification = if matches!(
-                reason,
-                Some(
-                    NemuResolutionReason::ProviderVersionBelowMinimum
-                        | NemuResolutionReason::ProviderVersionUnparseable
-                )
-            ) {
-                "mumu_manager_version_unsupported"
-            } else {
-                "instance_discovery_unavailable"
-            };
-            let code = reason
-                .map(|reason| reason.as_str().to_owned())
+                .map(|context| context.reason().as_str().to_owned())
                 .or_else(|| {
                     error.diagnostic().map(|diagnostic| {
                         format!("{}.{}", diagnostic.category().as_str(), diagnostic.stage())
@@ -148,6 +139,53 @@ impl ConfiguredExecutionBackendRegistry {
             })?;
         }
         startup.record(backend, Observation::Completed { stage })
+    }
+
+    /// On-demand discovery: the same `MuMuManager` resolution as startup, mapped to the
+    /// provider view. Binds, rebinds, registers and records nothing.
+    pub(super) fn discover_instances_on_demand(
+        &self,
+    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
+        let report = discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
+            Box::new(InstanceDiscoveryFailure {
+                code: discovery_refusal_code(&error),
+                error,
+            })
+        })?;
+        Ok(ProviderInstanceDiscovery {
+            provider_version: report.version.to_string(),
+            instances: report
+                .instances
+                .into_iter()
+                .map(|instance| ProviderDiscoveredInstance {
+                    instance_index: instance.instance_index,
+                    instance_name: instance.instance_name,
+                    adb_host: instance.adb_host,
+                    adb_port: instance.adb_port,
+                    running: instance.running,
+                    android_version: instance.android_version,
+                })
+                .collect(),
+        })
+    }
+}
+
+/// Classifies one discovery refusal, at startup and on demand: a version below the policy
+/// floor or unparseable is `mumu_manager_version_unsupported`, anything else (no install,
+/// tool spawn, exit, timeout, decode or JSON failure) `instance_discovery_unavailable`.
+fn discovery_refusal_code(error: &DeviceError) -> &'static str {
+    if matches!(
+        error
+            .nemu_resolution_context()
+            .map(|context| context.reason()),
+        Some(
+            NemuResolutionReason::ProviderVersionBelowMinimum
+                | NemuResolutionReason::ProviderVersionUnparseable
+        )
+    ) {
+        "mumu_manager_version_unsupported"
+    } else {
+        "instance_discovery_unavailable"
     }
 }
 
