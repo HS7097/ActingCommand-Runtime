@@ -2509,13 +2509,41 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .host
                         .finish_capture_failure_while_guarded(error, links.clone(), &admission)
                         .map_err(RequestFailure::poison_without_terminal)?;
-                    let runtime_error =
+                    let mut runtime_error =
                         RuntimeHostError::execution("run_contained_task_capture", &error);
                     if self
                         .host
                         .retain_unconfirmed_resources(&runtime_error, links.clone())?
                     {
                         return Err(RequestFailure::poison_without_terminal(runtime_error));
+                    }
+                    // #316-P4: a physical instance's first capture that fails while one ADB
+                    // baseline probe (task deadline) also fails is the ADB baseline lost, not a
+                    // host fault: both ADB facts are invalidated and the task fails nonfatal.
+                    // An answering adbd keeps the capture failure fatal.
+                    if self.last_frame_id.is_none()
+                        && self.execution_provenance == ExecutionBackendProvenance::PhysicalDevice
+                        && runtime_error.is_fatal()
+                        && matches!(
+                            error.code(),
+                            "capture_backend_open_failed" | "capture_backend_operation_failed"
+                        )
+                    {
+                        let host = self.host;
+                        let probe = host.execution.probe_adb_baseline_until(
+                            self.instance_alias,
+                            self.geometry_operation_deadline()?,
+                            &|| host.fatal.is_shutdown_requested(),
+                        );
+                        if probe.is_err_and(|probe| {
+                            probe.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed)
+                        }) {
+                            host.invalidate_adb_baseline(self.token.instance_id())?;
+                            runtime_error = RuntimeHostError::adb_unreachable_capture(
+                                "run_contained_task_capture",
+                                &error,
+                            );
+                        }
                     }
                     let payload = CapturePayloadDraft::failed_with_causes(
                         EventAction::CaptureObserve,

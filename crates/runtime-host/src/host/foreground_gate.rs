@@ -165,7 +165,7 @@ impl HostShared {
 
     /// Drops `device.connected` and `application.foreground` with `adb_unreachable`; an
     /// absent key is not an error.
-    fn invalidate_adb_baseline(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
+    pub(super) fn invalidate_adb_baseline(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         let scope = RuntimeFactScope::Instance { instance_id };
         for key in [DEVICE_CONNECTED_FACT_KEY, APPLICATION_FOREGROUND_FACT_KEY] {
             match self.invalidate_runtime_fact(

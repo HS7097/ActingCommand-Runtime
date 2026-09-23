@@ -189,6 +189,9 @@ above with source `runtime`.
   Slice #316-B3 adds a second invalidation path: an ADB failure inside the
   foreground gate (below) invalidates the key with `adb_unreachable`, even while
   a Nemu session still delivers frames, because ADB is the only health anchor.
+  Slice #316-P4 adds the second `adb_unreachable` invalidation point: a physical
+  instance's first contained-task capture that fails while one ADB baseline
+  probe fails too invalidates this key and `application.foreground` the same way.
 - `application.foreground` (slice #316-B3) — instance scope, `string`: the
   package name Android reported as the resumed activity, read through ADB
   (`dumpsys activity activities`) by the foreground gate before every pointer
