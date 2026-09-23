@@ -1590,6 +1590,8 @@ pub(crate) mod tests {
         pub(crate) references: Vec<ArtifactReference>,
         pub(crate) payloads: Vec<actingcommand_contract::EventPayload>,
         pub(crate) fail_at: Option<usize>,
+        pub(crate) fail_artifact_created: bool,
+        pub(crate) fail_next: Option<EventType>,
     }
 
     impl crate::ArtifactCapacityAdmission for RecordingSink {
@@ -1670,6 +1672,21 @@ pub(crate) mod tests {
                     error.to_string(),
                 )
             })?;
+            if self.fail_artifact_created && sanitized.event_type() == EventType::ArtifactCreated {
+                return Err(ArtifactStoreError::fatal(
+                    "injected_event_failure",
+                    "test_sink",
+                    "injected artifact-created failure",
+                ));
+            }
+            if self.fail_next == Some(sanitized.event_type()) {
+                self.fail_next = None;
+                return Err(ArtifactStoreError::fatal(
+                    "injected_event_failure",
+                    "test_sink",
+                    "injected evidence event failure",
+                ));
+            }
             self.event_types.push(sanitized.event_type());
             self.references.extend_from_slice(sanitized.artifacts());
             self.payloads.push(sanitized.payload().clone());
@@ -1677,7 +1694,7 @@ pub(crate) mod tests {
         }
     }
 
-    struct TestFingerprinter;
+    pub(crate) struct TestFingerprinter;
 
     impl SecretFingerprinter for TestFingerprinter {
         fn fingerprint(
