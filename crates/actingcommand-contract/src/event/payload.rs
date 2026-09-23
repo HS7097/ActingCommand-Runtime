@@ -11,6 +11,8 @@ mod vendor_stdio;
 pub use vendor_stdio::*;
 mod adb_recovery;
 pub use adb_recovery::*;
+mod owner_unlock;
+pub use owner_unlock::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -6457,6 +6459,9 @@ fn validate_client_action_payload(payload: &ClientPayload) -> Result<(), Sanitiz
     if let ClientPayload::LabPinRelease(value) = payload {
         return value.validate();
     }
+    if let ClientPayload::OwnerUnlock(value) = payload {
+        return value.validate();
+    }
     if let ClientPayload::Action(value) = payload {
         if value.action == EventAction::ClientAction {
             return value.record.validate();
@@ -8593,6 +8598,7 @@ enum ClientDraftKind {
     CliCommand(ObservationDraft),
     LabRequest(ObservationDraft),
     LabPinRelease(crate::LabPinReleaseTarget, AuditInput),
+    OwnerUnlock(OwnerUnlockDraft),
 }
 
 pub struct ClientPayloadDraft(ClientDraftKind);
@@ -9478,6 +9484,7 @@ pub enum ClientPayload {
     CliCommand(ObservationPayload),
     LabRequest(ObservationPayload),
     LabPinRelease(LabPinReleaseRequestPayload),
+    OwnerUnlock(OwnerUnlockPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9698,6 +9705,7 @@ family_payload!(ClientPayload, {
     CliCommand => EventType::CliCommand,
     LabRequest => EventType::LabRequest,
     LabPinRelease => EventType::LabRequest,
+    OwnerUnlock => EventType::CliCommand,
 });
 impl FamilyPayload for LedgerPayload {
     fn event_type(&self) -> EventType {
@@ -10096,6 +10104,9 @@ impl EventPayloadDraft {
                 ClientDraftKind::LabPinRelease(target, audit) => ClientPayload::LabPinRelease(
                     LabPinReleaseRequestPayload::sanitize(target, audit, fingerprinter)?,
                 ),
+                ClientDraftKind::OwnerUnlock(draft) => {
+                    ClientPayload::OwnerUnlock(draft.sanitize(fingerprinter)?)
+                }
             }),
             Self::Ledger(value) => EventPayload::Ledger(match value.0 {
                 LedgerDraftKind::Recovered(detail) => {
@@ -10247,7 +10258,8 @@ impl EventPayload {
         }
         if matches!(
             self,
-            Self::Approval(_) | Self::Client(ClientPayload::Action(_))
+            Self::Approval(_)
+                | Self::Client(ClientPayload::Action(_) | ClientPayload::OwnerUnlock(_))
         ) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }

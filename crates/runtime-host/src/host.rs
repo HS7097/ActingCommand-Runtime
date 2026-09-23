@@ -639,6 +639,21 @@ impl RuntimeHost {
         )
     }
 
+    /// Offline `actingd unlock-owner`; see `contracts/actingd-unlock-owner.md`.
+    pub fn unlock_owner(
+        config: RuntimeHostConfig,
+        actor: actingcommand_contract::OwnerUnlockActor,
+        confirmed: bool,
+    ) -> Result<crate::OwnerUnlockReceipt, crate::OwnerUnlockFailure> {
+        crate::owner_unlock::run(
+            &config.state_root,
+            &config.secret_fingerprint_salt,
+            config.clock,
+            actor,
+            confirmed,
+        )
+    }
+
     pub fn start(
         config: RuntimeHostConfig,
         provider: Arc<dyn ExecutionBackendProvider>,

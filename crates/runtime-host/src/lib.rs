@@ -22,6 +22,8 @@ pub use ledger_maintenance::{
     LedgerMaintenanceRequest,
 };
 mod owner;
+mod owner_unlock;
+pub use owner_unlock::{OwnerUnlockFailure, OwnerUnlockReceipt};
 mod performance;
 mod performance_control;
 mod planning;
