@@ -145,6 +145,37 @@ or `validate` (`invalid_runtime_host_config`,
 `RuntimeHostConfig::validate` codes). The secret fingerprint salt and the
 governance capability bytes are never printed.
 
+## Discovery-bound instances
+
+An instance bound by `instance_index` or `instance_name` runs through the same
+registration function as an explicit entry, with a stand-in ADB target, so a
+refusal carries the code startup would report, at stage `assemble`.
+
+Checked here, without discovery:
+
+- the binding key and a declared `serial` (`instance_binding_key_invalid`);
+  a non-empty `adb_path` and `host` and a non-zero `port` when declared
+  (`instance_config_invalid`);
+- `application_id` (`application_identity_missing`), explicit backends
+  (`touch_backend_invalid`, `capture_backend_invalid`,
+  `touch_backend_must_be_explicit`, `capture_backend_must_be_explicit`) and
+  timeouts (`timeout_invalid`);
+- the `nemu_app_index` pairing: allowed only with `touch_backend` and
+  `capture_backend` both `nemu_ipc`, which require it
+  (`nemu_app_index_requires_paired_input`,
+  `nemu_paired_input_configuration_missing`, `nemu_app_index_invalid`);
+- alias and application identity as the execution registry accepts them
+  (`instance_registration_invalid`), and duplicate aliases or instance ids
+  (`execution_registry_invalid`).
+
+Still deferred to startup, because each needs the discovery result
+(`contracts/provider-startup.md`): the `MuMuManager` version floor and
+capability admission, exactly one discovered instance matching the key
+(`instance_discovery_no_match`, `instance_discovery_ambiguous`), a declared
+`adb_path`, `host` or `port` against the discovered values
+(`instance_discovery_conflict`; a declared `adb_path` is only compared there,
+never resolved here) and the ADB endpoint itself.
+
 ## Exit code
 
 `0` only when `status` is `ok`. A failed check prints its JSON object, then the

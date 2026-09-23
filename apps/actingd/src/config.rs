@@ -111,7 +111,7 @@ struct PolicyCatalogConfigFile {
     timeline: PathBuf,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InstanceConfig {
     alias: String,
@@ -165,7 +165,7 @@ struct InstanceConfig {
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
 /// locator (relative paths resolve against the configuration file's directory) and the
 /// bare lowercase hex digest. The file is neither opened nor hashed at assembly.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartupPackageConfigFile {
     package: PathBuf,
@@ -198,14 +198,14 @@ impl StartupPackageConfigFile {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FixtureBackendConfigFile {
     frames: Vec<FixtureFrameConfigFile>,
     max_inputs: u16,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FixtureFrameConfigFile {
     width: u32,
@@ -807,6 +807,12 @@ impl InstanceConfig {
         ] {
             bounded_duration(timeout)?;
         }
+        // The remaining registration rules need no discovery result either (the
+        // `nemu_app_index` pairing, alias and application identity): run the same
+        // `device_registration` provider startup binds with. Only the ADB target is a
+        // stand-in, replaced by the discovered one at startup, so the result is dropped.
+        self.clone()
+            .device_registration("adb".to_owned(), default_device_host(), None)?;
         Ok(ConfiguredInstanceBackend::Deferred(Box::new(
             DeferredInstance {
                 alias: self.alias.clone(),
