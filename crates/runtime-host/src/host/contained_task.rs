@@ -2957,7 +2957,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 page_label,
                 width,
                 height,
-                targets: _,
+                targets,
             } => {
                 let observed_frame_id = self.last_frame_id.map(|id| *id.transport());
                 let observed_recognition_id = self.current_recognition_id.map(|id| *id.transport());
@@ -3025,8 +3025,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 matched_page: page_label.clone(),
                                 frame_width: width,
                                 frame_height: height,
-                                // Not forwarded yet: the lab-run protocol golden pins this fact's JSON.
-                                targets: Vec::new(),
+                                targets,
                             },
                             AuditInput::new(),
                         ),
