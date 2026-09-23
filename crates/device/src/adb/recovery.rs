@@ -279,6 +279,14 @@ pub(super) fn ensure_input_device_with_commands(
             ),
         )
     });
+    let primary = if [&first, &second]
+        .into_iter()
+        .any(|result| state_result(result).is_ok_and(|state| state != "device"))
+    {
+        primary.input_parameter_failure()
+    } else {
+        primary
+    };
     let mut final_state = observed_state(&second);
     let mut path = AdbRecoveryPath::Connect;
     let mut recovery_error = None;

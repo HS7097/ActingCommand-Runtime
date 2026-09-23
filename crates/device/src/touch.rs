@@ -108,6 +108,7 @@ impl TouchBackendConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TouchBackendAttempt {
+    pub input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     pub attempt_id: u64,
     pub backend: TouchBackendName,
     pub ok: bool,
@@ -127,6 +128,15 @@ pub struct TouchBackendDiagnostics {
 }
 
 impl TouchBackendDiagnostics {
+    fn record_input_parameters(
+        &mut self,
+        check: Option<&actingcommand_contract::BackendInputParameterCheck>,
+    ) {
+        self.attempts
+            .last_mut()
+            .expect("connection attempt recorded")
+            .input_parameters = check.cloned();
+    }
     fn new(requested: TouchBackendChoice) -> Self {
         Self {
             requested,
@@ -149,6 +159,7 @@ impl TouchBackendDiagnostics {
         selected: bool,
     ) {
         self.push_attempt(TouchBackendAttempt {
+            input_parameters: None,
             attempt_id: self.attempts.len() as u64 + 1,
             backend,
             ok: true,
@@ -169,6 +180,7 @@ impl TouchBackendDiagnostics {
         fallback_backend: Option<TouchBackendName>,
     ) {
         self.push_attempt(TouchBackendAttempt {
+            input_parameters: None,
             attempt_id: self.attempts.len() as u64 + 1,
             backend,
             ok: false,
@@ -182,6 +194,7 @@ impl TouchBackendDiagnostics {
 }
 
 pub struct ConnectedTouchBackend {
+    pub input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     pub name: TouchBackendName,
     pub backend: Box<dyn InputBackend>,
     pub device: DeviceInfo,
@@ -194,6 +207,8 @@ pub trait TouchBackendFactory {
 }
 
 pub struct SelectedTouchBackend {
+    // Bounded by the original remaining factory chain; moved out by this action.
+    action_open_observations: Vec<crate::BackendOpenObservation>,
     active: ConnectedTouchBackend,
     remaining: Vec<Box<dyn TouchBackendFactory>>,
     diagnostics: TouchBackendDiagnostics,
@@ -201,6 +216,11 @@ pub struct SelectedTouchBackend {
 }
 
 impl SelectedTouchBackend {
+    pub(crate) fn input_parameters(
+        &self,
+    ) -> Option<&actingcommand_contract::BackendInputParameterCheck> {
+        self.active.input_parameters.as_ref()
+    }
     pub(crate) fn opened_input_geometry(
         &self,
     ) -> Option<actingcommand_contract::BackendInputGeometryObservation> {
@@ -235,6 +255,21 @@ impl SelectedTouchBackend {
     }
 
     fn run_touch_action(
+        &mut self,
+        action: &'static str,
+        points: &[(i32, i32)],
+        run: impl FnMut(&mut dyn InputBackend) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        self.run_touch_action_inner(action, points, run)
+            .map_err(|mut error| {
+                for observation in self.take_backend_open_observations() {
+                    error = error.with_backend_open_observation(observation);
+                }
+                error
+            })
+    }
+
+    fn run_touch_action_inner(
         &mut self,
         action: &'static str,
         points: &[(i32, i32)],
@@ -275,12 +310,22 @@ impl SelectedTouchBackend {
             let factory = self.remaining.remove(0);
             let backend_name = factory.name();
             let started = Instant::now();
-            match factory.connect() {
+            let connected = factory.connect();
+            self.action_open_observations.push(
+                crate::backend_open::observe_touch_action_connection(
+                    self.diagnostics.requested,
+                    backend_name,
+                    &connected,
+                ),
+            );
+            match connected {
                 Ok(mut connected) => match run(connected.backend.as_mut()) {
                     Ok(()) => {
                         let elapsed_ms = started.elapsed().as_millis();
                         self.diagnostics
                             .push_success(connected.name, elapsed_ms, action, true);
+                        self.diagnostics
+                            .record_input_parameters(connected.input_parameters.as_ref());
                         if let Err(cleanup) = self
                             .active
                             .backend
@@ -316,6 +361,8 @@ impl SelectedTouchBackend {
                             action,
                             fallback_backend,
                         );
+                        self.diagnostics
+                            .record_input_parameters(connected.input_parameters.as_ref());
                         self.diagnostics.warnings.push(format!(
                             "WARNING touch backend {} failed during {action}; fallback_backend={}; reason={reason}",
                             connected.name.as_str(),
@@ -349,6 +396,8 @@ impl SelectedTouchBackend {
                         action,
                         fallback_backend,
                     );
+                    self.diagnostics
+                        .record_input_parameters(err.input_parameters());
                     self.diagnostics.warnings.push(format!(
                         "WARNING touch backend {} could not be selected for {action}; fallback_backend={}; reason={reason}",
                         backend_name.as_str(),
@@ -418,6 +467,10 @@ impl SelectedTouchBackend {
 }
 
 impl InputBackend for SelectedTouchBackend {
+    fn take_backend_open_observations(&mut self) -> Vec<crate::BackendOpenObservation> {
+        std::mem::take(&mut self.action_open_observations)
+    }
+
     fn take_adb_recovery(&mut self) -> Option<crate::AdbTargetRecovery> {
         self.active.backend.take_adb_recovery()
     }
@@ -583,21 +636,26 @@ fn touch_probe_report_with_factories(
                         "probe_close",
                         None,
                     );
+                    diagnostics.record_input_parameters(connected.input_parameters.as_ref());
                     if unconfirmed {
                         std::mem::forget(connected);
                     }
                     continue;
                 }
                 diagnostics.push_success(name, elapsed_ms, "probe", false);
+                diagnostics.record_input_parameters(connected.input_parameters.as_ref());
                 successful.push((name, elapsed_ms));
             }
-            Err(err) => diagnostics.push_failure(
-                factory.name(),
-                started.elapsed().as_millis(),
-                err.to_string(),
-                "probe",
-                None,
-            ),
+            Err(err) => {
+                diagnostics.push_failure(
+                    factory.name(),
+                    started.elapsed().as_millis(),
+                    err.to_string(),
+                    "probe",
+                    None,
+                );
+                diagnostics.record_input_parameters(err.input_parameters());
+            }
         }
     }
 
@@ -662,7 +720,9 @@ fn select_fixed_priority(
                     true,
                 );
                 diagnostics.selected = Some(active.name);
+                diagnostics.record_input_parameters(active.input_parameters.as_ref());
                 return Ok(SelectedTouchBackend {
+                    action_open_observations: Vec::new(),
                     active,
                     remaining: factories,
                     diagnostics,
@@ -680,6 +740,7 @@ fn select_fixed_priority(
                     "select",
                     fallback_backend,
                 );
+                diagnostics.record_input_parameters(err.input_parameters());
                 diagnostics.warnings.push(format!(
                     "WARNING touch backend {} unavailable during selection; fallback_backend={}; reason={reason}",
                     backend.as_str(),
@@ -713,6 +774,7 @@ fn select_fastest(
             Ok(backend) => {
                 let elapsed_ms = started.elapsed().as_millis();
                 diagnostics.push_success(backend.name, elapsed_ms, "select", false);
+                diagnostics.record_input_parameters(backend.input_parameters.as_ref());
                 connected.push((index, elapsed_ms, backend));
             }
             Err(err) => {
@@ -725,6 +787,7 @@ fn select_fastest(
                     "select",
                     None,
                 );
+                diagnostics.record_input_parameters(err.input_parameters());
                 diagnostics.warnings.push(format!(
                     "WARNING touch backend {} unavailable during fastest selection: {reason}",
                     backend.as_str()
@@ -799,6 +862,7 @@ fn select_fastest(
         .collect::<Vec<_>>();
 
     Ok(SelectedTouchBackend {
+        action_open_observations: Vec::new(),
         active,
         remaining,
         diagnostics,
@@ -905,6 +969,7 @@ impl TouchBackendFactory for MaaTouchFactory {
         let device = backend.connect()?;
         let handshake = backend.handshake_info().cloned();
         Ok(ConnectedTouchBackend {
+            input_parameters: backend.input_parameters().cloned(),
             name: TouchBackendName::MaaTouch,
             backend: Box::new(backend),
             device,
@@ -933,6 +998,7 @@ impl TouchBackendFactory for MinitouchFactory {
         let device = backend.connect()?;
         let handshake = backend.handshake_info().cloned();
         Ok(ConnectedTouchBackend {
+            input_parameters: backend.input_parameters().cloned(),
             name: TouchBackendName::Minitouch,
             backend: Box::new(backend),
             device,
@@ -961,6 +1027,7 @@ impl TouchBackendFactory for AdbShellInputFactory {
         };
         Ok(ConnectedTouchBackend {
             name: TouchBackendName::AdbShellInput,
+            input_parameters: backend.input_parameters.clone(),
             backend: Box::new(backend),
             device,
             handshake: None,
@@ -970,6 +1037,7 @@ impl TouchBackendFactory for AdbShellInputFactory {
 
 #[derive(Debug, Clone)]
 pub struct AdbShellInputBackend {
+    input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     recovery: Option<crate::AdbTargetRecovery>,
     adb_config: AdbConfig,
     target: DeviceTarget,
@@ -984,6 +1052,7 @@ impl AdbShellInputBackend {
     pub fn new(adb_config: AdbConfig, target: DeviceTarget) -> Self {
         let serial = target.resolved_serial();
         Self {
+            input_parameters: None,
             recovery: None,
             adb_config,
             target,
@@ -1034,6 +1103,7 @@ impl AdbShellInputBackend {
         screen_size: impl FnOnce() -> DeviceResult<String>,
         device_rotation: impl FnOnce() -> DeviceResult<DeviceRotation>,
     ) -> DeviceResult<DeviceInfo> {
+        self.input_parameters = None;
         let state = ensure_device().map_err(|error| {
             adb_shell_input_connect_error(
                 error,
@@ -1056,7 +1126,7 @@ impl AdbShellInputBackend {
         })?;
         let natural_bounds = touch_bounds_from_screen_size(&screen_size).map_err(|error| {
             adb_shell_input_connect_error(
-                error,
+                error.input_parameter_failure(),
                 DeviceErrorCategory::Protocol,
                 "adb.input.bounds_validate",
                 "bounds_conversion",
@@ -1095,6 +1165,13 @@ impl AdbShellInputBackend {
             },
         ));
         self.connected = true;
+        self.input_parameters = Some(actingcommand_contract::BackendInputParameterCheck {
+            status: actingcommand_contract::BackendObservationStatus::Passed,
+            input_geometry: self
+                .connect_geometry
+                .map(AdbInputConnectGeometry::open_observation),
+            ..Default::default()
+        });
         self.close_result = None;
         Ok(DeviceInfo {
             serial: self.serial.clone(),
@@ -1842,6 +1919,7 @@ mod tests {
             result?;
             Ok(ConnectedTouchBackend {
                 name: self.name,
+                input_parameters: None,
                 backend: Box::new(FakeBackend {
                     action_result: self.action_result.clone(),
                     closed: false,
@@ -2140,8 +2218,10 @@ mod tests {
     fn selected_adb_shell_input_defers_stale_natural_bounds_to_concrete_backend() {
         let actions = Rc::new(RefCell::new(vec![Ok(())]));
         let mut selected = SelectedTouchBackend {
+            action_open_observations: Vec::new(),
             active: ConnectedTouchBackend {
                 name: TouchBackendName::AdbShellInput,
+                input_parameters: None,
                 backend: Box::new(FakeBackend {
                     action_result: Rc::clone(&actions),
                     closed: false,

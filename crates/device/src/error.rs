@@ -436,6 +436,7 @@ pub struct DeviceError {
 
 #[derive(Clone, Default)]
 struct StoredDeviceEvidence {
+    input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     frame_memory: Option<crate::FrameMemoryFailure>,
     capture_probe_check: Option<crate::backend_open::CaptureProbeCheck>,
     backend_open: Vec<crate::BackendOpenObservation>,
@@ -445,6 +446,35 @@ struct StoredDeviceEvidence {
 }
 
 impl DeviceError {
+    pub(crate) fn with_input_parameters(
+        mut self,
+        check: actingcommand_contract::BackendInputParameterCheck,
+    ) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .input_parameters = Some(check);
+        self
+    }
+
+    pub(crate) fn input_parameters(
+        &self,
+    ) -> Option<&actingcommand_contract::BackendInputParameterCheck> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.input_parameters.as_ref())
+    }
+
+    pub(crate) fn input_parameter_failure(self) -> Self {
+        self.with_input_parameters(actingcommand_contract::BackendInputParameterCheck::failed())
+    }
+
+    /// A shared ADB prerequisite is not the touch protocol's handshake check.
+    pub(crate) fn without_input_parameters(mut self) -> Self {
+        if let Some(evidence) = &mut self.evidence {
+            evidence.input_parameters = None;
+        }
+        self
+    }
     pub(crate) fn with_capture_probe_check(
         mut self,
         check: crate::backend_open::CaptureProbeCheck,
@@ -516,6 +546,13 @@ impl DeviceError {
         self.evidence
             .as_deref()
             .map_or(&[], |value| value.backend_open.as_slice())
+    }
+
+    /// Transfer the same occurrences into the enclosing command's ordered result.
+    pub fn take_backend_open_observations(&mut self) -> Vec<crate::BackendOpenObservation> {
+        self.evidence.as_mut().map_or_else(Vec::new, |evidence| {
+            std::mem::take(&mut evidence.backend_open)
+        })
     }
 
     pub fn with_backend_open_observation(

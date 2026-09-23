@@ -47,6 +47,7 @@ impl CaptureProbeCheck {
             status: BackendObservationStatus::Failed,
             elapsed_ms: None,
             detail: LifecycleNativeDetail::bounded(error.message()),
+            input_parameters: None,
         });
     }
 }
@@ -117,6 +118,9 @@ impl<T> OpenedBackend<T> {
         report.status = BackendObservationStatus::SimulationNotApplicable;
         report.connection = report.status;
         report.capture_check = report.status;
+        if entry != BackendOpenEntry::Capture {
+            report.input_check = report.status;
+        }
         Self::new(backend, report)
     }
 
@@ -132,8 +136,55 @@ pub fn observe_open_failure(mut report: BackendOpenReport, error: DeviceError) -
     if !error.backend_open_observations().is_empty() {
         return error.with_backend_open_configuration(&report);
     }
+    if report.entry == BackendOpenEntry::NemuPair
+        && report.source == BackendOpenSource::Native
+        && let Some(check) = error.input_parameters()
+    {
+        check.apply_to_report(&mut report);
+    }
     report.status = BackendObservationStatus::Failed;
     error.with_backend_open_observation(BackendOpenObservation::new(report))
+}
+
+pub(crate) fn observe_touch_action_connection(
+    requested: crate::TouchBackendChoice,
+    backend: crate::TouchBackendName,
+    result: &crate::DeviceResult<crate::ConnectedTouchBackend>,
+) -> BackendOpenObservation {
+    use actingcommand_contract::{BackendOpenAttempt, BackendOpenStage, LifecycleNativeDetail};
+    let mut report = BackendOpenReport::unobserved(BackendOpenEntry::Input);
+    report.source = BackendOpenSource::Native;
+    report.requested = requested.as_str().into();
+    let (check, detail) = match result {
+        Ok(connected) => {
+            report.status = BackendObservationStatus::Passed;
+            report.connection = BackendObservationStatus::Passed;
+            report.selected = Some(connected.name.as_str().into());
+            report.screen_size = LifecycleNativeDetail::bounded(&connected.device.screen_size);
+            (connected.input_parameters.as_ref(), None)
+        }
+        Err(error) => {
+            report.status = BackendObservationStatus::Failed;
+            (
+                error.input_parameters(),
+                LifecycleNativeDetail::bounded(error.message()),
+            )
+        }
+    };
+    if let Some(check) = check {
+        check.apply_to_report(&mut report);
+    }
+    report.push_attempt(BackendOpenAttempt {
+        backend: backend.as_str().into(),
+        stage: BackendOpenStage::Connect,
+        status: report.status,
+        // The original action fallback span includes the subsequent action.
+        // It is not a connection-only measurement and must not be relabelled.
+        elapsed_ms: None,
+        detail,
+        input_parameters: check.cloned(),
+    });
+    BackendOpenObservation::new(report)
 }
 
 impl crate::SelectedTouchBackend {
@@ -154,6 +205,11 @@ impl crate::SelectedTouchBackend {
                 max_y: value.max_y,
                 max_pressure: value.max_pressure,
             });
+        if let Some(check) = self.input_parameters() {
+            check.apply_to_report(&mut report);
+        } else {
+            report.input_check = BackendObservationStatus::Unknown;
+        }
         report
     }
 }
@@ -179,7 +235,15 @@ impl crate::TouchBackendDiagnostics {
                     .error_reason
                     .as_deref()
                     .and_then(LifecycleNativeDetail::bounded),
+                input_parameters: attempt.input_parameters.clone(),
             });
+        }
+        if let Some(check) = self
+            .attempts
+            .last()
+            .and_then(|attempt| attempt.input_parameters.as_ref())
+        {
+            check.apply_to_report(&mut report);
         }
         for warning in &self.warnings {
             if let Some(detail) = LifecycleNativeDetail::bounded(warning) {
@@ -263,6 +327,7 @@ pub(crate) fn capture_open_report(
                     .and_then(|value| u64::try_from(value).ok())
             },
             detail: LifecycleNativeDetail::bounded(&attempt.message),
+            input_parameters: None,
         });
     }
     report

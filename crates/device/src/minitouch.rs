@@ -64,6 +64,7 @@ pub struct MinitouchBackend {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     handshake_info: Option<HandshakeInfo>,
+    input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     coordinate_mapper: Option<MinitouchCoordinateMapper>,
     stderr_text: Arc<Mutex<String>>,
     stderr_thread: Option<JoinHandle<()>>,
@@ -87,6 +88,7 @@ impl MinitouchBackend {
             child: None,
             stdin: None,
             handshake_info: None,
+            input_parameters: None,
             coordinate_mapper: None,
             stderr_text: Arc::new(Mutex::new(String::new())),
             stderr_thread: None,
@@ -100,13 +102,21 @@ impl MinitouchBackend {
         self.handshake_info.as_ref()
     }
 
+    pub(crate) fn input_parameters(
+        &self,
+    ) -> Option<&actingcommand_contract::BackendInputParameterCheck> {
+        self.input_parameters.as_ref()
+    }
+
     pub fn connect(&mut self) -> DeviceResult<DeviceInfo> {
         if self.child.is_some() || self.stdin.is_some() {
             return Err(DeviceError::fatal("MinitouchBackend is already connected"));
         }
 
+        self.input_parameters = None;
         let adb = Adb::new(self.adb_config.clone());
-        let device = verify_minitouch_device(&adb, &self.serial, self.target.connect)?;
+        let device = verify_minitouch_device(&adb, &self.serial, self.target.connect)
+            .map_err(DeviceError::without_input_parameters)?;
         self.install(&adb)?;
         self.start(&device)?;
         Ok(device)
@@ -146,6 +156,7 @@ impl MinitouchBackend {
             return Err(DeviceError::fatal("minitouch process is already started"));
         }
 
+        self.input_parameters = None;
         let child = Command::new(&self.adb_config.adb_path)
             .args([
                 "-s",
@@ -190,11 +201,24 @@ impl MinitouchBackend {
                 Arc::clone(&self.stderr_text),
             ));
             let handshake = self.receive_handshake(stdout)?;
+            let mut checked = actingcommand_contract::BackendInputParameterCheck {
+                status: actingcommand_contract::BackendObservationStatus::Failed,
+                handshake: Some(actingcommand_contract::BackendHandshakeObservation {
+                    max_contacts: handshake.max_contacts,
+                    max_x: handshake.max_x,
+                    max_y: handshake.max_y,
+                    max_pressure: handshake.max_pressure,
+                }),
+                configured_pressure: Some(self.minitouch_config.default_pressure),
+                ..Default::default()
+            };
             validate_default_pressure(
                 self.minitouch_config.default_pressure,
                 handshake.max_pressure,
             )
-            .map_err(|error| self.with_stderr(error))?;
+            .map_err(|error| self.with_stderr(error.with_input_parameters(checked.clone())))?;
+            checked.status = actingcommand_contract::BackendObservationStatus::Passed;
+            self.input_parameters = Some(checked);
             let screen_bounds =
                 screen_bounds_from_device(device).map_err(|error| self.with_stderr(error))?;
             self.coordinate_mapper =
@@ -205,10 +229,16 @@ impl MinitouchBackend {
         .unwrap_or_else(|_| Err(DeviceError::fatal("minitouch acquisition panicked")));
         match result {
             Ok(()) => Ok(()),
-            Err(primary) => match self.close_once(DeviceCloseAuthority::LocalOnly) {
-                Ok(_) => Err(primary),
-                Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
-            },
+            Err(primary) => {
+                let primary = match &self.input_parameters {
+                    Some(check) => primary.with_input_parameters(check.clone()),
+                    None => primary,
+                };
+                match self.close_once(DeviceCloseAuthority::LocalOnly) {
+                    Ok(_) => Err(primary),
+                    Err(cleanup) => Err(primary.merge_resource_cleanup(cleanup)),
+                }
+            }
         }
     }
     pub fn read_handshake<R: Read + Send + 'static>(
@@ -740,10 +770,12 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         );
     }
     let max_values = max.strip_prefix('^').ok_or_else(|| {
-        DeviceError::transient(format!("invalid minitouch max line: {max:?}")).with_diagnostic(
-            DeviceErrorCategory::Protocol,
-            "minitouch.handshake.max_parse",
-        )
+        DeviceError::transient(format!("invalid minitouch max line: {max:?}"))
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                "minitouch.handshake.max_parse",
+            )
+            .input_parameter_failure()
     })?;
     let parts = max_values.split_whitespace().collect::<Vec<_>>();
     if parts.len() != 4 {
@@ -753,7 +785,8 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         .with_diagnostic(
             DeviceErrorCategory::Protocol,
             "minitouch.handshake.max_shape",
-        ));
+        )
+        .input_parameter_failure());
     }
 
     let parse_i32 = |label: &str, value: &str| {
@@ -763,6 +796,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
                     DeviceErrorCategory::Protocol,
                     "minitouch.handshake.max_value_parse",
                 )
+                .input_parameter_failure()
         })
     };
     let max_contacts = parse_i32("max_contacts", parts[0])?;
@@ -776,7 +810,8 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         .with_diagnostic(
             DeviceErrorCategory::Protocol,
             "minitouch.handshake.max_value_validate",
-        ));
+        )
+        .input_parameter_failure());
     }
     let pid = pid
         .strip_prefix('$')

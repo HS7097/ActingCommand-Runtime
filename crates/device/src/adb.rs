@@ -491,6 +491,7 @@ fn device_state_error(
     state: DeviceResult<String>,
     connect_result: Option<DeviceResult<()>>,
 ) -> DeviceError {
+    let state_was_checked = state.is_ok();
     let diagnostic_message = match &connect_result {
         Some(Ok(())) => DeviceErrorDiagnosticMessage::AdbDeviceStateAfterConnectAttempt,
         Some(Err(_)) => DeviceErrorDiagnosticMessage::AdbDeviceStateConnectFailed,
@@ -505,11 +506,16 @@ fn device_state_error(
         Some(Err(err)) => format!("; one adb connect failed: {err}"),
         None => String::new(),
     };
-    DeviceError::fatal(format!(
+    let error = DeviceError::fatal(format!(
         "target device {serial} is not available in device state ({state_text}{connect_attempt_text})"
     ))
         .with_diagnostic(DeviceErrorCategory::Native, "adb.ensure_device.get_state")
-        .with_diagnostic_message(diagnostic_message)
+        .with_diagnostic_message(diagnostic_message);
+    if state_was_checked {
+        error.input_parameter_failure()
+    } else {
+        error
+    }
 }
 
 pub(crate) struct RawCommandOutput {

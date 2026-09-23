@@ -2439,9 +2439,14 @@ impl NemuIpcWorkerState {
         self.connect_id = connect_id;
         self.record_vendor_stdio_snapshot()?;
         if connect_id <= 0 {
-            return Err(DeviceError::fatal(
+            let error = DeviceError::fatal(
                 "Nemu IPC connect did not return a positive handle; check MuMu path and running instance",
-            ));
+            );
+            return Err(if self.input.is_some() {
+                error.input_parameter_failure()
+            } else {
+                error
+            });
         }
         Ok(())
     }
@@ -2471,10 +2476,24 @@ impl NemuIpcWorkerState {
             .as_ref()
             .ok_or_else(|| DeviceError::fatal("Nemu IPC library is closed"))?;
         let symbol = unsafe { library.get::<T>(name) }.map_err(|err| {
-            DeviceError::fatal(format!(
+            let error = DeviceError::fatal(format!(
                 "Nemu IPC DLL is missing symbol {}: {err}",
                 String::from_utf8_lossy(name).trim_end_matches('\0')
-            ))
+            ));
+            if self.input.is_some()
+                && matches!(
+                    name,
+                    b"nemu_connect\0"
+                        | b"nemu_get_display_id\0"
+                        | b"nemu_input_event_finger_touch_down\0"
+                        | b"nemu_input_event_finger_touch_up\0"
+                        | b"nemu_capture_display\0"
+                )
+            {
+                error.input_parameter_failure()
+            } else {
+                error
+            }
         })?;
         Ok(*symbol)
     }
@@ -2497,8 +2516,14 @@ impl NemuIpcWorkerState {
         let mut width = 0i32;
         let mut height = 0i32;
         let connect_id = self.connect_id;
-        let display_id = u32::try_from(self.display_id)
-            .map_err(|_| DeviceError::fatal("Nemu IPC display id is negative"))?;
+        let display_id = u32::try_from(self.display_id).map_err(|_| {
+            let error = DeviceError::fatal("Nemu IPC display id is negative");
+            if self.input.is_some() {
+                error.input_parameter_failure()
+            } else {
+                error
+            }
+        })?;
         let width_ptr = &mut width as *mut i32;
         let height_ptr = &mut height as *mut i32;
         if let Some((context, stopped)) = context {
@@ -2516,14 +2541,23 @@ impl NemuIpcWorkerState {
         };
         self.record_vendor_stdio_snapshot()?;
         if ret != 0 {
-            return Err(DeviceError::fatal(format!(
-                "Nemu IPC resolution probe failed with code {ret}"
-            )));
+            let error =
+                DeviceError::fatal(format!("Nemu IPC resolution probe failed with code {ret}"));
+            return Err(if self.input.is_some() {
+                error.input_parameter_failure()
+            } else {
+                error
+            });
         }
         if width <= 0 || height <= 0 {
-            return Err(DeviceError::fatal(format!(
+            let error = DeviceError::fatal(format!(
                 "Nemu IPC returned invalid resolution {width}x{height}"
-            )));
+            ));
+            return Err(if self.input.is_some() {
+                error.input_parameter_failure()
+            } else {
+                error
+            });
         }
         Ok((width as u32, height as u32))
     }
@@ -3034,7 +3068,9 @@ fn read_device_rotation_with_source(
         None => adb.run(args),
     };
     let output = run(&["-s", serial, "shell", "dumpsys", "display"])?;
-    if let Some(rotation) = parse_display_orientation(&output.stdout)? {
+    if let Some(rotation) =
+        parse_display_orientation(&output.stdout).map_err(DeviceError::input_parameter_failure)?
+    {
         return Ok((rotation, CaptureRotationSource::DumpsysDisplayOrientation));
     }
     let output = run(&[
@@ -3047,6 +3083,7 @@ fn read_device_rotation_with_source(
         "user_rotation",
     ])?;
     parse_device_rotation(&output.stdout)
+        .map_err(DeviceError::input_parameter_failure)
         .map(|rotation| (rotation, CaptureRotationSource::UserRotation))
 }
 
