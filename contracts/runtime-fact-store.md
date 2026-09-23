@@ -10,7 +10,7 @@ disjoint by construction.
 Workflow #313 owns the design. This document freezes the contract half, the
 pure store, and the host wiring that makes the store ledger-backed: the three
 ledger events, the append-first rule, startup replay, takeover invalidation,
-the periodic snapshot, the read operation, and the producers built so far
+the periodic snapshot, the read operation, the offline read, and the producers built so far
 (see "Producers"). The `task.` family has three producers (`task.game`,
 `task.server`, `task.page`); the remaining producers (`host.`, … facts),
 policy-input rewiring, and the per-instance read operation land in later
@@ -181,6 +181,58 @@ dirty. `RuntimeHost::runtime_fact_snapshot` and
 JSON. `facts` without `--program` (the per-instance read) is not built and is a
 usage error; the command takes no `--instance`.
 
+## Offline read
+
+`actingcommand_ledger_forensics::runtime_facts_at(state_root, position,
+deadline)` is the single offline implementation of the startup replay above,
+bound to a ledger position (inclusive) instead of the latest one. The UI and
+every other offline consumer call it; none folds `runtime.fact_*` events
+itself.
+
+1. It opens one read-only metadata snapshot of the state root
+   (`GlobalLedger::open_metadata`, the source `actingledger views` uses) and
+   reads through the shared view page at snapshot `position`.
+2. The latest `runtime.fact_snapshot` with a sequence at or below `position`
+   replaces the empty store after its own validation; without one the store
+   stays empty.
+3. Every `runtime.fact_recorded` / `runtime.fact_invalidated` after that
+   snapshot, through `position`, is applied in ledger order under the store's
+   rules. An identical record changes nothing; an older or equal observation,
+   a new key on a full store, an invalid record, an absent key on
+   invalidation, or any other payload under `runtime-facts` fails with
+   `runtime_fact_replay_failed` naming the sequence. Nothing is skipped and no
+   partial store is returned.
+
+Takeover and device-close drops need no rule of their own: every dropped key is
+its own `runtime.fact_invalidated` event. A position between `runtime.takeover`
+and that takeover's `runtime_takeover` invalidations shows the previous epoch's
+records; the host serves no online read there.
+
+The result `ForensicRuntimeFactsResult` is one of:
+
+- `available { source, position, facts }` — `facts` is the `RuntimeFactSnapshot`
+  the online read returns, records in scope-then-key order, with
+  `ledger_position` = `position`. `taken_at_unix_ms` is the ledger timestamp of
+  the event at `position`; the online read samples the host clock instead,
+  which the ledger does not record. Expired records are included, as online;
+  expiry stays the consumer's `is_expired(taken_at_unix_ms)`. `source` is the
+  final page's `LedgerReadScope` (`offline`, complete, scanned through
+  `position`).
+- `not_available { position, latest_sequence, reason }` — `ledger_empty` (the
+  snapshot holds no event) or `position_beyond_snapshot`.
+- `failed { position, code, operation, detail }` — position 0
+  (`runtime_fact_ledger_position_invalid`), an empty state root
+  (`invalid_state_root`), the ledger's own open and read codes (`ledger_io` for
+  an absent ledger, `ledger_read_budget_exceeded`), a source that is not
+  completely readable (`runtime_facts_source_incomplete`), no event at the
+  position (`runtime_facts_position_missing`), the cooperative deadline
+  (`runtime_facts_read_budget_exceeded`), or `runtime_fact_replay_failed`.
+
+`actingledger --state-root <state-root> facts --at <sequence>` prints the
+result as one JSON line under `command: facts`, with a 30 s deadline. It exits
+0 only for `available`; otherwise the result is printed first and the tool
+exits nonzero with `runtime_facts_not_available` or the failure code.
+
 ## Producers
 
 Five producers write the store today; all go through the append-first rule
@@ -268,4 +320,7 @@ Contract: `runtime_fact_ledger_position_invalid`,
 `runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
 `runtime_fact_instance_unknown` (request class);
 `runtime_fact_store_desync`, `runtime_fact_replay_failed`,
-`invalid_runtime_config_manifest` (fatal).
+`invalid_runtime_config_manifest` (fatal). Offline read:
+`runtime_facts_source_incomplete`, `runtime_facts_position_missing`,
+`runtime_facts_read_budget_exceeded`; `actingledger facts`:
+`runtime_facts_not_available`.
