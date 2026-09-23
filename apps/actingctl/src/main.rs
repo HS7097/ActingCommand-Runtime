@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+mod shutdown_wait;
+
 use actingcommand_contract::{
     CaptureSequenceSpec, ContainedTaskRecoveryBinding, ContainedTaskRequest,
     EmulatorInstanceAction, EventActor, EventSource, RuntimeMonitorPolicy,
@@ -16,6 +18,10 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
+
+/// Upper bound for `request-shutdown --wait <seconds>`.
+const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -47,6 +53,7 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     let Invocation {
         state_root,
         instance,
+        shutdown_wait,
         command,
     } = Invocation::parse(arguments)?;
     let observation = if let Command::AgentPublishFacts { record_file } = &command {
@@ -76,9 +83,20 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         Command::AgentPublishFacts { .. } => Ok(serde_json::json!({
             "event_id": client.publish_facts(observation.ok_or(ActingctlError::FactRecord)?).map_err(ActingctlError::runtime)?,
         })),
-        Command::RequestShutdown => Ok(serde_json::json!({
-            "receipt": client.request_shutdown().map_err(ActingctlError::runtime)?,
-        })),
+        Command::RequestShutdown => match shutdown_wait {
+            None => Ok(serde_json::json!({
+                "receipt": client.request_shutdown().map_err(ActingctlError::runtime)?,
+            })),
+            Some(wait) => {
+                let receipt = client.request_shutdown().map_err(ActingctlError::runtime)?;
+                // request_shutdown verified that the accepted receipt names exactly this target.
+                let target = client.runtime_info().shutdown_target();
+                // Close the connection so the waiting CLI leaves nothing for the Runtime to drain.
+                drop(client);
+                let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
+                Ok(serde_json::json!({ "receipt": receipt, "shutdown": shutdown }))
+            }
+        },
         Command::Reset => serde_json::to_value(
             client
                 .safe_reset(instance()?)
@@ -198,6 +216,7 @@ fn write_output(output: &Value) -> Result<(), ActingctlError> {
 struct Invocation {
     state_root: PathBuf,
     instance: Option<String>,
+    shutdown_wait: Option<Duration>,
     command: Command,
 }
 
@@ -259,12 +278,20 @@ impl Invocation {
         let mut recovery_enabled = false;
         let mut program = false;
         let mut record_file = None;
+        let mut shutdown_wait = None;
         let mut index = if emulator_action.is_some() { 2 } else { 1 };
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
             match flag {
                 "--record-file" if command == "agent-publish-facts" && record_file.is_none() => {
                     record_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
+                }
+                "--wait" if command == "request-shutdown" && shutdown_wait.is_none() => {
+                    let seconds = require_u64(&arguments, &mut index)?;
+                    if !(1..=MAX_SHUTDOWN_WAIT_SECONDS).contains(&seconds) {
+                        return Err(ActingctlError::Usage);
+                    }
+                    shutdown_wait = Some(Duration::from_secs(seconds));
                 }
                 "--state-root" => {
                     state_root = Some(PathBuf::from(require_value(&arguments, &mut index)?));
@@ -385,6 +412,7 @@ impl Invocation {
         Ok(Self {
             state_root,
             instance,
+            shutdown_wait,
             command,
         })
     }
@@ -443,6 +471,11 @@ enum ActingctlError {
     FactRecord,
     InstanceUnknown,
     Output,
+    /// `request-shutdown --wait` failed after the shutdown was accepted; `detail` is JSON.
+    ShutdownWait {
+        code: &'static str,
+        detail: String,
+    },
 }
 
 impl ActingctlError {
@@ -455,12 +488,15 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
             Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
             Self::Output => formatter.write_str("failed to write JSON output"),
+            Self::ShutdownWait { code, detail } => {
+                write!(formatter, "{code} during wait_shutdown: {detail}")
+            }
         }
     }
 }
