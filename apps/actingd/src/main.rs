@@ -79,10 +79,17 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host,
         registry,
         policy,
+        resource_packages,
         ..
     } = config::load(&config_path)
         .and_then(config::ActingdConfigFile::assemble)
         .map_err(ActingdError::config)?;
+    // The same resource package admission as `check-config`, before any side effect.
+    let resource_packages =
+        config::validate_resource_packages(&resource_packages).map_err(|rejection| {
+            ActingdError::config(rejection.code).with_detail(rejection.to_string())
+        })?;
+    let host = host.with_resource_packages(resource_packages);
     let host =
         RuntimeHost::start_with_provider(host, |startup| registry.assemble_provider(startup))
             .map_err(ActingdError::runtime)?;
@@ -1278,10 +1285,17 @@ struct ActingdError {
     runtime: Option<Box<RuntimeHostError>>,
     client: Option<Box<RuntimeClientError>>,
     maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
+    /// What a configuration code refers to, such as the refused resource package path.
+    detail: Option<String>,
     recorded: std::sync::atomic::AtomicBool,
 }
 
 impl ActingdError {
+    fn with_detail(mut self, detail: String) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+
     fn with_recording_result(mut self, recorded: Result<(), Self>) -> Self {
         if let Err(error) = recorded {
             self.recording_failure = Some(Box::new(match self.recording_failure.take() {
@@ -1336,6 +1350,7 @@ impl ActingdError {
             runtime: None,
             client: None,
             maintenance: None,
+            detail: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1349,6 +1364,7 @@ impl ActingdError {
             runtime: None,
             client: None,
             maintenance: None,
+            detail: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1362,6 +1378,7 @@ impl ActingdError {
             runtime: Some(Box::new(error)),
             client: None,
             maintenance: None,
+            detail: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1375,6 +1392,7 @@ impl ActingdError {
             runtime: None,
             client: Some(Box::new(error)),
             maintenance: None,
+            detail: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1393,6 +1411,9 @@ impl fmt::Display for ActingdError {
             error.fmt(formatter)?;
         } else {
             formatter.write_str(self.code)?;
+        }
+        if let Some(detail) = &self.detail {
+            write!(formatter, ": {detail}")?;
         }
         for secondary in self.secondary.iter().flatten() {
             write!(formatter, "; secondary {secondary}")?;

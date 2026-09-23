@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::{InstanceResourcePackage, InstanceResourcePackageKind};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedAdbEndpoint, ResolvedInstanceEndpoint,
 };
@@ -11,6 +12,9 @@ const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1
 /// Inputs this command cannot validate: the vision provider manifest is only read and
 /// validated inside host startup, and nothing under `state_root` is inspected here.
 const NOT_CHECKED: [&str; 2] = ["vision_provider_manifest", "state_root"];
+/// Added to `not_checked` when a `resource_package` is a directory: the package loader reads
+/// a directory only against a Git source-tree reference, which the field does not carry.
+const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
 
 /// Loads, assembles and validates a configuration exactly as startup would, then stops
 /// before the first side effect: nothing under `state_root` is created, read or locked,
@@ -31,6 +35,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         return Err(ActingdError::config("check_config_option_invalid"));
     }
     let config_path = config.ok_or_else(|| ActingdError::config("check_config_config_missing"))?;
+    let mut rejection = None;
     let checked = config::load(&config_path)
         .map_err(|code| (code, "load"))
         .and_then(|file| file.assemble().map_err(|code| (code, "assemble")))
@@ -39,18 +44,32 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 .host
                 .validate()
                 .map_err(|error| (error.code(), "validate"))?;
-            summarize(&config_path, &assembly)
+            let resource_packages = config::validate_resource_packages(&assembly.resource_packages)
+                .map_err(|refused| {
+                    let code = refused.code;
+                    rejection = Some(refused);
+                    (code, "resource_package")
+                })?;
+            summarize(&config_path, &assembly, &resource_packages)
         });
     let (report, result) = match checked {
         Ok(report) => (report, Ok(())),
-        Err((code, stage)) => (
-            json!({
-                "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
-                "status": "failed",
-                "error": { "code": code, "stage": stage },
-            }),
-            Err(ActingdError::config(code)),
-        ),
+        Err((code, stage)) => {
+            let mut error = json!({ "code": code, "stage": stage });
+            let mut failure = ActingdError::config(code);
+            if let Some(rejection) = rejection {
+                error["detail"] = rejection.detail();
+                failure = failure.with_detail(rejection.to_string());
+            }
+            (
+                json!({
+                    "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
+                    "status": "failed",
+                    "error": error,
+                }),
+                Err(failure),
+            )
+        }
     };
     let encoded = serde_json::to_string(&report)
         .map_err(|_| ActingdError::process("check_config_report_encode_failed"))?;
@@ -61,9 +80,10 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
 fn summarize(
     config_path: &Path,
     assembly: &RuntimeAssembly,
+    resource_packages: &BTreeMap<String, InstanceResourcePackage>,
 ) -> Result<serde_json::Value, (&'static str, &'static str)> {
     let registry = &assembly.registry;
-    let instances = registry
+    let mut instances = registry
         .instance_aliases()
         .into_iter()
         .map(|alias| {
@@ -106,6 +126,22 @@ fn summarize(
             }))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // The admitted default resource package, only on an instance that declares one.
+    for entry in &mut instances {
+        if let Some(package) = entry["alias"]
+            .as_str()
+            .and_then(|alias| resource_packages.get(alias))
+        {
+            entry["resource_package"] = json!(package);
+        }
+    }
+    let mut not_checked = NOT_CHECKED.to_vec();
+    if resource_packages
+        .values()
+        .any(|package| package.kind == InstanceResourcePackageKind::Directory)
+    {
+        not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
+    }
     let bind_address = assembly.host.bind_address();
     Ok(json!({
         "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
@@ -118,6 +154,6 @@ fn summarize(
         "instances": instances,
         "policy_configured": assembly.policy.is_some(),
         "config_manifest": assembly.manifest,
-        "not_checked": NOT_CHECKED,
+        "not_checked": not_checked,
     }))
 }

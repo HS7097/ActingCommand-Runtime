@@ -392,6 +392,10 @@ impl HostShared {
                 .bound_adb_endpoint()
                 .filter(|endpoint| !endpoint.serial_configured())
                 .map(ResolvedAdbEndpoint::port);
+            let resource_package = self
+                .resource_packages
+                .get(&instance.instance_alias)
+                .cloned();
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -414,7 +418,8 @@ impl HostShared {
                     ))
                 })?
                 .with_backend_metadata(resolved.provenance(), resolved.capabilities().cloned())
-                .with_adb_port(adb_port),
+                .with_adb_port(adb_port)
+                .with_resource_package(resource_package),
             );
         }
         let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected).map_err(|_| {

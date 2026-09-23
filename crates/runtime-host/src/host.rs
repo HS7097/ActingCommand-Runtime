@@ -338,6 +338,9 @@ pub struct RuntimeHostConfig {
     /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
     /// `actingctl task-run --package / --expected-sha256`.
     startup_packages: BTreeMap<String, ContainedTaskRequest>,
+    /// Per instance alias: the default resource package the daemon admitted from its
+    /// configuration (slice #324-r1). Reported by instance status only; never opened here.
+    resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
 }
 
 impl RuntimeHostConfig {
@@ -364,6 +367,7 @@ impl RuntimeHostConfig {
             procedure_manifest: None,
             config_manifest: None,
             startup_packages: BTreeMap::new(),
+            resource_packages: BTreeMap::new(),
         }
     }
 
@@ -495,6 +499,16 @@ impl RuntimeHostConfig {
         &self.startup_packages
     }
 
+    /// Installs the admitted default resource packages, keyed by instance alias (slice
+    /// #324-r1); instance status reports them.
+    pub fn with_resource_packages(
+        mut self,
+        resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
+    ) -> Self {
+        self.resource_packages = resource_packages;
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -610,6 +624,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field(
                 "startup_packages",
                 &self.startup_packages.keys().collect::<Vec<_>>(),
+            )
+            .field(
+                "resource_packages",
+                &self.resource_packages.keys().collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -1145,6 +1163,7 @@ impl RuntimeHost {
             contained_runs: Mutex::new(BTreeMap::new()),
             startup_packages,
             pending_startup_packages: Mutex::new(VecDeque::new()),
+            resource_packages: config.resource_packages,
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -2664,6 +2683,8 @@ struct HostShared {
     // handed to the host's own scheduling thread.
     startup_packages: BTreeMap<InstanceId, ContainedTaskRequest>,
     pending_startup_packages: Mutex<VecDeque<startup_package::PendingStartupPackage>>,
+    // Slice #324-r1: the admitted default resource package by instance alias (status only).
+    resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
