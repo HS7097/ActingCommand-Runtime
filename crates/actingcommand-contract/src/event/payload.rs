@@ -3245,6 +3245,31 @@ fn validate_geometry_source(
     Ok(())
 }
 
+/// Upper bound on the recognized targets one `task.recognition_completed` fact may carry.
+pub const TASK_RECOGNITION_TARGET_LIMIT: usize = 32;
+const TASK_RECOGNITION_TARGET_ID_MAX_BYTES: usize = 128;
+
+/// The page role under which a recognized target was evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecognizedTargetRole {
+    Required,
+    AnyOf,
+    Optional,
+    Forbidden,
+}
+
+/// One target of the evaluated page; `region` is in frame pixels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecognizedTarget {
+    pub target_id: String,
+    pub role: RecognizedTargetRole,
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<crate::page_projection::Rect>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSemanticFact {
@@ -3274,6 +3299,8 @@ pub enum TaskSemanticFact {
         matched_page: Option<String>,
         frame_width: u32,
         frame_height: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<RecognizedTarget>,
     },
     EntryRecognition {
         phase: TaskEntryRecognitionPhase,
@@ -3999,6 +4026,7 @@ impl TaskSemanticFact {
                 matched_page,
                 frame_width,
                 frame_height,
+                targets,
             } => {
                 validate_task_candidate_pages(candidate_pages)?;
                 validate_task_frame_dimensions(*frame_width, *frame_height)?;
@@ -4011,6 +4039,7 @@ impl TaskSemanticFact {
                         ));
                     }
                 }
+                validate_task_recognition_targets(targets, *frame_width, *frame_height)?;
             }
             Self::EntryRecognition { required_page, .. } => {
                 validate_task_semantic_label(required_page, "required_page")?;
@@ -4239,6 +4268,50 @@ fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), Sanitiz
     } else {
         Ok(())
     }
+}
+
+fn validate_task_recognition_targets(
+    targets: &[RecognizedTarget],
+    frame_width: u32,
+    frame_height: u32,
+) -> Result<(), SanitizationError> {
+    if targets.len() > TASK_RECOGNITION_TARGET_LIMIT {
+        return Err(SanitizationError::new(
+            "invalid_task_recognition_targets",
+            "targets",
+        ));
+    }
+    for (index, target) in targets.iter().enumerate() {
+        if target.target_id.is_empty()
+            || target.target_id.len() > TASK_RECOGNITION_TARGET_ID_MAX_BYTES
+            || targets[..index]
+                .iter()
+                .any(|prior| prior.target_id == target.target_id)
+        {
+            return Err(SanitizationError::new(
+                "invalid_task_recognition_targets",
+                "target_id",
+            ));
+        }
+        if let Some(region) = target.region
+            && (region.width == 0
+                || region.height == 0
+                || region
+                    .x
+                    .checked_add(region.width)
+                    .is_none_or(|right| right > frame_width)
+                || region
+                    .y
+                    .checked_add(region.height)
+                    .is_none_or(|bottom| bottom > frame_height))
+        {
+            return Err(SanitizationError::new(
+                "invalid_task_recognition_targets",
+                "region",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_task_candidate_pages(pages: &[String]) -> Result<(), SanitizationError> {

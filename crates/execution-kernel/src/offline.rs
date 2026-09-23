@@ -310,6 +310,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
                 page_label,
                 width,
                 height,
+                ..
             } => self.recognition.push(OfflineRecognitionResult {
                 candidate_pages,
                 matched_page: page_label,
@@ -861,6 +862,7 @@ mod tests {
                     page_label,
                     width,
                     height,
+                    ..
                 } => self.recognition.push(OfflineRecognitionResult {
                     candidate_pages,
                     matched_page: page_label,

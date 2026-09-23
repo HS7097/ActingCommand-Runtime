@@ -2171,6 +2171,7 @@ fn task_semantic_payload_preserves_recognition_basis_and_v3_schema() {
                 matched_page: Some("campaign".to_string()),
                 frame_width: 1280,
                 frame_height: 720,
+                targets: Vec::new(),
             },
             AuditInput::new(),
         )
@@ -2401,6 +2402,7 @@ fn task_semantic_payload_rejects_invalid_facts() {
             matched_page: Some("campaign".to_string()),
             frame_width: 1280,
             frame_height: 720,
+            targets: Vec::new(),
         },
         TaskSemanticFact::TerminalCommitted {
             outcome: TaskOutcome::Success,

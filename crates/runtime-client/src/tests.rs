@@ -260,6 +260,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                             matched_page: Some("fixture/panel".into()),
                             frame_width: 8,
                             frame_height: 4,
+                            targets: Vec::new(),
                         },
                         AuditInput::new(),
                     )
