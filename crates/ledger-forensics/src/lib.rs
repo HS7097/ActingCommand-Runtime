@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 mod bindings;
 mod material;
+mod runtime_facts;
 mod signatures;
 mod task_records;
 mod views;
@@ -34,6 +35,9 @@ pub use bindings::{InstanceBinding, InstanceBindings, instance_bindings};
 pub use material::{
     ForensicMaterialCompleteResult, ForensicMaterialRequest, read_material_complete,
     read_material_to,
+};
+pub use runtime_facts::{
+    ForensicRuntimeFactsResult, ForensicRuntimeFactsUnavailable, runtime_facts_at,
 };
 pub use signatures::{
     ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,
@@ -239,6 +243,7 @@ impl ForensicRequest {
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ForensicReport {
     MaterialRead(Box<actingcommand_contract::RuntimeMaterialReadResult>),
+    Facts(Box<ForensicRuntimeFactsResult>),
     Views(Box<actingcommand_contract::RuntimeEventQueryPage>),
     Signatures(Box<SignatureReplayReport>),
     Open(Box<OpenReport>),

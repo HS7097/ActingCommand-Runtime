@@ -7,12 +7,16 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use actingcommand_ledger_forensics::{
     ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
-    ForensicReplayRequest, ForensicReport, ForensicRequest, ForensicViewOptions,
-    ForensicViewRequest, MAX_FORENSIC_EVENTS, TaskRecordsRequest,
+    ForensicReplayRequest, ForensicReport, ForensicRequest, ForensicRuntimeFactsResult,
+    ForensicViewOptions, ForensicViewRequest, MAX_FORENSIC_EVENTS, TaskRecordsRequest,
 };
+
+/// Cooperative deadline of one `facts` replay.
+const FACTS_READ_BUDGET: Duration = Duration::from_secs(30);
 
 enum CliRequest {
     Material(Box<actingcommand_ledger_forensics::ForensicMaterialRequest>),
@@ -20,6 +24,7 @@ enum CliRequest {
     StateRoot(ForensicRequest),
     Replay(ForensicReplayRequest),
     Signatures(actingcommand_ledger_forensics::ForensicSignatureRequest),
+    Facts { state_root: PathBuf, position: u64 },
 }
 
 #[derive(Debug)]
@@ -72,6 +77,16 @@ where
         CliRequest::Signatures(request) => {
             actingcommand_ledger_forensics::replay_signatures_read_only(request)
         }
+        CliRequest::Facts {
+            state_root,
+            position,
+        } => Ok(ForensicOutput::Machine(ForensicReport::Facts(Box::new(
+            actingcommand_ledger_forensics::runtime_facts_at(
+                state_root,
+                position,
+                Instant::now() + FACTS_READ_BUDGET,
+            ),
+        )))),
     }
     .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
     let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
@@ -79,6 +94,18 @@ where
     let signatures_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Signatures(report)) if !report.evidence_complete);
     let views_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Views(page))
         if page.read_scope().is_none_or(|scope| !scope.read_complete));
+    let facts_unavailable = match &report {
+        ForensicOutput::Machine(ForensicReport::Facts(result)) => match result.as_ref() {
+            ForensicRuntimeFactsResult::Available { .. } => None,
+            ForensicRuntimeFactsResult::NotAvailable { .. } => {
+                Some(("runtime_facts_not_available", "read_runtime_facts_at"))
+            }
+            ForensicRuntimeFactsResult::Failed {
+                code, operation, ..
+            } => Some((*code, *operation)),
+        },
+        _ => None,
+    };
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -92,6 +119,13 @@ where
         }
     }
     output.flush().map_err(output_error)?;
+    if let Some((code, operation)) = facts_unavailable {
+        return Err(CliError::new(
+            code,
+            operation,
+            "see the structured runtime fact result",
+        ));
+    }
     if views_incomplete {
         return Err(CliError::new(
             "ledger_view_source_incomplete",
@@ -175,6 +209,17 @@ where
                 .map(|request| CliRequest::Views(Box::new(request)));
         }
         "signatures" => return parse_signatures(state_root, args).map(CliRequest::Signatures),
+        "facts" => {
+            require_utf8(args.next(), "--at")?;
+            let position = parse_u64(&next_value(&mut args, "--at")?, "--at")?;
+            if args.next().is_some() {
+                return Err(invalid_arguments("facts accepts only --at <sequence>"));
+            }
+            return Ok(CliRequest::Facts {
+                state_root,
+                position,
+            });
+        }
         "open" => ForensicCommand::Open,
         "events" => {
             return parse_events(state_root, args, ForensicCommand::Events)
