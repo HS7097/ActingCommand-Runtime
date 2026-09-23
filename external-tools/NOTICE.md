@@ -9,6 +9,8 @@ The Rust capture backend can discover optional local tools through environment v
 - `ACTINGCOMMAND_NEMU_FOLDER`: local MuMu Player folder.
 - `ACTINGCOMMAND_NEMU_IPC_DLL`: local path to `external_renderer_ipc.dll`.
 
+When one MuMu installation has several kernel versions (`nx_device\<version>`) and capture uses the shared `nx_main\adb.exe`, Runtime picks `external_renderer_ipc.dll` from the version the target instance's running `MuMuNxDevice.exe` belongs to. `ACTINGCOMMAND_NEMU_IPC_DLL` and an explicit Nemu DLL configuration still take priority. If no running process matches the target instance, capture keeps failing with the `shared_adb_multiple_dll_versions` ambiguity error.
+
 These files are host-local runtime tools. Keep their license review, source location, and version evidence outside the committed binary path unless a later milestone explicitly approves vendoring.
 
 ## ADB version boundary
