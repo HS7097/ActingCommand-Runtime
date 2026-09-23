@@ -2,7 +2,7 @@ name: Windows exact-SHA build
 
 on:
   push:
-    branches: [main]
+    branches: [main, stable]
   pull_request:
     branches: [main]
   workflow_dispatch:
