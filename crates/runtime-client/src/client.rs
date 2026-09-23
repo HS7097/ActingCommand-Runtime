@@ -2636,7 +2636,6 @@ fn receipt_ocr_run(
                 .filter(|event| {
                     event.event_id == terminal.event_id
                         && event.sequence == terminal.sequence
-                        && event.event_type == EventType::TaskFailed
                         && event.links.correlation_id() == Some(&correlation_id)
                 })
                 .collect::<Vec<_>>();
@@ -2645,6 +2644,10 @@ fn receipt_ocr_run(
                     "runtime_official_ocr_terminal_identity_mismatch",
                 ));
             };
+            // Only a task.failed terminal can carry OCR evidence; other rejections keep their error.
+            if event.event_type != EventType::TaskFailed {
+                return Ok(None);
+            }
             // The validated receipt binds this exact terminal to its request. Event links are optional.
             if event
                 .links

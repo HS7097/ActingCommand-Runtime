@@ -288,6 +288,8 @@ fields report. Fields-mode missing, malformed, mismatched or unverified evidence
 explicitly. A 0.7 collection run with partial observations and a later ordinary provider
 failure retains its original nonfatal rejection and terminal; it does not require a
 final comparison report. Other Runtime errors retain their existing error behavior.
+The OCR projection applies only when the rejection's terminal is a `task.failed` event;
+a rejection with any other terminal, such as `command.rejected`, is returned as-is.
 
 `privacy` is mandatory and is either `public` or `personal`; omission is not public.
 For personal fields, the program-facing projection removes raw text, trimmed text,
