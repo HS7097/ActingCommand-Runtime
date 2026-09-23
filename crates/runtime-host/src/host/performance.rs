@@ -66,7 +66,6 @@ impl HostShared {
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
-            performance.sample_and_record_capacity(&self.ledger, &self.events)?;
             let mut tick = if performance.counters_enabled() {
                 performance.tick(observed_at_unix_ms)?
             } else {
@@ -75,6 +74,8 @@ impl HostShared {
                     stop_sampling: true,
                 }
             };
+            // The one summary producer runs after this tick's system sample is ingested.
+            performance.sample_and_record_capacity(&self.ledger, &self.events)?;
             tick.stop_sampling &= !performance.capacity_enabled();
             performance.attach_ledger_sample(&mut tick, &self.ledger)?;
             let observation = if performance.counters_enabled() {

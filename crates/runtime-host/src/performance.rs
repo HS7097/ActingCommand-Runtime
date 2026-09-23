@@ -6,13 +6,14 @@ use crate::performance_control::PerformanceControlObservation;
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ActionId, EventId, EventSeverity, EventType, FrameId, MAX_LEDGER_SAMPLE_WINDOW_NS,
-    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
-    PerformanceDeadlineDisposition, PerformanceForegroundSummary, PerformanceLedgerSample,
-    PerformanceLedgerUnavailable, PerformanceLedgerWindow, PerformanceMetric,
-    PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePressureEventData,
-    PerformancePressureKind, PerformancePressureRecord, PerformancePressureSeverity,
-    PerformancePressureValue, PerformanceProcessOwnership, PerformanceProcessSummary,
-    PerformanceStutterEventData, PerformanceSummaryEventData, RecognitionId, RuntimeErrorCode,
+    PerformanceCapacitySample, PerformanceContext, PerformanceControlEventData,
+    PerformanceControlLevel, PerformanceDeadlineDisposition, PerformanceForegroundSummary,
+    PerformanceLedgerSample, PerformanceLedgerUnavailable, PerformanceLedgerWindow,
+    PerformanceMetric, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
+    PerformancePressureEventData, PerformancePressureKind, PerformancePressureRecord,
+    PerformancePressureSeverity, PerformancePressureValue, PerformanceProcessOwnership,
+    PerformanceProcessSummary, PerformanceStutterEventData, PerformanceSummaryEventData,
+    RecognitionId, RuntimeErrorCode,
 };
 use actingcommand_host_metrics::{
     HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
@@ -1229,32 +1230,71 @@ impl PerformanceMonitor {
                 },
             ));
         }
-        let summary_interval_ms = duration_ms(config.summary_interval)?;
-        let summary_due = self.last_summary_unix_ms.is_none_or(|previous| {
-            sample.observed_at_unix_ms.saturating_sub(previous) >= summary_interval_ms
-        });
-        if summary_due {
-            // Host-level summary: pipeline maxima fold over every instance alias in the window.
-            let context = self.context_for(None, sample.observed_at_unix_ms)?;
+        // A capacity owner's tick records the one summary once this sample is ingested.
+        if self.capacity.is_none() && self.summary_due(sample.observed_at_unix_ms, None)? {
             events.push(PerformanceSemanticEvent::Summary(Box::new(
-                PerformanceSummaryEventData {
-                    context,
-                    foreground: sample.foreground.clone(),
-                    owned_processes: sample.owned_processes.iter().map(process_summary).collect(),
-                    third_party_high_load: sample
-                        .third_party_high_load
-                        .iter()
-                        .map(process_summary)
-                        .collect(),
-                    ledger_commits: None,
-                    capacity: None,
-                },
+                self.summary(sample.observed_at_unix_ms, None)?,
             )));
             self.last_summary_unix_ms = Some(sample.observed_at_unix_ms);
         }
         Ok(PerformanceTick {
             events,
             stop_sampling: false,
+        })
+    }
+
+    /// The one "is a summary due now" decision fed by the system and the capacity tick:
+    /// none recorded yet, the summary interval elapsed, or a material capacity change.
+    fn summary_due(
+        &self,
+        now_unix_ms: u64,
+        capacity: Option<&PerformanceCapacitySample>,
+    ) -> RuntimeHostResult<bool> {
+        let Some(previous) = self.last_summary_unix_ms else {
+            return Ok(true);
+        };
+        let interval = self
+            .config
+            .as_ref()
+            .map_or(DEFAULT_SUMMARY_INTERVAL, |config| config.summary_interval);
+        Ok(
+            now_unix_ms.saturating_sub(previous) >= duration_ms(interval)?
+                || capacity.is_some_and(|live| {
+                    self.capacity
+                        .as_ref()
+                        .and_then(|owner| owner.recorded.as_ref())
+                        .is_none_or(|recorded| capacity::material_change(recorded, live))
+                }),
+        )
+    }
+
+    /// Host-level summary: pipeline maxima fold over every instance alias in the window.
+    fn summary(
+        &self,
+        now_unix_ms: u64,
+        capacity: Option<PerformanceCapacitySample>,
+    ) -> RuntimeHostResult<PerformanceSummaryEventData> {
+        let context = self.context_for(None, now_unix_ms)?;
+        let latest = self.system_samples.iter().rev().find(|sample| {
+            context.sample_count > 0
+                && (context.window_start_unix_ms..=context.window_end_unix_ms)
+                    .contains(&sample.observed_at_unix_ms)
+        });
+        Ok(PerformanceSummaryEventData {
+            context,
+            foreground: latest.and_then(|sample| sample.foreground.clone()),
+            owned_processes: latest.map_or_else(Vec::new, |sample| {
+                sample.owned_processes.iter().map(process_summary).collect()
+            }),
+            third_party_high_load: latest.map_or_else(Vec::new, |sample| {
+                sample
+                    .third_party_high_load
+                    .iter()
+                    .map(process_summary)
+                    .collect()
+            }),
+            ledger_commits: None,
+            capacity,
         })
     }
 

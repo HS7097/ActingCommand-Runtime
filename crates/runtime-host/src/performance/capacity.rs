@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{PerformanceMonitor, PerformanceMonitorConfig, system_performance_sampler};
+use super::{
+    PerformanceMonitor, PerformanceMonitorConfig, PerformanceSemanticEvent, PerformanceTick,
+    system_performance_sampler,
+};
 use crate::events::RuntimeEvents;
 use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
@@ -10,11 +13,10 @@ use actingcommand_contract::{
     AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityDecision,
     CapacityFactReference, CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds,
     CapacityVolumeSample, EventActor, EventSeverity, EventSource, LifecycleNativeDetail,
-    OriginModule, OwnerEpoch, PerformanceCapacitySample, PerformanceContext, PerformanceMetric,
+    OriginModule, OwnerEpoch, PerformanceCapacitySample, PerformanceMetric,
     PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePayloadDraft,
     PerformancePressureEventData, PerformancePressureKind, PerformancePressureRecord,
-    PerformancePressureSeverity, PerformancePressureValue, PerformanceSummaryEventData,
-    RuntimeErrorCode,
+    PerformancePressureSeverity, PerformancePressureValue, RuntimeErrorCode,
 };
 use actingcommand_host_metrics::{CapacityTarget, capacity_volume, sample_capacity};
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
@@ -215,6 +217,20 @@ impl CapacityProjection {
             Some(CommittedCapacity { sample, reference });
         Ok(())
     }
+
+    /// A live sample that records no summary keeps the last recorded fact's reference.
+    fn refresh(&self, sample: PerformanceCapacitySample) -> RuntimeHostResult<()> {
+        let mut committed = self
+            .committed
+            .lock()
+            .map_err(|_| failure("capacity_projection_poisoned"))?;
+        let reference = committed
+            .take()
+            .map(|committed| committed.reference)
+            .ok_or_else(|| failure("capacity_recorded_fact_missing"))?;
+        *committed = Some(CommittedCapacity { sample, reference });
+        Ok(())
+    }
 }
 
 impl ArtifactCapacityAdmission for CapacityProjection {
@@ -231,6 +247,8 @@ pub(super) struct CapacityMonitor {
     projection: Arc<CapacityProjection>,
     consecutive_failures: u16,
     pressure: Option<PerformancePressureRecord>,
+    /// The capacity sample of the last recorded summary; material change is measured against it.
+    pub(super) recorded: Option<PerformanceCapacitySample>,
 }
 
 impl PerformanceMonitor {
@@ -267,6 +285,7 @@ impl PerformanceMonitor {
             projection: Arc::clone(&projection),
             consecutive_failures: 0,
             pressure: None,
+            recorded: None,
         });
         monitor.sample_and_record_capacity(ledger, events)?;
         artifacts
@@ -399,23 +418,40 @@ impl PerformanceMonitor {
         } else {
             EventSeverity::Info
         };
-        let summary = PerformanceSummaryEventData {
-            context: PerformanceContext::unavailable(now.unix_ms),
-            foreground: None,
-            owned_processes: Vec::new(),
-            third_party_high_load: Vec::new(),
-            ledger_commits: None,
-            capacity: Some(sample.clone()),
+        if !self.summary_due(now.unix_ms, Some(&sample))? {
+            // Freshness follows the live sample; the reference stays on the last recorded fact.
+            let capacity = self
+                .capacity
+                .as_mut()
+                .ok_or_else(|| failure("capacity_owner_missing"))?;
+            capacity.projection.refresh(sample.clone())?;
+            return capacity.record_transitions(&sample, now, ledger, events);
+        }
+        let mut tick = PerformanceTick {
+            events: vec![PerformanceSemanticEvent::Summary(Box::new(
+                self.summary(now.unix_ms, Some(sample.clone()))?,
+            ))],
+            stop_sampling: false,
         };
-        let event = append(
-            ledger,
-            events,
-            severity,
-            PerformancePayloadDraft::summary(summary.clone(), AuditInput::new()),
-        );
+        let event = self.attach_ledger_sample(&mut tick, ledger).and_then(|()| {
+            match tick.events.as_slice() {
+                [PerformanceSemanticEvent::Summary(summary)] => append(
+                    ledger,
+                    events,
+                    severity,
+                    PerformancePayloadDraft::summary(summary.as_ref().clone(), AuditInput::new()),
+                ),
+                _ => Err(failure("capacity_summary_missing")),
+            }
+        });
+        let capacity = self
+            .capacity
+            .as_mut()
+            .ok_or_else(|| failure("capacity_owner_missing"))?;
         let event = match event {
             Ok(event) => event,
             Err(error) => {
+                capacity.recorded = None;
                 *capacity
                     .projection
                     .committed
@@ -425,15 +461,48 @@ impl PerformanceMonitor {
             }
         };
         capacity.projection.commit(sample.clone(), &event)?;
+        capacity.recorded = Some(sample.clone());
+        self.last_summary_unix_ms = Some(now.unix_ms);
         capacity.record_transitions(&sample, now, ledger, events)?;
         if self.config.is_some() {
-            self.record_event_reference(
-                &super::PerformanceSemanticEvent::Summary(Box::new(summary)),
-                *event.event_id(),
-            )?;
+            for summary in &tick.events {
+                self.record_event_reference(summary, *event.event_id())?;
+            }
         }
         Ok(())
     }
+}
+
+const MATERIAL_CAPACITY_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Against the last recorded fact: a volume (identity plus purposes) appears or disappears,
+/// its state changes, its bytes go to/from unknown, or move by at least 5 % or 1 GiB.
+pub(super) fn material_change(
+    recorded: &PerformanceCapacitySample,
+    live: &PerformanceCapacitySample,
+) -> bool {
+    recorded.volumes.len() != live.volumes.len()
+        || live.volumes.iter().any(|volume| {
+            recorded
+                .volumes
+                .iter()
+                .find(|previous| {
+                    previous.volume_id == volume.volume_id && previous.purposes == volume.purposes
+                })
+                .is_none_or(|previous| {
+                    previous.state != volume.state
+                        || match (previous.available_bytes, volume.available_bytes) {
+                            (Some(before), Some(after)) => {
+                                let moved = before.abs_diff(after);
+                                moved > 0
+                                    && (moved >= MATERIAL_CAPACITY_BYTES
+                                        || moved.saturating_mul(20) >= before)
+                            }
+                            (None, None) => false,
+                            _ => true,
+                        }
+                })
+        })
 }
 
 impl CapacityMonitor {

@@ -20,13 +20,30 @@ or a reservation. The existing performance interval defaults to two seconds;
 capacity freshness is twice that interval. Optional counter shutdown does not
 stop capacity sampling.
 
+Capacity is sampled every interval, but a sample is recorded only through the
+single `perf.summary` producer. A summary is due when none has been recorded yet
+in this owner epoch, when the summary interval (60 seconds by default) has
+elapsed since the last recorded summary, or when the live sample changed
+materially against the last recorded capacity fact: a volume (identity plus
+purpose set) appeared or disappeared, a volume's state changed, its available
+bytes went to or from unknown, or they moved by at least 5 % of the recorded
+value or by at least 1 GiB. The recorded summary carries the host performance
+context of that moment (unavailable only when counters are disabled or its
+window holds no data), the latest capacity sample and the ledger commit window.
+Ticks on which no summary is due record nothing.
+
 Each small typed B3 `PerformanceSummary.capacity` is committed directly to
 GlobalLedger before it can authorize business. It includes owner epoch, original
 Unix and monotonic observation times, thresholds, volume identities and purpose
 sets, available bytes or Unknown, and native failure detail. It needs no context
-artifact. Only the append receipt updates the derived view; queuing and appending
-do not refresh observation time. Admission carries its decision time and the
-committed EventId/sequence. Missing, failed, stale, future, changed-binding or
+artifact. A recorded fact enters the derived view only with its append receipt;
+queuing and appending do not refresh observation time. A sample that records no
+summary replaces only the derived view's live sample and keeps the last recorded
+fact's reference, so freshness, binding and thresholds follow the live sample.
+Admission carries its decision time and the fact reference: the EventId/sequence
+of the last recorded fact, which may lag the live sample by at most the summary
+interval and the 5 % / 1 GiB band. A failed recording clears the derived view and
+returns its error. Missing, failed, stale, future, changed-binding or
 cross-owner facts refuse new work. Old summaries without capacity do not authorize
 capacity admission.
 
