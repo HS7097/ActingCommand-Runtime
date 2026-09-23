@@ -11,7 +11,8 @@ Workflow #313 owns the design. This document freezes the contract half, the
 pure store, and the host wiring that makes the store ledger-backed: the three
 ledger events, the append-first rule, startup replay, takeover invalidation,
 the periodic snapshot, the read operation, and the producers built so far
-(see "Producers"). The remaining producers (`task.`, `host.`, … facts),
+(see "Producers"). The `task.` family has three producers (`task.game`,
+`task.server`, `task.page`); the remaining producers (`host.`, … facts),
 policy-input rewiring, and the per-instance read operation land in later
 slices.
 
@@ -136,10 +137,12 @@ When the owner guard reports a takeover (a new owner epoch over an existing
 state root), device-bound facts of the previous epoch are stale until the
 post-connect self-check writes them again. After replay, every instance-scoped
 record whose key starts with `device.`, `backend.` or `application.` is
-dropped, ledger first:
+dropped, and so is the single key `task.page` (the other `task.` keys survive a
+takeover), ledger first:
 one `runtime.fact_invalidated` with reason `runtime_takeover` per record
 (`at_unix_ms` = the host clock now, instance link from the record's scope),
-then `invalidate_instance` per distinct instance with the same time. The
+then `invalidate_instance` for the families and `invalidate` for `task.page`
+per distinct instance with the same time. The
 dropped keys must equal the appended keys, otherwise
 `runtime_fact_store_desync` is fatal. The store is then dirty. Zero matching
 records append nothing, so a fresh ledger and the startup event order are
@@ -180,7 +183,7 @@ usage error; the command takes no `--instance`.
 
 ## Producers
 
-Three producers write the store today; all go through the append-first rule
+Five producers write the store today; all go through the append-first rule
 above with source `runtime`.
 
 - `device.connected` (slice #316-B) — instance scope, `boolean`: the running
@@ -201,6 +204,26 @@ above with source `runtime`.
   keep the first. Invalidated with `device_closed` after emulator `stop`, with
   `adb_unreachable` on an ADB failure, and with `runtime_takeover` like every
   device-bound family. Never written for a fixture instance.
+- `task.game` and `task.server` (Workflow #191, slice g) — instance scope,
+  `string`, no lifetime: the admitted contained-task package's `control.json`
+  `game` and `server` declarations, copied verbatim (the Runtime names no game
+  or server of its own). The host records both for the leased instance right
+  after `task.package_admitted` is appended, each only when its value differs
+  from the stored one, so repeated runs of packages with the same declarations
+  append nothing; two observations inside one millisecond keep the first. An
+  entry-recovery package's admission records nothing. Invalidated with
+  `device_closed` after emulator `stop`; an ADB failure and a takeover leave
+  them in place (they name the last admitted package, not device state).
+  Written for fixture and physical instances alike.
+- `task.page` (Workflow #191, slice g) — instance scope, `string`, no lifetime:
+  the page label the last contained-task recognition matched (`matched_page`
+  of `task.recognition_completed`), copied verbatim. Recorded right after that
+  event is appended, only when a page matched and the label differs from the
+  stored one; an unmatched recognition leaves the stored value in place.
+  Invalidated with `device_closed` after emulator `stop`, with
+  `adb_unreachable` wherever `device.connected` is (foreground gate and
+  contained-task capture), and with `runtime_takeover`. Written for fixture and
+  physical instances alike.
 - `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module

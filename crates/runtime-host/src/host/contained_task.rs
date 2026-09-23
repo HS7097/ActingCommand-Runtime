@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation, TaskGeometryConclusion,
@@ -411,6 +412,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) run_id: IssuedRunId,
     execution_provenance: ExecutionBackendProvenance,
     pub(super) control: Arc<ContainedRunControl>,
+    /// The admitted package's `control.json` `game` / `server`, published as `task.game` /
+    /// `task.server` once `task.package_admitted` is appended.
+    declared_game_server: (String, String),
     pub(super) last_frame_id: Option<IssuedFrameId>,
     geometry_session: Option<CaptureGeometrySessionRef>,
     geometry_frame: Option<TaskGeometryFrame>,
@@ -2758,7 +2762,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         self.token.expires_at_monotonic_ms(),
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                let (game, server) = &self.declared_game_server;
+                for (key, value) in [(TASK_GAME_FACT_KEY, game), (TASK_SERVER_FACT_KEY, server)] {
+                    self.host
+                        .record_changed_instance_string_fact(self.control.instance_id, key, value)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                }
+                Ok(())
             }
             ContainedTaskTrace::RunStarted => self.append_task(
                 EventSeverity::Info,
@@ -3010,7 +3021,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         TaskPayloadDraft::semantic(
                             TaskSemanticFact::RecognitionCompleted {
                                 candidate_pages,
-                                matched_page: page_label,
+                                matched_page: page_label.clone(),
                                 frame_width: width,
                                 frame_height: height,
                             },
@@ -3022,6 +3033,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .finish_append(append_started, appended.is_ok(), observation);
                     appended?;
                     self.current_recognition_id = None;
+                    if let Some(page) = &page_label {
+                        self.host
+                            .record_changed_instance_string_fact(
+                                self.control.instance_id,
+                                TASK_PAGE_FACT_KEY,
+                                page,
+                            )
+                            .map_err(RequestFailure::poison_without_terminal)?;
+                    }
                     Ok(())
                 })();
                 let elapsed_us =
@@ -4585,6 +4605,7 @@ impl HostShared {
             run_id,
             execution_provenance,
             control: Arc::clone(&control),
+            declared_game_server: (prepared.game().to_owned(), prepared.server().to_owned()),
             last_frame_id: None,
             geometry_session: None,
             geometry_frame: None,

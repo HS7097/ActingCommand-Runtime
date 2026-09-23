@@ -1809,6 +1809,10 @@ impl PreparedContainedTask {
         &self.control.game
     }
 
+    pub fn server(&self) -> &str {
+        &self.control.server
+    }
+
     pub fn scheduling_outcome(&self) -> Option<&SchedulingOutcomeDeclaration> {
         self.scheduling_outcome.as_ref()
     }
