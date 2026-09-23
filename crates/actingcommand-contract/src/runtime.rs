@@ -3217,8 +3217,13 @@ impl RuntimeRequest {
         if !valid_client_origin(self.actor, self.source) {
             return Err(RuntimeContractError::new("invalid_client_origin"));
         }
+        // Shutdown is only ever requested, never forced: the person at the console (Ui) or the
+        // operator (Cli) may ask; the host still decides and stops at its own pace.
         if matches!(self.operation, RuntimeOperation::RequestShutdown { .. })
-            && (self.actor != EventActor::Cli || self.source != EventSource::Cli)
+            && !matches!(
+                (self.actor, self.source),
+                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+            )
         {
             return Err(RuntimeContractError::new("invalid_shutdown_origin"));
         }
