@@ -105,15 +105,16 @@ are not gated.
 - No resumed activity reported (a transition, an empty display):
   `application_foreground_unknown`, same shape, nothing recorded.
 - ADB failure (`ensure_device` or the command itself): the ADB baseline is lost. The host
-  invalidates `device.connected` and `application.foreground` with reason `adb_unreachable`
-  (`runtime.fact_invalidated`, absent keys ignored) and refuses with
+  invalidates `device.connected`, `application.foreground` and `task.page` with reason
+  `adb_unreachable` (`runtime.fact_invalidated`, absent keys ignored) and refuses with
   `application_foreground_unknown`, even while a Nemu session still delivers frames. The next
   successful gate re-records `application.foreground`; `device.connected` is written again by
-  the next emulator control action.
+  the next emulator control action, `task.page` by the next matched contained-task recognition.
 - First contained-task capture on a physical instance (#316-P4): when it fails and one ADB
-  baseline probe against the task deadline fails too, the host invalidates the same two facts
-  with `adb_unreachable` and the task fails nonfatal (`task.failed` severity `warning`, lease
-  released) instead of poisoning the host; an answering adbd keeps the capture failure fatal.
+  baseline probe against the task deadline fails too, the host invalidates the same three facts
+  (`device.connected`, `application.foreground`, `task.page`) with `adb_unreachable` and the
+  task fails nonfatal (`task.failed` severity `warning`, lease released) instead of poisoning
+  the host; an answering adbd keeps the capture failure fatal.
 
 Rule (ADB baseline, Alice 09-19): whatever other connection is open, the ADB endpoint must
 stay bound and answering; Nemu never replaces ADB as instance identity (the port, #322) or as

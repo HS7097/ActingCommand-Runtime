@@ -8,9 +8,19 @@
 //! periodic snapshot only shortens replay.
 
 use super::*;
+use actingcommand_contract::FactValue;
 
 /// Key families that stop describing the device once a new owner epoch starts.
 const TAKEOVER_INVALIDATED_FAMILIES: [&str; 3] = ["device.", "backend.", "application."];
+
+/// The admitted package's `control.json` `game` / `server` declarations, copied verbatim.
+pub(super) const TASK_GAME_FACT_KEY: &str = "task.game";
+pub(super) const TASK_SERVER_FACT_KEY: &str = "task.server";
+/// The page label the last contained-task recognition matched.
+pub(super) const TASK_PAGE_FACT_KEY: &str = "task.page";
+
+/// Single keys outside [`TAKEOVER_INVALIDATED_FAMILIES`] that a takeover also drops.
+const TAKEOVER_INVALIDATED_KEYS: [&str; 1] = [TASK_PAGE_FACT_KEY];
 
 impl HostShared {
     /// Records the in-memory runtime configuration manifest as its two
@@ -69,6 +79,38 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    /// Records an instance-scope string fact only when it differs from the stored value;
+    /// an unchanged value appends nothing and a same-millisecond observation keeps the
+    /// first (`runtime_fact_stale` is not an error). No lifetime.
+    pub(super) fn record_changed_instance_string_fact(
+        &self,
+        instance_id: InstanceId,
+        key: &str,
+        value: &str,
+    ) -> RuntimeHostResult<()> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let value = FactValue::String(value.to_owned());
+        let unchanged = lock(&self.runtime_facts, "read_instance_string_fact")?
+            .get(&scope, key)
+            .is_some_and(|record| record.value == value);
+        if unchanged {
+            return Ok(());
+        }
+        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
+        match self.record_runtime_fact(RuntimeFactRecord {
+            scope,
+            key: key.to_owned(),
+            value,
+            observed_at_unix_ms,
+            source: OriginModule::Runtime,
+            ttl_ms: None,
+        }) {
+            Ok(_) => Ok(()),
+            Err(error) if error.code() == "runtime_fact_stale" => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Appends `runtime.fact_invalidated` first, then drops the record from
@@ -282,8 +324,8 @@ pub(super) fn recover_runtime_fact_store(
 }
 
 /// Appends `runtime.fact_invalidated` (reason `runtime_takeover`) for every
-/// `device.` / `backend.` instance fact, then drops them per instance. Zero
-/// matching records append nothing.
+/// `device.` / `backend.` / `application.` instance fact and `task.page`, then
+/// drops them per instance. Zero matching records append nothing.
 fn append_takeover_invalidations(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
@@ -293,9 +335,10 @@ fn append_takeover_invalidations(
     let mut targets: BTreeMap<InstanceId, Vec<String>> = BTreeMap::new();
     for record in store.records() {
         if let RuntimeFactScope::Instance { instance_id } = &record.scope
-            && TAKEOVER_INVALIDATED_FAMILIES
+            && (TAKEOVER_INVALIDATED_FAMILIES
                 .iter()
                 .any(|family| record.key.starts_with(family))
+                || TAKEOVER_INVALIDATED_KEYS.contains(&record.key.as_str()))
         {
             targets
                 .entry(*instance_id)
@@ -332,12 +375,28 @@ fn append_takeover_invalidations(
                 .append(draft)
                 .map_err(|_| ledger_error("append_runtime_fact_invalidated"))?;
         }
-        let dropped = store.invalidate_instance(
+        let mut dropped = store.invalidate_instance(
             *instance_id,
             &TAKEOVER_INVALIDATED_FAMILIES,
             RuntimeFactInvalidationReason::RuntimeTakeover,
             at_unix_ms,
         );
+        let scope = RuntimeFactScope::Instance {
+            instance_id: *instance_id,
+        };
+        for key in TAKEOVER_INVALIDATED_KEYS {
+            // An absent key (`Missing`) is simply not dropped; the comparison below catches desync.
+            if let Ok(entry) = store.invalidate(
+                &scope,
+                key,
+                RuntimeFactInvalidationReason::RuntimeTakeover,
+                at_unix_ms,
+            ) {
+                dropped.push(entry);
+            }
+        }
+        // `keys` is in store (key) order; the family and single-key drops are merged into it.
+        dropped.sort_by(|left, right| left.key.cmp(&right.key));
         if dropped.iter().map(|entry| &entry.key).ne(keys.iter()) {
             return Err(RuntimeHostError::fatal(
                 "runtime_fact_store_desync",

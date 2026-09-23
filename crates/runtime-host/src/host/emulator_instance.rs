@@ -27,6 +27,7 @@
 //! records the instance program fact `device.connected` (and, after `Stop`, invalidates it
 //! with `device_closed`).
 
+use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use crate::{EmulatorControlFailure, EmulatorControlOutcome};
 use actingcommand_contract::{EmulatorInstanceAction, FactValue, StartupPackageDisposition};
@@ -343,10 +344,13 @@ impl HostShared {
         })
         .map_err(|error| fact_failure(error, terminal_event))?;
         if action == EmulatorInstanceAction::Stop {
-            // A stopped instance has no foreground either (#316-B3).
+            // A stopped instance has no foreground (#316-B3) and runs no task either.
             for key in [
                 DEVICE_CONNECTED_FACT_KEY,
                 actingcommand_contract::APPLICATION_FOREGROUND_FACT_KEY,
+                TASK_GAME_FACT_KEY,
+                TASK_SERVER_FACT_KEY,
+                TASK_PAGE_FACT_KEY,
             ] {
                 match self.invalidate_runtime_fact(
                     &scope,

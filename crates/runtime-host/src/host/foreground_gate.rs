@@ -18,6 +18,7 @@
 //! `application_not_foreground` / `application_foreground_unknown` (`invalid_request`).
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
+use super::runtime_facts::TASK_PAGE_FACT_KEY;
 use super::*;
 use actingcommand_contract::{APPLICATION_FOREGROUND_FACT_KEY, FactValue};
 
@@ -163,11 +164,15 @@ impl HostShared {
         }
     }
 
-    /// Drops `device.connected` and `application.foreground` with `adb_unreachable`; an
-    /// absent key is not an error.
+    /// Drops `device.connected`, `application.foreground` and `task.page` with
+    /// `adb_unreachable`; an absent key is not an error.
     pub(super) fn invalidate_adb_baseline(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         let scope = RuntimeFactScope::Instance { instance_id };
-        for key in [DEVICE_CONNECTED_FACT_KEY, APPLICATION_FOREGROUND_FACT_KEY] {
+        for key in [
+            DEVICE_CONNECTED_FACT_KEY,
+            APPLICATION_FOREGROUND_FACT_KEY,
+            TASK_PAGE_FACT_KEY,
+        ] {
             match self.invalidate_runtime_fact(
                 &scope,
                 key,
