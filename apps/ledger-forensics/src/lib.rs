@@ -187,10 +187,8 @@ where
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
         "material" => {
-            if require_utf8(args.next(), "--request")? != "--request" {
-                return Err(invalid_arguments("material expects --request JSON"));
-            }
-            let json = require_utf8(args.next(), "typed material request")?;
+            require_utf8(args.next(), "--request")?;
+            let json = next_value(&mut args, "--request")?;
             if json.len() > 16 * 1024 || args.next().is_some() {
                 return Err(invalid_arguments(
                     "material request exceeds bound or has extra arguments",
