@@ -2,8 +2,9 @@
 
 `actingd check-config` validates a configuration file exactly as startup would
 and stops before the first side effect. It runs the configuration load, the
-typed assembly of `actingcommand.actingd.config.v1` and
-`RuntimeHostConfig::validate`, the same checks as startup's first step, then
+typed assembly of `actingcommand.actingd.config.v1`,
+`RuntimeHostConfig::validate` and the instance resource package admission (see
+"Instance resource package"), the same checks as startup's first step, then
 drops the assembly. It never stats, creates or reads anything under
 `state_root`, never opens the ledger, never acquires `owner.lock`, never binds a
 socket and records no lifecycle failure. A passing check is not a startup: the
@@ -34,7 +35,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -91,7 +92,9 @@ terminal with the chosen eligibility basis in the original eviction intent.
   `instance_config_invalid`; a non-absolute locator, a digest that is not 64
   lowercase hex digits or a request the contract refuses fail with
   `startup_package_path_invalid`, `startup_package_digest_invalid`,
-  `startup_package_invalid`.
+  `startup_package_invalid`. `resource_package` is present only on an instance
+  that declares one: the admitted `{ path, kind }` (see "Instance resource
+  package"); an instance without the field carries no `resource_package` key.
 - `policy_configured` states whether a `policy` section was assembled.
 - `config_manifest` is the in-memory runtime configuration manifest exactly
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
@@ -124,10 +127,12 @@ terminal with the chosen eligibility basis in the original eviction intent.
     is `explicit` when the file named the value and `default` otherwise;
     `discovered` is reserved and not produced yet. A `value` is a typed
     scalar (`string`, `integer`, `boolean`, `duration_ms`).
-- `not_checked` is a fixed list of what this command cannot validate:
-  `vision_provider_manifest` (only read and validated inside host startup,
+- `not_checked` lists what this command did not validate. It always starts
+  with `vision_provider_manifest` (only read and validated inside host startup,
   which records `provider.startup_observed`) and `state_root` (nothing under it
-  is inspected).
+  is inspected). `resource_package_directory_declarations` is appended when at
+  least one instance's `resource_package` is a directory: its existence is
+  checked, its declarations are not (see "Instance resource package").
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"config_decode_failed","stage":"load"}}
@@ -139,11 +144,53 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `config_invalid`, `bind_host_not_loopback`, `execution_registry_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
 `scheduled_execution_instance_unknown`, `policy_governance_capability_missing`,
-`config_manifest_value_out_of_range`, `config_manifest_invalid`)
-or `validate` (`invalid_runtime_host_config`,
+`config_manifest_value_out_of_range`, `config_manifest_invalid`),
+`validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest` and the other
-`RuntimeHostConfig::validate` codes). The secret fingerprint salt and the
-governance capability bytes are never printed.
+`RuntimeHostConfig::validate` codes) or `resource_package`
+(`resource_package_missing`, `resource_package_invalid`), in that order. The
+secret fingerprint salt and the governance capability bytes are never printed.
+
+A `resource_package` failure also carries `error.detail`; no other stage does:
+
+```json
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"resource_package_invalid","stage":"resource_package","detail":{"alias":"node.a","path":"D:/runtime/packages/neutral.zip","loader_code":"contained_task_admission_failed","loader_message":"fatal containment error: missing package entry: resources/operations/task/task.json"}}}
+```
+
+`detail.alias` is the instance and `detail.path` the absolute path that was
+checked. `detail.loader_code` and `detail.loader_message` are the package
+loader's own code and message for `resource_package_invalid` on a package file,
+and `null` otherwise.
+
+## Instance resource package
+
+An instance may declare `resource_package`, the local path of its default
+resource package: a package file (ZIP) or a package directory. A relative path
+resolves against the configuration file's directory, as
+`startup_package.package` does, and is then made absolute. The field carries no
+digest and URLs are not accepted: whoever writes the configuration downloads the
+package first. Daemon startup runs the same admission right after assembly,
+before any side effect, and fails with the same codes on the normal
+`FATAL actingd: <code>: instance "<alias>" resource_package "<path>"` line
+(followed by `; loader <code>: <message>` when the loader refused the file).
+
+- `resource_package_missing`: the path does not exist (or is empty).
+- `resource_package_invalid`: the path exists but is neither a file nor a
+  directory, or it is a file that the contained-task package loader
+  (`PreparedContainedTask::load`, the loader `actingctl task-run` uses) cannot
+  read. The file's own SHA-256 serves as the expected digest, so only the
+  package content is judged.
+- A directory is checked for existence only. The loader reads a package
+  directory solely against a Git source-tree reference
+  (`contracts/package-reference.md`), which this field does not carry; hence the
+  `resource_package_directory_declarations` entry in `not_checked`.
+- Packages declare no application id (`contracts/application-lifecycle.md`), so
+  nothing is compared against the instance's `application_id`.
+
+The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
+and reported by the instance status entry (`RuntimeInstanceStatus`,
+`ProjectInstanceView`) as `resource_package`, omitted when none is configured.
+Nothing else consumes it yet.
 
 ## Discovery-bound instances
 

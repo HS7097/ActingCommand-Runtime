@@ -394,6 +394,9 @@ pub struct ProjectInstanceView {
     pub takeover_cooldown_active: bool,
     pub destructive_step_active: bool,
     pub preempt_requested: bool,
+    /// The instance's configured default resource package; absent when none is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_package: Option<crate::InstanceResourcePackage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1186,6 +1189,7 @@ mod tests {
                 takeover_cooldown_active: false,
                 destructive_step_active: false,
                 preempt_requested: false,
+                resource_package: None,
             }],
             catalog: Some(ProjectCatalogView {
                 catalog_id: "project:neutral".to_owned(),

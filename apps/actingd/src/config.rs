@@ -5,7 +5,7 @@ use actingcommand_contract::resource_declaration::{
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, ContainedTaskRequest, EmulatorInstanceAction, InstanceId,
-    RuntimeConfigManifest,
+    InstanceResourcePackage, InstanceResourcePackageKind, RuntimeConfigManifest,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
@@ -13,6 +13,7 @@ use actingcommand_device::{
     DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig, PixelFormat,
     PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
 };
+use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -28,6 +29,7 @@ use actingcommand_vision_ffi::{
     NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
@@ -158,6 +160,11 @@ struct InstanceConfig {
     /// `emulator start` / `restart` of this instance; absent means nothing is pulled.
     #[serde(default)]
     startup_package: Option<StartupPackageConfigFile>,
+    /// Slice #324-r1: the instance's default resource package, a local package file or
+    /// package directory. A relative path resolves against the configuration file's
+    /// directory, as `startup_package.package` does; see `validate_resource_packages`.
+    #[serde(default)]
+    resource_package: Option<PathBuf>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
 }
@@ -219,6 +226,98 @@ pub(super) struct RuntimeAssembly {
     pub(super) policy: Option<PolicyBootstrap>,
     /// The manifest handed to `host`; `check-config` prints it.
     pub(super) manifest: RuntimeConfigManifest,
+    /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
+    pub(super) resource_packages: BTreeMap<String, PathBuf>,
+}
+
+/// A refused `resource_package`: the code, the offending instance and path and, for
+/// `resource_package_invalid`, the package loader's own code and message.
+pub(super) struct ResourcePackageRejection {
+    pub(super) code: &'static str,
+    alias: String,
+    path: PathBuf,
+    loader: Option<(&'static str, String)>,
+}
+
+impl ResourcePackageRejection {
+    pub(super) fn detail(&self) -> serde_json::Value {
+        serde_json::json!({
+            "alias": self.alias,
+            "path": self.path.to_string_lossy(),
+            "loader_code": self.loader.as_ref().map(|(code, _)| code),
+            "loader_message": self.loader.as_ref().map(|(_, message)| message),
+        })
+    }
+}
+
+impl std::fmt::Display for ResourcePackageRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "instance {:?} resource_package {:?}",
+            self.alias,
+            self.path.to_string_lossy()
+        )?;
+        if let Some((code, message)) = &self.loader {
+            write!(formatter, "; loader {code}: {message}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Admits every configured `resource_package`, identically for `check-config` and daemon
+/// startup: the path must exist (`resource_package_missing`); a file must be read by the
+/// contained-task package loader exactly as `task-run` admits one, with the file's own
+/// digest as the expected one (`resource_package_invalid`). A directory is confirmed to
+/// exist only: the loader reads a package directory solely against a Git source-tree
+/// reference, which this field does not carry, so `check-config` lists it as not checked.
+pub(super) fn validate_resource_packages(
+    configured: &BTreeMap<String, PathBuf>,
+) -> Result<BTreeMap<String, InstanceResourcePackage>, ResourcePackageRejection> {
+    let mut admitted = BTreeMap::new();
+    for (alias, configured_path) in configured {
+        let rejected = |code, path: &Path, loader| ResourcePackageRejection {
+            code,
+            alias: alias.clone(),
+            path: path.to_path_buf(),
+            loader,
+        };
+        let path = std::path::absolute(configured_path)
+            .map_err(|_| rejected("resource_package_missing", configured_path, None))?;
+        let metadata =
+            fs::metadata(&path).map_err(|_| rejected("resource_package_missing", &path, None))?;
+        let kind = if metadata.is_dir() {
+            InstanceResourcePackageKind::Directory
+        } else if metadata.is_file() {
+            let invalid = |code, message: String| {
+                rejected("resource_package_invalid", &path, Some((code, message)))
+            };
+            let bytes = fs::read(&path)
+                .map_err(|error| invalid("package_read_failed", error.to_string()))?;
+            let expected =
+                ExternalExpectedSha256::parse_hex(&format!("{:x}", Sha256::digest(&bytes)))
+                    .map_err(|error| invalid("package_reference_invalid", error.to_string()))?;
+            PreparedContainedTask::load(alias, &bytes, expected).map_err(|error| {
+                invalid(
+                    error.code(),
+                    error
+                        .detail()
+                        .map_or_else(|| error.to_string(), str::to_owned),
+                )
+            })?;
+            InstanceResourcePackageKind::File
+        } else {
+            return Err(rejected("resource_package_invalid", &path, None));
+        };
+        admitted.insert(
+            alias.clone(),
+            InstanceResourcePackage {
+                path: path.to_string_lossy().into_owned(),
+                kind,
+            },
+        );
+    }
+    Ok(admitted)
 }
 
 pub(super) struct PolicyBootstrap {
@@ -394,7 +493,17 @@ impl ActingdConfigFile {
             .map_err(|_| "invalid_failed_run_retention_policy")?;
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
+        let mut resource_packages = BTreeMap::new();
         for instance in &mut instances {
+            if let Some(path) = instance.resource_package.take() {
+                // An empty path stays empty so admission reports it missing.
+                let path = if path.as_os_str().is_empty() || path.is_absolute() {
+                    path
+                } else {
+                    self.source_root.join(path)
+                };
+                resource_packages.insert(instance.alias.clone(), path);
+            }
             if let Some(startup_package) = instance.startup_package.take() {
                 if instance.fixture_backend.is_some() {
                     return Err("instance_config_invalid");
@@ -497,6 +606,7 @@ impl ActingdConfigFile {
             registry,
             policy,
             manifest,
+            resource_packages,
         })
     }
 }

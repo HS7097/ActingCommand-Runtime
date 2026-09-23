@@ -67,6 +67,7 @@ impl ProjectInterfaceProjection {
                 takeover_cooldown_active: instance.takeover_cooldown_active(),
                 destructive_step_active: instance.destructive_step_active(),
                 preempt_requested: instance.preempt_requested(),
+                resource_package: instance.resource_package().cloned(),
             })
             .collect::<Vec<_>>();
         let facts = self.facts.into_iter().map(project_fact).collect::<Vec<_>>();

@@ -1210,6 +1210,23 @@ impl fmt::Debug for CaptureSequence {
     }
 }
 
+/// Whether an instance's default resource package is a package file or a package directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceResourcePackageKind {
+    File,
+    Directory,
+}
+
+/// The default resource package configured for an instance (slice #324-r1): the local path the
+/// daemon admitted at startup. No digest is carried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceResourcePackage {
+    pub path: String,
+    pub kind: InstanceResourcePackageKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeInstanceStatus {
@@ -1228,6 +1245,9 @@ pub struct RuntimeInstanceStatus {
     /// absent for a serial-configured instance or one without an ADB target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     adb_port: Option<u16>,
+    /// The instance's configured default resource package; absent when none is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_package: Option<InstanceResourcePackage>,
 }
 
 impl RuntimeInstanceStatus {
@@ -1251,6 +1271,7 @@ impl RuntimeInstanceStatus {
             backend_provenance: None,
             capabilities: None,
             adb_port: None,
+            resource_package: None,
         };
         status.validate()?;
         Ok(status)
@@ -1325,6 +1346,18 @@ impl RuntimeInstanceStatus {
 
     pub const fn adb_port(&self) -> Option<u16> {
         self.adb_port
+    }
+
+    pub fn with_resource_package(
+        mut self,
+        resource_package: Option<InstanceResourcePackage>,
+    ) -> Self {
+        self.resource_package = resource_package;
+        self
+    }
+
+    pub const fn resource_package(&self) -> Option<&InstanceResourcePackage> {
+        self.resource_package.as_ref()
     }
 }
 
