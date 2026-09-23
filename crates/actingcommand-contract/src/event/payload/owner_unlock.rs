@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `owner.unlock`: the operator confirmation recorded by the offline `actingd unlock-owner`
-//! (`contracts/actingd-unlock-owner.md`). It is a `cli.command` fact, never an owner-epoch
-//! record; the owner journal alone carries the close evidence.
-
 use super::*;
 use crate::OwnerUnlockActor;
 
+/// `owner.unlock`: the operator confirmation recorded by the offline `actingd unlock-owner`
+/// (`contracts/actingd-unlock-owner.md`). It is a `cli.command` fact, never an owner-epoch
+/// record; the owner journal alone carries the close evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OwnerUnlockPayload {
