@@ -956,6 +956,19 @@ fn runtime_owned_policy_inputs_supply_time_and_reject_unknown_resource_hosts() {
         )),
     )
     .expect("runtime host");
+    let program_snapshot = host.runtime_fact_snapshot().expect("seeded program facts");
+    let seeded_instance = program_snapshot
+        .records
+        .iter()
+        .find(|record| record.key == actingcommand_contract::CONFIG_POLICY_INSTANCE_KEY)
+        .expect("configured instance seed");
+    assert_eq!(
+        seeded_instance.value,
+        ContractFactValue::String(
+            serde_json::to_string(&policy_facts().instances[0])
+                .expect("original configured instance bytes")
+        ),
+    );
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate catalog");
     let cycle = host

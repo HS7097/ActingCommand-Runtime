@@ -11,9 +11,8 @@ Workflow #313 owns the design. This document freezes the contract half, the
 pure store, and the host wiring that makes the store ledger-backed: the three
 ledger events, the append-first rule, startup replay, takeover invalidation,
 the periodic snapshot, the read operation, and the producers built so far
-(see "Producers"). The remaining producers (`task.`, `host.`, … facts),
-policy-input rewiring, and the per-instance read operation land in later
-slices.
+(see "Producers"), and the program-instance inputs consumed by policy. The
+remaining producers (`task.`, `host.`, … facts) land in later slices.
 
 ## Records
 
@@ -102,9 +101,17 @@ fact store:
 2. **Append.** `runtime.fact_recorded` or `runtime.fact_invalidated` is
    appended through the host's gated append path. An append failure returns
    the ledger error and touches nothing in memory.
-3. **Apply.** The store is updated and marked dirty. If the store still refuses
+3. **Apply.** Both fact projections consume the committed tail, including this
+   event, and the program store is marked dirty when its records change. If it refuses
    a change the ledger already holds, memory and ledger disagree: the host
    marks itself fatal with `runtime_fact_store_desync` and returns it.
+
+The Host's program-store wrapper tracks the last sequence actually applied;
+the instance store retains its own applied cursor. Both inspect every event
+through the selected position, apply their own event families, and reject a
+gap or incomplete prefix. A snapshot label never advances a cursor. Fatal
+append/application failures close projection eligibility before the caller
+releases `fact_write_gate`, including the interval before fatal propagation.
 
 The store keeps no pending queue: the per-record append is the durability
 step. Anything not appended is gone with the process (iron rule 13).
@@ -115,13 +122,16 @@ step. Anything not appended is gone with the process (iron rule 13).
 `runtime.started` / `runtime.takeover` and the `runtime.instance_bound`
 events, next to the instance fact store's recovery:
 
-1. The newest `runtime.fact_snapshot` is read (`EventQuery` on that event
-   type; the ledger's `query` is unpaged). If one exists the store is
-   replaced from it with `replay`.
+1. The newest `runtime.fact_snapshot` whose event is at or before the requested
+   cut is read. Its coverage must precede its own event, and the interval
+   between coverage and that event must be complete and contain no omitted
+   recorded/invalidated change. If one exists the store is replaced from it
+   with `replay`, and the cursor advances to that actual snapshot event.
 2. Every `runtime.fact_recorded` / `runtime.fact_invalidated` with a sequence
    greater than that snapshot's — or every one of them when no snapshot exists
-   — is applied in ledger order through `record` / `invalidate`, selected with
-   `origin_module` `runtime-facts`.
+   — is applied through the requested cut in ledger order through
+   `record` / `invalidate`. All intervening events advance actual prefix
+   progress. Subsequent snapshots must match the already applied state.
 3. Any rejection while replaying our own ledger (stale, invalid, capacity,
    missing, an unexpected payload under that module) is fatal:
    `runtime_fact_replay_failed`, with the offending sequence in the native
@@ -138,19 +148,20 @@ post-connect self-check writes them again. After replay, every instance-scoped
 record whose key starts with `device.`, `backend.` or `application.` is
 dropped, ledger first:
 one `runtime.fact_invalidated` with reason `runtime_takeover` per record
-(`at_unix_ms` = the host clock now, instance link from the record's scope),
-then `invalidate_instance` per distinct instance with the same time. The
-dropped keys must equal the appended keys, otherwise
-`runtime_fact_store_desync` is fatal. The store is then dirty. Zero matching
+(`at_unix_ms` = the host clock now, instance link from the record's scope).
+Each committed invalidation is applied through that exact sequence; an absent
+or refused target is `runtime_fact_store_desync`, never a skipped drop. The
+store is then dirty. Zero matching
 records append nothing, so a fresh ledger and the startup event order are
 unchanged.
 
 ## Periodic snapshot
 
 `append_runtime_fact_snapshot_if_dirty` seals the store only when it is dirty:
-it reads the ledger's latest sequence and the clock, builds the snapshot,
+it synchronizes both stores to the selected position and reads the clock, builds the snapshot,
 validates it (the size and position codes above surface here as fatal host
-errors), appends `runtime.fact_snapshot`, and clears the dirty flag. A store
+errors), appends `runtime.fact_snapshot`, clears the dirty flag, and consumes
+the new event through the same synchronization path. A store
 that never changed appends nothing, so there is no ledger noise before
 producers exist.
 
@@ -167,21 +178,94 @@ rule anyway. The snapshot only shortens replay.
 `RuntimeOperation::RuntimeFactSnapshot` (no fields, no source gate beyond a
 valid client origin, like `Status`) returns
 `RuntimeResult::RuntimeFactSnapshot { snapshot }`: the live store sealed under
-the write gate at the ledger's latest sequence, with `taken_at_unix_ms` from
+the write gate at both stores' actual synchronized position, with `taken_at_unix_ms` from
 the host clock. `ledger_position` therefore names the last event the reader
 can rely on having been applied; every accepted record and invalidation at or
-below it is reflected. The read appends nothing and does not mark the store
-dirty. `RuntimeHost::runtime_fact_snapshot` and
+below it is reflected. The common synchronization first settles any pending
+instance-fact invalidations through their existing ledger transaction and
+acknowledgment path; it appends no program snapshot. Reading alone does not
+mark program records dirty. `RuntimeHost::runtime_fact_snapshot` and
 `RuntimeClient::runtime_fact_snapshot` expose the same read.
 
 `actingctl facts --program --state-root <state-root>` prints the snapshot as
-JSON. `facts` without `--program` (the per-instance read) is not built and is a
-usage error; the command takes no `--instance`.
+JSON. The existing Host instance-fact snapshot also uses the same real cut.
+
+## Program-instance policy inputs
+
+Startup seeds each configured, registered instance through the original
+pre-check → ledger append → memory-application path, after configuration
+manifest recording and before worker admission. The fixed keys use the
+registered UUID's instance scope, source `runtime`, and no TTL:
+
+| Key | Existing value type | Meaning |
+| --- | --- | --- |
+| `config.policy_instance.seeded` | `boolean` (`true`) | Durable first-seed occurrence; immutable and non-invalidatable |
+| `config.policy_instance.identity` | `string` | Serialized `InstanceSnapshot` containing the declared instance/server/game/host identity, `available=false`, and empty capability/preference lists |
+| `config.policy_instance` | `string` | Serialized original configured `InstanceSnapshot`, including availability, capabilities and preferences |
+
+The JSON string encoding reuses `InstanceSnapshot`'s required fields and
+unknown-field rejection and the existing fact/event/snapshot bounds. It
+preserves exact string case and list order and does not deduplicate values.
+The codec rejects a string larger than the existing 512 KiB snapshot byte
+bound before append or decode; whole-store snapshot and record-count bounds
+still apply independently.
+These are declared planning metadata; server/game labels are scope identity,
+not screen observations. The seed makes no claim about backend self-check,
+device readiness or execution permission.
+
+The marker is committed first. Existing records are retained, and a recovered
+marker prevents configuration from refilling missing or invalidated values,
+including after an interrupted startup. No policy configuration creates no
+seed or default instance. An unregistered alias has no legal seed scope and
+remains subject to the original `policy_instance_metadata_untrusted` consumer
+check. Existing host-resource authority checks remain in place.
+
+Formal current evaluation, re-projection and historical policy-input identity
+reads construct `instances` from committed program facts. Configuration only
+supplies the expected alias list; it never supplies a missing runtime field.
+Missing/expired/invalid planning values, or an identity mismatch, produce an
+unavailable instance with empty capability/preference lists and an explicit
+key/cause in the existing `instance_unavailable` reason chain. This uses the
+committed identity record. If that identity or the seed occurrence itself is
+unavailable, the read fails explicitly with `policy_instance_fact_unavailable`
+and its instance/key/cause. It cannot fabricate a successful empty collection.
+`InstanceSnapshot.unavailable_reason` is optional and omitted when absent, so
+ordinary initial instance serialization is unchanged. The original overlay
+ordering and policy validation continue to apply.
+
+Under the original outcome → fact lock order, current projection first consumes
+the instance tail and settles generated invalidations. Their acknowledgment
+does not advance the instance cursor: the appended events are actually
+consumed in another tail pass. Work is bounded by the existing 256 active-fact
+limit. The program projection then consumes through that same real position
+P. Both stores are copied while the fact gate is held. This path is incremental,
+not a replay from the first event on each evaluation. Program snapshots and
+the affected instance snapshots use this same position discipline.
+
+An explicit historical P uses a temporary program projection from the latest
+valid snapshot event at or before P plus its tail, and the existing instance
+`at_position(P)` projection. Prefix gaps or unavailable cuts are errors. TTL
+is evaluated at the timestamp of the actual cut event, not today's clock.
+Historical reconstruction neither runs takeover invalidation nor changes
+either live store. Forward what-if projection retains its caller-supplied
+scenario and read-only behavior: temporary copies consume to one cut, while
+real fact-scope/pool bindings use program identity at that cut.
+
+Instance-fact publication and pool-source checks bind server/game scopes from
+program metadata. The policy identity combines the existing semantic hash
+with just the committed identity/planning records actually consumed. Sampling
+timestamps and unrelated program records do not change it. A relevant value,
+source revision, catalog, outcome or instance fact still invalidates the
+original identity. The original stale, approval, capacity, lease and fencing
+checks remain the final admission controls.
 
 ## Producers
 
-Three producers write the store today; all go through the append-first rule
+The following producers write the store; all go through the append-first rule
 above with source `runtime`.
+
+- `config.policy_instance.*` and `config.policy_instance` — the one-time
+  configuration seed and declared identity described above.
 
 - `device.connected` (slice #316-B) — instance scope, `boolean`: the running
   state emulator instance control observed after `status` / `start` / `stop` /
@@ -240,6 +324,7 @@ Contract: `runtime_fact_ledger_position_invalid`,
 `invalid_config_subsystem_name`, `invalid_config_subsystem_reason`,
 `invalid_config_parameter_key`. Host: `runtime_fact_stale`,
 `runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
-`runtime_fact_instance_unknown` (request class);
+`runtime_fact_instance_unknown`, `policy_instance_fact_unavailable`,
+`policy_instance_seed_immutable`, `policy_instance_fact_payload_too_large` (request class);
 `runtime_fact_store_desync`, `runtime_fact_replay_failed`,
 `invalid_runtime_config_manifest` (fatal).

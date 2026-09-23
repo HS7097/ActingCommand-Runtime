@@ -1784,6 +1784,7 @@ mod tests {
                         game_id: assessment.game_id.clone(),
                         host_id: format!("host.{}", assessment.instance_id),
                         available: assessment.available,
+                        unavailable_reason: None,
                         capability_operation_ids: assessment.capability_ids.clone(),
                         preferred_task_ids: Vec::new(),
                     },

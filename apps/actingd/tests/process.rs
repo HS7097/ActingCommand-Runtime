@@ -25,8 +25,8 @@ use actingcommand_runtime_client::{
     PredictiveMaintenanceRequest, RuntimeClient, RuntimeClientConfig,
 };
 use actingcommand_runtime_host::{
-    AgentDispatcherConfig, CatalogGeneration, ExecutionBackendProvider, ResolvedExecutionInstance,
-    RuntimeHost, RuntimeHostConfig,
+    AgentDispatcherConfig, CatalogGeneration, ExecutionBackendProvider, PolicyInputSnapshot,
+    ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -3160,8 +3160,14 @@ fn seed_planning_state(
     state_root: &Path,
     instance_id: InstanceId,
 ) -> (CatalogGeneration, ProjectedArtifactReference, u64) {
+    let observed_at_unix_ms = unix_ms_now();
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(state_root, PROCESS_TEST_SALT.as_bytes()),
+        RuntimeHostConfig::new(state_root, PROCESS_TEST_SALT.as_bytes()).with_policy_inputs(
+            PolicyInputSnapshot::new(
+                configured_policy_facts(observed_at_unix_ms),
+                configured_policy_resources(observed_at_unix_ms),
+            ),
+        ),
         Arc::new(PlanningSeedProvider { instance_id }),
     )
     .expect("seed planning runtime host");
@@ -3437,6 +3443,7 @@ fn policy_facts() -> EvaluationFacts {
             game_id: "fixture-game-a".to_owned(),
             host_id: "fixture-host-a".to_owned(),
             available: true,
+            unavailable_reason: None,
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         }],
@@ -3476,6 +3483,7 @@ fn configured_policy_facts(_now_unix_ms: u64) -> EvaluationFacts {
             game_id: "fixture-game-a".to_owned(),
             host_id: "fixture-host-a".to_owned(),
             available: true,
+            unavailable_reason: None,
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         }],

@@ -1096,6 +1096,7 @@ impl RuntimeHost {
             facts: Mutex::new(facts),
             runtime_facts: Mutex::new(runtime_facts),
             runtime_facts_dirty: AtomicBool::new(runtime_facts_dirty),
+            fact_projection_failed: AtomicBool::new(false),
             policy_inputs: Mutex::new(config.policy_inputs),
             authoritative_policy_outcomes: Mutex::new(authoritative_policy_outcomes),
             procedure_manifest: Mutex::new(config.procedure_manifest),
@@ -1153,6 +1154,10 @@ impl RuntimeHost {
         if let Some(config_manifest) = &config.config_manifest
             && let Err(original) = shared.record_config_manifest(config_manifest)
         {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
+        if let Err(original) = shared.seed_policy_instance_facts() {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
@@ -2608,8 +2613,9 @@ struct HostShared {
     proposal_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
     // The Runtime's own facts: ledger-first, memory-only, sealed periodically while dirty.
-    runtime_facts: Mutex<RuntimeFactStore>,
+    runtime_facts: Mutex<runtime_facts::RuntimeFactState>,
     runtime_facts_dirty: AtomicBool,
+    fact_projection_failed: AtomicBool,
     policy_inputs: Mutex<Option<PolicyInputSnapshot>>,
     // A bounded cache of exact GlobalLedger projections; it never computes or owns outcomes.
     authoritative_policy_outcomes:

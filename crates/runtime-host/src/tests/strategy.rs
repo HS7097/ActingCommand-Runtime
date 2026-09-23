@@ -431,6 +431,7 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
         game_id: "fixture-game-a".to_owned(),
         host_id: "fixture-host-a".to_owned(),
         available: true,
+        unavailable_reason: None,
         capability_operation_ids: vec!["operation.observe".to_owned()],
         preferred_task_ids: Vec::new(),
     });

@@ -163,8 +163,62 @@ impl HostShared {
     ) -> RuntimeHostResult<PolicyCycle> {
         {
             let _gate = lock(&self.fact_write_gate, "set_test_policy_inputs")?;
-            *lock(&self.policy_inputs, "set_test_policy_inputs")? =
-                Some(PolicyInputSnapshot::new(facts.clone(), resources.clone()));
+            let inputs = PolicyInputSnapshot::new(facts.clone(), resources.clone());
+            self.validate_policy_input_authority(&inputs, "set_test_policy_inputs")?;
+            self.synchronize_fact_inputs_under_gate()?;
+            // This existing replacement seam now replaces committed program
+            // facts too. Explicit invalidation preserves the store's same-time
+            // rejection rule without manufacturing a newer observation time.
+            for instance in &facts.instances {
+                use actingcommand_contract::{
+                    CONFIG_POLICY_INSTANCE_IDENTITY_KEY, CONFIG_POLICY_INSTANCE_KEY,
+                    CONFIG_POLICY_INSTANCE_SEEDED_KEY,
+                };
+                let scope = self.policy_instance_scope(&instance.instance_id)?;
+                let now = self.clock.sample()?.unix_ms;
+                if lock(&self.runtime_facts, "set_test_policy_inputs")?
+                    .store
+                    .get(&scope, CONFIG_POLICY_INSTANCE_SEEDED_KEY)
+                    .is_none()
+                {
+                    self.record_runtime_fact_under_gate(RuntimeFactRecord {
+                        scope: scope.clone(),
+                        key: CONFIG_POLICY_INSTANCE_SEEDED_KEY.into(),
+                        value: actingcommand_contract::FactValue::Boolean(true),
+                        observed_at_unix_ms: now,
+                        source: OriginModule::Runtime,
+                        ttl_ms: None,
+                    })?;
+                }
+                let mut identity = instance.clone();
+                identity.available = false;
+                identity.unavailable_reason = None;
+                identity.capability_operation_ids.clear();
+                identity.preferred_task_ids.clear();
+                for (key, value) in [
+                    (CONFIG_POLICY_INSTANCE_IDENTITY_KEY, identity),
+                    (CONFIG_POLICY_INSTANCE_KEY, instance.clone()),
+                ] {
+                    let desired =
+                        runtime_facts::policy_instance_record(scope.clone(), key, &value, now)?;
+                    let prior = lock(&self.runtime_facts, "set_test_policy_inputs")?
+                        .store
+                        .get(&scope, key)
+                        .cloned();
+                    if let Some(prior) = prior {
+                        if prior.value == desired.value && prior.ttl_ms == desired.ttl_ms {
+                            continue;
+                        }
+                        self.invalidate_runtime_fact_under_gate(
+                            &scope,
+                            key,
+                            RuntimeFactInvalidationReason::Operator,
+                        )?;
+                    }
+                    self.record_runtime_fact_under_gate(desired)?;
+                }
+            }
+            *lock(&self.policy_inputs, "set_test_policy_inputs")? = Some(inputs);
         }
         self.evaluate_policy_cycle_authoritative(time, Some(seed), trigger, self.monotonic_ms()?)
     }
@@ -254,15 +308,10 @@ impl HostShared {
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
-        self.synchronize_fact_store_under_gate()?;
+        let latest_ledger_position = self.synchronize_fact_inputs_under_gate()?;
         let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
             .clone()
             .ok_or_else(|| policy_admission_request("policy_inputs_unconfigured", operation))?;
-        self.validate_policy_input_authority(&inputs, operation)?;
-        let latest_ledger_position = self
-            .ledger
-            .latest_sequence()
-            .map_err(|_| ledger_error("read_policy_fact_position"))?;
         let ledger_position = match as_of_ledger_position {
             Some(position) if position == 0 || position > latest_ledger_position => {
                 return Err(policy_admission_request(
@@ -286,6 +335,17 @@ impl HostShared {
             ledger_position
         };
         let mut base_facts = inputs.facts().clone();
+        let (instances, program_revisions) = self.program_instances_at(
+            &inputs.facts().instances,
+            ledger_position,
+            latest_ledger_position,
+            as_of_ledger_position.is_some(),
+        )?;
+        base_facts.instances = instances;
+        self.validate_policy_input_authority(
+            &PolicyInputSnapshot::new(base_facts.clone(), inputs.resources().clone()),
+            operation,
+        )?;
         base_facts.tasks = lock(&self.policy, "project_policy_task_state")?
             .task_runtime_snapshots(ledger_position)?;
         base_facts.tasks.retain(|state| {
@@ -430,14 +490,21 @@ impl HostShared {
         )?;
         let resources = if let Some(catalog) = catalog {
             fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
-                self.fact_scope_instances(scope)
+                self.fact_scope_instances(scope, &base_facts.instances)
             })?;
             actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, inputs.resources())
         } else {
             inputs.resources().clone()
         };
-        let facts =
+        let mut facts =
             fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
+        // Only records consumed by the instance projection are authority inputs.
+        // Snapshot sampling time and unrelated program facts are not revisions.
+        let identity =
+            serde_json::to_vec(&(&facts.fact_snapshot_id, &program_revisions)).map_err(|_| {
+                policy_admission_fatal("policy_instance_identity_encode_failed", operation)
+            })?;
+        facts.fact_snapshot_id = format!("snapshot:policy-fact:{:x}", Sha256::digest(identity));
         Ok((facts, resources))
     }
 
@@ -495,16 +562,47 @@ impl HostShared {
         config: ForwardProjectionConfig,
     ) -> RuntimeHostResult<ForwardProjection> {
         let declared_facts = facts;
-        let (facts, fact_projection) = {
+        let (facts, fact_projection, scope_instances) = {
+            let _gate = lock(&self.fact_write_gate, "project_forward_facts")?;
+            if self.fact_projection_failed.load(Ordering::Acquire)
+                || self.lifecycle_append_failed.load(Ordering::Acquire)
+            {
+                return Err(ledger_error("fact_projection_unavailable"));
+            }
+            // Forward projection remains read-only: synchronize temporary copies
+            // to one cut without acknowledging or appending derived invalidations.
             let mut fact_projection = lock(&self.facts, "project_forward_facts")?.clone();
-            fact_projection.synchronize(&self.ledger)?;
-            let ledger_position = self
-                .ledger
-                .latest_sequence()
-                .map_err(|_| ledger_error("project_forward_fact_position"))?;
+            fact_projection
+                .synchronize(&self.ledger)
+                .inspect_err(|error| {
+                    if error.is_fatal() {
+                        self.fact_projection_failed.store(true, Ordering::Release);
+                    }
+                })?;
+            let ledger_position = fact_projection.applied_position();
+            let mut program_projection =
+                lock(&self.runtime_facts, "project_forward_facts")?.clone();
+            program_projection
+                .synchronize_to(&self.ledger, ledger_position)
+                .inspect_err(|error| {
+                    if error.is_fatal() {
+                        self.fact_projection_failed.store(true, Ordering::Release);
+                    }
+                })?;
+            let inputs = lock(&self.policy_inputs, "project_forward_facts")?;
+            let scope_instances = if let Some(inputs) = inputs.as_ref() {
+                self.project_program_instances(
+                    &inputs.facts().instances,
+                    &program_projection.store,
+                    self.clock.sample()?.unix_ms,
+                )?
+                .0
+            } else {
+                Vec::new()
+            };
             let facts =
                 fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?;
-            (facts, fact_projection)
+            (facts, fact_projection, scope_instances)
         };
         let (catalog, workloads) = {
             let policy = lock(&self.policy, "project_forward_catalog")?;
@@ -523,8 +621,9 @@ impl HostShared {
             resources,
             "project_policy_forward",
         )?;
-        fact_projection
-            .validate_pool_sources(catalog.compiled(), |scope| self.fact_scope_instances(scope))?;
+        fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
+            self.fact_scope_instances(scope, &scope_instances)
+        })?;
         let mut resources =
             actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, resources);
         lock(

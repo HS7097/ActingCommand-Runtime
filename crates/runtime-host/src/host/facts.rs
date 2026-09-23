@@ -15,8 +15,8 @@ impl HostShared {
     pub(super) fn fact_scope_instances(
         &self,
         scope: &actingcommand_contract::FactScope,
+        instances: &[actingcommand_policy::InstanceSnapshot],
     ) -> RuntimeHostResult<Vec<InstanceId>> {
-        let inputs = lock(&self.policy_inputs, "bind_fact_scope")?;
         let registered = lock(&self.registered_instances, "bind_fact_scope")?;
         Ok(registered
             .values()
@@ -24,15 +24,13 @@ impl HostShared {
                 actingcommand_contract::FactScope::Instance { instance_id } => {
                     instance_id == &instance.instance_alias
                 }
-                _ => inputs.as_ref().is_some_and(|inputs| {
-                    inputs.facts().instances.iter().any(|context| {
-                        context.instance_id == instance.instance_alias
-                            && scope.matches(&InstanceFactContext {
-                                instance_id: context.instance_id.clone(),
-                                server_id: context.server_id.clone(),
-                                game_id: context.game_id.clone(),
-                            })
-                    })
+                _ => instances.iter().any(|context| {
+                    context.instance_id == instance.instance_alias
+                        && scope.matches(&InstanceFactContext {
+                            instance_id: context.instance_id.clone(),
+                            server_id: context.server_id.clone(),
+                            game_id: context.game_id.clone(),
+                        })
                 }),
             })
             .map(|instance| instance.instance_id)
@@ -46,7 +44,7 @@ impl HostShared {
     ) -> RuntimeHostResult<EventId> {
         let result: RuntimeHostResult<EventId> = (|| {
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
-            self.synchronize_fact_store_under_gate()?;
+            let position = self.synchronize_fact_inputs_under_gate()?;
             if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_observation(
                 &observation,
                 self.clock.sample()?.unix_ms,
@@ -69,8 +67,16 @@ impl HostShared {
                     "publish_facts",
                 ));
             }
+            let instances = if matches!(scope, actingcommand_contract::FactScope::Instance { .. }) {
+                Vec::new()
+            } else if let Some(inputs) = inputs.as_ref() {
+                self.program_instances_at(&inputs.facts().instances, position, position, false)?
+                    .0
+            } else {
+                Vec::new()
+            };
             drop(inputs);
-            let scope_instances = self.fact_scope_instances(scope)?;
+            let scope_instances = self.fact_scope_instances(scope, &instances)?;
             lock(&self.facts, "validate_fact_input_boundary")?
                 .validate_input_boundaries(&observation.records[0], &scope_instances)?;
             if scope_instances.is_empty()
@@ -116,11 +122,7 @@ impl HostShared {
         context: InstanceFactContext,
     ) -> RuntimeHostResult<InstanceFactSnapshot> {
         let _gate = lock(&self.fact_write_gate, "read_instance_fact_snapshot")?;
-        self.synchronize_fact_store_under_gate()?;
-        let ledger_position = self
-            .ledger
-            .latest_sequence()
-            .map_err(|_| ledger_error("read_instance_fact_position"))?;
+        let ledger_position = self.synchronize_fact_inputs_under_gate()?;
         lock(&self.facts, "read_instance_fact_snapshot")?.snapshot(context, ledger_position)
     }
 
@@ -317,52 +319,86 @@ impl HostShared {
     }
 
     pub(super) fn synchronize_fact_store_under_gate(&self) -> RuntimeHostResult<()> {
-        let result: RuntimeHostResult<()> = (|| {
-            let mut facts = lock(&self.facts, "synchronize_fact_store")?;
-            facts.synchronize(&self.ledger)?;
-            for invalidation in facts.pending_invalidations() {
-                if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                    return Err(ledger_error("append_fact_transaction"));
-                }
-                let work = facts.prepare_invalidation(&self.ledger, &invalidation)?;
-                let links = self.events.system_links()?;
-                let draft = self.events.draft(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::FactStore,
-                    EventActor::Runtime,
-                    links.clone(),
-                    FactPayloadDraft::invalidated(invalidation.data.clone(), AuditInput::new()),
-                )?;
-                let draft = self.events.sanitize(draft)?;
-                let persisted = self
-                    .ledger
-                    .append_transaction(draft, Box::new(work))
-                    .map_err(|error| {
-                        let error = crate::fact_store::fact_transaction_error(error);
-                        if error.is_fatal() {
-                            self.lifecycle_append_failed.store(true, Ordering::Release);
-                        }
-                        error
-                    })?;
-                facts
-                    .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
-                    .and_then(|()| {
-                        self.observe_device_diagnostics_under_fact_gate(&persisted, &links)
-                    })
-                    .inspect_err(|error| {
-                        self.lifecycle_append_failed.store(true, Ordering::Release);
-                        let _ = error
-                            .diagnostics()
-                            .recorded_event()
-                            .set(*persisted.event_id());
-                    })?;
+        self.synchronize_fact_inputs_under_gate().map(|_| ())
+    }
+
+    /// Select a real cut after settling generated invalidations. Both stores
+    /// consume only through that cut, while every fact writer shares this gate.
+    pub(super) fn synchronize_fact_inputs_under_gate(&self) -> RuntimeHostResult<u64> {
+        let result: RuntimeHostResult<u64> = (|| {
+            if self.fact_projection_failed.load(Ordering::Acquire)
+                || self.lifecycle_append_failed.load(Ordering::Acquire)
+            {
+                return Err(ledger_error("fact_projection_unavailable"));
             }
-            Ok(())
+            let mut facts = lock(&self.facts, "synchronize_fact_store")?;
+            let mut remaining = crate::fact_store::MAX_ACTIVE_FACTS;
+            loop {
+                let position = self
+                    .ledger
+                    .latest_sequence()
+                    .map_err(|_| ledger_error("read_fact_projection_position"))?;
+                facts.synchronize_to(&self.ledger, position)?;
+                let pending = facts.pending_invalidations();
+                if pending.is_empty() {
+                    self.synchronize_runtime_facts_to_under_gate(position)?;
+                    if facts.applied_position() != position {
+                        return Err(ledger_error("fact_projection_position_mismatch"));
+                    }
+                    return Ok(position);
+                }
+                remaining = remaining
+                    .checked_sub(pending.len())
+                    .ok_or_else(|| ledger_error("fact_invalidation_did_not_converge"))?;
+                for invalidation in pending {
+                    if self.lifecycle_append_failed.load(Ordering::Acquire) {
+                        return Err(ledger_error("append_fact_transaction"));
+                    }
+                    let work = facts.prepare_invalidation(&self.ledger, &invalidation)?;
+                    let links = self.events.system_links()?;
+                    let draft = self.events.draft(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::FactStore,
+                        EventActor::Runtime,
+                        links.clone(),
+                        FactPayloadDraft::invalidated(invalidation.data.clone(), AuditInput::new()),
+                    )?;
+                    let draft = self.events.sanitize(draft)?;
+                    let persisted = self
+                        .ledger
+                        .append_transaction(draft, Box::new(work))
+                        .map_err(|error| {
+                            let error = crate::fact_store::fact_transaction_error(error);
+                            if error.is_fatal() {
+                                self.lifecycle_append_failed.store(true, Ordering::Release);
+                            }
+                            error
+                        })?;
+                    facts
+                        .acknowledge_generated_invalidation(
+                            &invalidation.data,
+                            persisted.sequence(),
+                        )
+                        .and_then(|()| {
+                            self.observe_device_diagnostics_under_fact_gate(&persisted, &links)
+                        })
+                        .inspect_err(|error| {
+                            self.lifecycle_append_failed.store(true, Ordering::Release);
+                            let _ = error
+                                .diagnostics()
+                                .recorded_event()
+                                .set(*persisted.event_id());
+                        })?;
+                }
+            }
         })();
         if let Err(error) = &result
             && error.is_fatal()
         {
+            // Set while the caller still holds the gate: a reader must not
+            // observe a partially applied append before fatal propagation.
+            self.fact_projection_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
         }
         result

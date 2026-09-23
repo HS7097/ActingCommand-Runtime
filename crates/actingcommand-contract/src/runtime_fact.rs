@@ -39,6 +39,12 @@ pub const RUNTIME_FACT_SNAPSHOT_INTERVAL_MS: u64 = 60_000;
 pub const CONFIG_SUBSYSTEMS_FACT_KEY: &str = "config.subsystems";
 /// Key of the runtime fact that carries the manifest's parameter rows.
 pub const CONFIG_PARAMETERS_FACT_KEY: &str = "config.parameters";
+/// The declared scope identity retained when a planning record becomes unavailable.
+pub const CONFIG_POLICY_INSTANCE_IDENTITY_KEY: &str = "config.policy_instance.identity";
+/// Runtime-owned static planning state, initially seeded from validated configuration.
+pub const CONFIG_POLICY_INSTANCE_KEY: &str = "config.policy_instance";
+/// Persistent seed occurrence; an invalidated planning value is not seeded again on restart.
+pub const CONFIG_POLICY_INSTANCE_SEEDED_KEY: &str = "config.policy_instance.seeded";
 /// Upper bound on subsystems in one configuration manifest.
 pub const MAX_CONFIG_MANIFEST_SUBSYSTEMS: usize = 64;
 /// Upper bound on parameters in one configuration manifest.

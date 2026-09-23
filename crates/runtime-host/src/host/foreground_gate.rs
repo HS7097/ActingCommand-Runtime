@@ -143,6 +143,7 @@ impl HostShared {
         let scope = RuntimeFactScope::Instance { instance_id };
         let value = FactValue::String(foreground.to_owned());
         let unchanged = lock(&self.runtime_facts, "read_application_foreground")?
+            .store
             .get(&scope, APPLICATION_FOREGROUND_FACT_KEY)
             .is_some_and(|record| record.value == value);
         if unchanged {
