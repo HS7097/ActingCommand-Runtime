@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::global::tests::sealed_global_ledger::SaltedLedgerSink;
 use crate::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_artifact_store::{
-    ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
-    CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
-    EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
-    PackageVerification, capture_summary_record, verify_evidence_archive,
+    ArtifactWriteContext, CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments,
+    EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument,
+    EvidencePackage, PackageVerification, capture_summary_record, verify_evidence_archive,
 };
 use actingcommand_contract::{
     ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
@@ -394,27 +394,6 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
             TASK_DIAGNOSTIC_SCHEMA, TaskDiagnosticHeader, TaskDiagnosticOcrData,
             TaskDiagnosticPayload, TaskDiagnosticRecord,
         };
-        struct Sink<'a>(&'a GlobalLedger);
-        impl ArtifactEventSink for Sink<'_> {
-            fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-                self.0
-                    .append(
-                        draft
-                            .sanitize(
-                                &Sha256SecretFingerprinter::new(b"actingledger-test-salt").unwrap(),
-                            )
-                            .unwrap(),
-                    )
-                    .map(|_| ())
-                    .map_err(|error| {
-                        ArtifactStoreError::fatal(
-                            error.code(),
-                            "append_cli_fixture",
-                            "artifact event append failed",
-                        )
-                    })
-            }
-        }
         let store = ArtifactStore::open(state_root).unwrap();
         let mut admission = crate::global::tests::sealed_global_ledger::GlobalLedgerSink::new(None);
         admission.capacity_root = Some(store.root().to_path_buf());
@@ -505,7 +484,12 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
             stream.append(b"\n").unwrap();
         }
         stream.append(b"]}\n").unwrap();
-        let artifact = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
+        let artifact = store
+            .seal_stream(
+                stream,
+                &mut SaltedLedgerSink::new(&writer, b"actingledger-test-salt"),
+            )
+            .unwrap();
         let through = writer.latest_sequence().unwrap().to_string();
         writer.close().unwrap();
         let command = vec![
@@ -875,33 +859,6 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
 
 #[test]
 fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
-    struct LedgerSink<'a> {
-        ledger: &'a GlobalLedger,
-    }
-
-    impl ArtifactEventSink for LedgerSink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            let event = draft
-                .sanitize(
-                    &Sha256SecretFingerprinter::new(b"replay-cli-sink").expect("fingerprinter"),
-                )
-                .map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        "event_sanitize_failed",
-                        "append_replay_cli_fixture_event",
-                        error.to_string(),
-                    )
-                })?;
-            self.ledger.append(event).map(|_| ()).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    error.code(),
-                    "append_replay_cli_fixture_event",
-                    error.to_string(),
-                )
-            })
-        }
-    }
-
     fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         fn collect(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
             let mut entries = fs::read_dir(path)
@@ -1070,7 +1027,10 @@ fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
         .expect("fixture capacity owner");
     let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
     let receipt = exporter
-        .export(request, &mut LedgerSink { ledger: &ledger })
+        .export(
+            request,
+            &mut SaltedLedgerSink::new(&ledger, b"replay-cli-sink"),
+        )
         .expect("sealed export");
     ledger.close().expect("close fixture ledger");
     let expected =
@@ -1419,19 +1379,6 @@ fn performance_export_is_explicit_bounded_and_preserves_ordinary_export() {
 fn stability_cli_pages_errors_and_source_files_are_explicit() {
     use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
     use actingcommand_contract::{ArtifactIssuePolicy, ArtifactKind, ArtifactProducer};
-    struct Sink<'a>(&'a GlobalLedger);
-    impl ArtifactEventSink for Sink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            self.0
-                .append(
-                    draft
-                        .sanitize(&Sha256SecretFingerprinter::new(b"stability-cli").expect("salt"))
-                        .expect("sanitize"),
-                )
-                .map(|_| ())
-                .map_err(|e| ArtifactStoreError::fatal(e.code(), "append_spec", "append failed"))
-        }
-    }
     let temp = tempfile::tempdir().expect("state");
     let root = temp.path();
     let ids = IdentifierIssuer::new().expect("ids");
@@ -1502,7 +1449,7 @@ fn stability_cli_pages_errors_and_source_files_are_explicit() {
                         ArtifactRedactionState::NotRequired,
                     ),
                 ),
-                &mut Sink(&ledger),
+                &mut SaltedLedgerSink::new(&ledger, b"stability-cli"),
             )
             .expect("artifact");
         references.push(stored.reference().project(true));
