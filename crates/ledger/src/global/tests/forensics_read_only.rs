@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::global::tests::sealed_global_ledger::SaltedLedgerSink;
 use crate::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_artifact_store::{
-    ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
-    CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
-    EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
-    PackageVerification, capture_summary_record, verify_evidence_archive,
+    ArtifactWriteContext, CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments,
+    EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument,
+    EvidencePackage, PackageVerification, capture_summary_record, verify_evidence_archive,
 };
 use actingcommand_contract::{
     ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
@@ -309,25 +309,6 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
         ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, InputPayloadDraft,
     };
     use serde_json::json;
-    struct ConfigurationSink<'a>(&'a GlobalLedger);
-    impl ArtifactEventSink for ConfigurationSink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            self.0
-                .append(
-                    draft
-                        .sanitize(&Sha256SecretFingerprinter::new(b"configuration-spec").unwrap())
-                        .unwrap(),
-                )
-                .map(|_| ())
-                .map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        error.code(),
-                        "configuration_spec",
-                        "ledger append failed",
-                    )
-                })
-        }
-    }
     let temp = tempfile::tempdir().expect("tempdir");
     let state_root = temp.path();
     let ledger_root = state_root.join("ledger");
@@ -404,7 +385,7 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
                     ArtifactRedactionState::NotRequired,
                 ),
             ),
-            &mut ConfigurationSink(&writer),
+            &mut SaltedLedgerSink::new(&writer, b"configuration-spec"),
         )
         .unwrap();
     let input_source = writer
@@ -464,7 +445,7 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
                         ArtifactRedactionState::NotRequired,
                     ),
                 ),
-                &mut ConfigurationSink(&writer),
+                &mut SaltedLedgerSink::new(&writer, b"configuration-spec"),
             )
             .unwrap();
         configuration_artifacts.push((stored, bytes));
@@ -954,21 +935,6 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         |reference| store.verify_recovery_reference(reference).ok(),
     )
     .unwrap();
-    struct Sink<'a>(&'a GlobalLedger);
-    impl ArtifactEventSink for Sink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            let draft = draft
-                .sanitize(&Sha256SecretFingerprinter::new(b"task-evidence-spec").unwrap())
-                .unwrap();
-            self.0.append(draft).map(|_| ()).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    error.code(),
-                    "task_evidence_spec",
-                    "append artifact event failed",
-                )
-            })
-        }
-    }
     let append = |links: EventLinksDraft, payload: EventPayloadDraft| {
         writer
             .append(
@@ -1028,7 +994,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                     ArtifactRedactionState::NotRequired,
                 ),
             ),
-            &mut Sink(&writer),
+            &mut SaltedLedgerSink::new(&writer, b"task-evidence-spec"),
         )
         .unwrap();
     append(
@@ -1130,7 +1096,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                     ArtifactRedactionState::NotRequired,
                 ),
             ),
-            &mut Sink(&writer),
+            &mut SaltedLedgerSink::new(&writer, b"task-evidence-spec"),
         )
         .unwrap();
     append(
@@ -1365,7 +1331,12 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     assert!(evidence(0, None, 1024).diagnostics.is_empty());
     assert_eq!(tree_bytes(state_root), staging_tree);
     stream.append(b"]}\n").unwrap();
-    let raw = store.seal_stream(stream, &mut Sink(&writer)).unwrap();
+    let raw = store
+        .seal_stream(
+            stream,
+            &mut SaltedLedgerSink::new(&writer, b"task-evidence-spec"),
+        )
+        .unwrap();
     assert!(raw.reference().byte_count() > 1024 * 1024);
     let private = evidence(0, None, 1024);
     assert_eq!(private.diagnostics.len(), 1);
@@ -1468,7 +1439,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                     ArtifactRedactionState::NotRequired,
                 ),
             ),
-            &mut Sink(&writer),
+            &mut SaltedLedgerSink::new(&writer, b"task-evidence-spec"),
         )
         .unwrap();
     let unknown = evidence(0, None, 1024);
@@ -1544,34 +1515,6 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
 
 #[test]
 fn replays_a_sealed_archive_through_the_canonical_verifier() {
-    struct LedgerSink<'a> {
-        ledger: &'a GlobalLedger,
-    }
-
-    impl ArtifactEventSink for LedgerSink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            let event = draft
-                .sanitize(
-                    &Sha256SecretFingerprinter::new(b"forensic-replay-sink")
-                        .expect("fingerprinter"),
-                )
-                .map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        "event_sanitize_failed",
-                        "append_replay_fixture_event",
-                        error.to_string(),
-                    )
-                })?;
-            self.ledger.append(event).map(|_| ()).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    error.code(),
-                    "append_replay_fixture_event",
-                    error.to_string(),
-                )
-            })
-        }
-    }
-
     let temp = tempfile::tempdir().expect("tempdir");
     let identifiers = IdentifierIssuer::new().expect("identifiers");
     let run_id = identifiers.mint_run_id().expect("run id");
@@ -1712,7 +1655,10 @@ fn replays_a_sealed_archive_through_the_canonical_verifier() {
         .expect("fixture capacity owner");
     let mut exporter = EvidenceExporter::open_with_admission(&export_store).expect("exporter");
     let receipt = exporter
-        .export(request, &mut LedgerSink { ledger: &ledger })
+        .export(
+            request,
+            &mut SaltedLedgerSink::new(&ledger, b"forensic-replay-sink"),
+        )
         .expect("sealed export");
     ledger.close().expect("close fixture ledger");
     let expected =
@@ -2056,19 +2002,6 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
     use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
     use actingcommand_contract::{ArtifactIssuePolicy, ArtifactKind, ArtifactProducer};
     use actingcommand_ledger_forensics::MAX_STABILITY_ARTIFACT_BYTES;
-    struct Sink<'a>(&'a GlobalLedger);
-    impl ArtifactEventSink for Sink<'_> {
-        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
-            self.0
-                .append(
-                    draft
-                        .sanitize(&Sha256SecretFingerprinter::new(b"stability-spec").expect("salt"))
-                        .expect("sanitize"),
-                )
-                .map(|_| ())
-                .map_err(|e| ArtifactStoreError::fatal(e.code(), "append_spec", "append failed"))
-        }
-    }
     let ids = IdentifierIssuer::new().expect("ids");
     let task = ids.mint_task_id().expect("task");
     let run_id = ids.mint_run_id().expect("run");
@@ -2205,7 +2138,7 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
                         },
                     ),
                 ),
-                &mut Sink(&ledger),
+                &mut SaltedLedgerSink::new(&ledger, b"stability-spec"),
             )
             .expect("artifact");
         ledger.close().expect("close");

@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-ledger-forensics = { workspace = true }
+actingcommand-scheduler = { workspace = true }
 sha2 = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

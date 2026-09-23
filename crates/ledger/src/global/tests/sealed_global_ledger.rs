@@ -145,6 +145,40 @@ impl ArtifactEventSink for GlobalLedgerSink<'_> {
     }
 }
 
+/// Appends artifact events to a real ledger, fingerprinted with the salt its test names.
+pub(in crate::global) struct SaltedLedgerSink<'a> {
+    ledger: &'a GlobalLedger,
+    fingerprinter: crate::Sha256SecretFingerprinter,
+}
+
+impl<'a> SaltedLedgerSink<'a> {
+    pub(in crate::global) fn new(ledger: &'a GlobalLedger, salt: &[u8]) -> Self {
+        Self {
+            ledger,
+            fingerprinter: crate::Sha256SecretFingerprinter::new(salt).expect("fingerprinter"),
+        }
+    }
+}
+
+impl ArtifactEventSink for SaltedLedgerSink<'_> {
+    fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+        let event = draft.sanitize(&self.fingerprinter).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "event_sanitize_failed",
+                "append_salted_fixture_event",
+                error.to_string(),
+            )
+        })?;
+        self.ledger.append(event).map(|_| ()).map_err(|error| {
+            ArtifactStoreError::fatal(
+                error.code(),
+                "append_salted_fixture_event",
+                error.to_string(),
+            )
+        })
+    }
+}
+
 struct TestFingerprinter;
 
 impl SecretFingerprinter for TestFingerprinter {

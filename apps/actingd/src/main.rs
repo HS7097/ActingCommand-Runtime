@@ -9,6 +9,12 @@ mod config;
 mod ledger_maintenance;
 mod owner_unlock;
 
+// Test-only: the shared sealed C4 fixture support, reused for its 16x9 fake-device fixtures.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../tests/support/c4_runtime.rs"]
+mod c4_support;
+
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
     EventFamily, EventPayload, EventQuery, EventSource, EventType, MAX_RUNTIME_SUBSCRIPTION_EVENTS,
@@ -1407,10 +1413,7 @@ mod tests {
     use actingcommand_contract::{
         ApplicationLifecycleAction, ContainedTaskRequest, IdentifierIssuer, PolicyPayload,
     };
-    use actingcommand_device::{
-        CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend,
-        PixelFormat,
-    };
+    use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend};
     use actingcommand_policy::{
         CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources,
         HostResourceSnapshot, InstanceSnapshot, PoolValueSnapshot,
@@ -2092,8 +2095,8 @@ mod tests {
                 Ok(Box::new(RecordingCapture {
                     count: Arc::clone(&self.capture_count),
                     frames: VecDeque::from([
-                        recording_frame([255, 0, 0]).expect("home frame"),
-                        recording_frame([0, 0, 255]).expect("terminal frame"),
+                        crate::c4_support::page_frame([255, 0, 0]).expect("home frame"),
+                        crate::c4_support::page_frame([0, 0, 255]).expect("terminal frame"),
                     ]),
                 }))
             };
@@ -2112,12 +2115,7 @@ mod tests {
             &self,
             _instance_alias: &str,
         ) -> DeviceResult<actingcommand_runtime_host::ForegroundApplicationObservation> {
-            Ok(
-                actingcommand_runtime_host::ForegroundApplicationObservation {
-                    foreground: Some("neutral.application".to_owned()),
-                    assigned: "neutral.application".to_owned(),
-                },
-            )
+            Ok(crate::c4_support::neutral_foreground())
         }
 
         fn control_application(
@@ -2129,19 +2127,6 @@ mod tests {
                 "recording provider application control is forbidden",
             ))
         }
-    }
-
-    /// Page pixel (0,0), guard pixel (1,0), remaining 16x9 pixels black.
-    fn recording_frame(page_pixel: [u8; 3]) -> DeviceResult<Frame> {
-        let mut pixels = vec![page_pixel[0], page_pixel[1], page_pixel[2], 0, 255, 0];
-        pixels.resize(16 * 9 * 3, 0);
-        Frame::from_pixels(
-            16,
-            9,
-            pixels,
-            PixelFormat::Rgb8,
-            CaptureBackendName::AdbScreencap,
-        )
     }
 
     struct RecordingCapture {
@@ -2162,28 +2147,10 @@ mod tests {
             &mut self,
             _deadline: std::time::Instant,
         ) -> DeviceResult<actingcommand_contract::CaptureGeometryObservation> {
-            use actingcommand_contract::{
-                CaptureExtent, CaptureGeometry, CaptureGeometryObservation, CaptureGeometrySource,
-                CaptureRotation, CaptureRotationObservation, CaptureRotationSource,
-                CaptureWmSizeKind,
-            };
-            // The same 16x9 extent of the recorded frames; no device is queried.
-            let extent = CaptureExtent::new(16, 9).expect("positive recording extent");
-            Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
-                backend: CaptureBackendName::AdbScreencap,
-                source: CaptureGeometrySource::AdbDefaultDisplay {
-                    serial: "recording-device".to_string(),
-                    wm_extent: extent,
-                    wm_size_kind: CaptureWmSizeKind::Physical,
-                },
-                logical_display_extent: extent,
-                rotation: CaptureRotationObservation::Observed {
-                    rotation: CaptureRotation::R0,
-                    source: CaptureRotationSource::DumpsysDisplayOrientation,
-                },
-                sampled_at: std::time::SystemTime::now(),
-                frame_transform: None,
-            }))
+            // The same 16x9 extent of the recorded frames.
+            Ok(crate::c4_support::physical_geometry_16x9(
+                "recording-device",
+            ))
         }
         fn close_once(
             &mut self,
