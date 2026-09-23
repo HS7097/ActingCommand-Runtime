@@ -6,6 +6,9 @@ The Runtime source/module/actor and request/correlation links identify the owner
 The response is derived from that committed event. Its `source` gives the EventId,
 sequence and sampling start/end Unix milliseconds; the sampled status carries
 the owner epoch. The existing receipt terminal convention remains unchanged.
+Ledger sequences are gap-free from 1, so the online ledger event count equals
+`status.source.sequence`; `repair_count` belongs only to the legacy segment backend
+and is not applicable to the SQLite ledger (it is null offline as well).
 
 The owner samples current scheduler/registry state using its existing locks.
 The interval covers those reads; it does not assert a globally atomic instant

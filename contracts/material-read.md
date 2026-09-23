@@ -22,8 +22,9 @@ artifact references. An artifact from another event cannot fill a missing match.
 The request contains no state root, object key, key material or arbitrary path.
 Online source identity remains the existing validated RuntimeInfo/connection.
 
-`requested_length` is 1..=65536. Checked addition rejects overflow; `offset` must
-be below the committed material length. The last range may be shorter. The
+`requested_length` is 1..=196608 (192 KiB), so a worst-case JSON-encoded range and
+its receipt stay within the 1 MiB frame. Checked addition rejects overflow; `offset`
+must be below the committed material length. The last range may be shorter. The
 original whole-material length type and producer limits remain unchanged.
 
 The client clamps `max_reply_bytes` to its configured receiver bound. The Host
@@ -112,7 +113,11 @@ real material identity; the original hash is never attached to changed bytes.
 
 An assembly must keep the same Runtime connection/source or explicit offline root,
 event/material identity, total length and hash. Source changes, any failed range
-or unconfirmed receipt invalidate unfinished assembly. This interface does not
-implement UI assembly, automatic retries, cross-call interaction linking or control
+or unconfirmed receipt invalidate unfinished assembly. Assembly happens only inside
+runtime-client's complete-read helper `RuntimeClient::read_material_complete`, which
+returns the offline `read_material_complete` result shape and verifies the assembled
+length and SHA-256; the UI does not assemble segments itself. When a Runtime denies
+a range above 64 KiB as an invalid request, the helper continues at 64 KiB ranges.
+There are no other automatic retries, cross-call interaction linking or control
 approval consumption. Existing client-action/approval authorization and replay stay
 with their original owners.

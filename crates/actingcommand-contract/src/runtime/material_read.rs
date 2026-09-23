@@ -6,7 +6,8 @@ use crate::{
     Sensitivity,
 };
 
-pub const MAX_RUNTIME_MATERIAL_CHUNK_BYTES: u32 = 64 * 1024;
+/// A worst-case JSON byte array (four characters per byte) plus its receipt fits a 1 MiB frame.
+pub const MAX_RUNTIME_MATERIAL_CHUNK_BYTES: u32 = 192 * 1024;
 pub const MAX_RUNTIME_MATERIAL_REPLY_BYTES: usize = 1024 * 1024;
 pub const RUNTIME_MATERIAL_READ_BUDGET_MS: u64 = 4_000;
 

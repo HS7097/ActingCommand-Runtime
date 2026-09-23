@@ -545,6 +545,45 @@ impl PredictiveMaintenanceRequest {
     }
 }
 
+/// Selects one committed material for `RuntimeClient::read_material_complete`, mirroring the
+/// offline `LedgerArtifactSelection`; the helper chooses every range and reply bound itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeMaterialSelection {
+    pub event: actingcommand_contract::LedgerEventPosition,
+    pub artifact_id: actingcommand_contract::ArtifactId,
+    pub snapshot_position: u64,
+    pub sha256: String,
+    pub byte_count: u64,
+    pub run_id: Option<RunId>,
+    pub frame_id: Option<FrameId>,
+    pub request_id: Option<RequestId>,
+    pub correlation_id: Option<CorrelationId>,
+}
+
+/// A complete online material result. Only Verified owns bytes; an unfinished assembly is dropped.
+/// `failure` is the Runtime's typed range failure when a receipt carried one, and `error` is the
+/// client error that ended the assembly (refusal, transport or client-side verification).
+#[must_use = "inspect material availability and failure before consuming the result"]
+#[derive(Clone, PartialEq, Eq)]
+pub enum RuntimeMaterialCompleteResult {
+    Verified {
+        source: actingcommand_contract::RuntimeMaterialReadSource,
+        bytes: Vec<u8>,
+    },
+    NotProvided {
+        source: Option<actingcommand_contract::RuntimeMaterialReadSource>,
+        limit: actingcommand_contract::RuntimeMaterialReadLimit,
+        failure: Option<actingcommand_contract::RuntimeMaterialReadFailure>,
+        error: Option<RuntimeClientError>,
+    },
+    Failed {
+        source: Option<actingcommand_contract::RuntimeMaterialReadSource>,
+        state: actingcommand_contract::RuntimeMaterialReadState,
+        failure: Option<actingcommand_contract::RuntimeMaterialReadFailure>,
+        error: RuntimeClientError,
+    },
+}
+
 impl RuntimeFlowOutput {
     pub const fn receipt(&self) -> &RuntimeReceipt {
         &self.receipt
@@ -2022,6 +2061,199 @@ impl RuntimeClient {
                 Ok(result.as_ref().clone())
             }
             _ => Err(self.unexpected_result("read_runtime_material")),
+        }
+    }
+
+    /// Reads one whole committed material through verified ranges on this connection, with the
+    /// offline `read_material_complete` result semantics. Every range must verify under one
+    /// source identity, and the assembled length and SHA-256 must match the selection. A Runtime
+    /// that refuses ranges above 64 KiB as invalid is read at 64 KiB; nothing else is retried.
+    /// The deadline is cooperative: it is checked between ranges, not inside one exchange.
+    pub fn read_material_complete(
+        &self,
+        selection: RuntimeMaterialSelection,
+        max_material_bytes: usize,
+        deadline: Instant,
+    ) -> RuntimeMaterialCompleteResult {
+        use RuntimeMaterialCompleteResult::{Failed, NotProvided, Verified};
+        use actingcommand_contract::{
+            MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES,
+            RuntimeErrorProjection, RuntimeMaterialReadFailure, RuntimeMaterialReadLimit,
+            RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadSource,
+            RuntimeMaterialReadState as State, RuntimeReceiptState,
+            validate_material_read_selection,
+        };
+        const OPERATION: &str = "read_runtime_material_complete";
+        const LEGACY_CHUNK_BYTES: u32 = 64 * 1024;
+        let budget_exceeded = |source| NotProvided {
+            source,
+            limit: RuntimeMaterialReadLimit::BudgetExceeded,
+            failure: Some(RuntimeMaterialReadFailure {
+                code: "material_read_budget_exceeded".to_owned(),
+                operation: OPERATION.to_owned(),
+                error: RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
+            }),
+            error: None,
+        };
+        let client_failure = |source, state, code| Failed {
+            source,
+            state,
+            failure: None,
+            error: RuntimeClientError::fatal(code, OPERATION),
+        };
+        let same_source = |left: &RuntimeMaterialReadSource, right: &RuntimeMaterialReadSource| {
+            left.reference == right.reference
+                && left.sensitivity == right.sensitivity
+                && left.request_id == right.request_id
+                && left.run_id == right.run_id
+                && left.frame_id == right.frame_id
+                && left.correlation_id == right.correlation_id
+        };
+        if max_material_bytes == 0
+            || max_material_bytes > isize::MAX as usize
+            || validate_material_read_selection(
+                selection.event,
+                selection.snapshot_position,
+                selection.byte_count,
+                &selection.sha256,
+            )
+            .is_err()
+        {
+            return client_failure(None, State::RequestDenied, "material_read_request_invalid");
+        }
+        if selection.byte_count > max_material_bytes as u64 {
+            return budget_exceeded(None);
+        }
+        let mut bytes = Vec::with_capacity(selection.byte_count as usize);
+        let mut request = RuntimeMaterialReadRequest {
+            event: selection.event,
+            artifact_id: selection.artifact_id,
+            snapshot_position: selection.snapshot_position,
+            byte_count: selection.byte_count,
+            sha256: selection.sha256,
+            expected_run_id: selection.run_id,
+            expected_frame_id: selection.frame_id,
+            expected_request_id: selection.request_id,
+            expected_correlation_id: selection.correlation_id,
+            offset: 0,
+            requested_length: MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
+            max_reply_bytes: MAX_RUNTIME_MATERIAL_REPLY_BYTES,
+        };
+        let mut assembled_source: Option<RuntimeMaterialReadSource> = None;
+        while request.offset < request.byte_count {
+            if Instant::now() >= deadline {
+                return budget_exceeded(assembled_source);
+            }
+            let (result, error) = match self.read_material(request.clone()) {
+                Ok(result) => (result, None),
+                Err(error) => match error.committed_receipt().and_then(|value| value.result()) {
+                    Some(RuntimeResult::MaterialRead { result }) => {
+                        (result.as_ref().clone(), Some(error))
+                    }
+                    // A Runtime from before 192 KiB ranges denies the larger range as invalid.
+                    _ if request.requested_length > LEGACY_CHUNK_BYTES
+                        && !error.is_fatal()
+                        && error.projection().is_some_and(|value| {
+                            value.code == RuntimeErrorCode::InvalidRequest
+                        })
+                        && error.received_receipt().is_some_and(|receipt| {
+                            receipt.state() == RuntimeReceiptState::Denied
+                                && receipt.result().is_none()
+                        }) =>
+                    {
+                        request.requested_length = LEGACY_CHUNK_BYTES;
+                        continue;
+                    }
+                    _ => {
+                        let state = if error
+                            .received_receipt()
+                            .is_some_and(|receipt| receipt.state() == RuntimeReceiptState::Denied)
+                        {
+                            State::RequestDenied
+                        } else {
+                            State::ReadFailed
+                        };
+                        return Failed {
+                            source: assembled_source,
+                            state,
+                            failure: None,
+                            error,
+                        };
+                    }
+                },
+            };
+            let RuntimeMaterialReadResult {
+                source,
+                state,
+                limit,
+                chunk,
+                failure,
+                ..
+            } = result;
+            match (state, source, chunk, limit) {
+                (State::Verified, Some(source), Some(chunk), _) => {
+                    if assembled_source
+                        .as_ref()
+                        .is_some_and(|first| !same_source(first, &source))
+                    {
+                        return client_failure(
+                            Some(source),
+                            State::IntegrityFailed,
+                            "material_read_source_changed",
+                        );
+                    }
+                    if chunk.actual_length == 0
+                        || chunk.bytes.len() != chunk.actual_length as usize
+                        || request
+                            .offset
+                            .checked_add(u64::from(chunk.actual_length))
+                            .is_none_or(|end| end > request.byte_count)
+                    {
+                        return client_failure(
+                            Some(source),
+                            State::IntegrityFailed,
+                            "material_read_chunk_invalid",
+                        );
+                    }
+                    request.offset += u64::from(chunk.actual_length);
+                    bytes.extend_from_slice(&chunk.bytes);
+                    assembled_source = Some(source);
+                }
+                (State::NotProvided, source, _, Some(limit)) => {
+                    return NotProvided {
+                        source,
+                        limit,
+                        failure,
+                        error,
+                    };
+                }
+                (state, source, _, _) => {
+                    return Failed {
+                        source,
+                        state,
+                        failure,
+                        error: error.unwrap_or_else(|| {
+                            RuntimeClientError::fatal("runtime_result_unexpected", OPERATION)
+                        }),
+                    };
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return budget_exceeded(assembled_source);
+        }
+        match assembled_source {
+            Some(source)
+                if bytes.len() as u64 == request.byte_count
+                    && canonical_sha256(&bytes) == request.sha256 =>
+            {
+                Verified { source, bytes }
+            }
+            source => client_failure(
+                source,
+                State::IntegrityFailed,
+                "material_read_assembly_mismatch",
+            ),
         }
     }
 
