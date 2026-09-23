@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
+actingcommand-execution-kernel = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 actingcommand-runtime-host = { workspace = true }
