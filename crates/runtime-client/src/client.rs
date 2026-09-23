@@ -20,8 +20,8 @@ use actingcommand_contract::{
     ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
     RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeEvidenceExportRequest, RuntimeFactSnapshot, RuntimeForwardProjectionRequest,
-    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    RuntimeInfo, RuntimeInstanceDiscovery, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
     TaskPayload, TaskSemanticFact, TerminalEvent,
@@ -62,6 +62,10 @@ const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// host waits up to 30 s more for the ADB baseline (#316-B3), so the worst case is
 /// 60 + 120 + 10 + 30 = 220 s; 230 s covers it plus the IO margin.
 const EMULATOR_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(230);
+/// Receipt wait for `DiscoverInstances`: the provider runs two vendor commands (`version`,
+/// then `info -v all`), each bounded at 10 s (`MUMU_MANAGER_COMMAND_TIMEOUT`); 25 s covers
+/// both plus the IO margin.
+const INSTANCE_DISCOVERY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(25);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -785,6 +789,19 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    /// Re-runs the provider's instance discovery through the Runtime and returns every
+    /// reported instance with its bound alias. Binds nothing; see `DiscoverInstances`.
+    pub fn discover_instances(&self) -> RuntimeClientResult<RuntimeInstanceDiscovery> {
+        match self.execute_with_timeout(
+            "discover_instances",
+            RuntimeOperation::DiscoverInstances,
+            Some(INSTANCE_DISCOVERY_RESPONSE_TIMEOUT),
+        )? {
+            RuntimeResult::InstancesDiscovered { discovery } => Ok(discovery),
+            _ => Err(self.unexpected_result("discover_instances")),
         }
     }
 
@@ -3927,6 +3944,10 @@ impl RuntimeProjectClient {
 
     pub fn status(&self) -> RuntimeClientResult<RuntimeControlPlaneStatus> {
         self.client.status()
+    }
+
+    pub fn discover_instances(&self) -> RuntimeClientResult<RuntimeInstanceDiscovery> {
+        self.client.discover_instances()
     }
 
     pub fn snapshot(&self) -> RuntimeClientResult<ProjectLedgerSnapshot> {

@@ -157,6 +157,7 @@ mod foreground_gate;
 mod frame_retention;
 mod governance;
 mod input;
+mod instance_discovery;
 mod lab_operation;
 mod lease;
 mod lifecycle;

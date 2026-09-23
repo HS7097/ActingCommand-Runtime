@@ -16,8 +16,9 @@ use actingcommand_device::{
 pub use actingcommand_execution_kernel::{
     DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
     EmulatorControlResult, ExecutionBackendProvider, ForegroundApplicationObservation,
-    PendingAdbEndpoint, RecognitionVisionProvider, ResolvedAdbEndpoint, ResolvedExecutionInstance,
-    ResolvedInstanceEndpoint, VisionFfiProvider, VisionModelIdentity,
+    InstanceDiscoveryFailure, PendingAdbEndpoint, ProviderDiscoveredInstance,
+    ProviderInstanceDiscovery, RecognitionVisionProvider, ResolvedAdbEndpoint,
+    ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider, VisionModelIdentity,
 };
 use std::collections::BTreeMap;
 use std::fmt;

@@ -150,6 +150,7 @@ impl HostShared {
                 },
             }),
             RuntimeOperation::Status => self.control_plane_status(validated),
+            RuntimeOperation::DiscoverInstances => self.discover_instances(validated),
             RuntimeOperation::ProjectInterface { request } => {
                 self.project_interface(validated, request)
             }

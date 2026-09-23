@@ -1,7 +1,7 @@
 # Runtime state observations
 
-`Status`, `MonitorStatus` and `ProjectInterface` each commit one bounded typed
-`RuntimeStateFact::Observed` in the original request's `command.validated` event.
+`Status`, `MonitorStatus`, `ProjectInterface` and `DiscoverInstances` each commit one
+bounded typed `RuntimeStateFact::Observed` in the original request's `command.validated` event.
 The Runtime source/module/actor and request/correlation links identify the owner.
 The response is derived from that committed event. Its `source` gives the EventId,
 sequence and sampling start/end Unix milliseconds; the sampled status carries
@@ -13,6 +13,14 @@ across different locks. At most 1024 instances are observed, and existing native
 event/transport size limits still apply. A missing, invalid or uncommitted
 observation is an explicit error. There is no added polling, state cache or
 permission owner; Scheduler continues to decide lease/admission authority.
+
+`DiscoverInstances` commits `RuntimeObservedState::InstanceDiscovery { owner_epoch,
+provider_version, instances }`: the provider's discovery answer, each instance with its
+`bound_alias` read under the registry lock after the vendor tool answered, ordered by index.
+The variant has no `source` field; the response `RuntimeInstanceDiscovery` adds the committed
+one. The interval covers the vendor tool run. The event carries the same Internal sensitivity
+as the other state observations; a provider refusal commits no observation
+(`emulator-control.md`, "Instance discovery query").
 
 ProjectInterface preserves historical pagination position L for its catalog,
 facts, decisions, approvals and diagnostics. The separately sampled current view
