@@ -1902,6 +1902,7 @@ fn sql_error(error: rusqlite::Error, operation: &'static str) -> GlobalLedgerErr
         detail,
         terminal: true,
         rolled_back_work: None,
+        io_kind: None,
     }
 }
 

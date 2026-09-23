@@ -366,6 +366,43 @@ pub struct GlobalLedgerError {
     detail: Option<String>,
     terminal: bool,
     rolled_back_work: Option<Box<TransactionWorkError>>,
+    io_kind: Option<LedgerIoKind>,
+}
+
+/// Closed kind of the `std::io::Error` behind a ledger error; unlisted kinds are `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerIoKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    InvalidInput,
+    InvalidData,
+    TimedOut,
+    Interrupted,
+    UnexpectedEof,
+    Unsupported,
+    OutOfMemory,
+    Other,
+}
+
+impl From<std::io::ErrorKind> for LedgerIoKind {
+    fn from(kind: std::io::ErrorKind) -> Self {
+        use std::io::ErrorKind;
+        match kind {
+            ErrorKind::NotFound => Self::NotFound,
+            ErrorKind::PermissionDenied => Self::PermissionDenied,
+            ErrorKind::AlreadyExists => Self::AlreadyExists,
+            ErrorKind::InvalidInput => Self::InvalidInput,
+            ErrorKind::InvalidData => Self::InvalidData,
+            ErrorKind::TimedOut => Self::TimedOut,
+            ErrorKind::Interrupted => Self::Interrupted,
+            ErrorKind::UnexpectedEof => Self::UnexpectedEof,
+            ErrorKind::Unsupported => Self::Unsupported,
+            ErrorKind::OutOfMemory => Self::OutOfMemory,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// Error from a named Runtime business owner; only a confirmed SQL rollback exposes it.
@@ -409,6 +446,7 @@ impl GlobalLedgerError {
             detail: Some(error.detail.clone()),
             terminal: false,
             rolled_back_work: Some(Box::new(error)),
+            io_kind: None,
         }
     }
 
@@ -424,6 +462,11 @@ impl GlobalLedgerError {
         self.detail.as_deref()
     }
 
+    /// Kind of the `std::io::Error` this error was built from, if any.
+    pub fn io_kind(&self) -> Option<LedgerIoKind> {
+        self.io_kind
+    }
+
     pub fn is_fatal(&self) -> bool {
         self.terminal
     }
@@ -435,6 +478,7 @@ impl GlobalLedgerError {
             detail: None,
             terminal: true,
             rolled_back_work: None,
+            io_kind: None,
         }
     }
 
@@ -445,6 +489,7 @@ impl GlobalLedgerError {
             detail: None,
             terminal: false,
             rolled_back_work: None,
+            io_kind: None,
         }
     }
 
@@ -455,6 +500,7 @@ impl GlobalLedgerError {
             detail: Some(error.to_string()),
             terminal: true,
             rolled_back_work: None,
+            io_kind: Some(error.kind().into()),
         }
     }
 
@@ -465,6 +511,7 @@ impl GlobalLedgerError {
             detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
             rolled_back_work: None,
+            io_kind: None,
         }
     }
 
