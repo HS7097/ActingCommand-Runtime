@@ -110,6 +110,10 @@ are not gated.
   `application_foreground_unknown`, even while a Nemu session still delivers frames. The next
   successful gate re-records `application.foreground`; `device.connected` is written again by
   the next emulator control action.
+- First contained-task capture on a physical instance (#316-P4): when it fails and one ADB
+  baseline probe against the task deadline fails too, the host invalidates the same two facts
+  with `adb_unreachable` and the task fails nonfatal (`task.failed` severity `warning`, lease
+  released) instead of poisoning the host; an answering adbd keeps the capture failure fatal.
 
 Rule (ADB baseline, Alice 09-19): whatever other connection is open, the ADB endpoint must
 stay bound and answering; Nemu never replaces ADB as instance identity (the port, #322) or as
@@ -191,4 +195,6 @@ lease.released
 (`backend_operation_failed`, failed); startup-time fatal: `startup_package_instance_unknown`,
 `startup_package_requires_physical_instance`, `invalid_startup_package`; `actingd` assembly:
 `startup_package_path_invalid`, `startup_package_digest_invalid`, `startup_package_invalid`.
-Fact invalidation reason: `adb_unreachable`.
+Fact invalidation reason: `adb_unreachable`. A first capture lost to the ADB baseline keeps
+the kernel's `capture_backend_open_failed` / `capture_backend_operation_failed`
+(`capture_failed`, nonfatal); no code is added.

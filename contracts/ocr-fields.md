@@ -256,7 +256,9 @@ refusal, task timeout or OCR provider failure save the accumulated bounded field
 once before returning the original task error. Capture, action-seed and input callback
 errors do the same only when their error owner explicitly classifies them as nonfatal.
 The production adapter uses `RuntimeHostError::is_fatal()`; an adapter without a declared
-classification defaults to unknown. The execution result retains the original error and
+classification defaults to unknown. A physical instance's first capture that fails with the
+ADB baseline lost (#316-P4) is classified nonfatal (task failure severity `warning`); with
+no frame collected it saves no report. The execution result retains the original error and
 distinguishes nonfatal operation failures from record failures. Parsed facts from earlier
 frames retain their declarations, groups and values. Fatal or unknown operation failures,
 all record failures, and artifact/ledger persistence failures propagate without another

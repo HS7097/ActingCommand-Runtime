@@ -385,6 +385,19 @@ impl RuntimeHostError {
         result
     }
 
+    /// A contained task's first capture lost to an unreachable ADB baseline (#316-P4): the
+    /// kernel code stays, projected as a nonfatal `CaptureFailed`.
+    pub(crate) fn adb_unreachable_capture(
+        operation: &'static str,
+        error: &ExecutionKernelError,
+    ) -> Self {
+        let mut result = Self::execution(operation, error);
+        if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
+            result.projection = RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
+        }
+        result
+    }
+
     pub(crate) fn state(error: &RuntimeStateError) -> Self {
         if error.is_fatal() {
             Self::fatal(
