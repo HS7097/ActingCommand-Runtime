@@ -320,6 +320,9 @@ impl DeclarationReader {
             validate_control_declaration(value)
                 .map_err(|error| invalid(path, &error.to_string()))?;
             "control"
+        } else if is_applications_table(path) {
+            self.applications(path, &bytes)?;
+            "applications"
         } else if (name == "maa-semantic-mapping.json"
             && parent.file_name().is_some_and(|p| p == "tasks"))
             || (name == "maa.tasks.json"
@@ -400,6 +403,86 @@ impl DeclarationReader {
             &facts,
             game,
         )?;
+        Ok(())
+    }
+
+    /// Checks the repository-root application table against the repository manifest.
+    fn applications(&mut self, path: &Path, bytes: &[u8]) -> CliOutcome<()> {
+        let table: ApplicationTable = serde_json::from_slice(bytes)
+            .map_err(|error| invalid(path, &format!("applications declaration: {error}")))?;
+        if table.schema_version != APPLICATIONS_SCHEMA {
+            return Err(invalid(
+                path,
+                &format!("schema_version must be {APPLICATIONS_SCHEMA}"),
+            ));
+        }
+        let manifest = self
+            .read(Path::new("manifest.yaml"), MAX_DOCUMENT_BYTES)
+            .map_err(|error| {
+                invalid(
+                    path,
+                    &format!(
+                        "repository manifest.yaml is missing or unreadable: {}",
+                        error.message
+                    ),
+                )
+            })?;
+        let (game, supported) = std::str::from_utf8(&manifest)
+            .map_err(|_| "is not UTF-8".to_string())
+            .and_then(manifest_identity)
+            .map_err(|reason| invalid(path, &format!("repository manifest.yaml {reason}")))?;
+        if table.game != game {
+            return Err(invalid(
+                path,
+                &format!(
+                    "game {:?} does not match repository manifest.yaml game {game:?}",
+                    table.game
+                ),
+            ));
+        }
+        if table.servers.is_empty() {
+            return Err(invalid(path, "servers must not be empty"));
+        }
+        let mut owners = BTreeMap::new();
+        for (server, entry) in &table.servers {
+            if !supported.contains(server) {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "server {server:?} is not listed in repository manifest.yaml supported_servers"
+                    ),
+                ));
+            }
+            if entry.label.is_empty()
+                || entry.label.len() > 64
+                || entry.label.chars().any(char::is_control)
+            {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "servers.{server}.label must be 1-64 bytes without control characters"
+                    ),
+                ));
+            }
+            if !is_application_id(&entry.application_id) {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "servers.{server}.application_id {:?} is not a dotted Android application id of at most 255 bytes",
+                        entry.application_id
+                    ),
+                ));
+            }
+            if let Some(previous) = owners.insert(entry.application_id.as_str(), server) {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "servers {previous:?} and {server:?} share application_id {:?}",
+                        entry.application_id
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -539,6 +622,7 @@ impl DeclarationReader {
         } else if !(name == "detections.json"
             && parent.file_name().is_some_and(|p| p == "env-detection"))
             && name != "control.json"
+            && !is_applications_table(path)
         {
             return Err(invalid(
                 path,
@@ -704,6 +788,125 @@ fn exclusion(path: &Path) -> Option<&'static str> {
         return Some("not_a_declaration_document");
     }
     None
+}
+
+const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationTable {
+    schema_version: String,
+    game: String,
+    servers: BTreeMap<String, ApplicationEntry>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationEntry {
+    application_id: String,
+    label: String,
+}
+
+/// Only the table directly under the repository root belongs to the applications family.
+fn is_applications_table(path: &Path) -> bool {
+    path == Path::new("applications.json")
+}
+
+/// `^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`, at most 255 bytes.
+fn is_application_id(id: &str) -> bool {
+    id.len() <= 255
+        && id.contains('.')
+        && id.split('.').all(|segment| {
+            let mut characters = segment.chars();
+            characters
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+                && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+}
+
+/// Reads the top-level `game` scalar and `supported_servers` list of the repository manifest.
+/// Only plain block or flow forms are understood; any other shape fails instead of being skipped.
+fn manifest_identity(text: &str) -> Result<(String, BTreeSet<String>), String> {
+    let nested = |line: &str| line.trim().is_empty() || line.starts_with([' ', '\t', '#', '-']);
+    let mut game = None;
+    let mut servers = None;
+    let mut lines = text.trim_start_matches('\u{feff}').lines().peekable();
+    while let Some(line) = lines.next() {
+        if nested(line) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = plain_scalar(value);
+        match key.trim_end() {
+            "game" => {
+                if value.is_empty() || game.replace(value.to_string()).is_some() {
+                    return Err("must declare exactly one non-empty top-level game".to_string());
+                }
+            }
+            "supported_servers" => {
+                let items = if let Some(flow) = value
+                    .strip_prefix('[')
+                    .and_then(|flow| flow.strip_suffix(']'))
+                {
+                    flow.split(',')
+                        .filter(|item| !item.trim().is_empty())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                } else if value.is_empty() {
+                    let mut block = Vec::new();
+                    while let Some(item) = lines.next_if(|next| nested(next)) {
+                        let item = item.trim();
+                        if item.is_empty() || item.starts_with('#') {
+                            continue;
+                        }
+                        let entry = item.strip_prefix("- ").ok_or_else(|| {
+                            "supported_servers must be a list of plain scalars".to_string()
+                        })?;
+                        block.push(entry.to_string());
+                    }
+                    block
+                } else {
+                    return Err("supported_servers must be a list".to_string());
+                };
+                let mut list = BTreeSet::new();
+                for item in &items {
+                    let item = plain_scalar(item);
+                    if item.is_empty() || item.ends_with(':') || item.contains(": ") {
+                        return Err("supported_servers must be a list of plain scalars".to_string());
+                    }
+                    list.insert(item.to_string());
+                }
+                if servers.replace(list).is_some() {
+                    return Err("must declare exactly one top-level supported_servers".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    match (game, servers) {
+        (Some(game), Some(servers)) => Ok((game, servers)),
+        (None, _) => Err("has no top-level game".to_string()),
+        (_, None) => Err("has no top-level supported_servers".to_string()),
+    }
+}
+
+/// Drops a trailing comment and one pair of surrounding quotes from a YAML scalar.
+fn plain_scalar(value: &str) -> &str {
+    let value = value.trim();
+    let end = value
+        .char_indices()
+        .find(|&(index, character)| {
+            character == '#' && (index == 0 || value[..index].ends_with(char::is_whitespace))
+        })
+        .map_or(value.len(), |(index, _)| index);
+    let value = value[..end].trim_end();
+    ['"', '\'']
+        .iter()
+        .find_map(|quote| value.strip_prefix(*quote)?.strip_suffix(*quote))
+        .unwrap_or(value)
 }
 
 fn validate_relative_path(path: &Path) -> CliOutcome<()> {
