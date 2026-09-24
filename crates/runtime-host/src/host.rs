@@ -1131,6 +1131,7 @@ impl RuntimeHost {
             policy_inputs: Mutex::new(config.policy_inputs),
             authoritative_policy_outcomes: Mutex::new(authoritative_policy_outcomes),
             procedure_manifest: Mutex::new(config.procedure_manifest),
+            verified_materials: Mutex::new(material_read::VerifiedMaterialCache::default()),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -2650,6 +2651,8 @@ struct HostShared {
     authoritative_policy_outcomes:
         Mutex<BTreeMap<(String, String), AuthoritativeSchedulingOutcome>>,
     procedure_manifest: Mutex<Option<ProcedureManifest>>,
+    // Whole verified material objects, so chunked reads verify each object once.
+    verified_materials: Mutex<material_read::VerifiedMaterialCache>,
     ledger: GlobalLedger,
     artifacts: Arc<ArtifactStore>,
     state: Arc<RuntimeStateStore>,
