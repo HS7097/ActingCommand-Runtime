@@ -75,6 +75,8 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) executed_steps: Option<u32>,
     pub(super) failure_code: Option<&'static str>,
     pub(super) failure_severity: Option<EventSeverity>,
+    /// Failure severity used when the outcome projection rejects this terminal.
+    pub(super) projection_failure_severity: Option<EventSeverity>,
     pub(super) scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
     pub(super) selected_scheduling_outcome: Option<String>,
     pub(super) capture_summary: Option<CapturePipelineSummary>,
@@ -3565,21 +3567,37 @@ fn select_scheduling_disposition(
             ));
         }
     } else {
-        let final_steps = events
-            .iter()
-            .filter_map(|event| {
-                let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
-                    return None;
-                };
+        let final_step = executed_steps - 1;
+        let semantic_facts = events.iter().filter_map(|event| {
+            let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
+                return None;
+            };
+            Some((event.sequence(), payload.fact()))
+        });
+        // A retried step records one StepFinished per attempt; judge only the last attempt.
+        let last_attempt_started = semantic_facts
+            .clone()
+            .filter_map(|(sequence, fact)| {
+                matches!(
+                    fact,
+                    TaskSemanticFact::StepStarted { step_index, .. } if *step_index == final_step
+                )
+                .then_some(sequence)
+            })
+            .max();
+        let final_steps = semantic_facts
+            .filter_map(|(sequence, fact)| {
                 let TaskSemanticFact::StepFinished {
                     step_index,
                     page_label,
                     ..
-                } = payload.fact()
+                } = fact
                 else {
                     return None;
                 };
-                (*step_index == executed_steps - 1).then_some(page_label.as_str())
+                (*step_index == final_step
+                    && last_attempt_started.is_none_or(|started| sequence > started))
+                .then_some(page_label.as_str())
             })
             .collect::<Vec<_>>();
         let [observed_page] = final_steps.as_slice() else {
@@ -3594,7 +3612,8 @@ fn select_scheduling_disposition(
         }
     }
     if let [(step_index, operation_label)] = designated_effects.as_slice() {
-        let lifecycle_count = events
+        // Same last-attempt rule as the final step: earlier attempts' StepFinished are ignored.
+        let last_attempt_started = events
             .iter()
             .filter(|event| {
                 let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
@@ -3602,12 +3621,29 @@ fn select_scheduling_disposition(
                 };
                 matches!(
                     payload.fact(),
-                    TaskSemanticFact::StepFinished {
-                        step_index: completed_step,
-                        operation_label: completed_operation,
+                    TaskSemanticFact::StepStarted {
+                        step_index: started_step,
                         ..
-                    } if completed_step == step_index && completed_operation == operation_label
+                    } if started_step == step_index
                 )
+            })
+            .map(PersistedEvent::sequence)
+            .max();
+        let lifecycle_count = events
+            .iter()
+            .filter(|event| {
+                let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
+                    return false;
+                };
+                last_attempt_started.is_none_or(|started| event.sequence() > started)
+                    && matches!(
+                        payload.fact(),
+                        TaskSemanticFact::StepFinished {
+                            step_index: completed_step,
+                            operation_label: completed_operation,
+                            ..
+                        } if completed_step == step_index && completed_operation == operation_label
+                    )
             })
             .count();
         if lifecycle_count != 1 {
@@ -4806,6 +4842,7 @@ impl HostShared {
                             executed_steps,
                             failure_code: Some(failure.error.code()),
                             failure_severity: scheduled.then_some(EventSeverity::Warning),
+                            projection_failure_severity: None,
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
@@ -4886,6 +4923,7 @@ impl HostShared {
                                     .unwrap_or_else(|| failure.error.code()),
                             ),
                             failure_severity,
+                            projection_failure_severity: None,
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
@@ -4954,6 +4992,7 @@ impl HostShared {
                         executed_steps,
                         failure_code: Some(error.code()),
                         failure_severity,
+                        projection_failure_severity: None,
                         scheduling_outcome: None,
                         selected_scheduling_outcome: None,
                         capture_summary: Some(capture_summary),
@@ -5038,6 +5077,7 @@ impl HostShared {
                 executed_steps: Some(outcome.executed_steps),
                 failure_code: None,
                 failure_severity: None,
+                projection_failure_severity: scheduled.then_some(EventSeverity::Warning),
                 scheduling_outcome,
                 selected_scheduling_outcome: outcome.selected_scheduling_outcome,
                 capture_summary: Some(capture_summary),
@@ -5750,7 +5790,7 @@ impl HostShared {
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         token: &LeaseToken,
-        draft: ContainedTaskTerminalDraft,
+        mut draft: ContainedTaskTerminalDraft,
     ) -> Result<PersistedEvent, RequestFailure> {
         let task_timing = draft.task_timing.clone();
         let result = (|| {
@@ -5908,14 +5948,32 @@ impl HostShared {
                     ),
                 ));
             }
-            let scheduling_disposition = select_scheduling_disposition(
+            let projection = select_scheduling_disposition(
                 &chain_events,
                 draft.outcome,
                 draft.final_page.as_deref(),
                 draft.executed_steps,
                 draft.scheduling_outcome.as_ref(),
                 draft.selected_scheduling_outcome.as_deref(),
-            )?;
+            );
+            let (scheduling_disposition, projection_failure) = match projection {
+                Ok(disposition) => (disposition, None),
+                // A rejected projection still owes the run a terminal fact: commit it as failed.
+                Err(failure) if failure.error.code().starts_with("contained_task_outcome_") => {
+                    draft.outcome = TaskOutcome::Failure;
+                    draft.final_page = None;
+                    draft.failure_code = Some(failure.error.code());
+                    draft.failure_severity = draft.projection_failure_severity.map(|severity| {
+                        if failure.poison_runtime {
+                            EventSeverity::Fatal
+                        } else {
+                            severity
+                        }
+                    });
+                    (None, Some(failure))
+                }
+                Err(failure) => return Err(failure),
+            };
             let mut appended = Vec::with_capacity(3);
             if existing_summary.is_none()
                 && let Some(summary) = requested_summary
@@ -6010,6 +6068,10 @@ impl HostShared {
             for event in &appended {
                 self.observe_pipeline_event(event)
                     .map_err(RequestFailure::poison_without_terminal)?;
+            }
+            if let Some(mut failure) = projection_failure {
+                failure.terminal = Some(terminal(&terminal_event));
+                return Err(failure);
             }
             Ok(terminal_event)
         })();
