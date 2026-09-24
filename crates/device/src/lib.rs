@@ -41,7 +41,9 @@ pub use frame_memory::*;
 pub use input::*;
 pub use maatouch::*;
 pub use minitouch::*;
-pub use mumu::MumuInstallSource;
+pub use mumu::{
+    MumuInstallSource, MumuRootLocation, MumuRootResolution, MumuRootSource, resolve_mumu_root,
+};
 pub use mumu_manager::{
     DiscoveredMumuInstance, EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
     InstanceState, MAX_MUMU_INSTANCE_NAME_BYTES, MUMU_CAPABILITY_PROVIDER_ID,

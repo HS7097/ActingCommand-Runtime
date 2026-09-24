@@ -15,6 +15,8 @@ const NOT_CHECKED: [&str; 2] = ["vision_provider_manifest", "state_root"];
 /// Added to `not_checked` when a `resource_package` is a directory: the package loader reads
 /// a directory only against a Git source-tree reference, which the field does not carry.
 const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
+/// Added to `not_checked` when neither the file nor the root probe named a MuMu root.
+const MUMU_DISCOVERY_NOT_CHECKED: &str = "mumu_discovery";
 
 /// Loads, assembles and validates a configuration exactly as startup would, then stops
 /// before the first side effect: nothing under `state_root` is created, read or locked,
@@ -142,6 +144,15 @@ fn summarize(
     {
         not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
     }
+    let mumu_root = registry.mumu_root().resolved.as_ref().map(|root| {
+        json!({
+            "path": root.path.to_string_lossy(),
+            "source": root.source.as_str(),
+        })
+    });
+    if mumu_root.is_none() {
+        not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
+    }
     let bind_address = assembly.host.bind_address();
     Ok(json!({
         "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
@@ -153,6 +164,7 @@ fn summarize(
         "instance_count": instances.len(),
         "instances": instances,
         "policy_configured": assembly.policy.is_some(),
+        "mumu_root": mumu_root,
         "config_manifest": assembly.manifest,
         "not_checked": not_checked,
     }))

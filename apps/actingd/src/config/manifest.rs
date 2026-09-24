@@ -10,12 +10,12 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{
     MUMU_MANAGER_CONTROL_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,
+    MumuRootResolution, MumuRootSource,
 };
 use actingcommand_runtime_host::{
     PerformanceControlConfig, PerformanceMonitorConfig, PolicyCadence, SchedulerConfig,
 };
 use std::net::IpAddr;
-use std::path::Path;
 use std::time::Duration;
 
 /// Everything the manifest reports, taken from the configuration file and the assembled
@@ -31,7 +31,7 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) failed_run_days_explicit: bool,
     pub(super) capacity_thresholds: Option<CapacityThresholds>,
     pub(super) secret_fingerprint_salt_bytes: usize,
-    pub(super) mumu_root: Option<&'a Path>,
+    pub(super) mumu_root: &'a MumuRootResolution,
     pub(super) governance_configured: bool,
     /// `(max_attempts, max_session_ms, max_projection_events)` of a present section.
     pub(super) agent_dispatcher: Option<(u16, u64, u16)>,
@@ -53,6 +53,10 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
     let performance_control = PerformanceControlConfig::default();
     let scheduler = SchedulerConfig::default();
     let discovery_bound = inputs.instances_deferred_count > 0;
+    let mumu_root_state = inputs.mumu_root.resolved.as_ref().map_or_else(
+        || "mumu_root unresolved".to_owned(),
+        |root| format!("mumu_root from {}", root.source.as_str()),
+    );
     let subsystems = vec![
         subsystem(
             "frame_retention",
@@ -104,11 +108,11 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             enabled: discovery_bound,
             reason: if discovery_bound {
                 format!(
-                    "instances bound by instance_index or instance_name: {}",
+                    "instances bound by instance_index or instance_name: {}; {mumu_root_state}",
                     inputs.instances_deferred_count
                 )
             } else {
-                "no instance bound by instance_index or instance_name".to_owned()
+                format!("no instance bound by instance_index or instance_name; {mumu_root_state}")
             },
         },
         ConfigSubsystem {
@@ -173,10 +177,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             integer(inputs.secret_fingerprint_salt_bytes)?,
         ),
     ];
-    if let Some(mumu_root) = inputs.mumu_root {
+    if let Some(mumu_root) = inputs
+        .mumu_root
+        .resolved
+        .as_ref()
+        .filter(|root| root.source == MumuRootSource::Config)
+    {
         parameters.push(explicit(
             "mumu_root",
-            FactScalar::String(mumu_root.display().to_string()),
+            FactScalar::String(mumu_root.path.display().to_string()),
         ));
     }
     parameters.extend([

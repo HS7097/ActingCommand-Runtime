@@ -35,7 +35,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"mumu_root":{"path":"D:/emulator/MuMuPlayer","source":"env"},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -43,7 +43,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 one entry per group; the real object carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name; mumu_root unresolved"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -96,6 +96,23 @@ terminal with the chosen eligibility basis in the original eviction intent.
   that declares one: the admitted `{ path, kind }` (see "Instance resource
   package"); an instance without the field carries no `resource_package` key.
 - `policy_configured` states whether a `policy` section was assembled.
+- `mumu_root` is the MuMu install root that startup and on-demand discovery
+  use, `{ path, source }`, or `null`. `source` is `config` for the file's
+  `mumu_root`, echoed as given and never probed. Without it, assembly probes
+  in this order, spawning nothing and reading no registry key:
+  `ACTINGCOMMAND_NEMU_FOLDER` (`env`), the `MuMuPlayer`, `MuMuPlayer-*` and
+  `MuMu Player*` folders under `%ProgramFiles%`, `%ProgramFiles(x86)%` and
+  their `Netease` subfolders (the vendor list ADB discovery enumerates;
+  `known_path`), then the install root of a `MuMuManager.exe` on `PATH` (the
+  folder above `nx_main`; `path`). The first existing absolute directory wins
+  and is used as if configured. A
+  vendor folder that exists but cannot be read fails assembly with
+  `mumu_root_probe_failed`. `null` means nothing resolved: discovery then
+  keeps its own resolution (`contracts/provider-startup.md`), and when it
+  refuses with `instance_discovery_unavailable` the device error message (the
+  startup failure message, the on-demand refusal's native detail) ends with
+  `detail={"searched":[{"source":"env","path":"..."},{"source":"known_path","path":"..."},{"source":"path","path":"MuMuManager.exe"}]}`,
+  the locations the probe looked at (`env` only when the variable is set).
 - `config_manifest` is the in-memory runtime configuration manifest exactly
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
   `contracts/runtime-fact-store.md`, "Producers"); at startup the daemon
@@ -110,14 +127,16 @@ terminal with the chosen eligibility basis in the original eviction intent.
     `performance_monitor` (always on with the default sample interval),
     `mumu_discovery` and `emulator_control` (on only when at least one
     instance is bound by `instance_index` or `instance_name`; the reason
-    carries the count), `runtime_fact_snapshot` (rides the performance monitor
-    thread).
+    carries the count, and the `mumu_discovery` reason ends with
+    `mumu_root from <source>` or `mumu_root unresolved`),
+    `runtime_fact_snapshot` (rides the performance monitor thread).
   - `parameters` (`key`, `value`, `source`): the effective values of
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
     `frame_retention_enabled`, `frame_retention_failed_run_successes`,
     `frame_retention_failed_run_days`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `mumu_root` (only when
-    set), `instances_count`, `instances_deferred_count`,
+    set in the file; a probed root appears only in the top-level
+    `mumu_root`), `instances_count`, `instances_deferred_count`,
     `instances_startup_package_count` (instances declaring a startup package), the
     `capacity_thresholds.*` bytes and, when the section is present, the
     `agent_dispatcher.*` budget; plus the library defaults the daemon applies
@@ -133,6 +152,7 @@ terminal with the chosen eligibility basis in the original eviction intent.
   is inspected). `resource_package_directory_declarations` is appended when at
   least one instance's `resource_package` is a directory: its existence is
   checked, its declarations are not (see "Instance resource package").
+  `mumu_discovery` is appended when `mumu_root` is `null`.
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"config_decode_failed","stage":"load"}}
@@ -142,7 +162,7 @@ terminal with the chosen eligibility basis in the original eviction intent.
 (`config_unavailable`, `config_size_invalid`, `config_read_failed`,
 `config_decode_failed`), `assemble` (the typed configuration codes, for example
 `config_invalid`, `bind_host_not_loopback`, `execution_registry_invalid`,
-`instance_binding_key_invalid`, `mumu_root_invalid`,
+`instance_binding_key_invalid`, `mumu_root_invalid`, `mumu_root_probe_failed`,
 `scheduled_execution_instance_unknown`, `policy_governance_capability_missing`,
 `config_manifest_value_out_of_range`, `config_manifest_invalid`),
 `validate` (`invalid_runtime_host_config`,

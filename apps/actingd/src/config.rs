@@ -10,8 +10,9 @@ use actingcommand_contract::{
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
-    DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig, PixelFormat,
-    PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
+    DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig,
+    MumuRootLocation, MumuRootResolution, MumuRootSource, PixelFormat, PreparedSegmentedSwipePlan,
+    TouchBackendChoice, TouchBackendConfig, resolve_mumu_root,
 };
 use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
 use actingcommand_policy::{
@@ -340,7 +341,8 @@ pub(super) struct ConfiguredExecutionBackendRegistry {
     /// Instances bound by `instance_index`/`instance_name`; registered by provider startup
     /// after one `MuMuManager` discovery run. `assemble` itself spawns nothing.
     deferred: Vec<DeferredInstance>,
-    mumu_root: Option<PathBuf>,
+    /// The configured `mumu_root`, else the probe result when the file names none.
+    mumu_root: MumuRootResolution,
 }
 
 /// The discovery binding key of one deferred instance.
@@ -519,7 +521,17 @@ impl ActingdConfigFile {
             .map(InstanceConfig::backend)
             .collect::<Result<Vec<_>, _>>()?;
         let mut registry = ConfiguredExecutionBackendRegistry::new(registrations, None)?;
-        registry.mumu_root = self.mumu_root;
+        registry.mumu_root = match self.mumu_root {
+            // An explicit root keeps the validation above and is never probed.
+            Some(path) => MumuRootResolution {
+                resolved: Some(MumuRootLocation {
+                    source: MumuRootSource::Config,
+                    path,
+                }),
+                searched: Vec::new(),
+            },
+            None => resolve_mumu_root(None).map_err(|_| "mumu_root_probe_failed")?,
+        };
         registry.pending_vision = self
             .vision_provider_manifest
             .map(|path| (self.source_root.clone(), path));
@@ -564,7 +576,7 @@ impl ActingdConfigFile {
             failed_run_days_explicit: self.frame_retention_failed_run_days.is_some(),
             capacity_thresholds: self.capacity_thresholds,
             secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
-            mumu_root: registry.mumu_root.as_deref(),
+            mumu_root: &registry.mumu_root,
             governance_configured: self.governance_capability.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
@@ -1230,12 +1242,17 @@ impl ConfiguredExecutionBackendRegistry {
             fixtures,
             modes,
             deferred,
-            mumu_root: None,
+            mumu_root: MumuRootResolution::default(),
         })
     }
 
     pub(super) fn mode_for_alias(&self, instance_alias: &str) -> Option<ScheduledExecutionMode> {
         self.modes.get(instance_alias).copied()
+    }
+
+    /// The configured or probed MuMu root (`check-config` reporting).
+    pub(super) const fn mumu_root(&self) -> &MumuRootResolution {
+        &self.mumu_root
     }
 
     /// The binding key of an instance still waiting for discovery (`check-config` reporting).

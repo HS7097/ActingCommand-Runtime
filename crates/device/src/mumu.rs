@@ -8,6 +8,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const NEMU_IPC_DLL_NAME: &str = "external_renderer_ipc.dll";
+const MUMU_MANAGER_EXE_NAME: &str = "MuMuManager.exe";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MumuInstallSource {
@@ -733,6 +734,117 @@ fn enumerate_vendor_install_roots(parents: &[PathBuf]) -> DeviceResult<Vec<PathB
         }
     }
     Ok(stable_unique_paths(roots))
+}
+
+/// Where a MuMu install root candidate came from, in probe order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MumuRootSource {
+    Config,
+    Env,
+    KnownPath,
+    Path,
+}
+
+impl MumuRootSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Env => "env",
+            Self::KnownPath => "known_path",
+            Self::Path => "path",
+        }
+    }
+}
+
+/// One probed location: a root candidate, a known vendor directory or `MuMuManager.exe`
+/// looked up on `PATH`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MumuRootLocation {
+    pub source: MumuRootSource,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MumuRootResolution {
+    /// The winning root, `None` when no candidate qualified.
+    pub resolved: Option<MumuRootLocation>,
+    /// Every location actually probed, in probe order.
+    pub searched: Vec<MumuRootLocation>,
+}
+
+impl MumuRootResolution {
+    pub fn root(&self) -> Option<&Path> {
+        self.resolved
+            .as_ref()
+            .map(|location| location.path.as_path())
+    }
+
+    fn probe(&mut self, source: MumuRootSource, path: PathBuf) -> bool {
+        self.searched.push(MumuRootLocation {
+            source,
+            path: path.clone(),
+        });
+        self.accept(source, path)
+    }
+
+    /// The `mumu_root_invalid` shape (non-empty, absolute) on an existing directory.
+    fn accept(&mut self, source: MumuRootSource, path: PathBuf) -> bool {
+        let accepted = !path.as_os_str().is_empty() && path.is_absolute() && path.is_dir();
+        if accepted {
+            self.resolved = Some(MumuRootLocation { source, path });
+        }
+        accepted
+    }
+}
+
+/// Resolves the MuMu install root without spawning anything or reading the registry: the
+/// explicit root, `ACTINGCOMMAND_NEMU_FOLDER`, the MuMu folders under the known vendor
+/// directories (the list ADB discovery enumerates), then the root of a `MuMuManager.exe` on
+/// `PATH`. The first existing absolute directory wins. A vendor directory that exists but
+/// cannot be read is an error, never a miss.
+pub fn resolve_mumu_root(explicit: Option<&Path>) -> DeviceResult<MumuRootResolution> {
+    let mut resolution = MumuRootResolution::default();
+    if let Some(root) = explicit
+        && resolution.probe(MumuRootSource::Config, root.to_path_buf())
+    {
+        return Ok(resolution);
+    }
+    if let Some(root) = std::env::var_os(crate::adb::ACTINGCOMMAND_NEMU_FOLDER_ENV)
+        && resolution.probe(MumuRootSource::Env, PathBuf::from(root))
+    {
+        return Ok(resolution);
+    }
+    for parent in known_vendor_parent_dirs() {
+        let roots = enumerate_vendor_install_roots(std::slice::from_ref(&parent))?;
+        resolution.searched.push(MumuRootLocation {
+            source: MumuRootSource::KnownPath,
+            path: parent,
+        });
+        if roots
+            .into_iter()
+            .any(|root| resolution.accept(MumuRootSource::KnownPath, root))
+        {
+            return Ok(resolution);
+        }
+    }
+    resolution.searched.push(MumuRootLocation {
+        source: MumuRootSource::Path,
+        path: PathBuf::from(MUMU_MANAGER_EXE_NAME),
+    });
+    let on_path = std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for dir in on_path {
+        let manager = dir.join(MUMU_MANAGER_EXE_NAME);
+        if dir.is_absolute()
+            && manager.is_file()
+            && let Some(root) = mumu_root_from_path(&manager)
+            && resolution.accept(MumuRootSource::Path, root)
+        {
+            break;
+        }
+    }
+    Ok(resolution)
 }
 
 pub(crate) fn known_vendor_parent_dirs() -> Vec<PathBuf> {

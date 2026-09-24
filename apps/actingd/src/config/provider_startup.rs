@@ -53,9 +53,9 @@ impl ConfiguredExecutionBackendRegistry {
         startup.record(backend, Observation::Started { stage })?;
         let mumu_root = self
             .mumu_root
-            .as_deref()
+            .root()
             .map_or_else(|| "<unset>".to_owned(), |root| root.display().to_string());
-        let report = discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
+        let report = self.discover_mumu().map_err(|error| {
             let classification = discovery_refusal_code(&error);
             let code = error
                 .nemu_resolution_context()
@@ -141,12 +141,42 @@ impl ConfiguredExecutionBackendRegistry {
         startup.record(backend, Observation::Completed { stage })
     }
 
+    /// `MuMuManager` discovery against the configured or probed root. When no root resolved
+    /// and discovery is unavailable, the message (the native detail) gains the probed
+    /// locations as `detail={"searched":[{"source","path"}...]}`; the code is unchanged.
+    fn discover_mumu(&self) -> DeviceResult<MumuDiscoveryReport> {
+        discover_mumu_instances(self.mumu_root.root()).map_err(|error| {
+            if self.mumu_root.resolved.is_some()
+                || discovery_refusal_code(&error) != "instance_discovery_unavailable"
+            {
+                return error;
+            }
+            let searched = self
+                .mumu_root
+                .searched
+                .iter()
+                .map(|location| {
+                    serde_json::json!({
+                        "source": location.source.as_str(),
+                        "path": location.path.to_string_lossy(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let message = format!(
+                "{}; detail={}",
+                error.message(),
+                serde_json::json!({ "searched": searched })
+            );
+            error.with_message(message)
+        })
+    }
+
     /// On-demand discovery: the same `MuMuManager` resolution as startup, mapped to the
     /// provider view. Binds, rebinds, registers and records nothing.
     pub(super) fn discover_instances_on_demand(
         &self,
     ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
-        let report = discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
+        let report = self.discover_mumu().map_err(|error| {
             Box::new(InstanceDiscoveryFailure {
                 code: discovery_refusal_code(&error),
                 error,
