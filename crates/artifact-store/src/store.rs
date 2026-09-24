@@ -1268,6 +1268,32 @@ impl ArtifactReader {
             bytes,
         })
     }
+
+    /// Retains every byte from offset 0 through the same verified-EOF path as
+    /// `read_verified_range`. The caller bounds the object size it is willing to hold.
+    pub fn read_verified_all(
+        mut self,
+        deadline: Instant,
+    ) -> ArtifactStoreResult<VerifiedArtifactRange> {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 65_536];
+        loop {
+            material_read_deadline(deadline)?;
+            let count = self.read_chunk(&mut buffer)?;
+            material_read_deadline(deadline)?;
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let verified = self.finish()?;
+        material_read_deadline(deadline)?;
+        Ok(VerifiedArtifactRange {
+            verified,
+            offset: 0,
+            bytes,
+        })
+    }
 }
 
 pub struct VerifiedArtifactRange {
