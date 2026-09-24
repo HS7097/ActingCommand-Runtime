@@ -36,6 +36,9 @@ const DEFAULT_MAX_SYSTEM_SAMPLES: usize = 64;
 const DEFAULT_MAX_PIPELINE_SAMPLES: usize = 4096;
 const DEFAULT_MAX_EVENT_REFERENCES: usize = 512;
 const DEFAULT_MAX_CONSECUTIVE_FAILURES: u16 = 3;
+const DEFAULT_PRESSURE_START_SAMPLES: u16 = 3;
+const DEFAULT_PRESSURE_END_SAMPLES: u16 = 3;
+const MAX_PRESSURE_STREAK_SAMPLES: u16 = 30;
 const DEFAULT_TOP_PROCESS_COUNT: usize = 5;
 const MAX_OWNED_PROCESS_COUNT: usize = 32;
 
@@ -48,6 +51,8 @@ pub struct PerformanceMonitorConfig {
     max_pipeline_samples: usize,
     max_event_references: usize,
     max_consecutive_failures: u16,
+    pressure_start_samples: u16,
+    pressure_end_samples: u16,
     top_process_count: usize,
     owned_processes: BTreeMap<u32, String>,
     thresholds: PerformanceThresholds,
@@ -63,6 +68,8 @@ impl Default for PerformanceMonitorConfig {
             max_pipeline_samples: DEFAULT_MAX_PIPELINE_SAMPLES,
             max_event_references: DEFAULT_MAX_EVENT_REFERENCES,
             max_consecutive_failures: DEFAULT_MAX_CONSECUTIVE_FAILURES,
+            pressure_start_samples: DEFAULT_PRESSURE_START_SAMPLES,
+            pressure_end_samples: DEFAULT_PRESSURE_END_SAMPLES,
             top_process_count: DEFAULT_TOP_PROCESS_COUNT,
             owned_processes: BTreeMap::new(),
             thresholds: PerformanceThresholds::default(),
@@ -73,6 +80,18 @@ impl Default for PerformanceMonitorConfig {
 impl PerformanceMonitorConfig {
     pub fn with_owned_process(mut self, pid: u32, label: impl Into<String>) -> Self {
         self.owned_processes.insert(pid, label.into());
+        self
+    }
+
+    /// Consecutive samples above a pressure's start threshold before it is recorded.
+    pub fn with_pressure_start_samples(mut self, samples: u16) -> Self {
+        self.pressure_start_samples = samples;
+        self
+    }
+
+    /// Consecutive samples below a pressure's end threshold before it is ended.
+    pub fn with_pressure_end_samples(mut self, samples: u16) -> Self {
+        self.pressure_end_samples = samples;
         self
     }
 
@@ -88,6 +107,8 @@ impl PerformanceMonitorConfig {
             || self.max_pipeline_samples == 0
             || self.max_event_references == 0
             || self.max_consecutive_failures == 0
+            || !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&self.pressure_start_samples)
+            || !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&self.pressure_end_samples)
             || self.top_process_count == 0
             || self.top_process_count > 32
             || self.owned_processes.len() > MAX_OWNED_PROCESS_COUNT
@@ -405,6 +426,15 @@ enum MonitorFailureDomain {
 struct ActivePressure {
     record: PerformancePressureRecord,
     event_id: Option<EventId>,
+    /// Consecutive samples that failed the end threshold since the last one that held it.
+    below_end_samples: u16,
+}
+
+/// A start streak still shorter than the configured sample count; nothing is recorded yet.
+#[derive(Clone)]
+struct PendingPressure {
+    record: PerformancePressureRecord,
+    samples: u16,
 }
 
 #[derive(Clone)]
@@ -421,6 +451,7 @@ pub(crate) struct PerformanceMonitor {
     system_samples: VecDeque<RawSystemSample>,
     pipeline_samples: VecDeque<PipelinePerformanceSignal>,
     active_pressures: BTreeMap<PerformancePressureKind, ActivePressure>,
+    pending_pressures: BTreeMap<PerformancePressureKind, PendingPressure>,
     event_references: VecDeque<TimedEventReference>,
     degraded_metrics: BTreeSet<PerformanceMetric>,
     capture_starts: BTreeMap<FrameId, PendingPipelineMeasurement>,
@@ -452,6 +483,7 @@ impl PerformanceMonitor {
             system_samples: VecDeque::new(),
             pipeline_samples: VecDeque::new(),
             active_pressures: BTreeMap::new(),
+            pending_pressures: BTreeMap::new(),
             event_references: VecDeque::new(),
             degraded_metrics: BTreeSet::new(),
             capture_starts: BTreeMap::new(),
@@ -490,6 +522,7 @@ impl PerformanceMonitor {
             system_samples: VecDeque::new(),
             pipeline_samples: VecDeque::new(),
             active_pressures: BTreeMap::new(),
+            pending_pressures: BTreeMap::new(),
             event_references: VecDeque::new(),
             degraded_metrics: BTreeSet::new(),
             capture_starts: BTreeMap::new(),
@@ -1386,53 +1419,87 @@ impl PerformanceMonitor {
             PerformancePressureKind::ThirdParty,
         ] {
             let measurement = measurements.get(&kind);
-            let remains_active = self.active_pressures.contains_key(&kind)
-                && measurement
-                    .is_some_and(|value| pressure_above_end(kind, value, &config.thresholds));
-            if let (Some(active), Some(value)) = (self.active_pressures.get_mut(&kind), measurement)
-                && remains_active
-            {
-                active.record.last_observed_at_unix_ms = sample.observed_at_unix_ms;
-                active.record.severity = pressure_severity(kind, value, &config.thresholds);
-                active.record.peak = peak_value(&active.record.peak, value);
+            if let Some(active) = self.active_pressures.get_mut(&kind) {
+                if let Some(value) = measurement
+                    && pressure_above_end(kind, value, &config.thresholds)
+                {
+                    active.record.last_observed_at_unix_ms = sample.observed_at_unix_ms;
+                    active.record.severity = pressure_severity(kind, value, &config.thresholds);
+                    active.record.peak = peak_value(&active.record.peak, value);
+                    active.below_end_samples = 0;
+                    continue;
+                }
+                // A missing measurement counts as below; the record keeps the last sample
+                // that still held the end threshold.
+                active.below_end_samples = next_streak_sample(active.below_end_samples)?;
+                if active.below_end_samples < config.pressure_end_samples {
+                    continue;
+                }
+                if let Some(ended) = self.active_pressures.remove(&kind) {
+                    events.push(PerformanceSemanticEvent::PressureEnded(
+                        PerformancePressureEventData {
+                            observed_at_unix_ms: sample.observed_at_unix_ms,
+                            pressure: ended.record,
+                        },
+                    ));
+                }
+            }
+            let Some(value) =
+                measurement.filter(|value| pressure_above_start(kind, value, &config.thresholds))
+            else {
+                self.pending_pressures.remove(&kind);
+                continue;
+            };
+            let severity = pressure_severity(kind, value, &config.thresholds);
+            let pending = match self.pending_pressures.remove(&kind) {
+                Some(mut pending) => {
+                    pending.record.last_observed_at_unix_ms = sample.observed_at_unix_ms;
+                    pending.record.severity = severity;
+                    pending.record.peak = peak_value(&pending.record.peak, value);
+                    pending.samples = next_streak_sample(pending.samples)?;
+                    pending
+                }
+                None => PendingPressure {
+                    record: PerformancePressureRecord {
+                        kind,
+                        severity,
+                        started_at_unix_ms: sample.observed_at_unix_ms,
+                        last_observed_at_unix_ms: sample.observed_at_unix_ms,
+                        peak: value.clone(),
+                    },
+                    samples: 1,
+                },
+            };
+            if pending.samples < config.pressure_start_samples {
+                self.pending_pressures.insert(kind, pending);
                 continue;
             }
-            if let Some(mut ended) = self.active_pressures.remove(&kind) {
-                ended.record.last_observed_at_unix_ms = sample.observed_at_unix_ms;
-                events.push(PerformanceSemanticEvent::PressureEnded(
-                    PerformancePressureEventData {
-                        observed_at_unix_ms: sample.observed_at_unix_ms,
-                        pressure: ended.record,
-                    },
-                ));
-            }
-            if let Some(value) = measurement
-                && pressure_above_start(kind, value, &config.thresholds)
-            {
-                let record = PerformancePressureRecord {
-                    kind,
-                    severity: pressure_severity(kind, value, &config.thresholds),
-                    started_at_unix_ms: sample.observed_at_unix_ms,
-                    last_observed_at_unix_ms: sample.observed_at_unix_ms,
-                    peak: value.clone(),
-                };
-                self.active_pressures.insert(
-                    kind,
-                    ActivePressure {
-                        record: record.clone(),
-                        event_id: None,
-                    },
-                );
-                events.push(PerformanceSemanticEvent::PressureStarted(
-                    PerformancePressureEventData {
-                        observed_at_unix_ms: sample.observed_at_unix_ms,
-                        pressure: record,
-                    },
-                ));
-            }
+            self.active_pressures.insert(
+                kind,
+                ActivePressure {
+                    record: pending.record.clone(),
+                    event_id: None,
+                    below_end_samples: 0,
+                },
+            );
+            events.push(PerformanceSemanticEvent::PressureStarted(
+                PerformancePressureEventData {
+                    observed_at_unix_ms: sample.observed_at_unix_ms,
+                    pressure: pending.record,
+                },
+            ));
         }
         Ok(events)
     }
+}
+
+fn next_streak_sample(samples: u16) -> RuntimeHostResult<u16> {
+    samples.checked_add(1).ok_or_else(|| {
+        performance_fatal(
+            "performance_pressure_streak_overflow",
+            "update_performance_pressures",
+        )
+    })
 }
 
 fn validate_pipeline_observation(observation: &PipelineEventObservation) -> RuntimeHostResult<()> {
@@ -2534,31 +2601,27 @@ mod tests {
         let mut monitor = monitor(vec![
             Ok(sample(1_000, 9_000)),
             Ok(sample(3_000, 9_100)),
-            Ok(sample(5_000, 6_000)),
+            Ok(sample(5_000, 9_000)),
+            Ok(sample(7_000, 6_000)),
+            Ok(sample(9_000, 6_000)),
+            Ok(sample(11_000, 6_000)),
         ]);
-        let first = monitor.tick(1_000).expect("first");
-        let second = monitor.tick(3_000).expect("second");
-        let third = monitor.tick(5_000).expect("third");
+        let pressure_events = [1_000, 3_000, 5_000, 7_000, 9_000, 11_000].map(|at| {
+            let tick = monitor.tick(at).expect("tick");
+            (
+                tick.events
+                    .iter()
+                    .filter(|event| matches!(event, PerformanceSemanticEvent::PressureStarted(_)))
+                    .count(),
+                tick.events
+                    .iter()
+                    .filter(|event| matches!(event, PerformanceSemanticEvent::PressureEnded(_)))
+                    .count(),
+            )
+        });
         assert_eq!(
-            first
-                .events
-                .iter()
-                .filter(|event| matches!(event, PerformanceSemanticEvent::PressureStarted(_)))
-                .count(),
-            1
-        );
-        assert!(!second.events.iter().any(|event| matches!(
-            event,
-            PerformanceSemanticEvent::PressureStarted(_)
-                | PerformanceSemanticEvent::PressureEnded(_)
-        )));
-        assert_eq!(
-            third
-                .events
-                .iter()
-                .filter(|event| matches!(event, PerformanceSemanticEvent::PressureEnded(_)))
-                .count(),
-            1
+            pressure_events,
+            [(0, 0), (0, 0), (1, 0), (0, 0), (0, 0), (0, 1)]
         );
     }
 
