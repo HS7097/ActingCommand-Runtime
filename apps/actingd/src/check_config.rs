@@ -2,6 +2,7 @@
 
 use super::*;
 use actingcommand_contract::{InstanceResourcePackage, InstanceResourcePackageKind};
+use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_manager};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedAdbEndpoint, ResolvedInstanceEndpoint,
 };
@@ -15,6 +16,8 @@ const NOT_CHECKED: [&str; 2] = ["vision_provider_manifest", "state_root"];
 /// Added to `not_checked` when a `resource_package` is a directory: the package loader reads
 /// a directory only against a Git source-tree reference, which the field does not carry.
 const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
+/// Added to `not_checked` when no MuMu install root could be resolved.
+const MUMU_DISCOVERY_NOT_CHECKED: &str = "mumu_discovery";
 
 /// Loads, assembles and validates a configuration exactly as startup would, then stops
 /// before the first side effect: nothing under `state_root` is created, read or locked,
@@ -142,8 +145,12 @@ fn summarize(
     {
         not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
     }
+    let (mumu_root, mumu_root_unresolved) = mumu_root_report(registry.mumu_root());
+    if mumu_root_unresolved.is_some() {
+        not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
+    }
     let bind_address = assembly.host.bind_address();
-    Ok(json!({
+    let mut report = json!({
         "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
         "status": "ok",
         "config_path": config_path.to_string_lossy(),
@@ -155,5 +162,59 @@ fn summarize(
         "policy_configured": assembly.policy.is_some(),
         "config_manifest": assembly.manifest,
         "not_checked": not_checked,
-    }))
+        "mumu_root": mumu_root,
+    });
+    if let Some(unresolved) = mumu_root_unresolved {
+        report["mumu_root_unresolved"] = unresolved;
+    }
+    Ok(report)
+}
+
+/// The MuMu install root the daemon would use: the configured `mumu_root`, else one
+/// read-only `resolve_mumu_manager(None)` run (environment, running process, uninstall
+/// registry, vendor folders). `MuMuManager.exe` is never run; no instance is started or
+/// stopped. A failed resolution is reported as `null` plus its reason, never refused.
+fn mumu_root_report(configured: Option<&Path>) -> (serde_json::Value, Option<serde_json::Value>) {
+    if let Some(root) = configured {
+        return (
+            json!({ "path": root.to_string_lossy(), "source": "config" }),
+            None,
+        );
+    }
+    match resolve_mumu_manager(None) {
+        Ok(resolved) => (
+            json!({
+                "path": resolved.install_root.to_string_lossy(),
+                "source": mumu_root_source(resolved.source),
+            }),
+            None,
+        ),
+        Err(error) => {
+            // The code order of a provider startup discovery refusal.
+            let reason = error
+                .nemu_resolution_context()
+                .map(|context| context.reason().as_str().to_owned())
+                .or_else(|| {
+                    error.diagnostic().map(|diagnostic| {
+                        format!("{}.{}", diagnostic.category().as_str(), diagnostic.stage())
+                    })
+                })
+                .unwrap_or_else(|| "device_error".to_owned());
+            (
+                serde_json::Value::Null,
+                Some(json!({ "reason": reason, "message": error.message() })),
+            )
+        }
+    }
+}
+
+/// `ExplicitRoot` is the configured root; the resolver rungs reuse the install source words.
+fn mumu_root_source(source: MumuManagerSource) -> &'static str {
+    match source {
+        MumuManagerSource::ExplicitRoot => "config",
+        MumuManagerSource::FolderEnvironment => "env",
+        MumuManagerSource::RunningProcess => MumuInstallSource::RunningProcess.as_str(),
+        MumuManagerSource::RegistryUninstall => MumuInstallSource::RegistryUninstall.as_str(),
+        MumuManagerSource::VendorEnumeration => MumuInstallSource::VendorEnumeration.as_str(),
+    }
 }

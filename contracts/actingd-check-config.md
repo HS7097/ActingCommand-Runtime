@@ -4,12 +4,13 @@
 and stops before the first side effect. It runs the configuration load, the
 typed assembly of `actingcommand.actingd.config.v1`,
 `RuntimeHostConfig::validate` and the instance resource package admission (see
-"Instance resource package"), the same checks as startup's first step, then
-drops the assembly. It never stats, creates or reads anything under
-`state_root`, never opens the ledger, never acquires `owner.lock`, never binds a
-socket and records no lifecycle failure. A passing check is not a startup: the
-daemon's own startup path remains the only authority on the state root and the
-vision provider manifest.
+"Instance resource package"), the same checks as startup's first step, reports
+the MuMu install root startup would use (resolved read-only when `mumu_root` is
+not configured, see "MuMu install root"), then drops the assembly. It never
+stats, creates or reads anything under `state_root`, never opens the ledger,
+never acquires `owner.lock`, never binds a socket and records no lifecycle
+failure. A passing check is not a startup: the daemon's own startup path
+remains the only authority on the state root and the vision provider manifest.
 
 ## Invocation
 
@@ -35,7 +36,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"]}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -133,6 +134,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
   is inspected). `resource_package_directory_declarations` is appended when at
   least one instance's `resource_package` is a directory: its existence is
   checked, its declarations are not (see "Instance resource package").
+  `mumu_discovery` is appended when no MuMu install root could be resolved
+  (`mumu_root` is `null`).
+- `mumu_root` is always present; `mumu_root_unresolved` only when `mumu_root`
+  is `null` (see "MuMu install root").
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"config_decode_failed","stage":"load"}}
@@ -222,6 +227,48 @@ capability admission, exactly one discovered instance matching the key
 `adb_path`, `host` or `port` against the discovered values
 (`instance_discovery_conflict`; a declared `adb_path` is only compared there,
 never resolved here) and the ADB endpoint itself.
+
+## MuMu install root
+
+`mumu_root` reports the MuMu install root the daemon's `MuMuManager` discovery
+would use, so a caller can pin it into the configuration's `mumu_root`. It has
+three shapes:
+
+- `mumu_root` configured: `{"path":"<configured path>","source":"config"}`.
+  The path is echoed as configured, after the usual assembly check (a relative
+  or empty value still fails with `mumu_root_invalid` at stage `assemble`);
+  nothing is resolved.
+- `mumu_root` absent and resolved:
+  `{"path":"<resolved root>","source":"<source>"}`. The command runs
+  `resolve_mumu_manager` once with no explicit root, the same resolution as
+  startup: `ACTINGCOMMAND_NEMU_FOLDER`, then the install root of a running MuMu
+  process, then the Windows uninstall registry entries, then the vendor
+  folders. `path` is the canonical root the resolver returns (on Windows a
+  `\\?\` verbatim path), which startup accepts as `mumu_root`. `source` is
+  `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`.
+- `mumu_root` absent and not resolved: `"mumu_root":null` plus a sibling
+  `"mumu_root_unresolved":{"reason":"<reason>","message":"<message>"}`, and
+  `mumu_discovery` is appended to `not_checked`. This is not a check failure:
+  `status` stays `ok` and the exit code `0`; startup runs this resolution only
+  when an instance is discovery-bound (`contracts/provider-startup.md`).
+  `message` is the resolver's own message. `reason` follows the order of a
+  startup discovery refusal's native code: the resolver's resolution reason
+  (`installation_absent`, `installation_ambiguous`, `candidate_absent`,
+  `candidate_outside_root`, `registry_entry_invalid`,
+  `registry_source_unavailable`), else its diagnostic `<category>.<stage>`
+  (for example `native.mumu_manager.registry`), else `device_error` (for
+  example a root path that cannot be canonicalized).
+
+```json
+{"mumu_root":null,"mumu_root_unresolved":{"reason":"installation_absent","message":"no MuMu installation was found: configure mumu_root, set ACTINGCOMMAND_NEMU_FOLDER, start MuMu, or install it at a registered or vendor path"}}
+```
+
+The resolution is read-only: it reads one environment variable, the process
+list (on Windows one `Get-CimInstance Win32_Process` query through PowerShell,
+as startup does), the uninstall registry keys and the file system. It never
+runs `MuMuManager.exe` or ADB, starts or stops no instance and records nothing.
+With two installations the winner can differ between runs (a running process
+comes first), which is why a configured `mumu_root` is preferred.
 
 ## Exit code
 

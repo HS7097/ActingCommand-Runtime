@@ -1246,6 +1246,11 @@ impl ConfiguredExecutionBackendRegistry {
             .map(|entry| &entry.key)
     }
 
+    /// The configured `mumu_root`, already validated as absolute (`check-config` reporting).
+    pub(super) fn mumu_root(&self) -> Option<&Path> {
+        self.mumu_root.as_deref()
+    }
+
     /// Registers one resolved device entry under the same duplicate rules as `new`.
     fn register_device(&mut self, backend: ConfiguredInstanceBackend) -> Result<(), &'static str> {
         let ConfiguredInstanceBackend::Device {
