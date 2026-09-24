@@ -7,7 +7,6 @@ use actingcommand_contract::{
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, RUNTIME_MATERIAL_READ_BUDGET_MS, RuntimeMaterialChunk,
     RuntimeMaterialReadFailure, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
     RuntimeMaterialReadResult, RuntimeMaterialReadSource, RuntimeMaterialReadState,
-    VerifiedArtifactReference,
 };
 use actingcommand_ledger::{GlobalLedgerError, LedgerArtifactSelection, ResolvedLedgerArtifact};
 
@@ -49,54 +48,42 @@ const VERIFIED_MATERIAL_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 // Tiny objects are charged at least this much, so the entry count stays bounded too.
 const VERIFIED_MATERIAL_MIN_CHARGE_BYTES: usize = 4 * 1024;
 
-/// Whole objects verified at EOF, keyed by their exact projected reference; least recent first.
+/// Whole objects verified at EOF, least recent first. Each key is the projected reference the
+/// store verified, inserted only after it equalled the Ledger's current reference.
 #[derive(Default)]
 pub(super) struct VerifiedMaterialCache {
-    entries: VecDeque<VerifiedMaterial>,
+    entries: VecDeque<(ProjectedArtifactReference, Arc<[u8]>)>,
     charged_bytes: usize,
 }
 
-struct VerifiedMaterial {
-    reference: ProjectedArtifactReference,
-    verified: VerifiedArtifactReference,
-    bytes: Arc<[u8]>,
-}
-
 impl VerifiedMaterialCache {
-    fn touch(&mut self, reference: &ProjectedArtifactReference) -> Option<&VerifiedMaterial> {
+    fn get(&mut self, reference: &ProjectedArtifactReference) -> Option<Arc<[u8]>> {
         let position = self
             .entries
             .iter()
-            .position(|entry| entry.reference == *reference)?;
+            .position(|(cached, _)| cached == reference)?;
         let entry = self.entries.remove(position)?;
+        let bytes = Arc::clone(&entry.1);
         self.entries.push_back(entry);
-        self.entries.back()
+        Some(bytes)
     }
 
-    fn get(
-        &mut self,
-        reference: &ProjectedArtifactReference,
-    ) -> Option<(VerifiedArtifactReference, Arc<[u8]>)> {
-        self.touch(reference)
-            .map(|entry| (entry.verified.clone(), Arc::clone(&entry.bytes)))
-    }
-
-    fn insert(&mut self, entry: VerifiedMaterial) {
-        if self.touch(&entry.reference).is_some() {
+    fn insert(&mut self, reference: ProjectedArtifactReference, bytes: Arc<[u8]>) {
+        if self.get(&reference).is_some() {
             return;
         }
-        let charge = material_charge(&entry.bytes);
+        let charge = material_charge(&bytes);
         while self.charged_bytes.saturating_add(charge) > VERIFIED_MATERIAL_TOTAL_BYTES {
             let Some(evicted) = self.entries.pop_front() else {
                 break;
             };
             self.charged_bytes = self
                 .charged_bytes
-                .saturating_sub(material_charge(&evicted.bytes));
+                .saturating_sub(material_charge(&evicted.1));
         }
         if self.charged_bytes.saturating_add(charge) <= VERIFIED_MATERIAL_TOTAL_BYTES {
             self.charged_bytes += charge;
-            self.entries.push_back(entry);
+            self.entries.push_back((reference, bytes));
         }
     }
 }
@@ -113,7 +100,7 @@ impl HostShared {
         current: &ProjectedArtifactReference,
         request: &RuntimeMaterialReadRequest,
         deadline: Instant,
-    ) -> Result<(VerifiedArtifactReference, u64, Vec<u8>), MaterialReadError> {
+    ) -> Result<(u64, Vec<u8>), MaterialReadError> {
         // The same range check and error as `ArtifactReader::read_verified_range`.
         let end = request
             .offset
@@ -133,23 +120,21 @@ impl HostShared {
         let cached = lock(&self.verified_materials, "read_runtime_material")
             .map_err(MaterialReadError::Cache)?
             .get(current);
-        let (verified, material) = match cached {
+        let material = match cached {
             Some(cached) => cached,
             None => {
                 let (verified, _, bytes) = reader
                     .read_verified_all(deadline)
                     .map_err(MaterialReadError::Artifact)?
                     .into_parts();
-                ensure_verified_material(&verified, current)?;
+                if verified.reference().project(true) != *current {
+                    return Err(verification_mismatch());
+                }
                 let material = Arc::<[u8]>::from(bytes);
                 lock(&self.verified_materials, "read_runtime_material")
                     .map_err(MaterialReadError::Cache)?
-                    .insert(VerifiedMaterial {
-                        reference: current.clone(),
-                        verified: verified.clone(),
-                        bytes: Arc::clone(&material),
-                    });
-                (verified, material)
+                    .insert(current.clone(), Arc::clone(&material));
+                material
             }
         };
         let bytes = usize::try_from(request.offset)
@@ -158,7 +143,7 @@ impl HostShared {
             .and_then(|(start, end)| material.get(start..end))
             .ok_or_else(verification_mismatch)?
             .to_vec();
-        Ok((verified, request.offset, bytes))
+        Ok((request.offset, bytes))
     }
 
     pub(super) fn read_material(
@@ -205,17 +190,19 @@ impl HostShared {
             if set_retention_result(&mut result) {
                 return Ok(());
             }
-            let (verified, offset, bytes) = if current.reference().byte_count
-                <= VERIFIED_MATERIAL_ENTRY_BYTES
+            let (offset, bytes) = if current.reference().byte_count <= VERIFIED_MATERIAL_ENTRY_BYTES
             {
                 self.read_cached_range(reader, current.reference(), request, context.deadline)?
             } else {
-                reader
+                let range = reader
                     .read_verified_range(request.offset, request.requested_length, context.deadline)
-                    .map_err(MaterialReadError::Artifact)?
-                    .into_parts()
+                    .map_err(MaterialReadError::Artifact)?;
+                let (verified, offset, bytes) = range.into_parts();
+                if verified.reference().project(true) != *current.reference() {
+                    return Err(verification_mismatch());
+                }
+                (offset, bytes)
             };
-            ensure_verified_material(&verified, current.reference())?;
             let length = u32::try_from(bytes.len()).map_err(|_| {
                 MaterialReadError::Identity(protocol_error("material_read_length_overflow"))
             })?;
@@ -480,16 +467,6 @@ fn set_retention_result(result: &mut RuntimeMaterialReadResult) -> bool {
         Some(ArtifactEvictionDisposition::Failed) => RuntimeMaterialReadLimit::EvictionFailed,
     });
     true
-}
-
-fn ensure_verified_material(
-    verified: &VerifiedArtifactReference,
-    current: &ProjectedArtifactReference,
-) -> Result<(), MaterialReadError> {
-    if verified.reference().project(true) != *current {
-        return Err(verification_mismatch());
-    }
-    Ok(())
 }
 
 fn verification_mismatch() -> MaterialReadError {
