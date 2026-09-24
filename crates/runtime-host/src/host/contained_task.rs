@@ -3612,7 +3612,8 @@ fn select_scheduling_disposition(
         }
     }
     if let [(step_index, operation_label)] = designated_effects.as_slice() {
-        let lifecycle_count = events
+        // Same last-attempt rule as the final step: earlier attempts' StepFinished are ignored.
+        let last_attempt_started = events
             .iter()
             .filter(|event| {
                 let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
@@ -3620,12 +3621,29 @@ fn select_scheduling_disposition(
                 };
                 matches!(
                     payload.fact(),
-                    TaskSemanticFact::StepFinished {
-                        step_index: completed_step,
-                        operation_label: completed_operation,
+                    TaskSemanticFact::StepStarted {
+                        step_index: started_step,
                         ..
-                    } if completed_step == step_index && completed_operation == operation_label
+                    } if started_step == step_index
                 )
+            })
+            .map(PersistedEvent::sequence)
+            .max();
+        let lifecycle_count = events
+            .iter()
+            .filter(|event| {
+                let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
+                    return false;
+                };
+                last_attempt_started.is_none_or(|started| event.sequence() > started)
+                    && matches!(
+                        payload.fact(),
+                        TaskSemanticFact::StepFinished {
+                            step_index: completed_step,
+                            operation_label: completed_operation,
+                            ..
+                        } if completed_step == step_index && completed_operation == operation_label
+                    )
             })
             .count();
         if lifecycle_count != 1 {
