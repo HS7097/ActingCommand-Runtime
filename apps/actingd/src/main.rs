@@ -77,7 +77,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let config_path = parse_arguments(arguments)?;
     let RuntimeAssembly {
         host,
-        registry,
+        provider,
         policy,
         resource_packages,
         ..
@@ -91,7 +91,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         })?;
     let host = host.with_resource_packages(resource_packages);
     let host =
-        RuntimeHost::start_with_provider(host, |startup| registry.assemble_provider(startup))
+        RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
             .map_err(ActingdError::runtime)?;
     let initial_policy_cycle = (|| {
         let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {

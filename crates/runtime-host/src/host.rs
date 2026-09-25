@@ -2586,22 +2586,14 @@ impl RegisteredInstance {
     }
 }
 
+/// Reads the provider's registered set as it is. Alias validity and uniqueness are the
+/// registry's own admission rules (`ExecutionBackendRegistry::from_assembly`); nothing is
+/// re-validated here.
 fn initial_registered_instances(
     provider: &dyn ExecutionBackendProvider,
 ) -> RuntimeHostResult<BTreeMap<InstanceId, RegisteredInstance>> {
-    let aliases = provider.instance_aliases();
-    let mut seen_aliases = BTreeSet::new();
     let mut instances = BTreeMap::new();
-    for instance_alias in aliases {
-        if actingcommand_contract::validate_instance_alias(&instance_alias).is_err()
-            || !seen_aliases.insert(instance_alias.clone())
-        {
-            return Err(RuntimeHostError::fatal(
-                "invalid_execution_backend_registry",
-                "initialize_runtime_instance_registry",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
+    for instance_alias in provider.instance_aliases() {
         let resolved = provider.resolve(&instance_alias).ok_or_else(|| {
             RuntimeHostError::fatal(
                 "execution_backend_registry_incomplete",
@@ -2609,13 +2601,6 @@ fn initial_registered_instances(
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        if resolved.audit_endpoint().is_empty() {
-            return Err(RuntimeHostError::fatal(
-                "invalid_execution_backend_registry",
-                "initialize_runtime_instance_registry",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
         let registration = RegisteredInstance {
             instance_alias,
             instance_id: resolved.instance_id(),

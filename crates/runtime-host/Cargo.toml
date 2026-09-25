@@ -10,6 +10,9 @@ publish = false
 
 [features]
 default = []
+# Fixture simulation backends (`provider/fixtures.rs`): device-free instances for actingd's
+# `fixture_backend` configuration and Lab simulation; absent from every other consumer.
+fixture-backends = []
 test-observation = []
 
 [dependencies]
