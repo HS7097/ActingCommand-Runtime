@@ -36,8 +36,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
@@ -47,6 +47,8 @@ const ACTIVE_POINTER_STATE_KEY: &str = "policy.catalog.active";
 const GENERATIONS_DIR: &str = "generations";
 const MAX_POINTER_BYTES: usize = 16 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+// Published generations are immutable, so verified compiled catalogs are memoised by hash.
+const MAX_CATALOG_MEMO_GENERATIONS: usize = 8;
 const DEFAULT_DEBOUNCE_MS: u64 = 250;
 const DEFAULT_COOLDOWN_MS: u64 = 1_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS: u64 = 60_000;
@@ -2511,6 +2513,36 @@ struct CatalogStore {
     generations: PathBuf,
     legacy_active_pointer: PathBuf,
     state: Arc<RuntimeStateStore>,
+    memo: Mutex<CatalogMemo>,
+}
+
+/// Bounded least-recently-used memo of verified, compiled generations keyed by
+/// catalog hash. A generation directory is immutable once published, so the
+/// hash alone identifies its verified content.
+#[derive(Default)]
+struct CatalogMemo {
+    // Least recently used first, most recently used last.
+    entries: Vec<(String, Arc<LoadedCatalog>)>,
+}
+
+impl CatalogMemo {
+    fn get(&mut self, hash: &str) -> Option<Arc<LoadedCatalog>> {
+        let position = self.entries.iter().position(|(key, _)| key == hash)?;
+        let entry = self.entries.remove(position);
+        let loaded = Arc::clone(&entry.1);
+        self.entries.push(entry);
+        Some(loaded)
+    }
+
+    fn insert(&mut self, hash: String, loaded: Arc<LoadedCatalog>) {
+        if let Some(position) = self.entries.iter().position(|(key, _)| *key == hash) {
+            self.entries.remove(position);
+        }
+        while self.entries.len() >= MAX_CATALOG_MEMO_GENERATIONS {
+            self.entries.remove(0);
+        }
+        self.entries.push((hash, loaded));
+    }
 }
 
 impl CatalogStore {
@@ -2524,6 +2556,7 @@ impl CatalogStore {
             root,
             generations,
             state,
+            memo: Mutex::new(CatalogMemo::default()),
         };
         Ok(store)
     }
@@ -2603,6 +2636,43 @@ impl CatalogStore {
     }
 
     fn load_generation(&self, hash: &str) -> RuntimeHostResult<LoadedCatalog> {
+        if let Some(loaded) = self.memoised_generation(hash)? {
+            return Ok(LoadedCatalog::clone(&loaded));
+        }
+        let loaded = Arc::new(self.read_generation(hash)?);
+        self.memoise_generation(hash, Arc::clone(&loaded))?;
+        Ok(LoadedCatalog::clone(&loaded))
+    }
+
+    fn memoised_generation(&self, hash: &str) -> RuntimeHostResult<Option<Arc<LoadedCatalog>>> {
+        let loaded = self
+            .memo
+            .lock()
+            .map_err(|_| fatal("runtime_state_poisoned", "load_catalog_generation"))?
+            .get(hash);
+        let Some(loaded) = loaded else {
+            return Ok(None);
+        };
+        if loaded.generation.schema_version != CATALOG_STATE_SCHEMA
+            || loaded.generation.catalog_hash != hash
+        {
+            return Err(fatal(
+                "catalog_generation_identity_mismatch",
+                "load_catalog_generation",
+            ));
+        }
+        Ok(Some(loaded))
+    }
+
+    fn memoise_generation(&self, hash: &str, loaded: Arc<LoadedCatalog>) -> RuntimeHostResult<()> {
+        self.memo
+            .lock()
+            .map_err(|_| fatal("runtime_state_poisoned", "load_catalog_generation"))?
+            .insert(hash.to_owned(), loaded);
+        Ok(())
+    }
+
+    fn read_generation(&self, hash: &str) -> RuntimeHostResult<LoadedCatalog> {
         let path = self.generation_path(hash)?;
         let manifest = read_bounded(&path.join("manifest.json"), MAX_MANIFEST_BYTES)?;
         let generation: CatalogGeneration = serde_json::from_slice(&manifest)
