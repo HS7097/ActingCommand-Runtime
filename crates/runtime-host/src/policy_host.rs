@@ -841,6 +841,8 @@ impl PolicyHost {
                     eligible_since_unix_ms: None,
                     terminal_state,
                     completed_window,
+                    last_duration_ms: None,
+                    failure_streak: None,
                 })
             })
             .collect()

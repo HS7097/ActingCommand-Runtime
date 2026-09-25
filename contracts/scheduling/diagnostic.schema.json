@@ -33,7 +33,8 @@
         "loop_budget_missing",
         "effect_incompatible",
         "approval_missing",
-        "priority_selection_without_document"
+        "priority_selection_without_document",
+        "priority_selection_percentile_invalid"
       ]
     },
     "severity": { "enum": ["error", "warning"] },

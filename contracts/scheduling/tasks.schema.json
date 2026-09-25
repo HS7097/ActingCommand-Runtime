@@ -23,7 +23,15 @@
       "properties": {
         "defer_below_milli": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
         "defer_for_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 },
-        "promote_above_milli": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
+        "promote_above_milli": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "aging_ms_per_milli": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "defer_below_percentile": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "promote_above_percentile": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "defer_aging_cap_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 }
+      },
+      "dependentRequired": {
+        "defer_below_percentile": ["promote_above_percentile"],
+        "promote_above_percentile": ["defer_below_percentile"]
       },
       "additionalProperties": false
     },
@@ -159,7 +167,8 @@
           "type": "array",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/instanceOverride" }
-        }
+        },
+        "value_milli": { "type": "integer", "minimum": 0, "maximum": 1000000 }
       },
       "additionalProperties": false
     }

@@ -34,6 +34,12 @@ pub const MAX_CANONICAL_INTEGER: i64 = 9_007_199_254_740_991;
 pub const MAX_DEFER_FOR_MS: u64 = 86_400_000;
 /// Largest manual priority offset magnitude accepted as evaluation input.
 pub const MAX_PRIORITY_OFFSET_MILLI: i32 = 1_000_000;
+/// Largest declared task value a catalog may declare.
+pub const MAX_VALUE_MILLI: u32 = 1_000_000;
+/// Longest eligibility age after which a score deferral turns into a promotion: one day.
+pub const MAX_DEFER_AGING_CAP_MS: u64 = 86_400_000;
+/// Highest relative threshold a catalog may declare.
+pub const MAX_PRIORITY_PERCENTILE: u8 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -86,6 +92,7 @@ pub enum CatalogDiagnosticCode {
     EffectIncompatible,
     ApprovalMissing,
     PrioritySelectionWithoutDocument,
+    PrioritySelectionPercentileInvalid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -138,12 +145,28 @@ pub struct TasksDocument {
 ///
 /// A candidate whose effective score is below `defer_below_milli` is deferred for
 /// `defer_for_ms`; one above `promote_above_milli` ranks ahead of every other candidate.
+/// With the optional percentile pair the thresholds are taken from the cycle's own
+/// candidates instead; the absolute pair stays the fallback for small cycles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrioritySelection {
     pub defer_below_milli: i64,
     pub defer_for_ms: u64,
     pub promote_above_milli: i64,
+    /// Eligibility age that adds one milli of urgency to the utility term; absent adds none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aging_ms_per_milli: Option<u32>,
+    /// Nearest-rank percentile at or below which a candidate is deferred; paired with
+    /// `promote_above_percentile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defer_below_percentile: Option<u8>,
+    /// Nearest-rank percentile above which a candidate is promoted; paired with
+    /// `defer_below_percentile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promote_above_percentile: Option<u8>,
+    /// Eligibility age at which a candidate that would be deferred is promoted instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defer_aging_cap_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +252,9 @@ pub struct TaskSpec {
     pub loop_budget: LoopBudget,
     pub strategic_weight_milli: u16,
     pub instance_overrides: Vec<InstanceTaskOverride>,
+    /// Declared value of one run; absent means the task carries no utility term.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_milli: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
