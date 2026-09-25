@@ -96,6 +96,27 @@ over all instances, not a per-instance breakdown. Per-instance contexts (policy
 failure `perf_context`, the runtime API context) keep filtering by the
 requested instance alias.
 
+## Observation events the contract rejects
+
+A performance observation event (`perf.pressure_started`, `perf.pressure_ended`,
+`perf.stutter_detected`, `perf.summary`, `perf.monitor_degraded`,
+`perf.monitor_recovered`, `perf.balance_changed`) whose draft fails contract
+sanitization no longer ends the runtime. The host drops that one event and
+records the failure through the existing monitor machinery
+(`record_monitor_failure`): a `perf.monitor_degraded` event is written whose
+`failure_code` is the contract's own sanitization code (for example
+`invalid_performance_process`), `consecutive_failures` counts up, and after
+`max_consecutive_failures` the degraded event is `terminal`. Recovery follows
+the existing degraded rules. The capacity summary path keeps clearing the
+committed capacity fact on the failed append. Every other ledger write (task,
+lease, command, fact, lifecycle) still fails fatally, and every fatal
+sanitization message now carries the concrete contract code instead of
+`event_sanitization_failed`. A degraded event that fails sanitization itself is
+fatal as before. Windows process records are normalised at the sampler boundary
+(peak working set at least the working set, no peak without a non-zero creation
+time, control characters replaced by `process-<pid>`, names cut to the contract
+limit), so a raw counter value does not reach the contract as a rejection.
+
 ## Touch backend diagnostics
 
 `TouchBackendDiagnostics` now records a successful action on the primary

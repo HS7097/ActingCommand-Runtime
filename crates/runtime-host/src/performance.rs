@@ -5,15 +5,15 @@
 use crate::performance_control::PerformanceControlObservation;
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    ActionId, EventId, EventSeverity, EventType, FrameId, MAX_LEDGER_SAMPLE_WINDOW_NS,
+    ActionId, AuditInput, EventId, EventSeverity, EventType, FrameId, MAX_LEDGER_SAMPLE_WINDOW_NS,
     PerformanceCapacitySample, PerformanceContext, PerformanceControlEventData,
     PerformanceControlLevel, PerformanceDeadlineDisposition, PerformanceForegroundSummary,
     PerformanceLedgerSample, PerformanceLedgerUnavailable, PerformanceLedgerWindow,
     PerformanceMetric, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
-    PerformancePressureEventData, PerformancePressureKind, PerformancePressureRecord,
-    PerformancePressureSeverity, PerformancePressureValue, PerformanceProcessOwnership,
-    PerformanceProcessSummary, PerformanceStutterEventData, PerformanceSummaryEventData,
-    RecognitionId, RuntimeErrorCode,
+    PerformancePayloadDraft, PerformancePressureEventData, PerformancePressureKind,
+    PerformancePressureRecord, PerformancePressureSeverity, PerformancePressureValue,
+    PerformanceProcessOwnership, PerformanceProcessSummary, PerformanceStutterEventData,
+    PerformanceSummaryEventData, RecognitionId, RuntimeErrorCode,
 };
 use actingcommand_host_metrics::{
     HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
@@ -97,6 +97,16 @@ impl PerformanceMonitorConfig {
 
     pub fn sample_interval(&self) -> Duration {
         self.sample_interval
+    }
+
+    /// The effective start streak (`with_pressure_start_samples`, default 3).
+    pub const fn pressure_start_samples(&self) -> u16 {
+        self.pressure_start_samples
+    }
+
+    /// The effective end streak (`with_pressure_end_samples`, default 3).
+    pub const fn pressure_end_samples(&self) -> u16 {
+        self.pressure_end_samples
     }
 
     pub fn validate(&self) -> RuntimeHostResult<()> {
@@ -407,6 +417,33 @@ impl PerformanceSemanticEvent {
             Self::Summary(data) => data.context.window_end_unix_ms,
             Self::MonitorDegraded(data) | Self::MonitorRecovered(data) => data.observed_at_unix_ms,
             Self::BalanceChanged(data) => data.observed_at_unix_ms,
+        }
+    }
+
+    /// The ledger payload of this observation event.
+    pub(crate) fn payload(&self) -> PerformancePayloadDraft {
+        match self {
+            Self::PressureStarted(data) => {
+                PerformancePayloadDraft::pressure_started(data.clone(), AuditInput::new())
+            }
+            Self::PressureEnded(data) => {
+                PerformancePayloadDraft::pressure_ended(data.clone(), AuditInput::new())
+            }
+            Self::StutterDetected(data) => {
+                PerformancePayloadDraft::stutter_detected(data.clone(), AuditInput::new())
+            }
+            Self::Summary(data) => {
+                PerformancePayloadDraft::summary(data.as_ref().clone(), AuditInput::new())
+            }
+            Self::MonitorDegraded(data) => {
+                PerformancePayloadDraft::monitor_degraded(data.clone(), AuditInput::new())
+            }
+            Self::MonitorRecovered(data) => {
+                PerformancePayloadDraft::monitor_recovered(data.clone(), AuditInput::new())
+            }
+            Self::BalanceChanged(data) => {
+                PerformancePayloadDraft::balance_changed(data.clone(), AuditInput::new())
+            }
         }
     }
 }

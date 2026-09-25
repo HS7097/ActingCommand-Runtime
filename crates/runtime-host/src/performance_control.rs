@@ -153,7 +153,16 @@ pub(crate) enum PerformanceDispatchGate {
         reason: &'static str,
         deadline_disposition: Option<PerformanceDeadlineDisposition>,
         event: Option<PerformanceControlEventData>,
+        /// Present only for a throttle deferral: the earliest-start wait still owed.
+        retry_after_ms: Option<u64>,
     },
+}
+
+/// One instance's open throttle window: the level that opened it and when a dispatch may start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ThrottleWindow {
+    level: PerformanceControlLevel,
+    not_before_unix_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +170,7 @@ pub(crate) struct PerformanceBalanceController {
     config: PerformanceControlConfig,
     level: PerformanceControlLevel,
     instance_levels: BTreeMap<String, PerformanceControlLevel>,
+    throttle_windows: BTreeMap<String, ThrottleWindow>,
     last_observed_at_unix_ms: Option<u64>,
     cooldown_until_unix_ms: u64,
     candidate_level: Option<PerformanceControlLevel>,
@@ -175,6 +185,7 @@ impl PerformanceBalanceController {
             config,
             level: PerformanceControlLevel::Normal,
             instance_levels: BTreeMap::new(),
+            throttle_windows: BTreeMap::new(),
             last_observed_at_unix_ms: None,
             cooldown_until_unix_ms: 0,
             candidate_level: None,
@@ -343,8 +354,11 @@ impl PerformanceBalanceController {
         Ok(())
     }
 
+    /// Gates one policy dispatch on the instance's own directive (its level falls back to the
+    /// global level when it has no entry). Pause levels defer; throttle levels defer until the
+    /// instance's throttle window has elapsed, then allow.
     pub(crate) fn gate_dispatch(
-        &self,
+        &mut self,
         instance_id: &str,
         urgency_milli: u16,
         observed_at_unix_ms: u64,
@@ -355,9 +369,27 @@ impl PerformanceBalanceController {
                 "gate_performance_dispatch",
             ));
         }
-        if self.level == PerformanceControlLevel::Normal {
-            return Ok(PerformanceDispatchGate::Allowed);
-        }
+        let directive = self.directive(instance_id)?;
+        let retry_after_ms = match directive.level {
+            PerformanceControlLevel::Normal => {
+                self.throttle_windows.remove(instance_id);
+                return Ok(PerformanceDispatchGate::Allowed);
+            }
+            PerformanceControlLevel::DispatchPaused
+            | PerformanceControlLevel::Suspended
+            | PerformanceControlLevel::ShutdownRequested => {
+                self.throttle_windows.remove(instance_id);
+                None
+            }
+            PerformanceControlLevel::Throttled
+            | PerformanceControlLevel::YieldRequested
+            | PerformanceControlLevel::QosReduced => {
+                match self.throttle_dispatch(&directive, observed_at_unix_ms)? {
+                    Some(remaining_ms) => Some(remaining_ms),
+                    None => return Ok(PerformanceDispatchGate::Allowed),
+                }
+            }
+        };
         let deadline_disposition = if urgency_milli >= 950 {
             Some(PerformanceDeadlineDisposition::CapacityFailure)
         } else if urgency_milli >= 750 {
@@ -378,8 +410,8 @@ impl PerformanceBalanceController {
             observation.observed_at_unix_ms = observed_at_unix_ms;
             self.event(
                 Some(instance_id.to_owned()),
-                self.level,
-                self.level,
+                directive.level,
+                directive.level,
                 PerformanceControlReason::DeadlineConflict,
                 false,
                 Some(disposition),
@@ -395,7 +427,53 @@ impl PerformanceBalanceController {
             },
             deadline_disposition,
             event,
+            retry_after_ms,
         })
+    }
+
+    /// Returns the wait still owed before a dispatch on this instance may start, or `None`
+    /// once its throttle window has elapsed (the window is then closed). The first throttled
+    /// attempt opens the window at `observed_at + throttle_delay_ms`; a window opened under a
+    /// different level, or a wait longer than the level's own delay (a clock anomaly), restarts
+    /// the window instead of granting by default.
+    fn throttle_dispatch(
+        &mut self,
+        directive: &PerformanceControlDirective,
+        observed_at_unix_ms: u64,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let delay_ms = directive.throttle_delay_ms;
+        if delay_ms == 0 {
+            self.throttle_windows.remove(&directive.instance_id);
+            return Ok(None);
+        }
+        if let Some(window) = self.throttle_windows.get(&directive.instance_id).copied()
+            && window.level == directive.level
+        {
+            let remaining_ms = window
+                .not_before_unix_ms
+                .saturating_sub(observed_at_unix_ms);
+            if remaining_ms == 0 {
+                self.throttle_windows.remove(&directive.instance_id);
+                return Ok(None);
+            }
+            if remaining_ms <= delay_ms {
+                return Ok(Some(remaining_ms));
+            }
+        }
+        let not_before_unix_ms = observed_at_unix_ms.checked_add(delay_ms).ok_or_else(|| {
+            control_fatal(
+                "performance_control_time_overflow",
+                "gate_performance_dispatch",
+            )
+        })?;
+        self.throttle_windows.insert(
+            directive.instance_id.clone(),
+            ThrottleWindow {
+                level: directive.level,
+                not_before_unix_ms,
+            },
+        );
+        Ok(Some(delay_ms))
     }
 
     pub(crate) fn directive(

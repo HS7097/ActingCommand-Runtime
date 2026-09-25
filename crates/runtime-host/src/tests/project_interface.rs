@@ -75,7 +75,15 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
         state: actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal }, ..
     }) if status.owner_epoch() == current.owner_epoch && *fatal == current.fatal)
     );
-    assert_eq!(snapshot.facts.len(), 1);
+    assert_eq!(
+        snapshot
+            .facts
+            .iter()
+            .filter(|fact| !fact.key.starts_with("session.instance."))
+            .count(),
+        1,
+        "one published fact besides the three configuration seeds"
+    );
     assert_eq!(snapshot.goals.len(), 1);
     assert_eq!(snapshot.decisions.len(), 1);
     assert_eq!(snapshot.decisions[0].state, ProjectDecisionState::Admitted);

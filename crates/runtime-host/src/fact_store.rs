@@ -104,6 +104,31 @@ fn invalidation_scope_matches(
     }
 }
 const MAX_ACTIVE_FACTS: usize = 256;
+
+/// The policy instance facts (Workflow #313 item 4): the evaluation's `instances` read these
+/// three keys from the fact store for every configured instance; the configuration only seeds
+/// them at startup. The instance projection consumes them, so they are never overlaid as
+/// ordinary policy facts.
+pub(crate) const POLICY_INSTANCE_AVAILABLE_KEY: &str = "session.instance.available";
+pub(crate) const POLICY_INSTANCE_CAPABILITIES_KEY: &str = "session.instance.capabilities";
+pub(crate) const POLICY_INSTANCE_PREFERRED_TASKS_KEY: &str = "session.instance.preferred_tasks";
+/// Row field of the `record_list` value of the two list-typed policy instance facts.
+pub(crate) const POLICY_INSTANCE_OPERATION_FIELD: &str = "operation_id";
+pub(crate) const POLICY_INSTANCE_TASK_FIELD: &str = "task_id";
+
+pub(crate) fn is_policy_instance_fact_key(key: &str) -> bool {
+    key == POLICY_INSTANCE_AVAILABLE_KEY
+        || key == POLICY_INSTANCE_CAPABILITIES_KEY
+        || key == POLICY_INSTANCE_PREFERRED_TASKS_KEY
+}
+
+fn scope_specificity(scope: &FactScope) -> u8 {
+    match scope {
+        FactScope::Instance { .. } => 3,
+        FactScope::Server { .. } => 2,
+        FactScope::Game { .. } => 1,
+    }
+}
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
 
 #[derive(Clone, Copy)]
@@ -1073,6 +1098,27 @@ impl InstanceFactStore {
         Ok(())
     }
 
+    /// The active record stored under exactly this scope and key, if any.
+    pub(crate) fn active_record(&self, scope: &FactScope, key: &str) -> Option<&FactRecord> {
+        self.active
+            .get(&(scope.clone(), key.to_owned()))
+            .map(|stored| &stored.record)
+    }
+
+    /// The active record for `key` that applies to `context`, the most specific scope first
+    /// (instance over server over game); `None` when no active record applies.
+    pub(crate) fn resolve_active(
+        &self,
+        context: &InstanceFactContext,
+        key: &str,
+    ) -> Option<&FactRecord> {
+        self.active
+            .values()
+            .map(|stored| &stored.record)
+            .filter(|record| record.key == key && record.scope.matches(context))
+            .max_by_key(|record| scope_specificity(&record.scope))
+    }
+
     pub(crate) fn snapshot(
         &self,
         context: InstanceFactContext,
@@ -1162,6 +1208,9 @@ impl InstanceFactStore {
             .collect::<BTreeSet<_>>();
         let mut selected = BTreeMap::<FactIdentity, &StoredFact>::new();
         for stored in self.active.values() {
+            if is_policy_instance_fact_key(&stored.record.key) {
+                continue;
+            }
             if contexts
                 .iter()
                 .any(|context| stored.record.scope.matches(context))

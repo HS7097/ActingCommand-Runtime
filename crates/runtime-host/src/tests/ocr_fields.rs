@@ -286,15 +286,22 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             )
             .unwrap();
             assert!(ledger.corrupt_tail().is_none());
-            assert!(ledger.events().iter().all(|event| !matches!(
-                event.event_type(),
-                EventType::CaptureRequested
-                    | EventType::LeaseGranted
-                    | EventType::InputIntent
-                    | EventType::InputCommitted
-                    | EventType::FactPublished
-                    | EventType::TaskRequested
-            )));
+            // The only fact publications are the three configuration seeds of startup.
+            assert!(ledger.events().iter().all(|event| match event.payload() {
+                EventPayload::Fact(actingcommand_contract::FactPayload::Published(payload)) => {
+                    payload
+                        .records()
+                        .all(|record| record.key.starts_with("session.instance."))
+                }
+                _ => !matches!(
+                    event.event_type(),
+                    EventType::CaptureRequested
+                        | EventType::LeaseGranted
+                        | EventType::InputIntent
+                        | EventType::InputCommitted
+                        | EventType::TaskRequested
+                ),
+            }));
             assert_eq!(
                 ledger
                     .events()

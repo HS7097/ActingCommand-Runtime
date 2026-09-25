@@ -2,7 +2,8 @@
 
 use super::*;
 use actingcommand_contract::{
-    InstanceResourcePackage, InstanceResourcePackageKind, RuntimeConfigManifest,
+    ConfigParameter, FactScalar, InstanceResourcePackage, InstanceResourcePackageKind,
+    RuntimeConfigManifest,
 };
 use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_manager};
 use actingcommand_runtime_host::{
@@ -22,6 +23,14 @@ const NOT_CHECKED: [&str; 2] = ["vision_provider_manifest", "state_root"];
 const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
 /// Added to `not_checked` when no MuMu install root could be resolved.
 const MUMU_DISCOVERY_NOT_CHECKED: &str = "mumu_discovery";
+/// The `device_paths` names the manifest reports (Workflow #318, cfg2), echoed in order.
+const DEVICE_PATH_NAMES: [&str; 5] = [
+    "nemu_folder",
+    "nemu_ipc_dll",
+    "droidcast_apk",
+    "minitouch_path",
+    "maatouch_path",
+];
 
 /// Loads, assembles and validates a configuration exactly as startup would, then stops
 /// before the first side effect: nothing under `state_root` is created, read or locked,
@@ -199,6 +208,27 @@ fn summarize(
         not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
     }
     let bind_address = checked.host.bind_address();
+    // The new tunables (Workflow #318, cfg2) echoed from the manifest, so this report and
+    // `actingctl status --config` cannot disagree.
+    let performance = json!({
+        "pressure_start_samples":
+            manifest_integer(&checked.manifest, "performance_monitor.pressure_start_samples")?,
+        "pressure_end_samples":
+            manifest_integer(&checked.manifest, "performance_monitor.pressure_end_samples")?,
+    });
+    let mut device_paths = serde_json::Map::new();
+    for name in DEVICE_PATH_NAMES {
+        let value = match manifest_parameter(&checked.manifest, &format!("device_paths.{name}")) {
+            Some(ConfigParameter {
+                value: FactScalar::String(path),
+                source,
+                ..
+            }) => json!({ "path": path, "source": source.as_str() }),
+            Some(_) => return Err(("config_manifest_incomplete", "assemble")),
+            None => serde_json::Value::Null,
+        };
+        device_paths.insert(name.to_owned(), value);
+    }
     let mut report = json!({
         "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
         "status": "ok",
@@ -209,6 +239,8 @@ fn summarize(
         "instance_count": instances.len(),
         "instances": instances,
         "policy_configured": checked.policy_configured,
+        "performance": performance,
+        "device_paths": device_paths,
         "config_manifest": checked.manifest,
         "not_checked": not_checked,
         "mumu_root": mumu_root,
@@ -217,6 +249,33 @@ fn summarize(
         report["mumu_root_unresolved"] = unresolved;
     }
     Ok(report)
+}
+
+/// One manifest parameter by key; `None` when the manifest does not carry it.
+fn manifest_parameter<'a>(
+    manifest: &'a RuntimeConfigManifest,
+    key: &str,
+) -> Option<&'a ConfigParameter> {
+    manifest
+        .parameters
+        .iter()
+        .find(|parameter| parameter.key == key)
+}
+
+/// `{ "value": <integer>, "source": <source> }` of a parameter the manifest must carry as
+/// an integer; anything else is an incomplete manifest, refused rather than filled in.
+fn manifest_integer(
+    manifest: &RuntimeConfigManifest,
+    key: &str,
+) -> Result<serde_json::Value, (&'static str, &'static str)> {
+    match manifest_parameter(manifest, key) {
+        Some(ConfigParameter {
+            value: FactScalar::Integer(value),
+            source,
+            ..
+        }) => Ok(json!({ "value": value, "source": source.as_str() })),
+        _ => Err(("config_manifest_incomplete", "assemble")),
+    }
 }
 
 /// The MuMu install root the daemon would use: the configured `mumu_root`, else one
