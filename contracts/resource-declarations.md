@@ -24,7 +24,15 @@ and `operation explain` keep their existing behavior.
 | `scheduling/{tasks,pools,activity,timeline}.json` | The production scheduling document parser and schema-version check |
 | `scheduling/procedure-manifest.*.json` | Shared `ProcedureBindingConfigFile` / `ScheduledExecutionConfigFile` serde declarations |
 | `control.json` | The source control declaration validator and production task-control parser |
+| `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
 | Converter semantic-mapping and task-facts declarations | The converter's existing declaration-pair rules |
+
+Each `servers.<server>` entry of the applications table carries `application_id`,
+`label` and an optional `default_package_id`. When present, `default_package_id` is a
+non-empty string of at most 128 bytes matching `^[a-z0-9]+(\.[a-z0-9_]+)+$`; when
+absent the server declares no default package. The validator does not check it against
+sealed packs; the resource repository's bundle generator does and fails when the named
+package is not sealed.
 
 Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and
