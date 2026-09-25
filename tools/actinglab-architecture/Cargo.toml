@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
 serde_json = { workspace = true }
 syn = { version = "2", features = ["full", "visit"] }
 toml = "1"

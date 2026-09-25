@@ -100,57 +100,62 @@ pub fn prepare_package_build_task(
         env: _,
     } = request;
     validate_max_buffered_payload_bytes(max_buffered_payload_bytes)?;
-    let source = ResolvedRepo::from_source(source, &temporary_root)?;
-    let repo = source.path().to_path_buf();
-    let resource_root = resolve_package_resource_root(&repo)?;
-    let converter = load_converter(
-        game.as_deref(),
-        server.as_deref(),
-        locale.as_deref(),
-        &resource_root.root,
-    )?;
-    let mut task_ids = vec![task_id.clone()];
-    let includes_recovery = include_recovery
-        && task_id != "return_home"
-        && converter
-            .bundles
-            .iter()
-            .any(|bundle| bundle.task_id == "return_home");
-    if includes_recovery {
-        task_ids.push("return_home".to_string());
-    }
-    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
-    let entry_bundle = find_bundle(&converter, &task_id)?;
-    let resolution = parse_resolution(resolution, entry_bundle)?;
-    let package_id = package_id
-        .unwrap_or_else(|| format!("{}.{}.{}", converter.game, converter.server, task_id));
-    let execution_mode = execution_mode.unwrap_or_else(|| "navigable_route".to_string());
-    validate_execution_mode(&execution_mode)?;
-    let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
-    let stability_termination =
-        validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
-    let task_max_steps =
-        validate_entry_task_max_steps(entry_bundle, stability_termination.as_ref())?;
+    let mut source = ResolvedRepo::from_source(source, &temporary_root)?;
+    // A failure below closes the temporary clone before returning; a close failure is folded
+    // into the primary error instead of being left to the silent `Drop` fallback.
+    let prepared = (|| -> CliOutcome<PreparedPackageBuildTask> {
+        let repo = source.path().to_path_buf();
+        let resource_root = resolve_package_resource_root(&repo)?;
+        let converter = load_converter(
+            game.as_deref(),
+            server.as_deref(),
+            locale.as_deref(),
+            &resource_root.root,
+        )?;
+        let mut task_ids = vec![task_id.clone()];
+        let includes_recovery = include_recovery
+            && task_id != "return_home"
+            && converter
+                .bundles
+                .iter()
+                .any(|bundle| bundle.task_id == "return_home");
+        if includes_recovery {
+            task_ids.push("return_home".to_string());
+        }
+        let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
+        let entry_bundle = find_bundle(&converter, &task_id)?;
+        let resolution = parse_resolution(resolution, entry_bundle)?;
+        let package_id = package_id
+            .unwrap_or_else(|| format!("{}.{}.{}", converter.game, converter.server, task_id));
+        let execution_mode = execution_mode.unwrap_or_else(|| "navigable_route".to_string());
+        validate_execution_mode(&execution_mode)?;
+        let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
+        let stability_termination =
+            validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
+        let task_max_steps =
+            validate_entry_task_max_steps(entry_bundle, stability_termination.as_ref())?;
 
-    Ok(PreparedPackageBuildTask {
-        source,
-        repo,
-        resource_root: resource_root.root,
-        resource_layout: resource_root.layout.to_string(),
-        converter,
-        task_id,
-        task_ids,
-        outputs,
-        resolution,
-        package_id,
-        execution_mode,
-        task_timeout_ms,
-        task_max_steps,
-        stability_termination,
-        out,
-        dry_run,
-        max_buffered_payload_bytes,
-    })
+        Ok(PreparedPackageBuildTask {
+            source: source.take(),
+            repo,
+            resource_root: resource_root.root,
+            resource_layout: resource_root.layout.to_string(),
+            converter,
+            task_id,
+            task_ids,
+            outputs,
+            resolution,
+            package_id,
+            execution_mode,
+            task_timeout_ms,
+            task_max_steps,
+            stability_termination,
+            out,
+            dry_run,
+            max_buffered_payload_bytes,
+        })
+    })();
+    prepared.map_err(|primary| source.close_after_failure(primary))
 }
 
 impl PreparedPackageBuildTask {
@@ -176,7 +181,7 @@ impl PreparedPackageBuildTask {
     }
 
     pub fn build(
-        mut self,
+        self,
         environment: &AuthoringEnvironmentSnapshot,
     ) -> CliOutcome<PackageBuildTaskResponse> {
         self.build_with_publication(environment, true)
@@ -184,62 +189,70 @@ impl PreparedPackageBuildTask {
 
     /// Builds directly at a caller-owned staging path without publishing a logical output.
     pub fn build_staged(
-        mut self,
+        self,
         environment: &AuthoringEnvironmentSnapshot,
     ) -> CliOutcome<PackageBuildTaskResponse> {
         self.build_with_publication(environment, false)
     }
 
     fn build_with_publication(
-        &mut self,
+        mut self,
         environment: &AuthoringEnvironmentSnapshot,
         publish: bool,
     ) -> CliOutcome<PackageBuildTaskResponse> {
-        apply_environment_to_outputs(environment, &mut self.outputs)?;
-        let mut entries =
-            PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
-        entries.add_json(
-            "control.json",
-            control_json(
-                &self.package_id,
-                &self.execution_mode,
-                &self.converter.game,
-                &self.converter.server,
-                self.resolution,
-                &self.task_id,
-                ControlOptions {
-                    timeout_ms: self.task_timeout_ms,
-                    source: Some(find_bundle(&self.converter, &self.task_id)?),
-                    max_steps: self.task_max_steps,
-                    stability_termination: self.stability_termination.as_ref(),
-                },
-            )?,
-        )?;
-        add_resources_json(
-            &mut entries,
-            &self.resource_root,
-            &self.converter,
-            &self.task_ids,
-            true,
-        )?;
-        add_selected_operations(
-            &mut entries,
-            environment,
-            &self.resource_root,
-            &self.converter,
-            &self.task_ids,
-        )?;
-        add_generated_outputs(&mut entries, &self.converter, &self.outputs)?;
-        add_recognition_target_assets(&mut entries, &self.resource_root, &self.outputs.pack)?;
-        entries.add_manifest(&self.task_id)?;
+        let written = (|| -> CliOutcome<PackageWrite> {
+            apply_environment_to_outputs(environment, &mut self.outputs)?;
+            let mut entries =
+                PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
+            entries.add_json(
+                "control.json",
+                control_json(
+                    &self.package_id,
+                    &self.execution_mode,
+                    &self.converter.game,
+                    &self.converter.server,
+                    self.resolution,
+                    &self.task_id,
+                    ControlOptions {
+                        timeout_ms: self.task_timeout_ms,
+                        source: Some(find_bundle(&self.converter, &self.task_id)?),
+                        max_steps: self.task_max_steps,
+                        stability_termination: self.stability_termination.as_ref(),
+                    },
+                )?,
+            )?;
+            add_resources_json(
+                &mut entries,
+                &self.resource_root,
+                &self.converter,
+                &self.task_ids,
+                true,
+            )?;
+            add_selected_operations(
+                &mut entries,
+                environment,
+                &self.resource_root,
+                &self.converter,
+                &self.task_ids,
+            )?;
+            add_generated_outputs(&mut entries, &self.converter, &self.outputs)?;
+            add_recognition_target_assets(&mut entries, &self.resource_root, &self.outputs.pack)?;
+            entries.add_manifest(&self.task_id)?;
 
-        let write = if publish {
-            write_and_validate_package(&self.out, entries, self.dry_run)?
-        } else {
-            write_and_validate_package_staged(&self.out, entries, self.dry_run)?
+            if publish {
+                write_and_validate_package(&self.out, entries, self.dry_run)
+            } else {
+                write_and_validate_package_staged(&self.out, entries, self.dry_run)
+            }
+        })();
+        // The temporary clone is closed on both outcomes: a close failure is folded into a build
+        // failure, and it is the failure of an otherwise successful build.
+        let write = match written {
+            Ok(write) => write,
+            Err(primary) => return Err(self.source.close_after_failure(primary)),
         };
         let from_remote = self.source.remote_url();
-        self.source.cleanup()?;
+        self.source.close()?;
         Ok(PackageBuildTaskResponse {
             status: if self.dry_run { "validated" } else { "written" }.to_string(),
             mode: "build-task".to_string(),
@@ -272,23 +285,28 @@ pub struct PackageBuildCatalog {
 impl PackageBuildCatalog {
     pub fn open(request: PackageBuildCatalogRequest) -> CliOutcome<Self> {
         validate_max_buffered_payload_bytes(request.max_buffered_payload_bytes)?;
-        let source = ResolvedRepo::from_source(request.source, &request.temporary_root)?;
-        let repo = source.path().to_path_buf();
-        let resource_root = resolve_package_resource_root(&repo)?;
-        let converter = load_converter(
-            request.game.as_deref(),
-            request.server.as_deref(),
-            request.locale.as_deref(),
-            &resource_root.root,
-        )?;
-        Ok(Self {
-            source,
-            repo,
-            resource_root: resource_root.root,
-            resource_layout: resource_root.layout.to_string(),
-            converter,
-            max_buffered_payload_bytes: request.max_buffered_payload_bytes,
-        })
+        let mut source = ResolvedRepo::from_source(request.source, &request.temporary_root)?;
+        // A failure below closes the temporary clone before returning; a close failure is
+        // folded into the primary error instead of being left to the silent `Drop` fallback.
+        let opened = (|| -> CliOutcome<Self> {
+            let repo = source.path().to_path_buf();
+            let resource_root = resolve_package_resource_root(&repo)?;
+            let converter = load_converter(
+                request.game.as_deref(),
+                request.server.as_deref(),
+                request.locale.as_deref(),
+                &resource_root.root,
+            )?;
+            Ok(Self {
+                source: source.take(),
+                repo,
+                resource_root: resource_root.root,
+                resource_layout: resource_root.layout.to_string(),
+                converter,
+                max_buffered_payload_bytes: request.max_buffered_payload_bytes,
+            })
+        })();
+        opened.map_err(|primary| source.close_after_failure(primary))
     }
 
     pub fn metadata(&self) -> PackageBuildCatalogMetadata {
@@ -490,8 +508,8 @@ impl PackageBuildCatalog {
         Ok(write_and_validate_package(&out, entries, dry_run)?.validation)
     }
 
-    pub fn cleanup(mut self) -> CliOutcome<()> {
-        self.source.cleanup()
+    pub fn cleanup(self) -> CliOutcome<()> {
+        self.source.close()
     }
 }
 
@@ -4104,28 +4122,49 @@ impl ResolvedRepo {
         self.remote_url.clone()
     }
 
-    fn cleanup(&mut self) -> CliOutcome<()> {
+    /// Moves the resolved repository out, leaving a closed shell behind (no path, no remote URL,
+    /// no temporary root), so `close` and `Drop` on the shell do nothing. This lets a fallible
+    /// block hand ownership into a prepared value while its failure path still holds the
+    /// original for `close`.
+    fn take(&mut self) -> Self {
+        Self {
+            path: std::mem::take(&mut self.path),
+            remote_url: self.remote_url.take(),
+            temp_root: self.temp_root.take(),
+        }
+    }
+
+    /// Removes the temporary clone root, if any. The failure names the path and the original
+    /// error and states the consequence: the directory is retained and keeps its disk space.
+    fn close(mut self) -> CliOutcome<()> {
         if let Some(root) = self.temp_root.take() {
-            fs::remove_dir_all(&root).map_err(|err| {
+            fs::remove_dir_all(&root).map_err(|error| {
                 CliError::package_invalid(format!(
-                    "failed to remove remote temp directory {}: {err}",
+                    "package source cleanup failed; path={}; original_error={error}; fallback=retain_temp_directory; impact=disk_space",
                     root.display()
                 ))
             })?;
         }
         Ok(())
     }
+
+    /// Closes after `primary` already failed; a close failure is folded into `primary`.
+    fn close_after_failure(self, primary: CliError) -> CliError {
+        match self.close() {
+            Ok(()) => primary,
+            Err(close) => combine_package_errors(primary, close),
+        }
+    }
 }
 
 impl Drop for ResolvedRepo {
     fn drop(&mut self) {
-        if let Some(root) = self.temp_root.take()
-            && let Err(error) = fs::remove_dir_all(&root)
-        {
-            eprintln!(
-                "WARNING package source cleanup failed during drop; path={}; original_error={error}; fallback=retain_temp_directory; impact=disk_space",
-                root.display()
-            );
+        // Reached only when the owner is dropped without `close`: a panic unwinding past it, or
+        // a consumer discarding a prepared task or catalog. Runtime-domain crates do not write to
+        // stderr and a destructor cannot return an error, so this removal is silent best effort;
+        // a directory leaked on such a path is accepted.
+        if let Some(root) = self.temp_root.take() {
+            let _ = fs::remove_dir_all(&root);
         }
     }
 }

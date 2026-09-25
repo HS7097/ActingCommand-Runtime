@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 mod ledger_owners;
 pub use ledger_owners::{LedgerOwnerModule, discover_ledger_owners};
 
+use proc_macro2::{Span, TokenStream, TokenTree};
 use syn::visit::Visit;
 use syn::{
     BinOp, Expr, ExprMatch, FnArg, Item, ItemFn, Lit, Pat, ReturnType, Stmt, Type, UseTree,
@@ -40,6 +41,164 @@ pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, Strin
         .filter(|(needle, _)| source.contains(needle))
         .map(|(_, label)| format!("{path}: forbidden {label}"))
         .collect())
+}
+
+/// Finds writes to the process's stderr that Runtime-domain crates must not contain:
+/// `eprintln!` / `eprint!` invocations (also when nested inside another macro's body),
+/// `io::stderr(` calls and `io::Stderr` / `io::StderrLock` handles under any `io` module
+/// (`std::io` and `tokio::io` alike), `use` imports of those names, and a bare `Stderr` /
+/// `StderrLock` type path. Items behind `#[cfg(test)]` and the body of an inline `mod tests`
+/// are skipped; which files count as test files is the caller's decision. Each violation is
+/// reported as `path:line`.
+pub fn inspect_stderr_writes(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let items = ledger_owners::production_items(&file.items)?;
+    let mut visitor = StderrWriteVisitor {
+        path,
+        violations: Vec::new(),
+    };
+    for item in &items {
+        visitor.visit_item(item);
+    }
+    Ok(visitor.violations)
+}
+
+struct StderrWriteVisitor<'a> {
+    path: &'a str,
+    violations: Vec<String>,
+}
+
+impl StderrWriteVisitor<'_> {
+    fn record(&mut self, span: Span, label: &str) {
+        self.violations.push(format!(
+            "{}:{} writes to stderr via {label}",
+            self.path,
+            span.start().line
+        ));
+    }
+
+    /// Macro bodies are opaque to `syn`, so their tokens are scanned for the same needles.
+    fn scan_macro_tokens(&mut self, tokens: TokenStream) {
+        let mut flat = Vec::new();
+        flatten_tokens(tokens, &mut flat);
+        for (index, token) in flat.iter().enumerate() {
+            let TokenTree::Ident(ident) = token else {
+                continue;
+            };
+            let name = ident.to_string();
+            if matches!(name.as_str(), "eprintln" | "eprint")
+                && matches!(flat.get(index + 1), Some(TokenTree::Punct(punct)) if punct.as_char() == '!')
+            {
+                self.record(ident.span(), &format!("{name}!"));
+            }
+            if name == "io"
+                && let (Some(TokenTree::Punct(first)), Some(TokenTree::Punct(second))) =
+                    (flat.get(index + 1), flat.get(index + 2))
+                && first.as_char() == ':'
+                && second.as_char() == ':'
+                && let Some(TokenTree::Ident(target)) = flat.get(index + 3)
+                && is_stderr_handle(&target.to_string())
+            {
+                self.record(target.span(), &format!("io::{target}"));
+            }
+        }
+    }
+}
+
+fn flatten_tokens(tokens: TokenStream, flat: &mut Vec<TokenTree>) {
+    for token in tokens {
+        match token {
+            TokenTree::Group(group) => flatten_tokens(group.stream(), flat),
+            other => flat.push(other),
+        }
+    }
+}
+
+fn is_stderr_handle(name: &str) -> bool {
+    matches!(name, "stderr" | "Stderr" | "StderrLock")
+}
+
+fn collect_use_paths(
+    prefix: &mut Vec<String>,
+    tree: &UseTree,
+    paths: &mut Vec<(Vec<String>, Span)>,
+) {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_paths(prefix, &path.tree, paths);
+            prefix.pop();
+        }
+        UseTree::Name(name) => {
+            let mut full = prefix.clone();
+            full.push(name.ident.to_string());
+            paths.push((full, name.ident.span()));
+        }
+        UseTree::Rename(rename) => {
+            let mut full = prefix.clone();
+            full.push(rename.ident.to_string());
+            paths.push((full, rename.ident.span()));
+        }
+        UseTree::Glob(_) => {}
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_paths(prefix, item, paths);
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for StderrWriteVisitor<'_> {
+    fn visit_item(&mut self, item: &'ast Item) {
+        // `production_items` already dropped `#[cfg(test)]` items; an inline `mod tests` is test
+        // scaffolding by convention even without the attribute.
+        if let Item::Mod(module) = item
+            && module.ident == "tests"
+        {
+            return;
+        }
+        syn::visit::visit_item(self, item);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let mut paths = Vec::new();
+        collect_use_paths(&mut Vec::new(), &item.tree, &mut paths);
+        for (segments, span) in paths {
+            if let [.., parent, last] = segments.as_slice()
+                && parent == "io"
+                && is_stderr_handle(last)
+            {
+                self.record(span, &format!("use of io::{last}"));
+            }
+        }
+        syn::visit::visit_item_use(self, item);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if let Some(segment) = mac.path.segments.last()
+            && matches!(segment.ident.to_string().as_str(), "eprintln" | "eprint")
+        {
+            self.record(segment.ident.span(), &format!("{}!", segment.ident));
+        }
+        self.scan_macro_tokens(mac.tokens.clone());
+        syn::visit::visit_macro(self, mac);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let segments = path.segments.iter().collect::<Vec<_>>();
+        match segments.as_slice() {
+            [.., parent, last]
+                if parent.ident == "io" && is_stderr_handle(&last.ident.to_string()) =>
+            {
+                self.record(last.ident.span(), &format!("io::{}", last.ident));
+            }
+            [only] if matches!(only.ident.to_string().as_str(), "Stderr" | "StderrLock") => {
+                self.record(only.ident.span(), &only.ident.to_string());
+            }
+            _ => {}
+        }
+        syn::visit::visit_path(self, path);
+    }
 }
 
 /// Rejects project identities from Runtime-owned code, contracts, defaults, and fixtures.

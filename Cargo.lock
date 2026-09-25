@@ -86,6 +86,7 @@ dependencies = [
 name = "actingcommand-actinglab-architecture"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "serde_json",
  "sha2",
  "syn",
