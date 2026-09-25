@@ -11,9 +11,9 @@ use actingcommand_actinglab_architecture::{
     extract_command_inventory, inspect_contract_fact_matching, inspect_generic_authoring_identity,
     inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
     inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_persisted_event_ownership,
-    inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, resource_tooling_removability_violations,
-    workspace_dependency_violations,
+    inspect_producer_event_capabilities, inspect_public_api, inspect_stderr_writes,
+    lab_removability_violations, ledger_owns_query_matching,
+    resource_tooling_removability_violations, workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -1049,6 +1049,76 @@ fn fenced_close_requires_scheduler_witness() {
         violations.is_empty(),
         "fenced-close violations:\n{}",
         violations.join("\n")
+    );
+}
+
+/// Runtime-domain crates never write to stderr: diagnostics go to the ledger and failures
+/// return as explicit errors; the process shells under `apps/` are the only exception. The scan
+/// covers every `.rs` file under `crates/` and `providers/`, skipping test files (`tests.rs` and
+/// anything under a `tests/` directory) and, inside a file, `#[cfg(test)]` items and `mod tests`.
+/// Fail-closed: a stderr site missing from `STDERR_ALLOW_LIST` fails with its `path:line`. A new
+/// site must be added to the list in the same PR that introduces it, with its reason; a listed
+/// entry that no longer matches any site fails too, so the list stays exact.
+#[test]
+fn runtime_domain_never_writes_stderr() {
+    /// Workspace-relative file (matched as the `path:` prefix of a reported violation) and reason.
+    const STDERR_ALLOW_LIST: &[(&str, &str)] = &[];
+
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for directory in ["crates", "providers"] {
+        collect_rust_files(&root.join(directory), &mut files);
+    }
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no Rust sources found under crates/ or providers/"
+    );
+    let mut violations = Vec::new();
+    for file in files {
+        let path = file
+            .strip_prefix(&root)
+            .expect("workspace source")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if path
+            .split('/')
+            .any(|component| component == "tests" || component == "tests.rs")
+        {
+            continue;
+        }
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        violations.extend(
+            inspect_stderr_writes(&path, &source)
+                .unwrap_or_else(|error| panic!("scan {path} for stderr writes: {error}")),
+        );
+    }
+    let mut unused_allowances = STDERR_ALLOW_LIST
+        .iter()
+        .map(|(path, _)| *path)
+        .collect::<BTreeSet<_>>();
+    let mut unexpected = Vec::new();
+    for violation in violations {
+        match STDERR_ALLOW_LIST
+            .iter()
+            .find(|(path, _)| violation.starts_with(&format!("{path}:")))
+        {
+            Some((path, _)) => {
+                unused_allowances.remove(path);
+            }
+            None => unexpected.push(violation),
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "stderr writes in Runtime-domain crates (a site may only join STDERR_ALLOW_LIST in the PR that adds it):\n{}",
+        unexpected.join("\n")
+    );
+    assert!(
+        unused_allowances.is_empty(),
+        "stale STDERR_ALLOW_LIST entries without a matching site:\n{}",
+        unused_allowances.into_iter().collect::<Vec<_>>().join("\n")
     );
 }
 

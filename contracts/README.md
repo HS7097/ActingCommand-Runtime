@@ -222,6 +222,12 @@ Runtime reports, ledgers, mutable state, and release pointers live under the Run
 they are never written into resource repositories. Release sets pair Runtime, UI, and external
 resource versions as immutable generations before one atomic pointer transition.
 
+Runtime-domain crates (`crates/*`, `providers/*`) do not write to stderr: diagnostics go to the
+ledger as facts and artifacts, and failures return as explicit error values. The process shells
+under `apps/*` are the only exception; they may print a FATAL or usage line before a non-zero
+exit. The architecture guard `runtime_domain_never_writes_stderr` enforces this with an explicit
+allow-list that a new site must join in the same change that introduces it.
+
 ## Historical Go boundary
 
 The historical Go interfaces were moved to:

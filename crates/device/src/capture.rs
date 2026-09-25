@@ -3873,10 +3873,19 @@ mod tests {
                             context[valid..valid + footer.len()].copy_from_slice(footer);
                             let record = &context[..valid + footer.len()];
                             if let Err(error) = file.write_all(record).and_then(|()| file.flush()) {
-                                eprintln!(
-                                    "CI summary write/flush failed: {error}; original failure retained:\n{}",
+                                // No stderr in Runtime-domain crates: the write failure and the
+                                // retained record travel inside the panic payload instead.
+                                let payload = original
+                                    .downcast_ref::<String>()
+                                    .cloned()
+                                    .or_else(|| {
+                                        original.downcast_ref::<&str>().map(|text| text.to_string())
+                                    })
+                                    .unwrap_or_else(|| format!("{original:?}"));
+                                std::panic::resume_unwind(Box::new(format!(
+                                    "{payload}\n[CI summary write failed: {error}]\n{}",
                                     String::from_utf8_lossy(record)
-                                );
+                                )));
                             }
                         }
                         std::panic::resume_unwind(original)
@@ -4071,10 +4080,19 @@ mod tests {
                     context[valid..valid + footer.len()].copy_from_slice(footer);
                     let record = &context[..valid + footer.len()];
                     if let Err(error) = file.write_all(record).and_then(|()| file.flush()) {
-                        eprintln!(
-                            "CI summary write/flush failed: {error}; original failure retained:\n{}",
+                        // No stderr in Runtime-domain crates: the write failure and the retained
+                        // record travel inside the panic payload instead.
+                        let payload = original
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| {
+                                original.downcast_ref::<&str>().map(|text| text.to_string())
+                            })
+                            .unwrap_or_else(|| format!("{original:?}"));
+                        std::panic::resume_unwind(Box::new(format!(
+                            "{payload}\n[CI summary write failed: {error}]\n{}",
                             String::from_utf8_lossy(record)
-                        );
+                        )));
                     }
                 }
                 std::panic::resume_unwind(original)
