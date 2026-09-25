@@ -187,18 +187,25 @@ impl HostShared {
             .ok_or_else(|| {
                 policy_admission_request("procedure_manifest_unconfigured", "evaluate_policy_cycle")
             })?;
-        let (outcome_keys, facts, resources, missing_instance_facts) = {
+        let (outcome_keys, facts, resources, missing_instance_facts, unknown_offset_tasks) = {
             let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
             let outcome_keys =
                 lock(&self.policy, "read_policy_outcome_keys")?.outcome_key_snapshot()?;
             let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
-            let (facts, resources, missing_instance_facts) = self
+            let (facts, resources, missing_instance_facts, unknown_offset_tasks) = self
                 .project_authoritative_policy_inputs_with_gaps_under_gate(
                     "evaluate_policy_cycle",
                     &outcome_keys,
                     None,
+                    Some(time.unix_ms),
                 )?;
-            (outcome_keys, facts, resources, missing_instance_facts)
+            (
+                outcome_keys,
+                facts,
+                resources,
+                missing_instance_facts,
+                unknown_offset_tasks,
+            )
         };
         let workloads = lock(&self.policy, "read_policy_performance_workloads")?
             .active_performance_workloads()?;
@@ -232,6 +239,11 @@ impl HostShared {
             &missing_instance_facts,
             facts.ledger_position,
         );
+        attach_unknown_priority_offset_task_reasons(
+            &mut cycle,
+            &unknown_offset_tasks,
+            facts.ledger_position,
+        );
         for signal in &cycle.detection_planning_signals {
             self.record_policy_planning_signal(signal.clone())?;
         }
@@ -262,25 +274,32 @@ impl HostShared {
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
-        let (facts, resources, _) = self.project_authoritative_policy_inputs_with_gaps_under_gate(
-            operation,
-            outcome_keys,
-            as_of_ledger_position,
-        )?;
+        let (facts, resources, _, _) = self
+            .project_authoritative_policy_inputs_with_gaps_under_gate(
+                operation,
+                outcome_keys,
+                as_of_ledger_position,
+                None,
+            )?;
         Ok((facts, resources))
     }
 
     /// Projects the evaluation inputs at the requested position and reports, per instance
-    /// alias, the policy instance facts the store did not hold there (Workflow #313 item 4).
+    /// alias, the policy instance facts the store did not hold there (Workflow #313 item 4),
+    /// and the tasks named by a priority offset that the active catalog does not declare
+    /// (Workflow #308 slice 4a-2). `offsets_at_unix_ms` is the evaluation instant: an offset
+    /// whose TTL has elapsed by then is not passed; without it every active offset is.
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
         operation: &'static str,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
+        offsets_at_unix_ms: Option<u64>,
     ) -> RuntimeHostResult<(
         EvaluationFacts,
         EvaluationResources,
         MissingPolicyInstanceFacts,
+        UnknownPriorityOffsetTasks,
     )> {
         self.synchronize_fact_store_under_gate()?;
         let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
@@ -327,6 +346,41 @@ impl HostShared {
         let (instances, missing_instance_facts) =
             project_policy_instances(&inputs, fact_projection);
         base_facts.instances = instances;
+        // Manual priority offsets (Workflow #308 slice 4a-2) come from the store's
+        // `session.task.<task>.priority_offset` records at the projected position.
+        let contexts = base_facts
+            .instances
+            .iter()
+            .map(|instance| InstanceFactContext {
+                instance_id: instance.instance_id.clone(),
+                server_id: instance.server_id.clone(),
+                game_id: instance.game_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        let live_offsets = fact_projection
+            .active_priority_offsets(&contexts, operation)?
+            .into_iter()
+            .filter(|offset| {
+                offsets_at_unix_ms.is_none_or(|now| {
+                    offset
+                        .expires_at_unix_ms
+                        .is_none_or(|expires| now <= expires)
+                })
+            })
+            .collect::<Vec<_>>();
+        for offset in
+            crate::fact_store::resolve_priority_offsets(&live_offsets, &base_facts.instances)
+        {
+            if base_facts.priority_offsets.iter().any(|configured| {
+                configured.task_id == offset.task_id && configured.instance_id == offset.instance_id
+            }) {
+                return Err(policy_admission_request(
+                    "policy_fact_authority_conflict",
+                    operation,
+                ));
+            }
+            base_facts.priority_offsets.push(offset);
+        }
         base_facts.tasks = lock(&self.policy, "project_policy_task_state")?
             .task_runtime_snapshots(ledger_position)?;
         base_facts.tasks.retain(|state| {
@@ -448,6 +502,7 @@ impl HostShared {
             });
         }
         let catalog = lock(&self.policy, "project_fact_pool_catalog")?.active_loaded();
+        let mut unknown_offset_tasks = UnknownPriorityOffsetTasks::new();
         if let Some(catalog) = &catalog {
             validate_static_fact_pool_authority(
                 catalog.compiled(),
@@ -455,6 +510,20 @@ impl HostShared {
                 inputs.resources(),
                 operation,
             )?;
+            // An offset for a task the catalog does not declare is still passed (the
+            // evaluator ignores it) and only reported.
+            for offset in &base_facts.priority_offsets {
+                if !catalog
+                    .compiled()
+                    .catalog()
+                    .tasks
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == offset.task_id)
+                {
+                    unknown_offset_tasks.insert(offset.task_id.clone());
+                }
+            }
         }
         let facts = fact_projection.overlay_policy_facts(
             &base_facts,
@@ -471,7 +540,12 @@ impl HostShared {
         };
         let facts =
             fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
-        Ok((facts, resources, missing_instance_facts))
+        Ok((
+            facts,
+            resources,
+            missing_instance_facts,
+            unknown_offset_tasks,
+        ))
     }
 
     /// The registered alias set must equal the configured static identity set (alias, host,
@@ -1322,6 +1396,45 @@ fn attach_missing_instance_fact_reasons(
                 ),
             });
         }
+    }
+}
+
+/// The tasks named by a priority offset of an evaluation that its active catalog does not
+/// declare (Workflow #308 slice 4a-2).
+pub(super) type UnknownPriorityOffsetTasks = BTreeSet<String>;
+
+/// Reports each unknown offset task once per evaluated cycle: one explanatory decision of
+/// that task, without an instance, blocked, with the single reason
+/// `priority_offset_unknown_task:<task>`. The evaluator never saw such a task, so this
+/// decision selects nothing and carries no rank; the offset stays in the inputs and is
+/// ignored there.
+fn attach_unknown_priority_offset_task_reasons(
+    cycle: &mut PolicyCycle,
+    unknown_offset_tasks: &UnknownPriorityOffsetTasks,
+    ledger_position: u64,
+) {
+    let Some(evaluation) = cycle.evaluation.as_mut() else {
+        return;
+    };
+    for task_id in unknown_offset_tasks {
+        evaluation
+            .decisions
+            .push(actingcommand_policy::TaskDecision {
+                task_id: task_id.clone(),
+                instance_id: None,
+                eligibility: actingcommand_policy::EligibilityState::Unknown,
+                state: actingcommand_policy::SchedulingDecisionState::Blocked,
+                rank: None,
+                detection_suggestions: Vec::new(),
+                reasons: vec![DecisionReason {
+                    code: format!("priority_offset_unknown_task:{task_id}"),
+                    detail: format!(
+                        "a priority offset at ledger position {ledger_position} names task \
+                     '{task_id}', which the active catalog does not declare; the offset is \
+                     ignored"
+                    ),
+                }],
+            });
     }
 }
 

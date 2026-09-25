@@ -4,9 +4,10 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    EventId, EventPayload, EventQuery, EventType, FactContent, FactInvalidationEventData,
-    FactPayload, FactRecord, FactScalar as ContractFactScalar, FactScope,
-    FactValue as ContractFactValue, InstanceFactContext, InstanceFactSnapshot, RuntimeErrorCode,
+    EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
+    FactInvalidationEventData, FactPayload, FactRecord, FactScalar as ContractFactScalar,
+    FactScope, FactValue as ContractFactValue, InstanceFactContext, InstanceFactSnapshot,
+    RuntimeErrorCode, priority_offset_task_id,
 };
 use actingcommand_ledger::{
     GlobalLedger, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
@@ -14,7 +15,8 @@ use actingcommand_ledger::{
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
-    FactValue as PolicyFactValue, InstanceSnapshot, ObservedFact, ScopeSelector,
+    FactValue as PolicyFactValue, InstanceSnapshot, MAX_ID_BYTES, MAX_PRIORITY_OFFSET_MILLI,
+    ObservedFact, PriorityOffsetOrigin, ScopeSelector,
 };
 use actingcommand_runtime_state::{
     FACT_TOMBSTONE_NAMESPACE, FactStateObservation, PreparedFactProjection, RuntimeStateStore,
@@ -122,6 +124,54 @@ pub(crate) fn is_policy_instance_fact_key(key: &str) -> bool {
         || key == POLICY_INSTANCE_PREFERRED_TASKS_KEY
 }
 
+/// The task identifier charset of the scheduling schema (`^[a-z0-9][a-z0-9._:-]*$`, 1 to
+/// 128 bytes), required of the `<task_id>` of a priority offset key.
+pub(crate) fn valid_priority_offset_task_id(task_id: &str) -> bool {
+    !task_id.is_empty()
+        && task_id.len() <= MAX_ID_BYTES
+        && task_id.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'-'))
+        })
+}
+
+/// The offset in milli a priority offset record carries: an inline integer within
+/// `±MAX_PRIORITY_OFFSET_MILLI`; `None` for any other content.
+pub(crate) fn priority_offset_milli(record: &FactRecord) -> Option<i32> {
+    let FactContent::Inline {
+        value: ContractFactValue::Integer(value),
+    } = &record.content
+    else {
+        return None;
+    };
+    i32::try_from(*value)
+        .ok()
+        .filter(|value| (-MAX_PRIORITY_OFFSET_MILLI..=MAX_PRIORITY_OFFSET_MILLI).contains(value))
+}
+
+/// One active `session.task.<task_id>.priority_offset` record that applies to at least one
+/// evaluated instance (Workflow #308 slice 4a-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActivePriorityOffset {
+    pub(crate) scope: FactScope,
+    pub(crate) task_id: String,
+    pub(crate) offset_milli: i32,
+    pub(crate) origin: PriorityOffsetOrigin,
+    pub(crate) observed_at_unix_ms: u64,
+    pub(crate) expires_at_unix_ms: Option<u64>,
+}
+
+/// A person (the console's User or the operator's Cli) published the offset; any other
+/// publishing actor — an agent, or the Runtime itself for a record published before offsets
+/// carried their request's origin — is an agent.
+fn priority_offset_origin(publisher: EventActor) -> PriorityOffsetOrigin {
+    match publisher {
+        EventActor::User | EventActor::Cli => PriorityOffsetOrigin::User,
+        _ => PriorityOffsetOrigin::Agent,
+    }
+}
+
 fn scope_specificity(scope: &FactScope) -> u8 {
     match scope {
         FactScope::Instance { .. } => 3,
@@ -143,6 +193,8 @@ struct StoredFact {
     sequence: u64,
     event_id: EventId,
     scope_instances: Vec<actingcommand_contract::InstanceId>,
+    /// The actor of the `fact.published` event that carried the record.
+    publisher: EventActor,
 }
 
 #[derive(Clone)]
@@ -242,6 +294,7 @@ fn original_at(ledger: &GlobalLedger, sequence: u64) -> RuntimeHostResult<Persis
 struct HistoricalFactProjection {
     active: BTreeMap<FactIdentity, (FactRecord, u64, EventId)>,
     scope_instances: BTreeMap<FactIdentity, Vec<actingcommand_contract::InstanceId>>,
+    publishers: BTreeMap<FactIdentity, EventActor>,
     invalidated: BTreeMap<HistoricalInvalidationIdentity, FactInvalidationEventData>,
     input_boundaries: InputInvalidationBoundaries,
 }
@@ -260,6 +313,10 @@ impl HistoricalFactProjection {
                     self.scope_instances.insert(
                         (record.scope.clone(), record.key.clone()),
                         payload.scope_instances().to_vec(),
+                    );
+                    self.publishers.insert(
+                        (record.scope.clone(), record.key.clone()),
+                        event.origin().actor(),
                     );
                 }
                 Ok(())
@@ -377,6 +434,7 @@ impl HistoricalFactProjection {
         self.active.remove(&identity);
         self.invalidated.insert(invalidation_identity, data);
         self.scope_instances.remove(&identity);
+        self.publishers.remove(&identity);
         Ok(())
     }
 
@@ -520,6 +578,9 @@ impl InstanceFactStore {
                     history.scope_instances.remove(&identity).ok_or_else(|| {
                         fact_fatal("fact_scope_projection_missing", "project_fact_history")
                     })?;
+                let publisher = history.publishers.remove(&identity).ok_or_else(|| {
+                    fact_fatal("fact_publisher_projection_missing", "project_fact_history")
+                })?;
                 Ok((
                     identity,
                     StoredFact {
@@ -527,6 +588,7 @@ impl InstanceFactStore {
                         sequence,
                         event_id,
                         scope_instances,
+                        publisher,
                     },
                 ))
             })
@@ -614,11 +676,12 @@ impl InstanceFactStore {
                         ));
                     }
                     complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
-                    complete
+                    let stored = complete
                         .active
                         .get_mut(&(record.scope.clone(), record.key.clone()))
-                        .ok_or_else(|| fact_fatal("fact_commit_missing", "replay_fact_event"))?
-                        .scope_instances = payload.scope_instances().to_vec();
+                        .ok_or_else(|| fact_fatal("fact_commit_missing", "replay_fact_event"))?;
+                    stored.scope_instances = payload.scope_instances().to_vec();
+                    stored.publisher = event.origin().actor();
                 }
                 *self = complete;
                 Ok(())
@@ -764,6 +827,8 @@ impl InstanceFactStore {
                 sequence,
                 event_id,
                 scope_instances: Vec::new(),
+                // Replay binds the publishing event's actor right after the commit.
+                publisher: EventActor::Runtime,
             },
         );
         let observed = self.active[&identity].record.observed_at_unix_ms;
@@ -1208,7 +1273,11 @@ impl InstanceFactStore {
             .collect::<BTreeSet<_>>();
         let mut selected = BTreeMap::<FactIdentity, &StoredFact>::new();
         for stored in self.active.values() {
-            if is_policy_instance_fact_key(&stored.record.key) {
+            // The instance projection consumes the policy instance keys and the priority
+            // offset projection consumes the offset keys; neither is an ordinary fact.
+            if is_policy_instance_fact_key(&stored.record.key)
+                || priority_offset_task_id(&stored.record.key).is_some()
+            {
                 continue;
             }
             if contexts
@@ -1282,16 +1351,139 @@ impl InstanceFactStore {
                 )
             })
             .collect::<Vec<_>>();
+        // The authoritative projection identifies the priority offsets it consumed by their
+        // (scope, task, offset, observation time); an external projection consumes none.
+        let offset_identity: Vec<PriorityOffsetIdentity> = match conflict_disposition {
+            PolicyFactConflictDisposition::FatalInvariant => self
+                .active_priority_offsets(&contexts, operation)?
+                .into_iter()
+                .map(|offset| {
+                    (
+                        offset.scope,
+                        offset.task_id,
+                        offset.offset_milli,
+                        offset.observed_at_unix_ms,
+                    )
+                })
+                .collect(),
+            PolicyFactConflictDisposition::RejectCaller => Vec::new(),
+        };
         projected.ledger_position = ledger_position;
-        projected.fact_snapshot_id =
-            combined_policy_snapshot_id(&projected, resources, &authority_revisions)?;
+        projected.fact_snapshot_id = combined_policy_snapshot_id(
+            &projected,
+            resources,
+            &authority_revisions,
+            &offset_identity,
+        )?;
         Ok(projected)
+    }
+
+    /// Every active priority offset record whose scope applies to at least one of
+    /// `contexts`, in store order (scope, then key). A record whose task identifier or value
+    /// breaks the publish rules is refused as `priority_offset_invalid`, never skipped.
+    pub(crate) fn active_priority_offsets(
+        &self,
+        contexts: &[InstanceFactContext],
+        operation: &'static str,
+    ) -> RuntimeHostResult<Vec<ActivePriorityOffset>> {
+        let mut offsets = Vec::new();
+        for stored in self.active.values() {
+            let Some(task_id) = priority_offset_task_id(&stored.record.key) else {
+                continue;
+            };
+            if !contexts
+                .iter()
+                .any(|context| stored.record.scope.matches(context))
+            {
+                continue;
+            }
+            let offset_milli = priority_offset_milli(&stored.record)
+                .filter(|_| valid_priority_offset_task_id(task_id))
+                .ok_or_else(|| {
+                    RuntimeHostError::request(
+                        "priority_offset_invalid",
+                        operation,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                })?;
+            offsets.push(ActivePriorityOffset {
+                scope: stored.record.scope.clone(),
+                task_id: task_id.to_owned(),
+                offset_milli,
+                origin: priority_offset_origin(stored.publisher),
+                observed_at_unix_ms: stored.record.observed_at_unix_ms,
+                expires_at_unix_ms: stored.record.expires_at_unix_ms,
+            });
+        }
+        Ok(offsets)
     }
 
     #[cfg(test)]
     fn active_count(&self) -> usize {
         self.active.len()
     }
+}
+
+/// Builds the evaluation's manual priority offsets from active offset records (Workflow #308
+/// slice 4a-2). An instance-scoped record is the entry of that instance. A task's single
+/// server- or game-scoped record that applies to every evaluated instance is the task-level
+/// entry (`instance_id: None`), which the evaluator applies to every instance without an
+/// instance-level entry of its own. When a task's server/game records apply to only some of
+/// the evaluated instances, or more than one of them applies, no single task-level entry can
+/// express them: every instance then gets its own entry from its most specific record
+/// (instance over server over game), the store's own resolution order.
+pub(crate) fn resolve_priority_offsets(
+    offsets: &[ActivePriorityOffset],
+    instances: &[InstanceSnapshot],
+) -> Vec<actingcommand_policy::PriorityOffset> {
+    let contexts = instances.iter().map(instance_context).collect::<Vec<_>>();
+    let mut by_task = BTreeMap::<&str, Vec<&ActivePriorityOffset>>::new();
+    for offset in offsets {
+        by_task
+            .entry(offset.task_id.as_str())
+            .or_default()
+            .push(offset);
+    }
+    let entry = |offset: &ActivePriorityOffset, instance_id: Option<String>| {
+        actingcommand_policy::PriorityOffset {
+            task_id: offset.task_id.clone(),
+            instance_id,
+            offset_milli: offset.offset_milli,
+            origin: offset.origin,
+            observed_at_unix_ms: offset.observed_at_unix_ms,
+        }
+    };
+    let mut resolved = Vec::new();
+    for records in by_task.values() {
+        let shared = records
+            .iter()
+            .filter(|offset| !matches!(offset.scope, FactScope::Instance { .. }))
+            .collect::<Vec<_>>();
+        match shared.as_slice() {
+            [] => {}
+            [only] if contexts.iter().all(|context| only.scope.matches(context)) => {
+                resolved.push(entry(only, None));
+            }
+            _ => {
+                for context in &contexts {
+                    if let Some(most_specific) = records
+                        .iter()
+                        .filter(|offset| offset.scope.matches(context))
+                        .max_by_key(|offset| scope_specificity(&offset.scope))
+                    {
+                        resolved.push(entry(most_specific, Some(context.instance_id.clone())));
+                    }
+                }
+                continue;
+            }
+        }
+        for offset in records {
+            if let FactScope::Instance { instance_id } = &offset.scope {
+                resolved.push(entry(offset, Some(instance_id.clone())));
+            }
+        }
+    }
+    resolved
 }
 
 fn invalidation_identity(data: &FactInvalidationEventData) -> InvalidationIdentity {
@@ -1378,10 +1570,14 @@ fn snapshot_id(
     Ok(format!("snapshot:fact:{:x}", Sha256::digest(bytes)))
 }
 
+/// The consumed priority offsets' identity: (scope, task, offset in milli, observed at).
+type PriorityOffsetIdentity = (FactScope, String, i32, u64);
+
 fn combined_policy_snapshot_id<T: serde::Serialize>(
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
     authority_revisions: &[T],
+    offset_identity: &[PriorityOffsetIdentity],
 ) -> RuntimeHostResult<String> {
     let mut resources = resources.clone();
     resources
@@ -1390,14 +1586,28 @@ fn combined_policy_snapshot_id<T: serde::Serialize>(
     resources
         .hosts
         .sort_by(|left, right| left.host_id.cmp(&right.host_id));
-    let bytes = serde_json::to_vec(&(
-        &facts.facts,
-        &facts.outcomes,
-        &facts.tasks,
-        &facts.instances,
-        &resources,
-        authority_revisions,
-    ))
+    // Without offsets the hashed tuple is exactly the one before offsets existed, so an
+    // unchanged configuration keeps its snapshot identity.
+    let bytes = if offset_identity.is_empty() {
+        serde_json::to_vec(&(
+            &facts.facts,
+            &facts.outcomes,
+            &facts.tasks,
+            &facts.instances,
+            &resources,
+            authority_revisions,
+        ))
+    } else {
+        serde_json::to_vec(&(
+            &facts.facts,
+            &facts.outcomes,
+            &facts.tasks,
+            &facts.instances,
+            &resources,
+            authority_revisions,
+            offset_identity,
+        ))
+    }
     .map_err(|_| fact_fatal("fact_snapshot_encode_failed", "hash_policy_fact_snapshot"))?;
     Ok(format!("snapshot:policy-fact:{:x}", Sha256::digest(bytes)))
 }

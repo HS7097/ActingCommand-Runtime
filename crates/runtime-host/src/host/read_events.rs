@@ -362,6 +362,17 @@ impl HostShared {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // The game of each configured policy identity (Workflow #308 slice 4a-2), read and
+        // released before the registry lock; a host without policy inputs names no game.
+        let configured_games = lock(&self.policy_inputs, "read_runtime_status_policy_games")?
+            .as_ref()
+            .map(|inputs| {
+                inputs
+                    .instance_identities()
+                    .map(|identity| (identity.instance_id.to_owned(), identity.game_id.to_owned()))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
         // Resolve only metadata before taking the scheduler lock. Identity checks and the
         // registered instance set are shared with device-facing admission; they run under
         // the registry lock so an endpoint rebinding is never observed half-applied.
@@ -396,6 +407,7 @@ impl HostShared {
                 .resource_packages
                 .get(&instance.instance_alias)
                 .cloned();
+            let game_id = configured_games.get(&instance.instance_alias).cloned();
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -419,7 +431,15 @@ impl HostShared {
                 })?
                 .with_backend_metadata(resolved.provenance(), resolved.capabilities().cloned())
                 .with_adb_port(adb_port)
-                .with_resource_package(resource_package),
+                .with_resource_package(resource_package)
+                .with_game_id(game_id)
+                .map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "runtime_status_projection_invalid",
+                        "project_runtime_control_plane_status",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?,
             );
         }
         let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected).map_err(|_| {

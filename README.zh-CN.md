@@ -171,6 +171,7 @@ actingctl monitor-clear --state-root <state-root> --instance <alias>
 actingctl emulator status --state-root <state-root> --instance <alias>
 actingctl emulator start --state-root <state-root> --instance <alias>     # 另有 stop | restart（仅显式请求；按实例围栏；配置了 startup_package 则随后以受控任务排程）
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>
+actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # 手动优先级偏移（±1000000 milli），写成 session.task.<task_id>.priority_offset 事实；不带 --instance 时为任务级，作用于唯一配置的游戏（否则 task_offset_scope_ambiguous）
 actingctl request-shutdown --state-root <state-root>
 
 # 只读取证（同一状态根）

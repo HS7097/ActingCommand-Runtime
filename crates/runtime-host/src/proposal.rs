@@ -224,7 +224,9 @@ impl ProposalDocuments {
             pools: encode_document(&sources.pools, self.pools)?,
             activity: encode_document(&sources.activity, self.activity)?,
             timeline: encode_document(&sources.timeline, self.timeline)?,
-            selection: None,
+            // The base catalog's selection document is carried over unchanged; a catalog
+            // without one stays without one.
+            selection: sources.selection.clone(),
         })
     }
 }

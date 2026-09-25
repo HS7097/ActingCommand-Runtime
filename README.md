@@ -167,6 +167,7 @@ actingctl monitor-clear --state-root <state-root> --instance <alias>
 actingctl emulator status --state-root <state-root> --instance <alias>
 actingctl emulator start --state-root <state-root> --instance <alias>     # also: stop | restart (explicit request only; fenced per instance; a configured startup_package is scheduled as a contained task afterwards)
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>
+actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # manual priority offset (±1000000 milli) as a session.task.<task_id>.priority_offset fact; without --instance it is task-level for the one configured game (task_offset_scope_ambiguous otherwise)
 actingctl request-shutdown --state-root <state-root>
 
 # Read-only forensics (same state root)

@@ -150,6 +150,89 @@ checks (`policy_fact_authority_conflict`, `policy_outcome_authority_conflict`),
 the `ObservedOutcome` projection, the wire format, the eight key families and
 the ledger event types are as before this slice.
 
+## Priority offset facts
+
+Workflow #308 slice 4a-2 adds manual priority offsets — a person's or an
+agent's adjustment of a task's score (`EvaluationFacts.priority_offsets`,
+`contracts/scheduling/README.md` "Score-Assisted Priority") — as ordinary
+records of the `session.` family.
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `session.task.<task_id>.priority_offset` | `integer`, the offset in milli | `instance` (that instance only), or `server` / `game` (a task-level offset for every instance of that server or game) |
+
+**Publication.** Offsets travel through `PublishFact` / `PublishFacts` and the
+normal fact rules (one scope and snapshot per observation, idempotent identical
+retries, strictly newer observations, the 256-record store bound). The
+publisher chooses the lifetime: an absent `expires_at_unix_ms` never expires;
+a present one follows the usual TTL policy validation. On top of the ordinary
+record validation the Runtime refuses, as the non-fatal request error
+`priority_offset_invalid`, any offset record whose `<task_id>` breaks the
+scheduling identifier charset (`^[a-z0-9][a-z0-9._:-]*$`, 1–128 bytes), whose
+value is not an inline integer within ±1,000,000, or which declares
+`invalidate_on` events (an offset ends by its TTL or by a newer offset, never by
+an event). `FactRecord::priority_offset(scope, task_id, offset_milli,
+observed_at_unix_ms, source_detector)` builds a record without expiry whose
+snapshot id and bundle hash are the SHA-256 of that content.
+
+**Origin exception.** The request origin gate of `PublishFact` / `PublishFacts`
+accepts an observation whose every key is a priority offset key from `(agent,
+adapter)`, `(user, ui)` and `(cli, cli)`. Any other observation stays
+`(agent, adapter)` only (`invalid_agent_dispatcher_origin`), and an observation
+that mixes offset keys with other keys is refused from every origin as
+`fact_origin_mixed`.
+
+**Ledger.** An offset-only observation published by a request keeps that
+request's source and actor on its `fact.published` event (origin module
+`fact-store`), so the ledger shows who set the offset; its links carry the
+request and correlation identities as for every request publication. Every
+other `fact.published` event keeps source `runtime` and actor `runtime`. No
+event type is added.
+
+**Projection.** `project_authoritative_policy_inputs_with_gaps_under_gate` reads
+the active offset records at the projected ledger position whose scope applies
+to at least one projected instance. An instance-scoped record becomes the entry
+`{task_id, instance_id: <alias>}`; a task's single server- or game-scoped record
+that applies to every projected instance becomes the task-level entry
+`{task_id, instance_id: null}`, which the evaluator overrides per instance with
+an instance-level entry. When a task's server/game records apply to only part of
+the projected instances, or several apply, a task-level entry cannot express
+them, and every projected instance instead gets its own entry from its most
+specific record (instance over server over game). `origin` is `user` when the
+publishing event's actor is `user` or `cli`, `agent` otherwise; `observed_at_unix_ms`
+is the record's. For a cycle evaluated by `evaluate_policy_cycle` an offset
+whose `expires_at_unix_ms` lies before the evaluation instant is not passed; its
+expiry does not by itself wake the evaluator. The other projections (admission,
+policy input identity, strategic report) pass every active offset. An entry that
+collides with a statically configured `priority_offsets` entry of the same task
+and instance is refused as `policy_fact_authority_conflict`. A record whose task
+identifier or value breaks the publication rules (only possible for a record
+published before those rules) fails the projection as `priority_offset_invalid`.
+
+Offset keys are never overlaid as ordinary `facts` of an evaluation or of a
+forward projection, and a catalog predicate or a selection document cannot
+observe them as facts. The forward projection receives no store offsets.
+
+**Unknown tasks.** An offset whose task the active catalog does not declare is
+still passed (the evaluator ignores it). A cycle evaluated by
+`evaluate_policy_cycle` reports each such task once: one extra `TaskDecision`
+of that task with no instance, eligibility `unknown`, state `blocked`, no rank
+and the single reason `priority_offset_unknown_task:<task>`. It is not an error,
+selects nothing and reaches no dispatch intent or ledger event.
+
+**Identity.** `combined_policy_snapshot_id` hashes, next to its previous
+inputs, the `(scope, task_id, offset_milli, observed_at_unix_ms)` tuple of every
+offset record the projection consumed, so a changed offset changes the
+`fact_snapshot_id` and an already evaluated dispatch is refused as
+`policy_facts_stale`. Without offsets the hashed input is exactly the previous
+one, so identities of offset-free inputs are unchanged. This is not a wire
+change.
+
+**Configured game.** For the `actingctl task-offset` default scope, the control
+plane status (`RuntimeInstanceStatus.game_id`) names the game of each
+instance's configured policy identity; it is absent when the host runs without
+policy inputs.
+
 ## Reading the seeds
 
 The per-instance read (`actingctl facts` without `--program`) is not built.

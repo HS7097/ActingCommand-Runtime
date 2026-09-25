@@ -8,14 +8,17 @@ The scheduling catalog is a data-only contract of four required documents plus o
 ## Offline inspection
 
 `actinglab scheduling compile --tasks <tasks.json> --pools <pools.json>
---activity <activity.json> --timeline <timeline.json>` reads four explicit local
-files through Lab and calls the existing policy `compile_catalog` entrypoint.
+--activity <activity.json> --timeline <timeline.json> [--selection <selection.json>]`
+reads four explicit local files, plus the optional selection document when
+`--selection` names one, through Lab and calls the existing policy
+`compile_catalog` entrypoint.
 With `--json`, one ordinary CLI envelope contains the compiler's `dry_run_json`
 report, including summary and catalog hash. Rejection returns exit 2 and the
 original structured compiler diagnostics under `error.details`. File read errors
 also fail explicitly. V1 compilation and catalog identities retain their contract.
 
-`actinglab scheduling timeline` takes those same file flags plus repeated
+`actinglab scheduling timeline` takes those same file flags (including the
+optional `--selection`) plus repeated
 `--event-id <id>`, `--unix-ms <u64>`, `--monotonic-ms <u64>`,
 `--instance-id <id>`, `--server-id <id>` and `--game-id <id>`. All are explicit;
 instance context must correspond to the configuration being inspected. The
@@ -44,7 +47,7 @@ The reader uses at most one additional sentinel byte per document to preserve th
 compiler's size diagnostic. Paths use the existing 1024-byte source-text bound;
 server/game context and event IDs use 128 bytes; the instance context uses the
 registered 256-byte alias rule. Selection is limited to 4096 events. CLI query
-arguments are bounded to 8210 tokens and 1 MiB, enough for all events and nine
+arguments are bounded to 8212 tokens and 1 MiB, enough for all events and ten
 single-value flags. Output payloads are limited to 16 MiB (four catalog budgets)
 to allow structured source locations and diagnostics. Exceeding a bound fails
 visibly without silently truncating a decision.
@@ -152,6 +155,29 @@ ranking, the evaluator runs an optional score stage:
 Without a selection document and without offsets the stage is a no-op and every
 evaluation output is byte-identical to a catalog compiled before this stage
 existed.
+
+In the Runtime (Workflow #308 slice 4a-2) manual offsets are instance facts
+`session.task.<task_id>.priority_offset` (integer milli; instance scope for one
+instance, server or game scope for a task-level offset) in the instance fact
+store, published through `PublishFacts` by an agent (`agent`/`adapter`) or by a
+person: the console (`user`/`ui`) or `actingctl task-offset` (`cli`/`cli`).
+Every evaluation projects the active records at its input ledger position into
+`priority_offsets` (origin `user` for a person, `agent` otherwise), drops those
+whose TTL has elapsed at the evaluation instant, and reports an offset naming a
+task the catalog does not declare once per cycle as
+`priority_offset_unknown_task:<task>` without failing; the offsets are part of
+the `fact_snapshot_id`. `contracts/instance-fact-store.md` ("Priority offset
+facts") owns the key, its validation, the origin exception and the projection.
+The `policy.dispatch_intent` payload is unchanged: the `scored` reason and its
+detail travel in the reason chain it already carries.
+
+The Runtime catalog store accepts the selection document with the other four:
+activation stages it as `selection.json` in the immutable generation, records it
+as a fifth source in the generation manifest only when present, and reloads it
+from there; the stored `catalog_hash` is verified against a recompilation as for
+the four documents. An agent proposal compiled against a catalog with a
+selection document carries that document unchanged into the proposed catalog;
+proposal patches address only the four catalog documents.
 
 ## Runtime Enforcement
 

@@ -15,6 +15,67 @@ const MAX_INVALIDATION_EVENTS: usize = 32;
 pub const MIN_FACT_TTL_MS: u64 = 1;
 pub const MAX_FACT_TTL_MS: u64 = 31_536_000_000;
 pub const MAX_FACT_OBSERVATION_BYTES: usize = 512 * 1024;
+/// A manual priority offset fact (Workflow #308 slice 4a-2) is keyed
+/// `session.task.<task_id>.priority_offset` and holds the offset in milli as an integer.
+pub const PRIORITY_OFFSET_KEY_PREFIX: &str = "session.task.";
+pub const PRIORITY_OFFSET_KEY_SUFFIX: &str = ".priority_offset";
+
+/// The `<task_id>` of a `session.task.<task_id>.priority_offset` key; `None` for any other key.
+/// The task identifier's own charset is checked by the Runtime when the offset is published.
+pub fn priority_offset_task_id(key: &str) -> Option<&str> {
+    key.strip_prefix(PRIORITY_OFFSET_KEY_PREFIX)?
+        .strip_suffix(PRIORITY_OFFSET_KEY_SUFFIX)
+        .filter(|task_id| !task_id.is_empty())
+}
+
+/// The priority offset fact key of one task.
+pub fn priority_offset_fact_key(task_id: &str) -> String {
+    format!("{PRIORITY_OFFSET_KEY_PREFIX}{task_id}{PRIORITY_OFFSET_KEY_SUFFIX}")
+}
+
+impl FactRecord {
+    /// A manually set priority offset without expiry: the inline integer `offset_milli` under
+    /// `session.task.<task_id>.priority_offset`, full confidence, no invalidating events. The
+    /// snapshot identity is the SHA-256 of (scope, key, offset, observation time, detector),
+    /// so an identical retry is idempotent and any change is a new observation.
+    pub fn priority_offset(
+        scope: FactScope,
+        task_id: &str,
+        offset_milli: i64,
+        observed_at_unix_ms: u64,
+        source_detector: &str,
+    ) -> Result<Self, SanitizationError> {
+        use sha2::{Digest, Sha256};
+        let key = priority_offset_fact_key(task_id);
+        let identity = serde_json::to_vec(&(
+            &scope,
+            &key,
+            offset_milli,
+            observed_at_unix_ms,
+            source_detector,
+        ))
+        .map_err(|_| SanitizationError::new("invalid_fact_record", "priority_offset"))?;
+        let digest = format!("{:x}", Sha256::digest(identity));
+        let record = Self {
+            scope,
+            key,
+            content: FactContent::Inline {
+                value: FactValue::Integer(offset_milli),
+            },
+            observed_at_unix_ms,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: source_detector.to_owned(),
+            source_snapshot_id: format!("snapshot:priority-offset:{digest}"),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: digest,
+            invalidate_on: Vec::new(),
+        };
+        record.validate()?;
+        Ok(record)
+    }
+}
 
 /// One adapter observation, committed as one durable fact event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
