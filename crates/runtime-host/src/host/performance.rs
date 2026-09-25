@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::events::is_sanitization_failure;
+use crate::performance::rejected_event_code;
 use crate::planning::collect_maintenance_evidence;
 use actingcommand_policy::assess_predictive_maintenance;
 
@@ -212,7 +213,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         for event in events {
             if let ObservationAppend::Rejected(error) = self.record_performance_event(event)? {
-                self.degrade_performance_monitor(error)?;
+                self.degrade_performance_monitor(event.event_type(), error)?;
             }
         }
         Ok(())
@@ -255,14 +256,20 @@ impl HostShared {
     }
 
     /// The dropped event is visible as `perf.monitor_degraded` carrying the contract's
-    /// sanitization code; a degraded event that fails itself is fatal as before.
-    fn degrade_performance_monitor(&self, rejection: RuntimeHostError) -> RuntimeHostResult<()> {
+    /// sanitization code and the rejected event type; a degraded event that fails itself is
+    /// fatal as before.
+    fn degrade_performance_monitor(
+        &self,
+        rejected: EventType,
+        rejection: RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
         let tick = {
             let mut performance = lock(&self.performance, "degrade_performance_monitor")?;
             if !performance.counters_enabled() {
                 return Err(rejection);
             }
-            performance.record_monitor_failure(unix_ms_now()?, rejection.code(), None)?
+            let code = rejected_event_code(rejection.code(), rejected)?;
+            performance.record_monitor_failure(unix_ms_now()?, &code, None)?
         };
         for event in &tick.events {
             if let ObservationAppend::Rejected(error) = self.record_performance_event(event)? {

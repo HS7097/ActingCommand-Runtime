@@ -5782,7 +5782,8 @@ impl PerformancePressureDraft {
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<PerformancePressurePayload, SanitizationError> {
         if self.data.observed_at_unix_ms == 0
-            || self.data.pressure.last_observed_at_unix_ms != self.data.observed_at_unix_ms
+            || self.data.pressure.started_at_unix_ms > self.data.pressure.last_observed_at_unix_ms
+            || self.data.pressure.last_observed_at_unix_ms > self.data.observed_at_unix_ms
         {
             return Err(SanitizationError::new(
                 "invalid_performance_pressure_time",
@@ -6421,26 +6422,12 @@ fn validate_runtime_fact_snapshot(
 
 fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), SanitizationError> {
     match payload {
-        PerformancePayload::PressureStarted(value)
+        PerformancePayload::PressureStarted(value) | PerformancePayload::PressureEnded(value)
             if value.action == EventAction::PerformanceObserve =>
         {
             if value.observed_at_unix_ms == 0
-                || value.pressure.last_observed_at_unix_ms != value.observed_at_unix_ms
-                || value.pressure.started_at_unix_ms != value.observed_at_unix_ms
-            {
-                return Err(SanitizationError::new(
-                    "invalid_performance_pressure_time",
-                    "performance_pressure",
-                ));
-            }
-            value.pressure.validate()
-        }
-        PerformancePayload::PressureEnded(value)
-            if value.action == EventAction::PerformanceObserve =>
-        {
-            if value.observed_at_unix_ms == 0
-                || value.pressure.last_observed_at_unix_ms != value.observed_at_unix_ms
-                || value.pressure.started_at_unix_ms >= value.observed_at_unix_ms
+                || value.pressure.started_at_unix_ms > value.pressure.last_observed_at_unix_ms
+                || value.pressure.last_observed_at_unix_ms > value.observed_at_unix_ms
             {
                 return Err(SanitizationError::new(
                     "invalid_performance_pressure_time",

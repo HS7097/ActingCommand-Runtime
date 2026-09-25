@@ -27,9 +27,12 @@ elapsed since the last recorded summary, or when the live sample changed
 materially against the last recorded capacity fact: a volume (identity plus
 purpose set) appeared or disappeared, a volume's state changed, its available
 bytes went to or from unknown, or they moved by at least 5 % of the recorded
-value or by at least 1 GiB. The recorded summary carries the host performance
-context of that moment (unavailable only when counters are disabled or its
-window holds no data), the latest capacity sample and the ledger commit window.
+value or by at least 1 GiB. A material-change summary is recorded at most every
+10 seconds after the last recorded summary (not configurable) unless a volume's
+state changed, which bypasses that floor. The recorded summary carries the host
+performance context of that moment (unavailable only when counters are disabled
+or its window holds no data), the latest capacity sample and the ledger commit
+window.
 Ticks on which no summary is due record nothing.
 
 Each small typed B3 `PerformanceSummary.capacity` is committed directly to
@@ -42,7 +45,8 @@ summary replaces only the derived view's live sample and keeps the last recorded
 fact's reference, so freshness, binding and thresholds follow the live sample.
 Admission carries its decision time and the fact reference: the EventId/sequence
 of the last recorded fact, which may lag the live sample by at most the summary
-interval and the 5 % / 1 GiB band. A failed recording clears the derived view and
+interval and the 5 % / 1 GiB band, or by the 10-second floor for a material
+change without a state change. A failed recording clears the derived view and
 returns its error. Missing, failed, stale, future, changed-binding or
 cross-owner facts refuse new work. Old summaries without capacity do not authorize
 capacity admission.

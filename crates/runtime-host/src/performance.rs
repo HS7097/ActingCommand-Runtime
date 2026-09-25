@@ -410,6 +410,18 @@ impl PerformanceSemanticEvent {
         }
     }
 
+    pub(crate) fn event_type(&self) -> EventType {
+        match self {
+            Self::PressureStarted(_) => EventType::PerformancePressureStarted,
+            Self::PressureEnded(_) => EventType::PerformancePressureEnded,
+            Self::StutterDetected(_) => EventType::PerformanceStutterDetected,
+            Self::Summary(_) => EventType::PerformanceSummary,
+            Self::MonitorDegraded(_) => EventType::PerformanceMonitorDegraded,
+            Self::MonitorRecovered(_) => EventType::PerformanceMonitorRecovered,
+            Self::BalanceChanged(_) => EventType::PerformanceBalanceChanged,
+        }
+    }
+
     pub(crate) fn observed_at_unix_ms(&self) -> u64 {
         match self {
             Self::PressureStarted(data) | Self::PressureEnded(data) => data.observed_at_unix_ms,
@@ -1179,7 +1191,7 @@ impl PerformanceMonitor {
     pub(crate) fn record_monitor_failure(
         &mut self,
         observed_at_unix_ms: u64,
-        code: &'static str,
+        code: &str,
         related_event_id: Option<EventId>,
     ) -> RuntimeHostResult<PerformanceTick> {
         if let Some(event_id) = related_event_id {
@@ -1314,7 +1326,8 @@ impl PerformanceMonitor {
     }
 
     /// The one "is a summary due now" decision fed by the system and the capacity tick:
-    /// none recorded yet, the summary interval elapsed, or a material capacity change.
+    /// none recorded yet, the summary interval elapsed, a capacity state change, or a
+    /// material capacity change at least `MATERIAL_SUMMARY_MIN_INTERVAL` after the last one.
     fn summary_due(
         &self,
         now_unix_ms: u64,
@@ -1327,15 +1340,19 @@ impl PerformanceMonitor {
             .config
             .as_ref()
             .map_or(DEFAULT_SUMMARY_INTERVAL, |config| config.summary_interval);
-        Ok(
-            now_unix_ms.saturating_sub(previous) >= duration_ms(interval)?
-                || capacity.is_some_and(|live| {
-                    self.capacity
-                        .as_ref()
-                        .and_then(|owner| owner.recorded.as_ref())
-                        .is_none_or(|recorded| capacity::material_change(recorded, live))
-                }),
-        )
+        let elapsed = now_unix_ms.saturating_sub(previous);
+        let material_floor = duration_ms(capacity::MATERIAL_SUMMARY_MIN_INTERVAL)?;
+        Ok(elapsed >= duration_ms(interval)?
+            || capacity.is_some_and(|live| {
+                self.capacity
+                    .as_ref()
+                    .and_then(|owner| owner.recorded.as_ref())
+                    .is_none_or(|recorded| {
+                        capacity::state_change(recorded, live)
+                            || (elapsed >= material_floor
+                                && capacity::material_change(recorded, live))
+                    })
+            }))
     }
 
     /// Host-level summary: pipeline maxima fold over every instance alias in the window.
@@ -1371,7 +1388,7 @@ impl PerformanceMonitor {
     fn ingest_monitor_failure(
         &mut self,
         observed_at_unix_ms: u64,
-        code: &'static str,
+        code: &str,
         unavailable_metrics: Vec<PerformanceMetric>,
         domain: MonitorFailureDomain,
     ) -> RuntimeHostResult<PerformanceTick> {
@@ -1400,12 +1417,9 @@ impl PerformanceMonitor {
             MonitorFailureDomain::Sampler => &mut self.consecutive_sampler_failures,
             MonitorFailureDomain::Pipeline => &mut self.consecutive_pipeline_failures,
         };
-        *consecutive_failures = consecutive_failures.checked_add(1).ok_or_else(|| {
-            performance_fatal(
-                "performance_failure_count_overflow",
-                "record_performance_monitor_failure",
-            )
-        })?;
+        let previous_failures = *consecutive_failures;
+        // Bounded: failures after the terminal one only count and record nothing.
+        *consecutive_failures = previous_failures.saturating_add(1);
         self.health = PerformanceMonitorHealth::Degraded;
         self.degraded_metrics
             .extend(unavailable_metrics.iter().copied());
@@ -1416,7 +1430,8 @@ impl PerformanceMonitor {
                 MonitorFailureDomain::Pipeline => self.pipeline_stopped = true,
             }
         }
-        let events = if *consecutive_failures == 1 || terminal {
+        let entered_terminal = terminal && previous_failures < config.max_consecutive_failures;
+        let events = if *consecutive_failures == 1 || entered_terminal {
             vec![PerformanceSemanticEvent::MonitorDegraded(
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms,
@@ -2163,6 +2178,21 @@ fn is_fresh_control_sample(
 
 fn valid_process_label(pid: u32, label: &str) -> bool {
     pid > 0 && !label.is_empty() && label.len() <= 260 && !label.chars().any(char::is_control)
+}
+
+/// The monitor failure code of a contract-rejected observation event:
+/// `<contract code>.<event type>`, e.g. `invalid_performance_pressure_time.perf.pressure_ended`.
+pub(crate) fn rejected_event_code(code: &str, event_type: EventType) -> RuntimeHostResult<String> {
+    let event_type = serde_json::to_value(event_type)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| {
+            performance_fatal(
+                "performance_event_type_encode_failed",
+                "record_performance_monitor_failure",
+            )
+        })?;
+    Ok(format!("{code}.{event_type}"))
 }
 
 fn valid_error_code(code: &str) -> bool {

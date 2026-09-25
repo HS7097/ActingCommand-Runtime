@@ -2,7 +2,7 @@
 
 use super::{
     PerformanceMonitor, PerformanceMonitorConfig, PerformanceSemanticEvent, PerformanceTick,
-    system_performance_sampler,
+    rejected_event_code, system_performance_sampler,
 };
 use crate::events::{RuntimeEvents, is_sanitization_failure};
 use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
@@ -12,7 +12,7 @@ use actingcommand_artifact_store::{
 use actingcommand_contract::{
     AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityDecision,
     CapacityFactReference, CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds,
-    CapacityVolumeSample, EventActor, EventSeverity, EventSource, LifecycleNativeDetail,
+    CapacityVolumeSample, EventActor, EventSeverity, EventSource, EventType, LifecycleNativeDetail,
     OriginModule, OwnerEpoch, PerformanceCapacitySample, PerformanceMetric,
     PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePayloadDraft,
     PerformancePressureEventData, PerformancePressureKind, PerformancePressureRecord,
@@ -465,12 +465,8 @@ impl PerformanceMonitor {
                 if !is_sanitization_failure(&error) || self.config.is_none() {
                     return Err(error);
                 }
-                return self.degrade_for_rejected_summary(
-                    now.unix_ms,
-                    error.code(),
-                    ledger,
-                    events,
-                );
+                let code = rejected_event_code(error.code(), EventType::PerformanceSummary)?;
+                return self.degrade_for_rejected_summary(now.unix_ms, &code, ledger, events);
             }
         };
         capacity.projection.commit(sample.clone(), &event)?;
@@ -486,11 +482,12 @@ impl PerformanceMonitor {
     }
 
     /// The dropped summary is visible as `perf.monitor_degraded` carrying the contract's
-    /// sanitization code; a degraded event that fails itself is fatal as before.
+    /// sanitization code and `perf.summary`; a degraded event that fails itself is fatal as
+    /// before.
     fn degrade_for_rejected_summary(
         &mut self,
         observed_at_unix_ms: u64,
-        code: &'static str,
+        code: &str,
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
     ) -> RuntimeHostResult<()> {
@@ -504,6 +501,25 @@ impl PerformanceMonitor {
 }
 
 const MATERIAL_CAPACITY_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Material-change summaries are recorded at most this often (measured from the last recorded
+/// summary); a capacity state change bypasses the floor. Not configurable.
+pub(super) const MATERIAL_SUMMARY_MIN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// A volume (identity plus purposes) whose state (sufficient, soft or hard pressure, unknown)
+/// differs from the last recorded fact.
+pub(super) fn state_change(
+    recorded: &PerformanceCapacitySample,
+    live: &PerformanceCapacitySample,
+) -> bool {
+    live.volumes.iter().any(|volume| {
+        recorded.volumes.iter().any(|previous| {
+            previous.volume_id == volume.volume_id
+                && previous.purposes == volume.purposes
+                && previous.state != volume.state
+        })
+    })
+}
 
 /// Against the last recorded fact: a volume (identity plus purposes) appears or disappears,
 /// its state changes, its bytes go to/from unknown, or move by at least 5 % or 1 GiB.
