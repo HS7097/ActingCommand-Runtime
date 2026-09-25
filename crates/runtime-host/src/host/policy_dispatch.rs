@@ -166,6 +166,8 @@ impl HostShared {
             *lock(&self.policy_inputs, "set_test_policy_inputs")? =
                 Some(PolicyInputSnapshot::new(facts.clone(), resources.clone()));
         }
+        // The replaced configuration seeds the instance fact store exactly as a startup does.
+        self.seed_policy_instance_facts()?;
         self.evaluate_policy_cycle_authoritative(time, Some(seed), trigger, self.monotonic_ms()?)
     }
 
@@ -185,17 +187,18 @@ impl HostShared {
             .ok_or_else(|| {
                 policy_admission_request("procedure_manifest_unconfigured", "evaluate_policy_cycle")
             })?;
-        let (outcome_keys, facts, resources) = {
+        let (outcome_keys, facts, resources, missing_instance_facts) = {
             let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
             let outcome_keys =
                 lock(&self.policy, "read_policy_outcome_keys")?.outcome_key_snapshot()?;
             let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
-            let (facts, resources) = self.project_authoritative_policy_inputs_under_gate(
-                "evaluate_policy_cycle",
-                &outcome_keys,
-                None,
-            )?;
-            (outcome_keys, facts, resources)
+            let (facts, resources, missing_instance_facts) = self
+                .project_authoritative_policy_inputs_with_gaps_under_gate(
+                    "evaluate_policy_cycle",
+                    &outcome_keys,
+                    None,
+                )?;
+            (outcome_keys, facts, resources, missing_instance_facts)
         };
         let workloads = lock(&self.policy, "read_policy_performance_workloads")?
             .active_performance_workloads()?;
@@ -209,7 +212,7 @@ impl HostShared {
             Some(seed) => seed,
             None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
         };
-        let cycle = {
+        let mut cycle = {
             let mut policy = lock(&self.policy, "evaluate_policy_cycle")?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
             policy.evaluate(
@@ -224,6 +227,11 @@ impl HostShared {
                 },
             )?
         };
+        attach_missing_instance_fact_reasons(
+            &mut cycle,
+            &missing_instance_facts,
+            facts.ledger_position,
+        );
         for signal in &cycle.detection_planning_signals {
             self.record_policy_planning_signal(signal.clone())?;
         }
@@ -254,6 +262,26 @@ impl HostShared {
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
+        let (facts, resources, _) = self.project_authoritative_policy_inputs_with_gaps_under_gate(
+            operation,
+            outcome_keys,
+            as_of_ledger_position,
+        )?;
+        Ok((facts, resources))
+    }
+
+    /// Projects the evaluation inputs at the requested position and reports, per instance
+    /// alias, the policy instance facts the store did not hold there (Workflow #313 item 4).
+    pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
+        &self,
+        operation: &'static str,
+        outcome_keys: &PolicyOutcomeKeySnapshot,
+        as_of_ledger_position: Option<u64>,
+    ) -> RuntimeHostResult<(
+        EvaluationFacts,
+        EvaluationResources,
+        MissingPolicyInstanceFacts,
+    )> {
         self.synchronize_fact_store_under_gate()?;
         let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
             .clone()
@@ -285,7 +313,20 @@ impl HostShared {
         } else {
             ledger_position
         };
+        // The instance set is read from the fact store at the projected position; the
+        // configuration contributes the static identity only (alias, host, server, game).
+        let fact_store = lock(&self.facts, "project_policy_facts")?;
+        let historical;
+        let fact_projection = if ledger_position == latest_ledger_position {
+            &*fact_store
+        } else {
+            historical = fact_store.at_position(&self.ledger, ledger_position)?;
+            &historical
+        };
         let mut base_facts = inputs.facts().clone();
+        let (instances, missing_instance_facts) =
+            project_policy_instances(&inputs, fact_projection);
+        base_facts.instances = instances;
         base_facts.tasks = lock(&self.policy, "project_policy_task_state")?
             .task_runtime_snapshots(ledger_position)?;
         base_facts.tasks.retain(|state| {
@@ -406,14 +447,6 @@ impl HostShared {
                 activity_window_id: Some(expected_run.activity_window_id.clone()),
             });
         }
-        let fact_store = lock(&self.facts, "project_policy_facts")?;
-        let historical;
-        let fact_projection = if ledger_position == latest_ledger_position {
-            &*fact_store
-        } else {
-            historical = fact_store.at_position(&self.ledger, ledger_position)?;
-            &historical
-        };
         let catalog = lock(&self.policy, "project_fact_pool_catalog")?.active_loaded();
         if let Some(catalog) = &catalog {
             validate_static_fact_pool_authority(
@@ -438,9 +471,13 @@ impl HostShared {
         };
         let facts =
             fact_projection.overlay_policy_facts(&base_facts, &resources, ledger_position)?;
-        Ok((facts, resources))
+        Ok((facts, resources, missing_instance_facts))
     }
 
+    /// The registered alias set must equal the configured static identity set (alias, host,
+    /// server, game), and every configured host must exist in `resources.hosts`. The
+    /// configured `instances` snapshot is not compared beyond its identity: availability,
+    /// capabilities and preferred tasks are read from the instance fact store.
     pub(super) fn validate_policy_input_authority(
         &self,
         inputs: &PolicyInputSnapshot,
@@ -454,13 +491,11 @@ impl HostShared {
             .values()
             .map(|instance| instance.instance_alias.as_str())
             .collect::<BTreeSet<_>>();
-        let snapshot_aliases = inputs
-            .facts()
-            .instances
-            .iter()
-            .map(|instance| instance.instance_id.as_str())
+        let configured_aliases = inputs
+            .instance_identities()
+            .map(|identity| identity.instance_id)
             .collect::<BTreeSet<_>>();
-        if registered_aliases != snapshot_aliases {
+        if registered_aliases != configured_aliases {
             return Err(policy_admission_request(
                 "policy_instance_metadata_untrusted",
                 operation,
@@ -473,10 +508,8 @@ impl HostShared {
             .map(|host| host.host_id.as_str())
             .collect::<BTreeSet<_>>();
         if inputs
-            .facts()
-            .instances
-            .iter()
-            .any(|instance| !host_ids.contains(instance.host_id.as_str()))
+            .instance_identities()
+            .any(|identity| !host_ids.contains(identity.host_id))
         {
             return Err(policy_admission_request(
                 "policy_resource_metadata_untrusted",
@@ -1148,6 +1181,124 @@ impl HostShared {
             terminal: None,
             result: RuntimeResult::PolicyInputIdentityProjected { identity },
         })
+    }
+}
+
+/// Per instance alias: the policy instance facts the store did not hold, or held in the wrong
+/// shape, at the projected position. Such an instance is projected `available = false`.
+pub(super) type MissingPolicyInstanceFacts = BTreeMap<String, Vec<&'static str>>;
+
+/// Builds the evaluation's `instances` from the instance fact store (Workflow #313 item 4):
+/// one entry per configured static identity, with `available`, `capability_operation_ids` and
+/// `preferred_task_ids` read from the three policy instance facts that apply to it (the most
+/// specific scope first). An instance missing any of the three, or holding one that is not an
+/// inline value of the expected shape, is projected unavailable and reported under its alias
+/// with the keys it lacks; it is never silently available.
+fn project_policy_instances(
+    inputs: &PolicyInputSnapshot,
+    store: &InstanceFactStore,
+) -> (Vec<InstanceSnapshot>, MissingPolicyInstanceFacts) {
+    let mut instances = Vec::new();
+    let mut missing_instance_facts = MissingPolicyInstanceFacts::new();
+    for identity in inputs.instance_identities() {
+        let context = InstanceFactContext {
+            instance_id: identity.instance_id.to_owned(),
+            server_id: identity.server_id.to_owned(),
+            game_id: identity.game_id.to_owned(),
+        };
+        let mut missing = Vec::new();
+        let available = store
+            .resolve_active(&context, POLICY_INSTANCE_AVAILABLE_KEY)
+            .and_then(policy_instance_boolean)
+            .unwrap_or_else(|| {
+                missing.push(POLICY_INSTANCE_AVAILABLE_KEY);
+                false
+            });
+        let capability_operation_ids = store
+            .resolve_active(&context, POLICY_INSTANCE_CAPABILITIES_KEY)
+            .and_then(|record| policy_instance_string_list(record, POLICY_INSTANCE_OPERATION_FIELD))
+            .unwrap_or_else(|| {
+                missing.push(POLICY_INSTANCE_CAPABILITIES_KEY);
+                Vec::new()
+            });
+        let preferred_task_ids = store
+            .resolve_active(&context, POLICY_INSTANCE_PREFERRED_TASKS_KEY)
+            .and_then(|record| policy_instance_string_list(record, POLICY_INSTANCE_TASK_FIELD))
+            .unwrap_or_else(|| {
+                missing.push(POLICY_INSTANCE_PREFERRED_TASKS_KEY);
+                Vec::new()
+            });
+        let available = available && missing.is_empty();
+        if !missing.is_empty() {
+            missing_instance_facts.insert(identity.instance_id.to_owned(), missing);
+        }
+        instances.push(InstanceSnapshot {
+            instance_id: identity.instance_id.to_owned(),
+            server_id: identity.server_id.to_owned(),
+            game_id: identity.game_id.to_owned(),
+            host_id: identity.host_id.to_owned(),
+            available,
+            capability_operation_ids,
+            preferred_task_ids,
+        });
+    }
+    (instances, missing_instance_facts)
+}
+
+fn policy_instance_boolean(record: &FactRecord) -> Option<bool> {
+    match &record.content {
+        FactContent::Inline {
+            value: ContractFactValue::Boolean(value),
+        } => Some(*value),
+        _ => None,
+    }
+}
+
+/// Every row must hold exactly the string field `field`; anything else is not a usable value.
+fn policy_instance_string_list(record: &FactRecord, field: &str) -> Option<Vec<String>> {
+    let FactContent::Inline {
+        value: ContractFactValue::RecordList(rows),
+    } = &record.content
+    else {
+        return None;
+    };
+    rows.iter()
+        .map(|row| match (row.len(), row.get(field)) {
+            (1, Some(FactScalar::String(value))) => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Records `policy_instance_fact_missing:<key>` on every decision made for an instance the
+/// projection found incomplete, next to the evaluator's own reasons for that decision.
+fn attach_missing_instance_fact_reasons(
+    cycle: &mut PolicyCycle,
+    missing_instance_facts: &MissingPolicyInstanceFacts,
+    ledger_position: u64,
+) {
+    if missing_instance_facts.is_empty() {
+        return;
+    }
+    let Some(evaluation) = cycle.evaluation.as_mut() else {
+        return;
+    };
+    for decision in &mut evaluation.decisions {
+        let Some(instance_id) = decision.instance_id.clone() else {
+            continue;
+        };
+        let Some(missing) = missing_instance_facts.get(&instance_id) else {
+            continue;
+        };
+        for key in missing {
+            decision.reasons.push(DecisionReason {
+                code: format!("policy_instance_fact_missing:{key}"),
+                detail: format!(
+                    "instance '{instance_id}' has no usable `{key}` fact at ledger position \
+                     {ledger_position}; it is projected unavailable"
+                ),
+            });
+        }
     }
 }
 

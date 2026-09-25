@@ -56,7 +56,8 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("peer snapshot");
-    assert_eq!(primary.records.len(), 2);
+    // The configured instance also carries its three configuration seeds (`session.instance.*`).
+    assert_eq!(primary.records.len(), 5);
     assert_eq!(peer.records.len(), 1);
 
     host.record_policy_planning_signal(PolicyPlanningSignalEventData {
@@ -76,7 +77,7 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("snapshot after invalidation");
-    assert_eq!(after.records.len(), 1);
+    assert_eq!(after.records.len(), 4);
     assert_eq!(after.records[0].key, "inventory.items");
     let stale = host
         .publish_fact(server_record)
@@ -94,7 +95,7 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             }
         )
         .len(),
-        2
+        5
     );
     assert_eq!(
         projected_events(
@@ -126,7 +127,7 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("recovered snapshot");
-    assert_eq!(recovered.records.len(), 1);
+    assert_eq!(recovered.records.len(), 4);
     assert_eq!(recovered.records[0].key, "inventory.items");
     reopened.close().expect("close reopened host");
 }
@@ -173,14 +174,16 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             ..EventQuery::default()
         },
     );
-    assert_eq!(first_events.len(), 1);
-    assert_eq!(first_events[0].event_id, published_event_id);
+    // The three configuration seeds precede the adapter's own publication.
+    assert_eq!(first_events.len(), 4);
+    let adapter_event = first_events.last().expect("adapter publication");
+    assert_eq!(adapter_event.event_id, published_event_id);
     assert_eq!(
-        first_events[0].links.request_id(),
+        adapter_event.links.request_id(),
         Some(&first_request.request_id())
     );
     assert_eq!(
-        first_events[0].links.correlation_id(),
+        adapter_event.links.correlation_id(),
         Some(&first_request.correlation_id())
     );
 
@@ -201,7 +204,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             }
         )
         .len(),
-        1
+        4
     );
 
     let invalid = client.agent_request(RuntimeOperation::PublishFact { record });
@@ -220,7 +223,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             }
         )
         .len(),
-        1
+        4
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
     let health = client.request(RuntimeOperation::Health);
@@ -318,7 +321,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             }
         )
         .len(),
-        3
+        6
     );
     assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
     assert!(host.fatal_error().unwrap().is_none());
@@ -584,7 +587,12 @@ fn fact_snapshot_catches_up_with_critical_ledger_events() {
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("synchronized fact snapshot");
-    assert!(snapshot.records.is_empty());
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .all(|record| record.key.starts_with("session.instance."))
+    );
 
     let mut client = TestClient::connect(&host);
     assert_eq!(
@@ -737,7 +745,12 @@ fn runtime_startup_materializes_a_missed_critical_fact_invalidation() {
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("recovered snapshot");
-    assert!(snapshot.records.is_empty());
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .all(|record| record.key.starts_with("session.instance."))
+    );
     let mut client = TestClient::connect(&reopened);
     assert_eq!(
         projected_events(

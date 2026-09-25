@@ -2,6 +2,39 @@
 
 use super::*;
 
+/// `source_detector` of the three configuration-seeded policy instance facts.
+const POLICY_INSTANCE_SEED_DETECTOR: &str = "runtime.policy-configuration";
+const POLICY_INSTANCE_SEED_SCHEMA: &str = "fact.v1";
+
+/// One `record_list` row per identifier, each holding the single string field `field`.
+fn policy_instance_string_list_value(field: &str, identifiers: &[String]) -> ContractFactValue {
+    ContractFactValue::RecordList(
+        identifiers
+            .iter()
+            .map(|identifier| {
+                BTreeMap::from([(field.to_owned(), FactScalar::String(identifier.clone()))])
+            })
+            .collect(),
+    )
+}
+
+/// The stable hash a seed carries as `source_snapshot_id` and `resource_bundle_hash`: SHA-256
+/// over the canonical JSON of (instance alias, key, configured value), as lowercase hex.
+fn policy_instance_seed_digest(
+    instance_id: &str,
+    key: &str,
+    value: &ContractFactValue,
+) -> RuntimeHostResult<String> {
+    let bytes = serde_json::to_vec(&(instance_id, key, value)).map_err(|_| {
+        RuntimeHostError::fatal(
+            "policy_instance_seed_encode_failed",
+            "seed_policy_instance_facts",
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 impl HostShared {
     pub(super) fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
         self.publish_facts(
@@ -10,6 +43,85 @@ impl HostShared {
             },
             None,
         )
+    }
+
+    /// Seeds the policy instance facts from the configured policy inputs (Workflow #313
+    /// item 4): for every configured instance, `session.instance.available`,
+    /// `session.instance.capabilities` and `session.instance.preferred_tasks`, each with
+    /// scope = that instance. A record's `source_snapshot_id` is a stable hash of the
+    /// instance alias, the key and the configured value: a key whose stored record already
+    /// carries that id is already published and appends nothing (its content is verified
+    /// against the configured value); otherwise the seed is a new observation at the host
+    /// clock. Any refusal is returned to the caller, which fails startup.
+    pub(super) fn seed_policy_instance_facts(&self) -> RuntimeHostResult<()> {
+        let Some(inputs) = lock(&self.policy_inputs, "seed_policy_instance_facts")?.clone() else {
+            return Ok(());
+        };
+        for instance in inputs.instance_seeds() {
+            let scope = FactScope::Instance {
+                instance_id: instance.instance_id.clone(),
+            };
+            let seeds = [
+                (
+                    POLICY_INSTANCE_AVAILABLE_KEY,
+                    ContractFactValue::Boolean(instance.available),
+                ),
+                (
+                    POLICY_INSTANCE_CAPABILITIES_KEY,
+                    policy_instance_string_list_value(
+                        POLICY_INSTANCE_OPERATION_FIELD,
+                        &instance.capability_operation_ids,
+                    ),
+                ),
+                (
+                    POLICY_INSTANCE_PREFERRED_TASKS_KEY,
+                    policy_instance_string_list_value(
+                        POLICY_INSTANCE_TASK_FIELD,
+                        &instance.preferred_task_ids,
+                    ),
+                ),
+            ];
+            for (key, value) in seeds {
+                let digest = policy_instance_seed_digest(&instance.instance_id, key, &value)?;
+                let source_snapshot_id = format!("snapshot:policy-config:{digest}");
+                let content = FactContent::Inline { value };
+                let already_published = {
+                    let _gate = lock(&self.fact_write_gate, "seed_policy_instance_facts")?;
+                    let stored = lock(&self.facts, "seed_policy_instance_facts")?;
+                    match stored.active_record(&scope, key) {
+                        Some(existing) if existing.source_snapshot_id == source_snapshot_id => {
+                            if existing.content != content {
+                                return Err(RuntimeHostError::fatal(
+                                    "policy_instance_seed_identity_conflict",
+                                    "seed_policy_instance_facts",
+                                    RuntimeErrorCode::RuntimeFatal,
+                                ));
+                            }
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if already_published {
+                    continue;
+                }
+                self.publish_fact(FactRecord {
+                    scope: scope.clone(),
+                    key: key.to_owned(),
+                    content,
+                    observed_at_unix_ms: self.clock.sample()?.unix_ms,
+                    expires_at_unix_ms: None,
+                    ttl_policy: None,
+                    confidence_milli: 1_000,
+                    source_detector: POLICY_INSTANCE_SEED_DETECTOR.to_owned(),
+                    source_snapshot_id,
+                    schema_version: POLICY_INSTANCE_SEED_SCHEMA.to_owned(),
+                    resource_bundle_hash: digest,
+                    invalidate_on: Vec::new(),
+                })?;
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn fact_scope_instances(
