@@ -1860,6 +1860,8 @@ mod tests {
                 eligible_since_unix_ms: Some(1_000),
                 terminal_state: None,
                 completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
             }],
             instances: vec![InstanceSnapshot {
                 instance_id: "instance-a".to_owned(),

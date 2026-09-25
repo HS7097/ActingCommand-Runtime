@@ -546,6 +546,8 @@ fn update_task_states(
                 eligible_since_unix_ms: None,
                 terminal_state: Some(TaskTerminalState::Succeeded),
                 completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
             });
         }
     }

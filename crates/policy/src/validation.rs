@@ -9,10 +9,11 @@ use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
     ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
     MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
-    MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS,
-    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_POOLS,
-    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
-    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
+    MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK,
+    MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
+    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
+    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
+    MAX_UTC_OFFSET_MINUTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
     MIN_DST_OFFSET_MINUTES, MIN_UTC_OFFSET_MINUTES, MetricRef, ObservationRef, PoolSpec,
     PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
     ScopeSelector, TaskSpec, TimelineDocument,
@@ -262,6 +263,43 @@ fn validate_priority_selection(
             ));
         }
     }
+    if selection.aging_ms_per_milli == Some(0) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            "/priority_selection/aging_ms_per_milli",
+            "aging_ms_per_milli must be at least 1",
+            descriptor,
+        ));
+    }
+    if selection
+        .defer_aging_cap_ms
+        .is_some_and(|cap| cap == 0 || cap > MAX_DEFER_AGING_CAP_MS)
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            "/priority_selection/defer_aging_cap_ms",
+            format!("defer_aging_cap_ms must be within 1..={MAX_DEFER_AGING_CAP_MS}"),
+            descriptor,
+        ));
+    }
+    let percentiles_valid = match (
+        selection.defer_below_percentile,
+        selection.promote_above_percentile,
+    ) {
+        (None, None) => true,
+        (Some(defer), Some(promote)) => defer < promote && promote <= MAX_PRIORITY_PERCENTILE,
+        _ => false,
+    };
+    if !percentiles_valid {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PrioritySelectionPercentileInvalid,
+            "/priority_selection",
+            format!(
+                "defer_below_percentile and promote_above_percentile must be declared together within 0..={MAX_PRIORITY_PERCENTILE} with defer_below_percentile less than promote_above_percentile"
+            ),
+            descriptor,
+        ));
+    }
 }
 
 fn validate_tasks(
@@ -458,6 +496,17 @@ fn validate_task(
             CatalogDiagnosticCode::LimitExceeded,
             format!("{path}/strategic_weight_milli"),
             format!("strategic weight exceeds {MAX_STRATEGIC_WEIGHT_MILLI}"),
+            descriptor,
+        ));
+    }
+    if task
+        .value_milli
+        .is_some_and(|value| value > MAX_VALUE_MILLI)
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/value_milli"),
+            format!("declared value exceeds {MAX_VALUE_MILLI}"),
             descriptor,
         ));
     }

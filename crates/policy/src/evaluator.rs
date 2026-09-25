@@ -16,7 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ObservationRef, PoolSpec,
-    PredicateSpec, ResourceEffectSpec, ScopeSelector, TaskSpec, TaskTerminalState, TimelineEvent,
+    PredicateSpec, PrioritySelection, ResourceEffectSpec, ScopeSelector, TaskSpec,
+    TaskTerminalState, TimelineEvent,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -26,6 +27,14 @@ pub const MAX_EVALUATION_INSTANCES: usize = 1_024;
 pub const MAX_EVALUATION_POOLS: usize = 4_096;
 pub const MAX_EVALUATION_HOSTS: usize = 1_024;
 pub const MAX_EVALUATION_PRIORITY_OFFSETS: usize = 16_384;
+/// Longest last-run duration accepted as evaluation input: one day.
+pub const MAX_TASK_LAST_DURATION_MS: u64 = 86_400_000;
+/// Longest failure streak accepted as evaluation input.
+pub const MAX_TASK_FAILURE_STREAK: u16 = 10_000;
+/// Aging contributes at most this much urgency to the utility term.
+const MAX_AGING_URGENCY_MILLI: u64 = 1_000;
+/// Fewer Eligible candidates than this fall back to the absolute thresholds.
+const MIN_PERCENTILE_CANDIDATES: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,6 +86,12 @@ pub struct TaskRuntimeSnapshot {
     /// Settled execution evidence, including tasks with no mapped outcome consumer.
     #[serde(default)]
     pub completed_window: Option<CompletedActivityWindow>,
+    /// Wall-clock duration of the last settled run; replaces the declared duration as cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_duration_ms: Option<u64>,
+    /// Consecutive failed runs since the last success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_streak: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -428,6 +443,13 @@ impl PolicyEvaluationError {
     fn overflow(message: impl Into<String>) -> Self {
         Self {
             code: "policy_evaluation_numeric_overflow",
+            message: message.into(),
+        }
+    }
+
+    fn score_overflow(message: impl Into<String>) -> Self {
+        Self {
+            code: "score_overflow",
             message: message.into(),
         }
     }
@@ -1165,6 +1187,10 @@ struct PlacementCandidate {
     affinity: bool,
     /// Set by the score stage; a promoted candidate ranks ahead of every other candidate.
     promoted: bool,
+    /// The task's declared value; absent means no utility term.
+    value_milli: Option<u32>,
+    /// The last settled run's duration for this task on this instance.
+    last_duration_ms: Option<u64>,
     tie_breaker: u64,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
@@ -1311,6 +1337,8 @@ fn build_candidate(
             .iter()
             .any(|task_id| task_id == &task.id),
         promoted: false,
+        value_milli: task.value_milli,
+        last_duration_ms: task_state.and_then(|state| state.last_duration_ms),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
         activity_profile_id: activity_profile.id.clone(),
@@ -1328,13 +1356,19 @@ enum CandidateScore {
     Unknown(String),
 }
 
+/// How one scored candidate leaves the score stage, with the reason detail it records.
 enum ScoreDisposition {
     Deferred {
         wake_unix_ms: u64,
-        defer_below_milli: i64,
+        detail: String,
     },
     Promoted {
-        promote_above_milli: i64,
+        detail: String,
+    },
+    /// It would have been deferred, but it has been eligible for at least the aging cap.
+    AgingCap {
+        aging_ms: u64,
+        cap_ms: u64,
     },
     Neutral,
 }
@@ -1343,15 +1377,192 @@ impl ScoreDisposition {
     const fn label(&self) -> &'static str {
         match self {
             Self::Deferred { .. } => "deferred",
-            Self::Promoted { .. } => "promoted",
+            Self::Promoted { .. } | Self::AgingCap { .. } => "promoted",
             Self::Neutral => "none",
         }
     }
 }
 
+/// The utility term `value_milli * urgency_total_milli / cost_ms` of one candidate.
+struct CandidateUtility {
+    utility_milli: i64,
+    /// `None` when the task declares no value.
+    cost_ms: Option<u64>,
+    urgency_total_milli: u64,
+    /// A declared value whose cost is zero: the term is dropped and the candidate stays neutral.
+    cost_unknown: bool,
+}
+
+fn candidate_utility(
+    candidate: &PlacementCandidate,
+    aging_ms_per_milli: Option<u32>,
+) -> PolicyEvaluationResult<CandidateUtility> {
+    let aging_urgency_milli = match aging_ms_per_milli {
+        None => 0,
+        Some(0) => {
+            return Err(PolicyEvaluationError::invalid(
+                "priority_selection aging_ms_per_milli must be at least 1",
+            ));
+        }
+        Some(per_milli) => {
+            (candidate.rank.aging_ms / u64::from(per_milli)).min(MAX_AGING_URGENCY_MILLI)
+        }
+    };
+    let urgency_total_milli = u64::from(candidate.rank.urgency_milli) + aging_urgency_milli;
+    let Some(value_milli) = candidate.value_milli else {
+        return Ok(CandidateUtility {
+            utility_milli: 0,
+            cost_ms: None,
+            urgency_total_milli,
+            cost_unknown: false,
+        });
+    };
+    let cost_ms = candidate
+        .last_duration_ms
+        .filter(|duration| *duration > 0)
+        .unwrap_or(candidate.expected_duration_ms);
+    if cost_ms == 0 {
+        return Ok(CandidateUtility {
+            utility_milli: 0,
+            cost_ms: Some(0),
+            urgency_total_milli,
+            cost_unknown: true,
+        });
+    }
+    let overflow = || {
+        PolicyEvaluationError::score_overflow(format!(
+            "task '{}' utility overflowed",
+            candidate.task_id
+        ))
+    };
+    let urgency = i64::try_from(urgency_total_milli).map_err(|_| overflow())?;
+    let cost = i64::try_from(cost_ms).map_err(|_| overflow())?;
+    // Integer division truncates toward zero.
+    let utility_milli = i64::from(value_milli)
+        .checked_mul(urgency)
+        .ok_or_else(overflow)?
+        / cost;
+    Ok(CandidateUtility {
+        utility_milli,
+        cost_ms: Some(cost_ms),
+        urgency_total_milli,
+        cost_unknown: false,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ThresholdSource {
+    Absolute,
+    Percentile { defer: u8, promote: u8 },
+}
+
+/// The thresholds one evaluation cycle applies to every scored candidate.
+struct CycleThresholds {
+    source: ThresholdSource,
+    /// Absolute: deferred strictly below. Percentile: deferred at or below, because a
+    /// nearest-rank percentile is the upper end of the bottom share it names; `None` for the
+    /// 0th percentile, which bounds no candidate.
+    defer_below_milli: Option<i64>,
+    promote_above_milli: Option<i64>,
+}
+
+impl CycleThresholds {
+    /// Percentiles apply to the effective scores of all of the cycle's Eligible candidates
+    /// across instances; a cycle with fewer than three uses the absolute pair.
+    fn new(selection: &PrioritySelection, effective: &[i64]) -> Self {
+        match (
+            selection.defer_below_percentile,
+            selection.promote_above_percentile,
+        ) {
+            (Some(defer), Some(promote)) if effective.len() >= MIN_PERCENTILE_CANDIDATES => {
+                let mut sorted = effective.to_vec();
+                sorted.sort_unstable();
+                Self {
+                    source: ThresholdSource::Percentile { defer, promote },
+                    defer_below_milli: nearest_rank(&sorted, defer),
+                    promote_above_milli: nearest_rank(&sorted, promote),
+                }
+            }
+            _ => Self {
+                source: ThresholdSource::Absolute,
+                defer_below_milli: Some(selection.defer_below_milli),
+                promote_above_milli: Some(selection.promote_above_milli),
+            },
+        }
+    }
+
+    fn defer_detail(&self, effective_milli: i64) -> Option<String> {
+        let threshold = self.defer_below_milli?;
+        match self.source {
+            ThresholdSource::Absolute if effective_milli < threshold => Some(format!(
+                "effective score {effective_milli} is below defer_below_milli {threshold}"
+            )),
+            ThresholdSource::Percentile { defer, .. } if effective_milli <= threshold => {
+                Some(format!(
+                    "effective score {effective_milli} is at or below the {defer}th-percentile threshold {threshold}"
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn promote_detail(&self, effective_milli: i64) -> Option<String> {
+        let threshold = self.promote_above_milli?;
+        if effective_milli <= threshold {
+            return None;
+        }
+        Some(match self.source {
+            ThresholdSource::Absolute => format!(
+                "effective score {effective_milli} is above promote_above_milli {threshold}"
+            ),
+            ThresholdSource::Percentile { promote, .. } => format!(
+                "effective score {effective_milli} is above the {promote}th-percentile threshold {threshold}"
+            ),
+        })
+    }
+
+    fn reason_fields(&self) -> String {
+        let source = match self.source {
+            ThresholdSource::Absolute => "absolute",
+            ThresholdSource::Percentile { .. } => "percentile",
+        };
+        format!(
+            " threshold_source={source} defer_below={} promote_above={}",
+            optional_milli(self.defer_below_milli),
+            optional_milli(self.promote_above_milli)
+        )
+    }
+}
+
+/// Nearest-rank percentile: the smallest value with at least `percentile` percent of the
+/// sorted values at or below it. The 0th percentile has no rank.
+fn nearest_rank(sorted: &[i64], percentile: u8) -> Option<i64> {
+    let rank = usize::from(percentile)
+        .saturating_mul(sorted.len())
+        .div_ceil(100);
+    rank.checked_sub(1)
+        .and_then(|index| sorted.get(index))
+        .copied()
+}
+
+fn optional_milli(value: Option<i64>) -> String {
+    value.map_or_else(|| "none".to_owned(), |value| value.to_string())
+}
+
+/// One candidate between computing its effective score and applying the cycle thresholds.
+struct StagedCandidate {
+    candidate: PlacementCandidate,
+    score_milli: Option<i64>,
+    unknown_rule: Option<String>,
+    offset_milli: i64,
+    utility: CandidateUtility,
+    effective_milli: i64,
+}
+
 /// The score stage between the predicate gate and ranking. Predicate outcomes are never
 /// revisited here: only candidates that already passed trigger, feedback stop, cooldown and
-/// placement are scored. Without a selection document and without offsets it is a no-op.
+/// placement are scored. Without a selection document, without a declared value and without
+/// offsets it is a no-op.
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -1360,18 +1571,29 @@ fn apply_priority_selection(
     work: &mut [TaskWork],
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     let policy = catalog.selection_policy();
-    if policy.is_none() && facts.priority_offsets.is_empty() {
+    // The utility fields join the `scored` detail only once the catalog can score or value a
+    // task, so an offset-only evaluation keeps its detail byte for byte.
+    let utility_fields = policy.is_some()
+        || catalog
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .any(|task| task.value_milli.is_some());
+    if !utility_fields && facts.priority_offsets.is_empty() {
         return Ok(candidates);
     }
-    let thresholds = catalog.catalog().tasks.priority_selection;
+    let selection = catalog.catalog().tasks.priority_selection;
+    let aging_ms_per_milli = selection.and_then(|selection| selection.aging_ms_per_milli);
     let scores = match policy {
         Some(policy) => score_candidates(policy, facts, time, &candidates)?,
         None => vec![None; candidates.len()],
     };
     let mut ranked = Vec::with_capacity(candidates.len());
-    for (mut candidate, score) in candidates.into_iter().zip(scores) {
+    let mut staged = Vec::with_capacity(candidates.len());
+    for (candidate, score) in candidates.into_iter().zip(scores) {
         let offset = effective_priority_offset(facts, &candidate.task_id, &candidate.instance_id);
-        if policy.is_none() && offset.is_none() {
+        if policy.is_none() && offset.is_none() && candidate.value_milli.is_none() {
             ranked.push(candidate);
             continue;
         }
@@ -1381,79 +1603,138 @@ fn apply_priority_selection(
             Some(CandidateScore::Unknown(rule)) => (None, Some(rule)),
             None => (None, None),
         };
+        let utility = candidate_utility(&candidate, aging_ms_per_milli)?;
         let effective_milli = score_milli
             .unwrap_or(0)
-            .checked_add(offset_milli)
+            .checked_add(utility.utility_milli)
+            .and_then(|sum| sum.checked_add(offset_milli))
             .ok_or_else(|| {
                 PolicyEvaluationError::overflow(format!(
                     "task '{}' effective score overflowed",
                     candidate.task_id
                 ))
             })?;
+        staged.push(StagedCandidate {
+            candidate,
+            score_milli,
+            unknown_rule,
+            offset_milli,
+            utility,
+            effective_milli,
+        });
+    }
+    let thresholds = selection.map(|selection| {
+        let effective = staged
+            .iter()
+            .map(|staged| staged.effective_milli)
+            .collect::<Vec<_>>();
+        (selection, CycleThresholds::new(&selection, &effective))
+    });
+    for StagedCandidate {
+        mut candidate,
+        score_milli,
+        unknown_rule,
+        offset_milli,
+        utility,
+        effective_milli,
+    } in staged
+    {
         candidate.rank.total_score = candidate
             .rank
             .total_score
             .saturating_add(effective_milli.saturating_mul(1_000));
-        // An unknown verdict never defers or promotes; only a scored one meets the thresholds.
-        let disposition = match (thresholds, score_milli) {
-            (Some(thresholds), Some(_)) if effective_milli < thresholds.defer_below_milli => {
-                ScoreDisposition::Deferred {
-                    wake_unix_ms: time
-                        .unix_ms
-                        .checked_add(thresholds.defer_for_ms)
-                        .ok_or_else(|| {
-                            PolicyEvaluationError::overflow("score deferral wake overflowed")
-                        })?,
-                    defer_below_milli: thresholds.defer_below_milli,
-                }
-            }
-            (Some(thresholds), Some(_)) if effective_milli > thresholds.promote_above_milli => {
-                ScoreDisposition::Promoted {
-                    promote_above_milli: thresholds.promote_above_milli,
+        // An unknown verdict or cost never defers or promotes; only a scored one meets the
+        // thresholds.
+        let disposition = match (&thresholds, score_milli) {
+            (Some((selection, thresholds)), Some(_)) if !utility.cost_unknown => {
+                if let Some(detail) = thresholds.defer_detail(effective_milli) {
+                    match selection.defer_aging_cap_ms {
+                        Some(cap_ms) if candidate.rank.aging_ms >= cap_ms => {
+                            ScoreDisposition::AgingCap {
+                                aging_ms: candidate.rank.aging_ms,
+                                cap_ms,
+                            }
+                        }
+                        _ => ScoreDisposition::Deferred {
+                            wake_unix_ms: time
+                                .unix_ms
+                                .checked_add(selection.defer_for_ms)
+                                .ok_or_else(|| {
+                                    PolicyEvaluationError::overflow(
+                                        "score deferral wake overflowed",
+                                    )
+                                })?,
+                            detail,
+                        },
+                    }
+                } else if let Some(detail) = thresholds.promote_detail(effective_milli) {
+                    ScoreDisposition::Promoted { detail }
+                } else {
+                    ScoreDisposition::Neutral
                 }
             }
             _ => ScoreDisposition::Neutral,
         };
+        let mut detail = format!(
+            "score={} offset={offset_milli} effective={effective_milli} disposition={}",
+            score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string()),
+            disposition.label()
+        );
+        if utility_fields {
+            detail.push_str(&format!(
+                " utility={} cost_ms={} urgency_total={}",
+                utility.utility_milli,
+                utility
+                    .cost_ms
+                    .map_or_else(|| "-".to_owned(), |cost| cost.to_string()),
+                utility.urgency_total_milli
+            ));
+        }
+        if let Some((_, thresholds)) = &thresholds {
+            detail.push_str(&thresholds.reason_fields());
+        }
         let task_work = &mut work[candidate.work_index];
         task_work.rank = Some(candidate.rank.clone());
-        task_work.reasons.push(reason(
-            "scored",
-            format!(
-                "score={} offset={offset_milli} effective={effective_milli} disposition={}",
-                score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string()),
-                disposition.label()
-            ),
-        ));
+        task_work.reasons.push(reason("scored", detail));
         if let Some(rule) = unknown_rule {
             task_work.reasons.push(reason(
                 format!("score_unknown:{rule}"),
-                "the selection document could not score this candidate; only the manual offset applies",
+                if utility.cost_ms.is_some() {
+                    "the selection document could not score this candidate; only the utility term and the manual offset apply"
+                } else {
+                    "the selection document could not score this candidate; only the manual offset applies"
+                },
+            ));
+        }
+        if utility.cost_unknown {
+            task_work.reasons.push(reason(
+                "score_unknown:cost",
+                "neither the last run duration nor the declared expected duration is above zero; the utility term is dropped",
             ));
         }
         match disposition {
             ScoreDisposition::Deferred {
                 wake_unix_ms,
-                defer_below_milli,
+                detail,
             } => {
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(reason(
                     "score_deferred",
-                    format!(
-                        "effective score {effective_milli} is below defer_below_milli {defer_below_milli}; reevaluation at {wake_unix_ms}"
-                    ),
+                    format!("{detail}; reevaluation at {wake_unix_ms}"),
                 ));
                 task_work.next_wake_unix_ms =
                     min_wake(task_work.next_wake_unix_ms, Some(wake_unix_ms));
             }
-            ScoreDisposition::Promoted {
-                promote_above_milli,
-            } => {
+            ScoreDisposition::Promoted { detail } => {
+                candidate.promoted = true;
+                task_work.reasons.push(reason("score_promoted", detail));
+                ranked.push(candidate);
+            }
+            ScoreDisposition::AgingCap { aging_ms, cap_ms } => {
                 candidate.promoted = true;
                 task_work.reasons.push(reason(
-                    "score_promoted",
-                    format!(
-                        "effective score {effective_milli} is above promote_above_milli {promote_above_milli}"
-                    ),
+                    "score_aging_cap",
+                    format!("aging_ms={aging_ms} cap_ms={cap_ms}"),
                 ));
                 ranked.push(candidate);
             }
@@ -3255,6 +3536,18 @@ fn validate_inputs(
         {
             validate_observation_time("task state", timestamp, time.unix_ms)?;
         }
+        if state
+            .last_duration_ms
+            .is_some_and(|duration| duration > MAX_TASK_LAST_DURATION_MS)
+            || state
+                .failure_streak
+                .is_some_and(|streak| streak > MAX_TASK_FAILURE_STREAK)
+        {
+            return Err(PolicyEvaluationError::invalid(format!(
+                "task state '{}:{}' last duration exceeds {MAX_TASK_LAST_DURATION_MS} ms or failure streak exceeds {MAX_TASK_FAILURE_STREAK}",
+                state.task_id, state.instance_id
+            )));
+        }
         if let Some(completed) = &state.completed_window {
             validate_id("completed activity window id", &completed.window_id)?;
             validate_observation_time(
@@ -4266,6 +4559,8 @@ mod tests {
                 eligible_since_unix_ms: Some(late_time.unix_ms - 1),
                 terminal_state: None,
                 completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
             },
             TaskRuntimeSnapshot {
                 task_id: "fixture.observe-secondary".to_owned(),
@@ -4274,6 +4569,8 @@ mod tests {
                 eligible_since_unix_ms: Some(0),
                 terminal_state: None,
                 completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
             },
         ];
         let result =
@@ -4485,6 +4782,8 @@ mod tests {
                 eligible_since_unix_ms: None,
                 terminal_state: None,
                 completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
             });
             let result = evaluate(
                 &catalog,
@@ -4573,6 +4872,8 @@ mod tests {
             eligible_since_unix_ms: None,
             terminal_state: Some(TaskTerminalState::Succeeded),
             completed_window: None,
+            last_duration_ms: None,
+            failure_streak: None,
         });
         assert_eq!(
             evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9)
@@ -4880,6 +5181,8 @@ mod tests {
             eligible_since_unix_ms: Some(NOW),
             terminal_state: None,
             completed_window: None,
+            last_duration_ms: None,
+            failure_streak: None,
         });
 
         let result = evaluate(
@@ -4920,6 +5223,8 @@ mod tests {
             eligible_since_unix_ms: Some(NOW - 100),
             terminal_state: None,
             completed_window: None,
+            last_duration_ms: None,
+            failure_streak: None,
         });
 
         let result = evaluate(

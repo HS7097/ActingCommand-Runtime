@@ -150,6 +150,8 @@ impl SimulationState {
                 eligible_since_unix_ms: Some(0),
                 terminal_state: None,
                 completed_window: None,
+                last_duration_ms: None,
+                failure_streak: None,
             })
             .collect();
         EvaluationFacts {
