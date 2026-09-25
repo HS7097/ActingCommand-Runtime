@@ -174,6 +174,7 @@ mod policy_dispatch;
 mod policy_outcome;
 mod ppocr_diagnostic;
 mod read_events;
+mod recovery_ladder;
 mod requests;
 mod resource_close;
 mod runtime_facts;
@@ -220,6 +221,7 @@ use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
+use recovery_ladder::{RecoveryLadderAdmission, with_recovery_ladder_staging};
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
     TaskFailureEvidence, client_fact_conflict, connection_boundary, critical_execution_error,
@@ -341,6 +343,9 @@ pub struct RuntimeHostConfig {
     /// Per instance alias: the default resource package the daemon admitted from its
     /// configuration (slice #324-r1). Reported by instance status only; never opened here.
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
+    /// Per instance alias: the stuck-recovery ladder settings (slice #316-B4); an instance
+    /// without an entry uses the defaults (enabled, 600 s cool-down).
+    stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
 }
 
 impl RuntimeHostConfig {
@@ -368,6 +373,7 @@ impl RuntimeHostConfig {
             config_manifest: None,
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
+            stuck_recovery: BTreeMap::new(),
         }
     }
 
@@ -509,6 +515,24 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Installs the stuck-recovery ladder settings, keyed by instance alias (slice #316-B4).
+    /// An alias that is not a registered instance fails startup with
+    /// `stuck_recovery_instance_unknown`.
+    pub fn with_stuck_recovery(
+        mut self,
+        stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
+    ) -> Self {
+        self.stuck_recovery = stuck_recovery;
+        self
+    }
+
+    /// The configured stuck-recovery ladder settings, keyed by instance alias.
+    pub const fn stuck_recovery(
+        &self,
+    ) -> &BTreeMap<String, actingcommand_contract::InstanceStuckRecovery> {
+        &self.stuck_recovery
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -564,6 +588,17 @@ impl RuntimeHostConfig {
             {
                 return Err(RuntimeHostError::fatal(
                     "invalid_startup_package",
+                    "validate_runtime_config",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+        }
+        for (alias, settings) in &self.stuck_recovery {
+            if actingcommand_contract::validate_instance_alias(alias).is_err()
+                || settings.validate().is_err()
+            {
+                return Err(RuntimeHostError::fatal(
+                    "invalid_stuck_recovery",
                     "validate_runtime_config",
                     RuntimeErrorCode::RuntimeFatal,
                 ));
@@ -629,6 +664,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 "resource_packages",
                 &self.resource_packages.keys().collect::<Vec<_>>(),
             )
+            .field("stuck_recovery", &self.stuck_recovery)
             .finish()
     }
 }
@@ -956,6 +992,8 @@ impl RuntimeHost {
             &config.startup_packages,
             &registered_instances,
         )?;
+        let stuck_recovery =
+            recovery_ladder::resolve_stuck_recovery(&config.stuck_recovery, &registered_instances)?;
         let monitor_registry = MonitorRegistry::open(
             &config.state_root,
             registered_instances
@@ -1163,8 +1201,11 @@ impl RuntimeHost {
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeMap::new()),
             startup_packages,
-            pending_startup_packages: Mutex::new(VecDeque::new()),
+            pending_host_work: Mutex::new(VecDeque::new()),
             resource_packages: config.resource_packages,
+            stuck_recovery,
+            recovery_ladders: Mutex::new(BTreeMap::new()),
+            parked_recovery_ladders: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -2684,12 +2725,17 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
-    // Slice #316-B3: startup packages by registered instance, and the ones emulator control
-    // handed to the host's own scheduling thread.
+    // Slice #316-B3: startup packages by registered instance, and the work handed to the
+    // host's own scheduling thread (startup packages; since #316-B4 also recovery ladders).
     startup_packages: BTreeMap<InstanceId, ContainedTaskRequest>,
-    pending_startup_packages: Mutex<VecDeque<startup_package::PendingStartupPackage>>,
+    pending_host_work: Mutex<VecDeque<startup_package::PendingHostWork>>,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
+    // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults), the
+    // per-instance ladder window, and direct-run triggers waiting for their receipt write.
+    stuck_recovery: BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>,
+    recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
+    parked_recovery_ladders: Mutex<BTreeMap<RequestId, recovery_ladder::PendingRecoveryLadder>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]

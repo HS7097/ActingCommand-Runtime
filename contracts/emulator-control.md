@@ -270,6 +270,75 @@ that belongs to emulator control:
   `runtime.failed` (stage `operation_cleanup`, category `startup_package`) linked to the
   instance and the causation id; a fatal one poisons the host as any other.
 
+## Stuck-recovery ladder (slice #316-B4)
+
+A contained task run on a physical instance, direct (`task-run`) or scheduled (policy), whose
+`task.failed` terminal carries `failure_code` `contained_task_page_unknown`, any
+`contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
+return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
+recovery ladder for the instance, unless the
+instance's `stuck_recovery` is `false` (`contracts/actingd-check-config.md`). Fixture-simulated
+instances, startup package runs and the ladder's own rung runs never trigger one. The ladder
+never runs on the run's thread: a direct run's trigger waits until its connection wrote the
+failure receipt, a scheduled run's trigger (no client receipt) is admitted as the run returns
+its failure, and the accepted ladder is queued for the scheduling thread of the startup package hook
+(`actingcommand-runtime-startup`). `task.failed` and every receipt keep their shape; the
+original task is never re-run.
+
+Rungs, in this fixed order, each existing work under the instance lease:
+
+- `return_home`: the failed run's bound recovery package (`--recovery-package`) runs as a
+  standalone contained task (default response deadline, self-minted request / correlation /
+  holder ids, its own lease and `task.*` chain, under the ladder's causation id). Skipped with
+  `no_recovery_package` when the run had none bound. An ADB baseline probe failure is
+  `recovery_ladder_adb_not_ready`; admission refusals keep their `contained_task_package_*`
+  code; failures are recorded as `runtime.failed` with category `recovery_ladder`.
+- `application_restart`: the instance's startup package is scheduled
+  (`startup_package_scheduled` under the ladder's links, a fresh causation id) and run, exactly
+  as after `emulator start`. Skipped with `no_startup_package` when none is configured.
+- `emulator_restart`: one `command.received` (`emulator.instance.restart`, origin
+  `(Runtime, Runtime, Runtime)`) under the ladder's links, then the `restart` path of this contract
+  (fence, session close, `MuMuManager`, rebinding, ADB baseline, `command.validated` or
+  `command.rejected` + `runtime.failed`, `runtime.instance_bound`, `device.connected`), whose
+  rebinding schedules the startup package, which then runs. Skipped with
+  `no_emulator_control` when the instance is not discovery-bound, and with
+  `no_startup_package` when no startup package is configured (the rung cannot complete
+  without it).
+
+A rung recovers when its package run completes `success` (its target page reached); any other
+end fails it, with the failure code as `reason` (`recovery_rung_target_not_reached` for a run
+that completed without reaching its target, `recovery_ladder_shutdown_requested` when the host
+is shutting down). The first rung that recovers ends the ladder `recovered`; when every rung
+failed or was skipped it ends `exhausted`.
+
+Cool-down: at most one ladder per instance per `stuck_recovery_cooldown_secs` (default 600),
+measured from the accepted trigger. A trigger inside the window records
+`recovery_ladder_suppressed { reason: "cooldown", until_unix_ms }` and does nothing else; a
+trigger while a ladder for the instance is queued or running records `reason:
+"already_running"` (`until_unix_ms` is the running ladder's window end).
+
+Facts are `runtime.lifecycle_observed` events (origin `(Runtime, Runtime, Runtime)`) linked to
+the instance and the trigger run's correlation id, under a fresh request id and the ladder's
+own causation id. Phases (`kind`, snake_case, unknown fields refused):
+
+| phase | fields | severity |
+| --- | --- | --- |
+| `recovery_ladder_started` | `trigger { run_id, task_id, failure_code }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (all three rungs, in order; `reason` exactly when skipped) | info |
+| `recovery_rung_finished` | `rung`, `outcome: "recovered" \| "failed" \| "skipped"`, `run_id?` (the rung's run, when it completed), `reason?` (skip reason or failure code) | info; `failed` warning |
+| `recovery_ladder_finished` | `outcome: "recovered" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped) | `recovered` info; `exhausted` error |
+| `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running"`, `until_unix_ms` | info |
+
+`rung` is `return_home`, `application_restart` or `emulator_restart`. A ladder with no
+recovery package, no startup package and no emulator control records `recovery_ladder_started`
+(all rungs skipped), three `recovery_rung_finished` (`skipped`) and `recovery_ladder_finished`
+(`exhausted`, `rungs_tried` 0). Adding these phases is an additive wire change: readers built
+against an older contract refuse the events.
+
+Host configuration: `RuntimeHostConfig::with_stuck_recovery` takes the settings by instance
+alias (an instance without an entry uses the defaults); `validate` refuses an invalid alias or
+a cool-down outside `1..=86400` with `invalid_stuck_recovery`, and startup refuses an alias
+that is not registered with `stuck_recovery_instance_unknown` (both fatal).
+
 ## Client and CLI
 
 `RuntimeClient::control_emulator_instance(instance_alias, action)` sends the operation with an

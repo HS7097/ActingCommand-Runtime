@@ -165,6 +165,14 @@ struct InstanceConfig {
     /// directory, as `startup_package.package` does; see `validate_resource_packages`.
     #[serde(default)]
     resource_package: Option<PathBuf>,
+    /// Slice #316-B4: `false` turns the stuck-recovery ladder off for this instance
+    /// (default `true`).
+    #[serde(default)]
+    stuck_recovery: Option<bool>,
+    /// Slice #316-B4: at most one stuck-recovery ladder per this many seconds (default 600,
+    /// `1..=86400`).
+    #[serde(default)]
+    stuck_recovery_cooldown_secs: Option<u32>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
 }
@@ -494,7 +502,18 @@ impl ActingdConfigFile {
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
+        let mut stuck_recovery = BTreeMap::new();
         for instance in &mut instances {
+            let settings = actingcommand_contract::InstanceStuckRecovery {
+                enabled: instance.stuck_recovery.unwrap_or(true),
+                cooldown_secs: instance.stuck_recovery_cooldown_secs.unwrap_or(
+                    actingcommand_contract::InstanceStuckRecovery::DEFAULT_COOLDOWN_SECS,
+                ),
+            };
+            settings
+                .validate()
+                .map_err(|_| "stuck_recovery_cooldown_invalid")?;
+            stuck_recovery.insert(instance.alias.clone(), settings);
             if let Some(path) = instance.resource_package.take() {
                 // An empty path stays empty so admission reports it missing.
                 let path = if path.as_os_str().is_empty() || path.is_absolute() {
@@ -553,7 +572,9 @@ impl ActingdConfigFile {
                 .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());
         let instances_startup_package_count = startup_packages.len();
-        host = host.with_startup_packages(startup_packages);
+        host = host
+            .with_startup_packages(startup_packages)
+            .with_stuck_recovery(stuck_recovery);
         let manifest = manifest::build(&manifest::ManifestInputs {
             bind_host,
             bind_port: self.bind_port,

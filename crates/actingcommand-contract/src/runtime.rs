@@ -1227,6 +1227,36 @@ pub struct InstanceResourcePackage {
     pub kind: InstanceResourcePackageKind,
 }
 
+/// The stuck-recovery ladder settings of an instance (slice #316-B4): `enabled` is its
+/// `stuck_recovery` (default `true`), `cooldown_secs` its `stuck_recovery_cooldown_secs`
+/// (default 600, `1..=86400`): at most one ladder per instance per cool-down window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceStuckRecovery {
+    pub enabled: bool,
+    pub cooldown_secs: u32,
+}
+
+impl InstanceStuckRecovery {
+    pub const DEFAULT_COOLDOWN_SECS: u32 = 600;
+    pub const MAX_COOLDOWN_SECS: u32 = 86_400;
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if !(1..=Self::MAX_COOLDOWN_SECS).contains(&self.cooldown_secs) {
+            return Err(RuntimeContractError::new("invalid_stuck_recovery_cooldown"));
+        }
+        Ok(())
+    }
+}
+
+impl Default for InstanceStuckRecovery {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cooldown_secs: Self::DEFAULT_COOLDOWN_SECS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeInstanceStatus {

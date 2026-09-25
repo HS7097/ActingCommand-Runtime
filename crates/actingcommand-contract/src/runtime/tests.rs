@@ -2731,7 +2731,8 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             } else {
                 validated.event_links(None, None, None)
             },
-            RuntimePayloadDraft::lifecycle_observed(owner_epoch, phase, AuditInput::new()).into(),
+            RuntimePayloadDraft::lifecycle_observed(owner_epoch, phase.clone(), AuditInput::new())
+                .into(),
         )
         .sanitize(&RejectSecrets)
         .expect("sanitize lifecycle event");

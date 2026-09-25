@@ -102,6 +102,13 @@ fn summarize(
                     "expected_sha256": request.expected_sha256(),
                 })
             });
+            // The effective stuck-recovery ladder settings (slice #316-B4).
+            let stuck_recovery = assembly
+                .host
+                .stuck_recovery()
+                .get(&alias)
+                .copied()
+                .unwrap_or_default();
             if let Some(key) = registry.deferred_binding(&alias) {
                 // Bound at startup by one MuMuManager discovery run; nothing is spawned here.
                 return Ok(json!({
@@ -111,6 +118,8 @@ fn summarize(
                     "instance_index": key.index(),
                     "instance_name": key.name(),
                     "startup_package": startup_package,
+                    "stuck_recovery": stuck_recovery.enabled,
+                    "stuck_recovery_cooldown_secs": stuck_recovery.cooldown_secs,
                 }));
             }
             let resolved = registry
@@ -126,6 +135,8 @@ fn summarize(
                 "adb_host": endpoint.map(ResolvedAdbEndpoint::host),
                 "adb_port": endpoint.map(ResolvedAdbEndpoint::port),
                 "startup_package": startup_package,
+                "stuck_recovery": stuck_recovery.enabled,
+                "stuck_recovery_cooldown_secs": stuck_recovery.cooldown_secs,
             }))
         })
         .collect::<Result<Vec<_>, _>>()?;

@@ -36,7 +36,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"}},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"}}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -93,7 +93,13 @@ terminal with the chosen eligibility basis in the original eviction intent.
   `instance_config_invalid`; a non-absolute locator, a digest that is not 64
   lowercase hex digits or a request the contract refuses fail with
   `startup_package_path_invalid`, `startup_package_digest_invalid`,
-  `startup_package_invalid`. `resource_package` is present only on an instance
+  `startup_package_invalid`. `stuck_recovery` and `stuck_recovery_cooldown_secs`
+  are the instance's effective stuck-recovery ladder settings (slice #316-B4,
+  `contracts/emulator-control.md`, "Stuck-recovery ladder"): the configured
+  values or the defaults `true` and `600`, on every instance. A cool-down
+  outside `1..=86400` fails assembly with `stuck_recovery_cooldown_invalid`;
+  `false` turns the ladder off for the instance, and a fixture instance never
+  starts one. `resource_package` is present only on an instance
   that declares one: the admitted `{ path, kind }` (see "Instance resource
   package"); an instance without the field carries no `resource_package` key.
 - `policy_configured` states whether a `policy` section was assembled.
@@ -147,11 +153,12 @@ terminal with the chosen eligibility basis in the original eviction intent.
 (`config_unavailable`, `config_size_invalid`, `config_read_failed`,
 `config_decode_failed`), `assemble` (the typed configuration codes, for example
 `config_invalid`, `bind_host_not_loopback`, `execution_registry_invalid`,
+`stuck_recovery_cooldown_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
 `scheduled_execution_instance_unknown`, `policy_governance_capability_missing`,
 `config_manifest_value_out_of_range`, `config_manifest_invalid`),
 `validate` (`invalid_runtime_host_config`,
-`invalid_runtime_config_manifest` and the other
+`invalid_runtime_config_manifest`, `invalid_stuck_recovery` and the other
 `RuntimeHostConfig::validate` codes) or `resource_package`
 (`resource_package_missing`, `resource_package_invalid`), in that order. The
 secret fingerprint salt and the governance capability bytes are never printed.
