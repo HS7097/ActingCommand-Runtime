@@ -71,6 +71,9 @@ impl HostShared {
     }
 
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
+        // Drain-only confirmation of deferred appends on the tick that hosts the summary
+        // producer; a failed reply ends the monitor through its existing fatal path.
+        self.confirm_deferred_appends(Duration::ZERO, "confirm_deferred_appends")?;
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
             let mut tick = if performance.counters_enabled() {
