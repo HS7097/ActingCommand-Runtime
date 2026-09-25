@@ -143,19 +143,30 @@ impl RuntimeEvents {
         ))
     }
 
+    /// A rejected draft fails with the contract's own sanitization code; the rejected
+    /// field travels in the native detail.
     pub(crate) fn sanitize(&self, draft: EventDraft) -> RuntimeHostResult<SanitizedEventDraft> {
-        draft.sanitize(&self.fingerprinter).map_err(|_| {
+        draft.sanitize(&self.fingerprinter).map_err(|error| {
             RuntimeHostError::fatal(
-                "event_sanitization_failed",
-                "sanitize_runtime_event",
+                error.code(),
+                SANITIZE_RUNTIME_EVENT,
                 RuntimeErrorCode::LedgerFailure,
             )
+            .with_native_detail(error.to_string())
         })
     }
 
     fn timestamp_unix_ms(&self) -> RuntimeHostResult<u64> {
         self.clock.sample().map(|sample| sample.unix_ms)
     }
+}
+
+/// The operation every `RuntimeEvents::sanitize` failure carries.
+pub(crate) const SANITIZE_RUNTIME_EVENT: &str = "sanitize_runtime_event";
+
+/// True when `error` is a draft rejected by contract sanitization.
+pub(crate) fn is_sanitization_failure(error: &RuntimeHostError) -> bool {
+    error.operation() == SANITIZE_RUNTIME_EVENT
 }
 
 fn id_error() -> RuntimeHostError {

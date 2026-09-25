@@ -45,6 +45,9 @@ const DISK_QUEUE_COUNTER: &str = r"\PhysicalDisk(_Total)\Current Disk Queue Leng
 const DISK_LATENCY_COUNTER: &str = r"\PhysicalDisk(_Total)\Avg. Disk sec/Transfer";
 const GPU_COUNTER: &str = r"\GPU Engine(*)\Utilization Percentage";
 const MIN_PROCESS_READABLE_BASIS_POINTS: u16 = 9_900;
+/// Mirrors `MAX_PROCESS_NAME_BYTES` of `PerformanceProcessSummary::validate` in
+/// `crates/actingcommand-contract/src/performance.rs`; this crate has no contract dependency.
+const MAX_PROCESS_NAME_BYTES: usize = 260;
 
 #[derive(Clone, Copy)]
 struct SystemTimes {
@@ -556,7 +559,7 @@ unsafe fn process_record(
     let process_name = owned
         .get(&pid)
         .cloned()
-        .unwrap_or_else(|| process_name(&entry.szExeFile));
+        .unwrap_or_else(|| sampled_process_name(pid, &entry.szExeFile));
     let ownership = if pid == std::process::id() {
         ProcessOwnership::Runtime
     } else if owned.contains_key(&pid) {
@@ -564,19 +567,46 @@ unsafe fn process_record(
     } else {
         ProcessOwnership::ThirdParty
     };
+    let working_set_bytes = memory.WorkingSetSize as u64;
+    // Windows reports a peak below the current working set for some processes, and a zero
+    // creation time; the contract pairs the peak with a non-zero creation time.
+    let (peak_working_set_bytes, process_created_at_windows_100ns) = match filetime(creation) {
+        0 => (None, None),
+        created => (
+            Some((memory.PeakWorkingSetSize as u64).max(working_set_bytes)),
+            Some(created),
+        ),
+    };
     ProcessRecordOutcome::Sampled(ProcessRecord {
         sample: ProcessSample {
             pid,
             process_name,
             ownership,
             cpu_basis_points,
-            working_set_bytes: memory.WorkingSetSize as u64,
-            peak_working_set_bytes: Some(memory.PeakWorkingSetSize as u64),
-            process_created_at_windows_100ns: Some(filetime(creation)),
+            working_set_bytes,
+            peak_working_set_bytes,
+            process_created_at_windows_100ns,
             io_bytes_per_second,
         },
         counters,
     })
+}
+
+/// The executable name within the contract's process-name rules: a name with control
+/// characters becomes `process-<pid>`, a longer one is cut at a UTF-8 boundary.
+fn sampled_process_name(pid: u32, buffer: &[u16]) -> String {
+    let mut name = process_name(buffer);
+    if name.chars().any(char::is_control) {
+        return format!("process-{pid}");
+    }
+    if name.len() > MAX_PROCESS_NAME_BYTES {
+        let mut end = MAX_PROCESS_NAME_BYTES;
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name.truncate(end);
+    }
+    name
 }
 
 fn process_access_failure(entry: &PROCESSENTRY32W, error: u32) -> ProcessRecordOutcome {
