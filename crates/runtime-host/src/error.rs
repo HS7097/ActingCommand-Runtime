@@ -65,6 +65,9 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) capacity: Option<actingcommand_contract::CapacityDecision>,
     pub(crate) raw_os_error: Option<i32>,
     pub(crate) incomplete_device_diagnostic_summary: Option<(&'static str, &'static str)>,
+    /// Slice #315-B2c-2: the previous owner probe behind an `owner_resource_unconfirmed`
+    /// refusal (`pid <n> alive` or `probe unknown: <reason>`), shown after the code.
+    pub(crate) owner_probe: Option<String>,
     pub(crate) instance_id: Option<InstanceId>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
     pub(crate) policy_rejection: Option<Box<actingcommand_contract::PolicyDispatchRejection>>,
@@ -92,6 +95,7 @@ impl PartialEq for RuntimeHostError {
                 == other.lifecycle.resource_declaration_event
             && self.lifecycle.incomplete_device_diagnostic_summary
                 == other.lifecycle.incomplete_device_diagnostic_summary
+            && self.lifecycle.owner_probe == other.lifecycle.owner_probe
     }
 }
 impl Eq for RuntimeHostError {}
@@ -489,6 +493,7 @@ impl fmt::Debug for RuntimeHostError {
                 "incomplete_device_diagnostic_summary",
                 &self.lifecycle.incomplete_device_diagnostic_summary,
             )
+            .field("owner_probe", &self.lifecycle.owner_probe)
             .finish()
     }
 }
@@ -500,6 +505,9 @@ impl fmt::Display for RuntimeHostError {
             "runtime host error {} during {}",
             self.code, self.operation
         )?;
+        if let Some(probe) = &self.lifecycle.owner_probe {
+            write!(formatter, ": {probe}")?;
+        }
         if let Some((code, operation)) = self.lifecycle.incomplete_device_diagnostic_summary {
             write!(
                 formatter,

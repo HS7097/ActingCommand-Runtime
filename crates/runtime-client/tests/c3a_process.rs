@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    EventActor, EventSource, IdentifierIssuer, InputAction, InstanceId, OwnerEpoch,
-    RUNTIME_INFO_FILE, RuntimeInfo,
+    EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
+    InstanceId, OwnerEpoch, OwnerResourceDisposition, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, RuntimeInfo, RuntimeLifecyclePhase, RuntimePayload,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -340,8 +341,10 @@ fn c3a_runtime_host_child_process() {
     host.close().expect("close child Runtime host");
 }
 
+// Slice #315-B2c-2: the killed owner's process no longer exists, so its in_use record is
+// released at the next start without `unlock-owner`, and the release is recorded.
 #[test]
-fn hard_kill_with_unconfirmed_owner_rejects_automatic_restart() {
+fn hard_kill_with_unconfirmed_owner_restarts_automatically() {
     let root = TempDir::new().expect("tempdir");
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -367,37 +370,49 @@ fn hard_kill_with_unconfirmed_owner_rejects_automatic_restart() {
     drop(first_client);
 
     let mut second = RuntimeChild::spawn(root.path(), instance_id, 2);
-    let started = Instant::now();
-    let second_status = loop {
-        if let Some(status) = second.try_wait().expect("read second child process state") {
-            break status;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "second Runtime rejection timed out"
-        );
-        thread::sleep(Duration::from_millis(10));
-    };
-    assert!(
-        !second_status.success(),
-        "second Runtime unexpectedly accepted unconfirmed resources"
+    let second_info = second.wait_for_runtime_info(root.path(), Some(first_info.owner_epoch()));
+    let second_client = client(root.path());
+    assert_eq!(
+        second_client.health().expect("second Runtime health"),
+        second_info.owner_epoch()
     );
-    let second_output = second.output();
-    assert!(
-        second_output.contains("owner_resource_unconfirmed"),
-        "second Runtime output omitted owner_resource_unconfirmed: {second_output}"
+    let replaced_runtime_info =
+        fs::read(root.path().join(RUNTIME_INFO_FILE)).expect("read second runtime-info.json");
+    assert_ne!(replaced_runtime_info, first_runtime_info);
+    let released = second_client
+        .query_events(
+            EventQuery {
+                event_type: Some(EventType::RuntimeLifecycleObserved),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("query lifecycle observations")
+        .into_iter()
+        .filter_map(|event| match event.payload {
+            ProjectionPayload::Full(payload) => match *payload {
+                EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) => {
+                    Some(value.phase())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter(|phase| {
+            matches!(
+                phase,
+                RuntimeLifecyclePhase::PriorEpochOwnerReleasedByExit { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        released,
+        [RuntimeLifecyclePhase::PriorEpochOwnerReleasedByExit {
+            pid: first_info.pid(),
+            started_at_unix_ms: first_info.started_at_unix_ms(),
+            last_disposition: OwnerResourceDisposition::InUse,
+        }]
     );
-    assert!(
-        second_output.contains("acquire_owner_file"),
-        "second Runtime output omitted acquire_owner_file: {second_output}"
-    );
-
-    let retained_runtime_info =
-        fs::read(root.path().join(RUNTIME_INFO_FILE)).expect("read retained runtime-info.json");
-    assert_eq!(retained_runtime_info, first_runtime_info);
-    let retained_info =
-        serde_json::from_slice::<RuntimeInfo>(&retained_runtime_info).expect("parse runtime info");
-    assert_eq!(retained_info.owner_epoch(), first_info.owner_epoch());
     assert_eq!(backend_events(root.path()), vec!["open", "reset"]);
 }
 

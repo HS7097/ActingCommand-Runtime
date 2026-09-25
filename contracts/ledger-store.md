@@ -117,6 +117,12 @@ positive close (a block that ends active, reuses an epoch, contradicts its own
 identity or follows ConfirmedClosed with later resource use). An epoch whose last
 record still declares InUse or Unconfirmed is left open; a block the native
 reader could not have produced fails startup as `prior_epoch_unproven_unclassified`.
+Such an epoch reaches this startup step when the OwnerGuard released it because
+its process had exited (`contracts/actingd-unlock-owner.md`, "When startup
+releases the owner itself"). That release is recorded as the lifecycle
+observation `prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
+`last_disposition`); it is not close evidence, the epoch stays open here, and it
+authorises nothing on the device side.
 The unproven import seals the observation instead of a suffix: no positive close,
 the block identity when one exists and the complete-read bounds, which a later
 startup must still support. Facts sealed before `basis` existed read as proven.

@@ -1704,6 +1704,15 @@ pub enum RuntimeLifecyclePhase {
     BackendOpenObserved,
     PriorEpochOwnerImported,
     PriorEpochScopeClosed,
+    /// Startup took over the previous owner whose last journal record still declared
+    /// resources `in_use` or `unconfirmed`, because its process (`pid`, started at
+    /// `started_at_unix_ms`) had exited (slice #315-B2c-2). Owner release only: it closes
+    /// no scope and authorises nothing on the device side.
+    PriorEpochOwnerReleasedByExit {
+        pid: u32,
+        started_at_unix_ms: u64,
+        last_disposition: OwnerResourceDisposition,
+    },
     VendorStdioClose {
         instance_id: Option<InstanceId>,
     },
