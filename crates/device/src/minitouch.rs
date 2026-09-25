@@ -46,14 +46,24 @@ impl Default for MinitouchConfig {
     }
 }
 
+impl MinitouchConfig {
+    /// `Default` with the caller-injected `ACTINGCOMMAND_MINITOUCH_PATH` value, when there is
+    /// one, in place of the bundled path (Workflow #318 cfg3). Explicitly configured paths
+    /// are applied afterwards and keep precedence.
+    pub fn from_env_overrides(env: &crate::EnvOverrides) -> Self {
+        let mut config = Self::default();
+        if let Some(path) = &env.minitouch_path {
+            config.local_path = path.clone();
+        }
+        config
+    }
+}
+
+/// The bundled minitouch path; the environment is never read here.
 fn default_minitouch_local_path() -> PathBuf {
-    std::env::var_os("ACTINGCOMMAND_MINITOUCH_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from("external-tools")
-                .join("minitouch")
-                .join("minitouch")
-        })
+    PathBuf::from("external-tools")
+        .join("minitouch")
+        .join("minitouch")
 }
 
 pub struct MinitouchBackend {

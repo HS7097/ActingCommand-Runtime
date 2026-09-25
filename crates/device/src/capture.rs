@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::{ACTINGCOMMAND_NEMU_FOLDER_ENV, Adb, AdbConfig, stop_child};
+use crate::adb::{Adb, AdbConfig, EnvOverrides, stop_child};
 use crate::mumu::{
     mumu_root_from_path, nemu_configured_adb_class, resolve_mumu_backend_paths,
     resolve_mumu_backend_paths_for_running_target,
@@ -476,6 +476,11 @@ pub struct CaptureBackendConfig {
     pub droidcast: DroidcastRawConfig,
     pub nemu: NemuIpcConfig,
     pub resolved_mumu: Option<CaptureMumuContext>,
+    /// The caller-injected `ACTINGCOMMAND_*` fallbacks (Workflow #318 cfg3): consulted by
+    /// `prepare_capture_backend_config` only where the matching configured value (ADB path,
+    /// `droidcast.local_apk`, `nemu.nemu_folder`, `nemu.dll_path`) is absent. `Default`
+    /// injects nothing; the environment itself is never read here.
+    pub env_overrides: EnvOverrides,
 }
 
 impl CaptureBackendConfig {
@@ -488,11 +493,18 @@ impl CaptureBackendConfig {
             droidcast: DroidcastRawConfig::default(),
             nemu: NemuIpcConfig::default(),
             resolved_mumu: None,
+            env_overrides: EnvOverrides::default(),
         }
     }
 
     pub fn with_requested(mut self, requested: CaptureBackendChoice) -> Self {
         self.requested = requested;
+        self
+    }
+
+    /// Injects the caller's `ACTINGCOMMAND_*` fallbacks; configured values keep precedence.
+    pub fn with_env_overrides(mut self, env: &EnvOverrides) -> Self {
+        self.env_overrides = env.clone();
         self
     }
 }
@@ -675,18 +687,22 @@ pub fn create_capture_backend_with_memory(
 }
 
 fn prepare_capture_backend_config(
-    config: CaptureBackendConfig,
+    mut config: CaptureBackendConfig,
 ) -> DeviceResult<CaptureBackendConfig> {
+    // Workflow #318 cfg3: a configured value first, then the caller-injected fallback.
+    if config.droidcast.local_apk.is_none() {
+        config.droidcast.local_apk = config.env_overrides.droidcast_apk.clone();
+    }
     let explicit_root = config
         .nemu
         .nemu_folder
         .clone()
-        .or_else(|| std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from));
+        .or_else(|| config.env_overrides.nemu_folder.clone());
     let explicit_dll = config
         .nemu
         .dll_path
         .clone()
-        .or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_IPC_DLL").map(PathBuf::from));
+        .or_else(|| config.env_overrides.nemu_ipc_dll.clone());
     prepare_capture_backend_config_with_resolvers(
         config,
         explicit_root,
@@ -869,7 +885,7 @@ where
         }
     }
     if config.adb_config.adb_path.trim().is_empty() {
-        config.adb_config = AdbConfig::resolve(None)?.0;
+        config.adb_config = AdbConfig::resolve(None, &config.env_overrides)?.0;
     }
     Ok(config)
 }
@@ -1527,9 +1543,11 @@ pub struct DroidcastRawConfig {
 }
 
 impl Default for DroidcastRawConfig {
+    /// No local APK: the caller configures one or injects `ACTINGCOMMAND_DROIDCAST_RAW_APK`
+    /// through [`CaptureBackendConfig::with_env_overrides`].
     fn default() -> Self {
         Self {
-            local_apk: std::env::var_os("ACTINGCOMMAND_DROIDCAST_RAW_APK").map(PathBuf::from),
+            local_apk: None,
             remote_apk: DEFAULT_DROIDCAST_REMOTE_PATH.to_string(),
             local_port: DEFAULT_DROIDCAST_LOCAL_PORT,
         }
@@ -1556,7 +1574,7 @@ impl DroidcastRawBackend {
     ) -> DeviceResult<Self> {
         let local_apk = config.local_apk.as_ref().ok_or_else(|| {
             DeviceError::fatal(
-                "DroidCast_raw unavailable: ACTINGCOMMAND_DROIDCAST_RAW_APK is not set",
+                "DroidCast_raw unavailable: no DroidCast_raw APK is configured or injected (ACTINGCOMMAND_DROIDCAST_RAW_APK)",
             )
         })?;
         require_file(local_apk, "DroidCast_raw APK")?;
@@ -3486,15 +3504,13 @@ fn rgb565_to_rgb8(raw: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> 
     Ok(pixels)
 }
 
+/// `folder` / `dll_path` are the configured values only: the injected environment
+/// fallbacks apply in `prepare_capture_backend_config`, never read here.
 fn resolve_nemu_paths(
     folder: Option<PathBuf>,
     dll_path: Option<PathBuf>,
 ) -> DeviceResult<(PathBuf, PathBuf)> {
-    let explicit_root =
-        folder.or_else(|| std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from));
-    let explicit_dll =
-        dll_path.or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_IPC_DLL").map(PathBuf::from));
-    let paths = resolve_mumu_backend_paths(None, explicit_root, explicit_dll)
+    let paths = resolve_mumu_backend_paths(None, folder, dll_path)
         .map_err(|error| {
             with_nemu_capture_resolution_detail(
                 error,

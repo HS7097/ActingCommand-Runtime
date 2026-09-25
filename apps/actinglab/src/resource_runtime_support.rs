@@ -13,7 +13,7 @@ use super::{
     resource_convert,
 };
 use actingcommand_device::{
-    AdbPathSource, CaptureBackendChoice, Frame, PixelFormat, resolve_adb_path,
+    AdbPathSource, CaptureBackendChoice, EnvOverrides, Frame, PixelFormat, resolve_adb_path,
 };
 use actingcommand_lab::{InstanceConfig, PackageValidationResponse, UserConfig};
 use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
@@ -111,7 +111,15 @@ pub(super) fn effective_adb_path_for_instance(
     let configured = instance
         .and_then(|instance| instance.adb_path.as_deref())
         .or(config.adb_path.as_deref());
-    resolve_adb_path(configured).map_err(|err| CliError::device(err.to_string()))
+    resolve_adb_path(configured, &process_env_overrides())
+        .map_err(|err| CliError::device(err.to_string()))
+}
+
+/// ActingLab has no `allow_env_overrides` switch: it keeps passing the process's
+/// `ACTINGCOMMAND_*` fallbacks to the device crate, which no longer reads them itself
+/// (Workflow #318 cfg3).
+pub(super) fn process_env_overrides() -> EnvOverrides {
+    EnvOverrides::from_lookup(|name| env::var_os(name))
 }
 
 pub(super) fn enforce_path_adb_target_boundary(
@@ -152,7 +160,10 @@ fn env_flag(name: &str) -> bool {
 }
 
 pub(super) fn resolved_adb_json(config: &UserConfig) -> Value {
-    resolved_adb_json_from(resolve_adb_path(config.adb_path.as_deref()))
+    resolved_adb_json_from(resolve_adb_path(
+        config.adb_path.as_deref(),
+        &process_env_overrides(),
+    ))
 }
 
 pub(super) fn resolved_adb_json_from(

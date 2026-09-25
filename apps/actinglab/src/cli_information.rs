@@ -4,8 +4,8 @@ use crate::user_config_store::{config_path, read_user_config, write_user_config}
 use crate::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, RUNTIME_VERSION, SCHEMA_VERSION,
     command_capabilities, effective_resource_root, effective_run_root, effective_runtime_endpoint,
-    lab2_cli, list_resource_kind, path_string, reject_legacy_session_routing, require_runtime,
-    resolved_adb_json, resolved_adb_json_from,
+    lab2_cli, list_resource_kind, path_string, process_env_overrides,
+    reject_legacy_session_routing, require_runtime, resolved_adb_json, resolved_adb_json_from,
 };
 use actingcommand_device::resolve_adb_path;
 use serde_json::{Value, json};
@@ -120,7 +120,7 @@ pub(super) fn run_config(sub: &str, args: &[String]) -> CliOutcome<Value> {
 
 pub(super) fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
-    let adb_resolution = resolve_adb_path(config.adb_path.as_deref());
+    let adb_resolution = resolve_adb_path(config.adb_path.as_deref(), &process_env_overrides());
     let runtime_endpoint = effective_runtime_endpoint(global, &config);
     let resource_root = effective_resource_root(global, &config);
     let run_root = effective_run_root(global, &config);

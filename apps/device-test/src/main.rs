@@ -2,9 +2,9 @@
 
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
-    EmulatorCapabilityAvailability, Frame, InputBackend, MaaTouchValidationConfig, PixelFormat,
-    TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName,
-    combine_operation_and_close, create_touch_backend, discover_mumu_instances,
+    EmulatorCapabilityAvailability, EnvOverrides, Frame, InputBackend, MaaTouchValidationConfig,
+    MinitouchConfig, PixelFormat, TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics,
+    TouchBackendName, combine_operation_and_close, create_touch_backend, discover_mumu_instances,
     mumu_capability_profile, resolve_adb_path,
 };
 use actingcommand_execution_kernel::{
@@ -29,6 +29,13 @@ use probe_run::DEFAULT_CHECKPOINT_FRAMES;
 mod ledger;
 
 type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+/// This probe has no `allow_env_overrides` switch: it keeps passing the process's
+/// `ACTINGCOMMAND_*` fallbacks to the device crate, which no longer reads them itself
+/// (Workflow #318 cfg3).
+fn process_env_overrides() -> EnvOverrides {
+    EnvOverrides::from_lookup(|name| env::var_os(name))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeviceCommand {
@@ -202,8 +209,12 @@ fn run_mumu_discover(tokens: &[String], output: &mut impl std::io::Write) -> Cli
             }
         }
     }
-    let report = match discover_mumu_instances(root.as_deref())
-        .and_then(|report| mumu_capability_profile(&report).map(|profile| (report, profile)))
+    let env_overrides = process_env_overrides();
+    let report = match discover_mumu_instances(
+        root.as_deref(),
+        env_overrides.nemu_folder.as_deref(),
+    )
+    .and_then(|report| mumu_capability_profile(&report).map(|profile| (report, profile)))
     {
         Ok((report, profile)) => serde_json::json!({
             "status": "ok",
@@ -376,7 +387,7 @@ fn resolve_adb_for_device_commands(
     commands: &[DeviceCommand],
 ) -> DeviceResult<Option<String>> {
     resolve_adb_for_device_commands_with(config, commands, || {
-        let resolved = resolve_adb_path(None)?;
+        let resolved = resolve_adb_path(None, &process_env_overrides())?;
         Ok((resolved.path, resolved.warning))
     })
 }
@@ -465,7 +476,9 @@ fn run_capture_command(
     };
 
     let selected = create_capture_backend(
-        CaptureBackendConfig::new(config.adb, config.target).with_requested(config.capture_backend),
+        CaptureBackendConfig::new(config.adb, config.target)
+            .with_requested(config.capture_backend)
+            .with_env_overrides(&process_env_overrides()),
     )?;
     let mut backend = selected.backend;
     let frame = backend.capture()?;
@@ -674,7 +687,8 @@ fn measure_capture_backend(
     };
     let selected = create_capture_backend(
         CaptureBackendConfig::new(config.adb.clone(), config.target.clone())
-            .with_requested(backend),
+            .with_requested(backend)
+            .with_env_overrides(&process_env_overrides()),
     );
     let mut selected = match selected {
         Ok(selected) => selected,
@@ -1000,7 +1014,8 @@ fn load_scene(
     if capture {
         let selected = create_capture_backend(
             CaptureBackendConfig::new(config.adb, config.target)
-                .with_requested(config.capture_backend),
+                .with_requested(config.capture_backend)
+                .with_env_overrides(&process_env_overrides()),
         )?;
         let mut backend = selected.backend;
         let frame = backend.capture()?;
@@ -1374,7 +1389,10 @@ fn parse_args<I>(args: I) -> DeviceResult<(MaaTouchValidationConfig, Vec<DeviceC
 where
     I: IntoIterator<Item = String>,
 {
-    let mut cfg = MaaTouchValidationConfig::default();
+    let mut cfg = MaaTouchValidationConfig {
+        minitouch: MinitouchConfig::from_env_overrides(&process_env_overrides()),
+        ..MaaTouchValidationConfig::default()
+    };
     let mut commands = Vec::new();
     let tokens = args.into_iter().collect::<Vec<_>>();
     let mut index = 0;

@@ -80,7 +80,9 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   must be absolute. At startup the daemon runs `MuMuManager.exe version` and
   `info -v all` once (read-only, 10 s timeout, never any mutating subcommand),
   resolving `MuMuManager.exe` in this order: `mumu_root`,
-  `ACTINGCOMMAND_NEMU_FOLDER`, the install root of a running MuMu process, the
+  `ACTINGCOMMAND_NEMU_FOLDER` (only when the top-level `allow_env_overrides` is
+  `true`; otherwise a set variable is ignored and reported as
+  `env_override_ignored:ACTINGCOMMAND_NEMU_FOLDER`), the install root of a running MuMu process, the
   Windows uninstall entry (`MuMuPlayer*` under the standard `Uninstall` keys of
   `HKLM`, `HKLM\...\WOW6432Node` and `HKCU`; only `InstallLocation`,
   `DisplayIcon` and `DisplayVersion` are read), then the vendor folders under
