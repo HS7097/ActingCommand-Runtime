@@ -88,15 +88,16 @@ persisted, until a confirmation reports it committed. The device diagnostic clos
 summary is the first deferred producer; `append` and `append_transaction`,
 subscriptions, the critical path and the writer exit rules are unchanged.
 
-## Proven prior-epoch scope close
+## Prior-epoch scope close (proven or unproven)
 
 Before Provider assembly, Host completes pending eviction recovery and capacity
 preflight, then passes the opaque complete owner-journal read to the existing
 writer. The original exclusive OwnerGuard remains held. The reader preserves the
 4 MiB ceiling, consecutive revisions, fatal complete corruption and incomplete
 tail recovery. Only a v2 ConfirmedClosed suffix without later resource use,
-Unconfirmed, epoch reuse or contradictory identity supports an import. An inactive
-record, None, a v1 record or an available OS lock alone supplies no close evidence.
+Unconfirmed, epoch reuse or contradictory identity supports a proven import. An
+inactive record, None, a v1 record or an available OS lock alone supplies no
+close evidence.
 
 The first `PriorEpochOwnerImported` lifecycle fact seals the native schema,
 subject epoch, positive/final revisions, complete-read bounds and SHA-256, and
@@ -104,6 +105,23 @@ replayable positive suffix. It also fixes the authenticated Ledger prefix and th
 subject's contiguous epoch upper sequence. A later startup resumes that same
 sealed range; subsequent identifiers cannot extend it. Imports originate only
 from the native-reader capability, never an RPC or a caller-supplied verdict.
+
+Every import and scope close carries a `basis`: `proven`, or `unproven` with one
+of three reasons. A prior owner without a native proof is still imported and
+closed, once per owner epoch and once per scope, through the same append path,
+links rule and startup barrier. `legacy_journal`: the owner's journal epoch
+contains a record older than the v2 schema. `process_exit_only`: a consistent v2
+epoch ends in a normal exit record and never recorded ConfirmedClosed.
+`proof_missing`: no journal epoch for the owner, or one whose records support no
+positive close (a block that ends active, reuses an epoch, contradicts its own
+identity or follows ConfirmedClosed with later resource use). An epoch whose last
+record still declares InUse or Unconfirmed is left open; a block the native
+reader could not have produced fails startup as `prior_epoch_unproven_unclassified`.
+The unproven import seals the observation instead of a suffix: no positive close,
+the block identity when one exists and the complete-read bounds, which a later
+startup must still support. Facts sealed before `basis` existed read as proven.
+An unproven close authorises nothing on the device side; device writes require a
+live scheduler lease. Retention treats an unproven close exactly like a proven one.
 
 The writer visits at most `RETENTION_ROUND_OBJECTS` original closure scopes per
 command, counting unknown and completed scopes, within the original maintenance

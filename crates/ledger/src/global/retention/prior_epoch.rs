@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::owner_journal::RuntimeOwnerJournal;
+use crate::owner_journal::{OwnerEpochBlock, RuntimeOwnerJournal};
 use actingcommand_contract::{
-    PriorEpochCloseFact, PriorEpochOwnerImport, PriorEpochScope, PriorEpochScopeClose,
+    OwnerResourceDisposition, PriorEpochCloseBasis, PriorEpochCloseFact, PriorEpochOwnerImport,
+    PriorEpochScope, PriorEpochScopeClose, UnprovenReason,
 };
 use std::{sync::Arc, time::Instant};
 
@@ -90,6 +91,7 @@ impl RetentionIndex {
                     return Err(invalid("prior_epoch_import_missing"));
                 };
                 if *proof_source != record.proof
+                    || proof.basis != record.basis
                     || proof.through_sequence != record.through_sequence
                     || proof.scope_upper_sequence != record.scope_upper_sequence
                     || self.prior_epoch_upper(scope.owner) != Some(record.scope_upper_sequence)
@@ -172,9 +174,41 @@ fn deadline_check(deadline: Instant) -> GlobalLedgerResult<()> {
     Ok(())
 }
 
+/// Why an owner without a native proof is closed anyway. `None` leaves a scope whose last
+/// native record still declares resources in use or unconfirmed untouched; a block the
+/// native reader could not have produced is an error, never a silent skip.
+fn classify_unproven(
+    block: Option<&OwnerEpochBlock>,
+) -> GlobalLedgerResult<Option<UnprovenReason>> {
+    let Some(block) = block else {
+        return Ok(Some(UnprovenReason::ProofMissing));
+    };
+    if block.legacy {
+        return Ok(Some(UnprovenReason::LegacyJournal));
+    }
+    match (block.last_active, block.last_disposition) {
+        (true, Some(OwnerResourceDisposition::InUse | OwnerResourceDisposition::Unconfirmed)) => {
+            Ok(None)
+        }
+        (false, Some(OwnerResourceDisposition::None))
+            if block.consistent && !block.confirmed_closed =>
+        {
+            Ok(Some(UnprovenReason::ProcessExitOnly))
+        }
+        (false, Some(OwnerResourceDisposition::None))
+        | (
+            true,
+            Some(OwnerResourceDisposition::None | OwnerResourceDisposition::ConfirmedClosed),
+        ) => Ok(Some(UnprovenReason::ProofMissing)),
+        _ => Err(invalid("prior_epoch_unproven_unclassified")),
+    }
+}
+
 impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore<B> {
     /// The page counts visited scopes, including unknown/already closed scopes. It only
     /// appends facts; retention material operations retain their original admission path.
+    /// A prior owner without a native proof is imported and closed with an explicit
+    /// unproven reason; a sealed import must still be supported by the native read.
     pub(in crate::global) fn reconcile_prior_epoch_closes(
         &mut self,
         writer: OwnerEpoch,
@@ -218,15 +252,26 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                 continue;
             }
             let sealed = self.retention.owner_imports.get(&scope.owner);
-            let Some(native) = journal.proofs.get(&scope.owner) else {
-                if sealed.is_some() {
-                    return Err(invalid("prior_epoch_native_proof_missing"));
-                }
-                continue;
+            let native = journal.proofs.get(&scope.owner);
+            if native.is_none()
+                && sealed.is_some_and(|(_, proof)| proof.basis == PriorEpochCloseBasis::Proven)
+            {
+                return Err(invalid("prior_epoch_native_proof_missing"));
+            }
+            let current = match native {
+                Some(_) => Some(PriorEpochCloseBasis::Proven),
+                None => classify_unproven(journal.block(scope.owner))?
+                    .map(|reason| PriorEpochCloseBasis::Unproven { reason }),
             };
             if let Some((_, proof)) = sealed {
-                let original = &proof.evidence;
-                if !journal.supports(original)
+                let supported = match proof.basis {
+                    PriorEpochCloseBasis::Proven => journal.supports(&proof.evidence),
+                    PriorEpochCloseBasis::Unproven { .. } => {
+                        current == Some(proof.basis)
+                            && journal.supports_observation(&proof.evidence)
+                    }
+                };
+                if !supported
                     || self.retention.prior_epoch_upper(scope.owner)
                         != Some(proof.scope_upper_sequence)
                     || last > proof.scope_upper_sequence
@@ -237,6 +282,9 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                     continue;
                 }
             } else {
+                let Some(basis) = current else {
+                    continue;
+                };
                 let Some(upper) = self.retention.prior_epoch_upper(scope.owner) else {
                     continue;
                 };
@@ -244,7 +292,11 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                     return Err(invalid("prior_epoch_scope_range_conflict"));
                 }
                 let record = PriorEpochOwnerImport {
-                    evidence: native.clone(),
+                    evidence: match native {
+                        Some(proof) => proof.clone(),
+                        None => journal.observation(scope.owner),
+                    },
+                    basis,
                     through_sequence: self.retention.through_sequence,
                     scope_upper_sequence: upper,
                 };
@@ -268,6 +320,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                 scope_source,
                 through_sequence: proof.through_sequence,
                 scope_upper_sequence: proof.scope_upper_sequence,
+                basis: proof.basis,
             };
             appended.push(self.append_prior_epoch_fact(
                 writer,
