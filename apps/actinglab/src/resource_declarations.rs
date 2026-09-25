@@ -440,6 +440,17 @@ impl DeclarationReader {
                 ),
             ));
         }
+        if let Some(label) = &table.label {
+            let text = label.trim();
+            if text.is_empty() || text.len() > 128 || text.chars().any(char::is_control) {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "label {label:?} must be 1-128 bytes of text without control characters"
+                    ),
+                ));
+            }
+        }
         if table.servers.is_empty() {
             return Err(invalid(path, "servers must not be empty"));
         }
@@ -807,6 +818,10 @@ const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
 struct ApplicationTable {
     schema_version: String,
     game: String,
+    /// The game's display name for people. Absent stays `None`; a present value must be a
+    /// string (explicit `null` fails).
+    #[serde(default, deserialize_with = "present_string")]
+    label: Option<String>,
     servers: BTreeMap<String, ApplicationEntry>,
 }
 

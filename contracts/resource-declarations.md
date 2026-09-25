@@ -27,6 +27,8 @@ and `operation explain` keep their existing behavior.
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
 | Converter semantic-mapping and task-facts declarations | The converter's existing declaration-pair rules |
 
+The applications table may carry an optional top-level `label`: the game's display name for people, free text (bilingual `中文 / English` recommended) of 1-128 bytes after trimming, without control characters; consumers fall back to `game` when it is absent.
+
 Each `servers.<server>` entry of the applications table carries `application_id`,
 `label` and an optional `default_package_id`. When present, `default_package_id` is a
 non-empty string of at most 128 bytes matching `^[a-z0-9]+(\.[a-z0-9_]+)+$`; when
