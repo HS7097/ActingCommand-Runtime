@@ -9,6 +9,7 @@ use crate::{
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceResourceCloseOutcome,
     DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceResult,
 };
+use std::ffi::OsString;
 use std::io::{self, Read};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -25,6 +26,61 @@ pub use recovery::{
 
 pub const ACTINGCOMMAND_ADB_PATH_ENV: &str = "ACTINGCOMMAND_ADB_PATH";
 pub const ACTINGCOMMAND_NEMU_FOLDER_ENV: &str = "ACTINGCOMMAND_NEMU_FOLDER";
+pub const ACTINGCOMMAND_NEMU_IPC_DLL_ENV: &str = "ACTINGCOMMAND_NEMU_IPC_DLL";
+pub const ACTINGCOMMAND_DROIDCAST_RAW_APK_ENV: &str = "ACTINGCOMMAND_DROIDCAST_RAW_APK";
+pub const ACTINGCOMMAND_MINITOUCH_PATH_ENV: &str = "ACTINGCOMMAND_MINITOUCH_PATH";
+pub const ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC_ENV: &str =
+    "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
+
+/// The `ACTINGCOMMAND_*` environment fallbacks as values the caller injects (Workflow #318
+/// cfg3). This crate never reads these variables itself: every former read point takes
+/// the matching field, and `Default` (every field `None`) is "no fallback". The caller
+/// decides whether the environment is consulted at all; `actingd` does so only under
+/// `allow_env_overrides`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnvOverrides {
+    /// `ACTINGCOMMAND_ADB_PATH`: preferred over a configured ADB in [`resolve_adb_path`].
+    pub adb_path: Option<PathBuf>,
+    /// `ACTINGCOMMAND_NEMU_FOLDER`: the MuMu root for ADB and `MuMuManager` resolution and
+    /// the Nemu IPC capture fallback.
+    pub nemu_folder: Option<PathBuf>,
+    /// `ACTINGCOMMAND_NEMU_IPC_DLL`: the Nemu IPC capture DLL fallback.
+    pub nemu_ipc_dll: Option<PathBuf>,
+    /// `ACTINGCOMMAND_DROIDCAST_RAW_APK`: the DroidCast_raw APK fallback.
+    pub droidcast_apk: Option<PathBuf>,
+    /// `ACTINGCOMMAND_MINITOUCH_PATH`: replaces the bundled minitouch path.
+    pub minitouch_path: Option<PathBuf>,
+    /// `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC`, verbatim: consumed by the PPOCR
+    /// provider, which validates it.
+    pub ppocr_node_placement_diagnostic: Option<OsString>,
+}
+
+impl EnvOverrides {
+    /// Every variable an [`EnvOverrides`] field carries, in field order.
+    pub const VARIABLES: [&'static str; 6] = [
+        ACTINGCOMMAND_ADB_PATH_ENV,
+        ACTINGCOMMAND_NEMU_FOLDER_ENV,
+        ACTINGCOMMAND_NEMU_IPC_DLL_ENV,
+        ACTINGCOMMAND_DROIDCAST_RAW_APK_ENV,
+        ACTINGCOMMAND_MINITOUCH_PATH_ENV,
+        ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC_ENV,
+    ];
+
+    /// Fills every field from `lookup` (for example `std::env::var_os`), exactly as the
+    /// former read points did: a set variable, even an empty one, is `Some`.
+    pub fn from_lookup(mut lookup: impl FnMut(&str) -> Option<OsString>) -> Self {
+        Self {
+            adb_path: lookup(ACTINGCOMMAND_ADB_PATH_ENV).map(PathBuf::from),
+            nemu_folder: lookup(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from),
+            nemu_ipc_dll: lookup(ACTINGCOMMAND_NEMU_IPC_DLL_ENV).map(PathBuf::from),
+            droidcast_apk: lookup(ACTINGCOMMAND_DROIDCAST_RAW_APK_ENV).map(PathBuf::from),
+            minitouch_path: lookup(ACTINGCOMMAND_MINITOUCH_PATH_ENV).map(PathBuf::from),
+            ppocr_node_placement_diagnostic: lookup(
+                ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC_ENV,
+            ),
+        }
+    }
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -50,8 +106,11 @@ impl Default for AdbConfig {
 }
 
 impl AdbConfig {
-    pub fn resolve(configured: Option<&str>) -> DeviceResult<(Self, ResolvedAdbPath)> {
-        let resolved = resolve_adb_path(configured)?;
+    pub fn resolve(
+        configured: Option<&str>,
+        env: &EnvOverrides,
+    ) -> DeviceResult<(Self, ResolvedAdbPath)> {
+        let resolved = resolve_adb_path(configured, env)?;
         let config = Self {
             adb_path: resolved.path.clone(),
             ..Self::default()
@@ -92,14 +151,19 @@ impl AdbPathSource {
     }
 }
 
-pub fn resolve_adb_path(configured: Option<&str>) -> DeviceResult<ResolvedAdbPath> {
-    if let Some(path) = std::env::var_os(ACTINGCOMMAND_ADB_PATH_ENV).map(PathBuf::from) {
+/// Resolves the ADB executable: the injected `env.adb_path`, the configured path, the
+/// injected `env.nemu_folder` MuMu root, then MuMu discovery with the `PATH` baseline.
+pub fn resolve_adb_path(
+    configured: Option<&str>,
+    env: &EnvOverrides,
+) -> DeviceResult<ResolvedAdbPath> {
+    if let Some(path) = env.adb_path.clone() {
         return resolved_existing_adb(path, AdbPathSource::Environment);
     }
     if let Some(path) = configured.filter(|value| !value.trim().is_empty()) {
         return resolved_existing_adb(PathBuf::from(path), AdbPathSource::UserConfig);
     }
-    let explicit_root = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from);
+    let explicit_root = env.nemu_folder.clone();
     if explicit_root.is_some() {
         let installation = resolve_mumu_installation_for_adb(explicit_root)?;
         return resolve_adb_path_after_discovery(installation, None);
@@ -1382,9 +1446,9 @@ mod tests {
         let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
         let adb = temp.join(adb_name);
         fs::write(&adb, b"test adb").unwrap();
+        // Workflow #318 cfg3: the ADB / MuMu folder fallbacks are injected values now, so
+        // only the discovery sources (`PATH`, `ProgramFiles*`) are staged in the environment.
         let original_path = std::env::var_os("PATH");
-        let original_adb = std::env::var_os(ACTINGCOMMAND_ADB_PATH_ENV);
-        let original_mumu = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV);
         let original_program_files = std::env::var_os("ProgramFiles");
         let original_program_files_x86 = std::env::var_os("ProgramFiles(x86)");
         let program_files = temp.join("program-files");
@@ -1394,8 +1458,6 @@ mod tests {
         let outcome = std::panic::catch_unwind(|| {
             unsafe {
                 std::env::set_var("PATH", &temp);
-                std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
-                std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
                 std::env::set_var("ProgramFiles", &program_files);
                 std::env::set_var("ProgramFiles(x86)", &program_files_x86);
             }
@@ -1407,14 +1469,6 @@ mod tests {
             match original_path {
                 Some(value) => std::env::set_var("PATH", value),
                 None => std::env::remove_var("PATH"),
-            }
-            match original_adb {
-                Some(value) => std::env::set_var(ACTINGCOMMAND_ADB_PATH_ENV, value),
-                None => std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV),
-            }
-            match original_mumu {
-                Some(value) => std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, value),
-                None => std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV),
             }
             match original_program_files {
                 Some(value) => std::env::set_var("ProgramFiles", value),
@@ -1454,33 +1508,36 @@ mod tests {
         fs::write(&adb, b"test adb").expect("PATH adb fixture");
         let missing_mumu = temp.join("missing-mumu-root");
         let original_path = std::env::var_os("PATH");
-        let original_adb = std::env::var_os(ACTINGCOMMAND_ADB_PATH_ENV);
-        let original_mumu = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV);
         let outcome = std::panic::catch_unwind(|| {
             let discovery_error = DeviceError::fatal(
                 "failed to enumerate Windows processes: injected process discovery failure",
             );
+            // Workflow #318 cfg3: no fallback is injected; `PATH` stays an environment source.
+            let no_overrides = EnvOverrides::default();
             unsafe {
                 std::env::set_var("PATH", &temp);
-                std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
-                std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
             }
             TEST_MUMU_DISCOVERY_ERROR.with(|slot| {
                 *slot.borrow_mut() = Some(discovery_error.clone());
             });
-            let fallback = resolve_adb_path(None).expect("PATH fallback through public entry");
+            let fallback =
+                resolve_adb_path(None, &no_overrides).expect("PATH fallback through public entry");
 
             unsafe {
                 std::env::set_var("PATH", "");
             }
-            let no_path_error = resolve_adb_path(None).expect_err("missing PATH must stay fatal");
+            let no_path_error =
+                resolve_adb_path(None, &no_overrides).expect_err("missing PATH must stay fatal");
 
             unsafe {
                 std::env::set_var("PATH", &temp);
-                std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, &missing_mumu);
             }
-            let explicit_error =
-                resolve_adb_path(None).expect_err("explicit MuMu root must be strict");
+            let injected_root = EnvOverrides {
+                nemu_folder: Some(missing_mumu.clone()),
+                ..EnvOverrides::default()
+            };
+            let explicit_error = resolve_adb_path(None, &injected_root)
+                .expect_err("explicit MuMu root must be strict");
             (fallback, no_path_error, explicit_error, discovery_error)
         });
 
@@ -1491,14 +1548,6 @@ mod tests {
             match original_path {
                 Some(value) => std::env::set_var("PATH", value),
                 None => std::env::remove_var("PATH"),
-            }
-            match original_adb {
-                Some(value) => std::env::set_var(ACTINGCOMMAND_ADB_PATH_ENV, value),
-                None => std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV),
-            }
-            match original_mumu {
-                Some(value) => std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, value),
-                None => std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV),
             }
         }
         let _ = fs::remove_dir_all(&temp);

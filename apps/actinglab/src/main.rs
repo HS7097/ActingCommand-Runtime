@@ -108,9 +108,10 @@ use resource_runtime_support::{
     ResolvedResourceRoot, create_error_report_zip, create_package_blocked_result_zip,
     effective_adb_path_for_instance, effective_resource_root, effective_run_root,
     effective_runtime_endpoint, enforce_path_adb_target_boundary, exit_code_table, find_files,
-    list_resource_kind, list_runs, match_metric_name, path_string, require_runtime,
-    resolve_resource_root, resolved_adb_json, resolved_adb_json_from, run_explain_run, run_report,
-    run_resource, scene_from_frame, validate_json_file, validate_operation_dir,
+    list_resource_kind, list_runs, match_metric_name, path_string, process_env_overrides,
+    require_runtime, resolve_resource_root, resolved_adb_json, resolved_adb_json_from,
+    run_explain_run, run_report, run_resource, scene_from_frame, validate_json_file,
+    validate_operation_dir,
 };
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;

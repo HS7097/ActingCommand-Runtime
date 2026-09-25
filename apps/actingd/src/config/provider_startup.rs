@@ -25,24 +25,35 @@ impl ConfiguredProvider {
         self,
         startup: &mut ProviderStartup<'_>,
     ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>> {
+        let discovery = self.discovery_spec();
         let Self {
             mut instances,
             deferred,
             vision_manifest,
-            mumu_root,
+            env_overrides,
+            ..
         } = self;
-        let discovery = DiscoverySpec::new(mumu_root);
         if !deferred.is_empty() {
             instances.extend(bind_discovered_instances(startup, &discovery, deferred)?);
         }
+        // The injected diagnostic value is carried verbatim; the provider validates it (a
+        // non-UTF-8 value becomes a lossy string the provider refuses).
+        let node_placement_diagnostic = env_overrides
+            .ppocr_node_placement_diagnostic
+            .map(|value| value.to_string_lossy().into_owned());
         let vision = match vision_manifest {
             None => {
                 startup.record(ProviderBackend::Configured, Observation::NotConfigured)?;
                 None
             }
-            Some((source_root, configured_path)) => Some(VisionSpec::new(
-                assemble_vision_provider(startup, &source_root, &configured_path)?,
-            )),
+            Some((source_root, configured_path)) => {
+                Some(VisionSpec::new(assemble_vision_provider(
+                    startup,
+                    &source_root,
+                    &configured_path,
+                    node_placement_diagnostic,
+                )?))
+            }
         };
         let vision_configured = vision.is_some();
         let registry = ExecutionBackendRegistry::from_assembly(ProviderAssembly {
@@ -387,6 +398,7 @@ fn assemble_vision_provider(
     startup: &mut ProviderStartup<'_>,
     source_root: &Path,
     configured_path: &Path,
+    node_placement_diagnostic: Option<String>,
 ) -> RuntimeHostResult<Arc<dyn RecognitionVisionProvider>> {
     let backend = ProviderBackend::Configured;
     startup.record(
@@ -565,15 +577,17 @@ fn assemble_vision_provider(
                     stage: Stage::BackendConstruction,
                 },
             )?;
-            let engine = FastDeployPpocrBackend::from_artifacts(artifacts).map_err(|error| {
-                ffi_failure(
-                    startup,
-                    backend,
-                    Stage::BackendConstruction,
-                    "vision_provider_unavailable",
-                    error,
-                )
-            })?;
+            let engine = FastDeployPpocrBackend::from_artifacts(artifacts)
+                .map_err(|error| {
+                    ffi_failure(
+                        startup,
+                        backend,
+                        Stage::BackendConstruction,
+                        "vision_provider_unavailable",
+                        error,
+                    )
+                })?
+                .with_node_placement_diagnostic(node_placement_diagnostic);
             startup.record(
                 backend,
                 Observation::Completed {

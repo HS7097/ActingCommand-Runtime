@@ -23,7 +23,6 @@ use ort::logging::LogLevel;
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 use std::collections::VecDeque;
-use std::ffi::OsStr;
 use std::path::Path;
 use std::slice;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -283,14 +282,17 @@ fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, Stri
     })
 }
 
+/// `value` is the caller-injected variable value carried by the request
+/// (`FastDeployPpocrInvokeRequest.node_placement_diagnostic`, Workflow #318 cfg3); the
+/// provider never reads the environment itself.
 fn node_placement_diagnostic_requested(
     plan: &ProviderSessionPlan,
-    value: Option<&OsStr>,
+    value: Option<&str>,
 ) -> Result<bool, String> {
     let Some(value) = value else {
         return Ok(false);
     };
-    if value != OsStr::new("1") {
+    if value != "1" {
         return Err(format!(
             "{NODE_PLACEMENT_DIAGNOSTIC_ENV} must be exactly 1 when set"
         ));
@@ -418,11 +420,13 @@ fn read_text_json(
     ensure_ort_runtime(runtime_library)?;
     let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
     let session_identity = OcrSessionIdentity::from(&envelope.session);
+    let node_placement_diagnostic = envelope.node_placement_diagnostic.as_deref();
     let recognizer_session = recognizer_sessions().get_or_load(&session_identity, |_| {
         load_bound_ort_session(
             &envelope.artifacts.recognizer_model_path,
             expected_key.clone(),
             PpocrModelRole::Recognizer,
+            node_placement_diagnostic,
             diagnostics,
         )
     })?;
@@ -438,6 +442,7 @@ fn read_text_json(
                 &envelope.artifacts.detector_model_path,
                 expected_key.clone(),
                 PpocrModelRole::Detector,
+                node_placement_diagnostic,
                 diagnostics,
             )
         })?;
@@ -607,10 +612,11 @@ fn load_bound_ort_session(
     path: &Path,
     key: OcrSessionKey,
     role: PpocrModelRole,
+    node_placement_diagnostic: Option<&str>,
     diagnostics: &mut PpocrDiagnostics,
 ) -> Result<BoundOrtSession, String> {
     let plan = ProviderSessionPlan::from_key(&key)?;
-    let session = load_ort_session(path, &plan, role, diagnostics)?;
+    let session = load_ort_session(path, &plan, role, node_placement_diagnostic, diagnostics)?;
     Ok(BoundOrtSession { key, plan, session })
 }
 
@@ -629,12 +635,11 @@ fn load_ort_session(
     path: &Path,
     plan: &ProviderSessionPlan,
     role: PpocrModelRole,
+    node_placement_diagnostic: Option<&str>,
     diagnostics: &mut PpocrDiagnostics,
 ) -> Result<Session, String> {
-    let diagnostic_requested = node_placement_diagnostic_requested(
-        plan,
-        std::env::var_os(NODE_PLACEMENT_DIAGNOSTIC_ENV).as_deref(),
-    )?;
+    let diagnostic_requested =
+        node_placement_diagnostic_requested(plan, node_placement_diagnostic)?;
     match plan.resolved_execution_provider {
         OnnxExecutionProvider::Cpu => Session::builder()
             .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
@@ -1699,15 +1704,17 @@ mod tests {
         let cuda = ProviderSessionPlan::from_key(&test_session_key(OnnxExecutionProvider::Cuda))
             .expect("CUDA plan");
 
+        // Workflow #318 cfg3: the value is injected through the request, never read from
+        // the environment.
         assert!(!node_placement_diagnostic_requested(&cuda, None).expect("disabled"));
         assert!(
-            node_placement_diagnostic_requested(&cuda, Some(OsStr::new("1")))
+            node_placement_diagnostic_requested(&cuda, Some("1"))
                 .expect("explicit CUDA diagnostic")
         );
-        let invalid = node_placement_diagnostic_requested(&cuda, Some(OsStr::new("true")))
+        let invalid = node_placement_diagnostic_requested(&cuda, Some("true"))
             .expect_err("non-canonical activation rejected");
         assert!(invalid.contains("must be exactly 1"));
-        let cpu = node_placement_diagnostic_requested(&cpu, Some(OsStr::new("1")))
+        let cpu = node_placement_diagnostic_requested(&cpu, Some("1"))
             .expect_err("CPU diagnostic rejected");
         assert!(cpu.contains("only for an explicit CUDA OCR session"));
     }

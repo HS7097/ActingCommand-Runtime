@@ -191,15 +191,21 @@ pub struct MumuDiscoveryReport {
     pub instances: Vec<DiscoveredMumuInstance>,
 }
 
-/// The single discovery entry used by the daemon and the device-test probe.
-pub fn discover_mumu_instances(explicit_root: Option<&Path>) -> DeviceResult<MumuDiscoveryReport> {
-    discover_mumu_instances_inner(explicit_root).map_err(with_mumu_manager_discovery_detail)
+/// The single discovery entry used by the daemon and the device-test probe. `env_folder` is
+/// the caller-injected `ACTINGCOMMAND_NEMU_FOLDER` value (see [`resolve_mumu_manager`]).
+pub fn discover_mumu_instances(
+    explicit_root: Option<&Path>,
+    env_folder: Option<&Path>,
+) -> DeviceResult<MumuDiscoveryReport> {
+    discover_mumu_instances_inner(explicit_root, env_folder)
+        .map_err(with_mumu_manager_discovery_detail)
 }
 
 fn discover_mumu_instances_inner(
     explicit_root: Option<&Path>,
+    env_folder: Option<&Path>,
 ) -> DeviceResult<MumuDiscoveryReport> {
-    let manager = resolve_mumu_manager(explicit_root)?;
+    let manager = resolve_mumu_manager(explicit_root, env_folder)?;
     let version = query_version(&manager.mumu_manager_path)?;
     let instances = query_instances(&manager, version)?;
     Ok(MumuDiscoveryReport {
@@ -300,8 +306,11 @@ impl MumuEmulatorCapabilityBackend {
     }
 
     /// Runs `discover_mumu_instances` once (`version` and `info -v all` only) and keeps the report.
-    pub fn from_discovery(explicit_root: Option<&Path>) -> DeviceResult<Self> {
-        discover_mumu_instances(explicit_root).map(Self::new)
+    pub fn from_discovery(
+        explicit_root: Option<&Path>,
+        env_folder: Option<&Path>,
+    ) -> DeviceResult<Self> {
+        discover_mumu_instances(explicit_root, env_folder).map(Self::new)
     }
 
     pub const fn report(&self) -> &MumuDiscoveryReport {
@@ -332,14 +341,19 @@ fn with_mumu_manager_discovery_detail(error: DeviceError) -> DeviceError {
     }
 }
 
-/// Resolves `MuMuManager.exe` in priority order: explicit root, `ACTINGCOMMAND_NEMU_FOLDER`,
-/// a running MuMu process, the Windows uninstall registry entry, then vendor folder enumeration.
-pub fn resolve_mumu_manager(explicit_root: Option<&Path>) -> DeviceResult<ResolvedMumuManager> {
+/// Resolves `MuMuManager.exe` in priority order: explicit root, the caller-injected
+/// `ACTINGCOMMAND_NEMU_FOLDER` value (`env_folder`; the `FolderEnvironment` rung takes part
+/// only when it is `Some`), a running MuMu process, the Windows uninstall registry entry,
+/// then vendor folder enumeration. The environment itself is never read here.
+pub fn resolve_mumu_manager(
+    explicit_root: Option<&Path>,
+    env_folder: Option<&Path>,
+) -> DeviceResult<ResolvedMumuManager> {
     if let Some(root) = explicit_root {
         return manager_in_root(root, MumuManagerSource::ExplicitRoot, None);
     }
-    if let Some(root) = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from) {
-        return manager_in_root(&root, MumuManagerSource::FolderEnvironment, None);
+    if let Some(root) = env_folder {
+        return manager_in_root(root, MumuManagerSource::FolderEnvironment, None);
     }
     let running = crate::discovery::running_mumu_executable_paths()?;
     if let Some(installation) = resolve_mumu_installation_from_sources(None, &running, &[])? {

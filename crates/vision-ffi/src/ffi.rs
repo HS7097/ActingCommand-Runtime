@@ -111,9 +111,18 @@ pub struct FastDeployPpocrBackend {
     free_buffer: VisionFfiFreeBuffer,
     artifacts: Option<FastDeployPpocrArtifacts>,
     session: Option<Arc<OcrSessionBinding>>,
+    /// Sent as `FastDeployPpocrInvokeRequest.node_placement_diagnostic` on every request.
+    node_placement_diagnostic: Option<String>,
 }
 
 impl FastDeployPpocrBackend {
+    /// Injects the `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` value the provider
+    /// receives with each request (Workflow #318 cfg3); `None` sends nothing.
+    pub fn with_node_placement_diagnostic(mut self, value: Option<String>) -> Self {
+        self.node_placement_diagnostic = value;
+        self
+    }
+
     pub fn from_library_path(path: impl AsRef<OsStr>) -> VisionFfiResult<Self> {
         let library = load_library("fastdeploy-ppocr", path)?;
         let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
@@ -124,6 +133,7 @@ impl FastDeployPpocrBackend {
             free_buffer,
             artifacts: None,
             session: None,
+            node_placement_diagnostic: None,
         })
     }
 
@@ -140,6 +150,7 @@ impl FastDeployPpocrBackend {
             free_buffer,
             artifacts: Some(artifacts),
             session: Some(Arc::new(session)),
+            node_placement_diagnostic: None,
         })
     }
 
@@ -162,6 +173,7 @@ impl FastDeployPpocrBackend {
             free_buffer,
             artifacts: None,
             session: None,
+            node_placement_diagnostic: None,
         }
     }
 
@@ -183,6 +195,7 @@ impl FastDeployPpocrBackend {
             free_buffer,
             artifacts: Some(artifacts),
             session: Some(Arc::new(session)),
+            node_placement_diagnostic: None,
         })
     }
 
@@ -205,6 +218,7 @@ impl FastDeployPpocrBackend {
             free_buffer,
             artifacts: Some(artifacts),
             session: Some(Arc::new(session)),
+            node_placement_diagnostic: None,
         })
     }
 
@@ -886,6 +900,7 @@ impl OcrEngine for FastDeployPpocrBackend {
             session.as_ref().clone(),
             request,
             artifacts.clone(),
+            self.node_placement_diagnostic.clone(),
         );
         envelope.validate()?;
         let (mut response, diagnostics): (FastDeployPpocrInvokeResponse, _) =

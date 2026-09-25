@@ -62,10 +62,12 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 policy,
                 manifest,
                 resource_packages,
+                ignored_env_overrides,
             } = assembly;
             let modes = provider.modes();
             let deferred = provider.deferred_bindings();
             let mumu_root = provider.mumu_root().map(Path::to_path_buf);
+            let env_nemu_folder = provider.env_nemu_folder().map(Path::to_path_buf);
             // Registered exactly as startup registers, short of discovery: the registry's own
             // refusals (duplicate aliases or instance ids) carry the code startup would report.
             let registry = provider
@@ -85,8 +87,10 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 modes,
                 deferred,
                 mumu_root,
+                env_nemu_folder,
                 policy_configured: policy.is_some(),
                 manifest,
+                ignored_env_overrides,
             };
             summarize(&config_path, &checked, &resource_packages)
         });
@@ -123,8 +127,12 @@ struct CheckedAssembly {
     modes: BTreeMap<String, ScheduledExecutionMode>,
     deferred: BTreeMap<String, InstanceBindingKey>,
     mumu_root: Option<PathBuf>,
+    /// The injected `ACTINGCOMMAND_NEMU_FOLDER` (`None` unless `allow_env_overrides`).
+    env_nemu_folder: Option<PathBuf>,
     policy_configured: bool,
     manifest: RuntimeConfigManifest,
+    /// Set `ACTINGCOMMAND_*` variables ignored because `allow_env_overrides` is off.
+    ignored_env_overrides: Vec<&'static str>,
 }
 
 fn summarize(
@@ -203,7 +211,10 @@ fn summarize(
     {
         not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
     }
-    let (mumu_root, mumu_root_unresolved) = mumu_root_report(checked.mumu_root.as_deref());
+    let (mumu_root, mumu_root_unresolved) = mumu_root_report(
+        checked.mumu_root.as_deref(),
+        checked.env_nemu_folder.as_deref(),
+    );
     if mumu_root_unresolved.is_some() {
         not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
     }
@@ -244,6 +255,13 @@ fn summarize(
         "config_manifest": checked.manifest,
         "not_checked": not_checked,
         "mumu_root": mumu_root,
+        // Workflow #318 (cfg3): one `env_override_ignored:<VAR>` per set variable that
+        // `allow_env_overrides` off leaves unread; empty otherwise.
+        "warnings": checked
+            .ignored_env_overrides
+            .iter()
+            .map(|variable| config::env_override_warning(variable))
+            .collect::<Vec<_>>(),
     });
     if let Some(unresolved) = mumu_root_unresolved {
         report["mumu_root_unresolved"] = unresolved;
@@ -279,17 +297,21 @@ fn manifest_integer(
 }
 
 /// The MuMu install root the daemon would use: the configured `mumu_root`, else one
-/// read-only `resolve_mumu_manager(None)` run (environment, running process, uninstall
+/// read-only `resolve_mumu_manager(None, env_folder)` run (the injected
+/// `ACTINGCOMMAND_NEMU_FOLDER` only under `allow_env_overrides`, running process, uninstall
 /// registry, vendor folders). `MuMuManager.exe` is never run; no instance is started or
 /// stopped. A failed resolution is reported as `null` plus its reason, never refused.
-fn mumu_root_report(configured: Option<&Path>) -> (serde_json::Value, Option<serde_json::Value>) {
+fn mumu_root_report(
+    configured: Option<&Path>,
+    env_folder: Option<&Path>,
+) -> (serde_json::Value, Option<serde_json::Value>) {
     if let Some(root) = configured {
         return (
             json!({ "path": root.to_string_lossy(), "source": "config" }),
             None,
         );
     }
-    match resolve_mumu_manager(None) {
+    match resolve_mumu_manager(None, env_folder) {
         Ok(resolved) => (
             json!({
                 "path": resolved.install_root.to_string_lossy(),

@@ -318,7 +318,18 @@ above with source `runtime`.
     default. Configured daemon-level device tool paths appear as
     `device_paths.<name>` (`explicit`); unconfigured ones are omitted. The
     secret fingerprint salt is never a value: only
-    `secret_fingerprint_salt_bytes`, its byte length, is reported.
+    `secret_fingerprint_salt_bytes`, its byte length, is reported. Since
+    Workflow #318 cfg3 every configured instance, in declaration order, adds
+    `instance.<instance_id>.stuck_recovery` (`boolean`) and
+    `instance.<instance_id>.stuck_recovery_cooldown_secs` (`integer`), read
+    back from the host's per-instance stuck-recovery settings and `explicit`
+    when the instance named the field; they are keyed by the registry's bounded
+    `instance_id` (`instance_<32 hex>`), never by the alias, which may exceed
+    the 128-byte key bound. `allow_env_overrides` (`boolean`, default `false`)
+    reports whether the `ACTINGCOMMAND_*` environment fallbacks are read; the
+    `env_overrides` subsystem's reason names every set but ignored variable as
+    `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`,
+    "Environment overrides").
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

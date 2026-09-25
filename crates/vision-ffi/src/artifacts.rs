@@ -1366,6 +1366,11 @@ pub struct FastDeployPpocrInvokeRequest {
     pub session: OcrSessionBinding,
     pub request: OcrInferenceRequest,
     pub artifacts: FastDeployPpocrArtifacts,
+    /// The caller-injected `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` value (Workflow
+    /// #318 cfg3), which the provider validates; the provider no longer reads the variable
+    /// itself. Omitted when absent, so a request without it is unchanged on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_placement_diagnostic: Option<String>,
 }
 
 impl FastDeployPpocrInvokeRequest {
@@ -1374,6 +1379,7 @@ impl FastDeployPpocrInvokeRequest {
         session: OcrSessionBinding,
         request: OcrInferenceRequest,
         artifacts: FastDeployPpocrArtifacts,
+        node_placement_diagnostic: Option<String>,
     ) -> Self {
         Self {
             schema_version: OCR_PROVIDER_REQUEST_SCHEMA_VERSION.to_string(),
@@ -1381,6 +1387,7 @@ impl FastDeployPpocrInvokeRequest {
             session,
             request,
             artifacts,
+            node_placement_diagnostic,
         }
     }
 

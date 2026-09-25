@@ -8,7 +8,7 @@
 
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSubsystem, DeviceDiagnosticMode, FactScalar,
-    RuntimeConfigManifest,
+    InstanceId, RuntimeConfigManifest,
 };
 use actingcommand_device::{
     MUMU_MANAGER_CONTROL_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,
@@ -34,6 +34,10 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) mumu_root: Option<&'a Path>,
     /// The daemon-level `device_paths` by manifest name; `None` is not configured.
     pub(super) device_paths: [(&'static str, Option<&'a Path>); 5],
+    /// The file's `allow_env_overrides` as declared (Workflow #318 cfg3).
+    pub(super) allow_env_overrides: Option<bool>,
+    /// The set `ACTINGCOMMAND_*` variables ignored because the flag is off.
+    pub(super) ignored_env_overrides: &'a [&'static str],
     pub(super) governance_configured: bool,
     /// `(max_attempts, max_session_ms, max_projection_events)` of a present section.
     pub(super) agent_dispatcher: Option<(u16, u64, u16)>,
@@ -42,6 +46,17 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
     pub(super) instances_startup_package_count: usize,
+    /// Every configured instance in declaration order (Workflow #318 cfg3).
+    pub(super) instances: &'a [InstanceParameters],
+}
+
+/// What the file named for one instance's manifest keys; the values are read back from
+/// the host's stuck-recovery settings under `alias`.
+pub(super) struct InstanceParameters {
+    pub(super) instance_id: InstanceId,
+    pub(super) alias: String,
+    pub(super) stuck_recovery_explicit: bool,
+    pub(super) stuck_recovery_cooldown_secs_explicit: bool,
 }
 
 pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, &'static str> {
@@ -135,6 +150,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             "rides the performance monitor thread",
         ),
+        env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
     let explicit_or_default = |present: bool| {
         if present {
@@ -179,6 +195,11 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             "secret_fingerprint_salt_bytes",
             integer(inputs.secret_fingerprint_salt_bytes)?,
         ),
+        ConfigParameter {
+            key: "allow_env_overrides".to_owned(),
+            value: FactScalar::Boolean(inputs.allow_env_overrides.unwrap_or(false)),
+            source: explicit_or_default(inputs.allow_env_overrides.is_some()),
+        },
     ];
     if let Some(mumu_root) = inputs.mumu_root {
         parameters.push(explicit(
@@ -205,6 +226,29 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             "instances_startup_package_count",
             integer(inputs.instances_startup_package_count)?,
         ),
+    ]);
+    // Workflow #318 (cfg3): each instance's stuck-recovery settings, keyed by its bounded
+    // registry id (an alias may exceed the 128-byte key bound).
+    for instance in inputs.instances {
+        let settings = host
+            .stuck_recovery()
+            .get(&instance.alias)
+            .ok_or("config_manifest_incomplete")?;
+        let prefix = format!("instance.{}", instance_id_text(instance.instance_id)?);
+        parameters.extend([
+            ConfigParameter {
+                key: format!("{prefix}.stuck_recovery"),
+                value: FactScalar::Boolean(settings.enabled),
+                source: explicit_or_default(instance.stuck_recovery_explicit),
+            },
+            ConfigParameter {
+                key: format!("{prefix}.stuck_recovery_cooldown_secs"),
+                value: FactScalar::Integer(i64::from(settings.cooldown_secs)),
+                source: explicit_or_default(instance.stuck_recovery_cooldown_secs_explicit),
+            },
+        ]);
+    }
+    parameters.extend([
         default(
             "scheduler.maximum_client_heartbeat_interval_ms",
             FactScalar::DurationMs(scheduler.maximum_client_heartbeat_interval_ms),
@@ -343,6 +387,41 @@ fn subsystem(name: &str, enabled: bool, reason: &str) -> ConfigSubsystem {
 /// "configured" for a present section or capability, otherwise the absence reason.
 const fn present(configured: bool, absent: &'static str) -> &'static str {
     if configured { "configured" } else { absent }
+}
+
+/// `env_overrides` (Workflow #318 cfg3): enabled only when the file allows the
+/// `ACTINGCOMMAND_*` fallbacks. The reason names the flag's state and, when it is off,
+/// every set variable as `env_override_ignored:<VAR>`: the startup record of the warnings
+/// `check-config` prints.
+fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSubsystem {
+    let state = match declared {
+        Some(true) => "configured",
+        Some(false) => "configured off",
+        None => "flag absent",
+    };
+    let reason = if ignored.is_empty() {
+        state.to_owned()
+    } else {
+        let warnings = ignored
+            .iter()
+            .map(|name| super::env_override_warning(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{state}; {warnings}")
+    };
+    ConfigSubsystem {
+        name: "env_overrides".to_owned(),
+        enabled: declared == Some(true),
+        reason,
+    }
+}
+
+/// The registry id's canonical text (`instance_<32 hex>`), its only public spelling.
+fn instance_id_text(instance_id: InstanceId) -> Result<String, &'static str> {
+    match serde_json::to_value(instance_id) {
+        Ok(serde_json::Value::String(text)) => Ok(text),
+        _ => Err("config_manifest_invalid"),
+    }
 }
 
 fn explicit(key: &str, value: FactScalar) -> ConfigParameter {

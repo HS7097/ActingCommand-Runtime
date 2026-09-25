@@ -54,9 +54,11 @@ every dispatch recorded intent -> result (`emulator-control.md`); the hidden
 `api` subcommand stays banned, and the resolved `MuMuManager.exe` path is
 carried on each discovered binding for that purpose. `MuMuManager.exe` is
 resolved in this priority:
-the configured `mumu_root`, `ACTINGCOMMAND_NEMU_FOLDER`, the install root of a
-running MuMu process, the Windows uninstall entry, then vendor folder
-enumeration. The registry tier enumerates `MuMuPlayer*` subkeys under
+the configured `mumu_root`, `ACTINGCOMMAND_NEMU_FOLDER` (only under
+`allow_env_overrides`: `actingd` injects the value, the resolver never reads the
+environment; see `contracts/actingd-check-config.md`, "Environment
+overrides"), the install root of a running MuMu process, the Windows uninstall
+entry, then vendor folder enumeration. The registry tier enumerates `MuMuPlayer*` subkeys under
 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`, its
 `WOW6432Node` twin and the `HKCU` twin, and reads only the standard uninstall
 values `InstallLocation` (fallback: the directory of `DisplayIcon`) and

@@ -36,7 +36,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"}}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"]}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -44,7 +44,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 one entry per group; the real object carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"},{"name":"env_overrides","enabled":false,"reason":"flag absent"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -99,7 +99,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
   values or the defaults `true` and `600`, on every instance. A cool-down
   outside `1..=86400` fails assembly with `stuck_recovery_cooldown_invalid`;
   `false` turns the ladder off for the instance, and a fixture instance never
-  starts one. `resource_package` is present only on an instance
+  starts one. The same values are the manifest parameters
+  `instance.<instance_id>.stuck_recovery` and
+  `instance.<instance_id>.stuck_recovery_cooldown_secs` (see `config_manifest`).
+  `resource_package` is present only on an instance
   that declares one: the admitted `{ path, kind }` (see "Instance resource
   package"); an instance without the field carries no `resource_package` key.
 - `policy_configured` states whether a `policy` section was assembled.
@@ -113,9 +116,9 @@ terminal with the chosen eligibility basis in the original eviction intent.
 - `device_paths` echoes the daemon-level device tool paths, always with all
   five names (`nemu_folder`, `nemu_ipc_dll`, `droidcast_apk`,
   `minitouch_path`, `maatouch_path`): `{ path, source: "explicit" }` for a
-  configured path, `null` for an absent one (today's environment-variable,
-  discovery or bundled-tool behaviour then applies; nothing discovered is
-  reported here).
+  configured path, `null` for an absent one (the injected environment variable
+  when `allow_env_overrides` is `true`, else discovery or the bundled tool, then
+  applies; nothing discovered or injected is reported here).
 - `config_manifest` is the in-memory runtime configuration manifest exactly
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
   `contracts/runtime-fact-store.md`, "Producers"); at startup the daemon
@@ -132,22 +135,35 @@ terminal with the chosen eligibility basis in the original eviction intent.
     `mumu_discovery` and `emulator_control` (on only when at least one
     instance is bound by `instance_index` or `instance_name`; the reason
     carries the count), `runtime_fact_snapshot` (rides the performance monitor
-    thread).
+    thread), `env_overrides` (on only when `allow_env_overrides` is `true`; the
+    reason is `configured`, `configured off` or `flag absent`, followed when the
+    flag is off by `; ` and every `env_override_ignored:<VAR>` warning joined
+    with `, `, see "Environment overrides").
   - `parameters` (`key`, `value`, `source`): the effective values of
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
     `frame_retention_enabled`, `frame_retention_failed_run_successes`,
     `frame_retention_failed_run_days`, `secret_fingerprint_salt_bytes` (the byte
-    length only; the salt itself is never printed), `mumu_root` (only when
+    length only; the salt itself is never printed), `allow_env_overrides`
+    (boolean, default `false`), `mumu_root` (only when
     set), `device_paths.<name>` (only the configured ones, see "Performance
     and device paths"), `instances_count`, `instances_deferred_count`,
-    `instances_startup_package_count` (instances declaring a startup package), the
+    `instances_startup_package_count` (instances declaring a startup package),
+    the per-instance keys below, the
     `capacity_thresholds.*` bytes, the performance monitor's
     `performance_monitor.pressure_start_samples` /
     `performance_monitor.pressure_end_samples` and, when the section is
     present, the `agent_dispatcher.*` budget; plus the values the daemon
     applies without a file field: `scheduler.*`, `policy_cadence.*`,
     `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
-    `performance_monitor.sample_interval_ms` and `mumu_manager.*`. Every
+    `performance_monitor.sample_interval_ms` and `mumu_manager.*`. Per
+    configured instance, in declaration order (Workflow #318, cfg3):
+    `instance.<instance_id>.stuck_recovery` (boolean) and
+    `instance.<instance_id>.stuck_recovery_cooldown_secs` (integer), keyed by
+    the registry's bounded `instance_id` (`instance_<32 hex>`; an alias may
+    exceed the 128-byte key bound), each `explicit` when the instance named
+    the field. The two keys per instance count against the 256-parameter
+    bound, so a configuration of more than about 100 instances fails with
+    `config_manifest_invalid`. Every
     value is read back from the assembled `RuntimeHostConfig` (Workflow #318,
     cfg2), never copied from a library `Default`; a host that cannot report
     one (no performance monitor configuration installed) fails assembly with
@@ -165,6 +181,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
   (`mumu_root` is `null`).
 - `mumu_root` is always present; `mumu_root_unresolved` only when `mumu_root`
   is `null` (see "MuMu install root").
+- `warnings` is always present: one `env_override_ignored:<VAR>` per
+  `ACTINGCOMMAND_*` fallback variable that is set while `allow_env_overrides`
+  is off, in the order of "Environment overrides", and empty otherwise. A
+  warning is not a failure: `status` stays `ok`.
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"config_decode_failed","stage":"load"}}
@@ -173,8 +193,8 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `error.code` is the code startup would fail with. `error.stage` is `load`
 (`config_unavailable`, `config_size_invalid`, `config_read_failed`,
 `config_decode_failed`), `assemble` (the typed configuration codes, for example
-`config_invalid`, `bind_host_not_loopback`, `execution_registry_invalid`,
-`stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
+`config_invalid`, `bind_host_not_loopback`, `duplicate_instance_alias`,
+`duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
 `scheduled_execution_instance_unknown`, `policy_governance_capability_missing`,
@@ -250,17 +270,62 @@ DLL of Nemu IPC capture and input), `droidcast_apk` becomes
 `DroidcastRawConfig.local_apk`, and `minitouch_path` / `maatouch_path` become
 the `MinitouchConfig` / `MaaTouchConfig` `local_path`. Each is optional; a set
 path must be absolute and exist (`device_path_invalid` otherwise; nothing is
-opened, resolved or compared against `mumu_root`). An absent path leaves
-today's behaviour unchanged: the `ACTINGCOMMAND_NEMU_FOLDER`,
-`ACTINGCOMMAND_NEMU_IPC_DLL`, `ACTINGCOMMAND_DROIDCAST_RAW_APK` and
-`ACTINGCOMMAND_MINITOUCH_PATH` environment variables, MuMu discovery and the
-bundled tool lookup. A per-instance `minitouch_local_path` /
+opened, resolved or compared against `mumu_root`). An absent path falls back
+to the `ACTINGCOMMAND_NEMU_FOLDER`, `ACTINGCOMMAND_NEMU_IPC_DLL`,
+`ACTINGCOMMAND_DROIDCAST_RAW_APK` and `ACTINGCOMMAND_MINITOUCH_PATH`
+environment variables only under `allow_env_overrides` (see "Environment
+overrides"), then to MuMu discovery and the bundled tool lookup. A per-instance
+`minitouch_local_path` /
 `maatouch_local_path` keeps precedence over the daemon-level value. A
 discovery-bound instance receives the same paths when it is registered after
 discovery. Configured paths are reported as the manifest parameters
 `device_paths.<name>` with source `explicit`; unconfigured ones are omitted
 from the manifest and `null` in `device_paths` here (no `discovered` value
 is produced).
+
+## Environment overrides
+
+Workflow #318 (cfg3) adds the optional top-level boolean
+`allow_env_overrides` (default `false`; manifest parameter
+`allow_env_overrides`, `explicit` when named). The device and PPOCR provider
+crates no longer read any `ACTINGCOMMAND_*` variable themselves: each former
+read point takes a value `actingd` injects (`EnvOverrides` in
+`crates/device/src/adb.rs`), and `actingd` fills those values from its
+environment only when `allow_env_overrides` is `true`. The variables, in
+warning order:
+
+- `ACTINGCOMMAND_ADB_PATH`: preferred over a configured ADB by the device
+  crate's ADB resolver. `actingd` itself never resolves an ADB path (explicit
+  instances require `adb_path`, discovery-bound ones take the discovered one),
+  so the injected value has no reader in the daemon.
+- `ACTINGCOMMAND_NEMU_FOLDER`: the `MuMuManager.exe` resolver's environment
+  rung (startup discovery and "MuMu install root" here) and the Nemu IPC
+  capture root when `device_paths.nemu_folder` is absent.
+- `ACTINGCOMMAND_NEMU_IPC_DLL`: the Nemu IPC capture DLL when
+  `device_paths.nemu_ipc_dll` is absent.
+- `ACTINGCOMMAND_DROIDCAST_RAW_APK`: the DroidCast_raw APK when
+  `device_paths.droidcast_apk` is absent.
+- `ACTINGCOMMAND_MINITOUCH_PATH`: the minitouch path in place of the bundled
+  one, below `device_paths.minitouch_path` and a per-instance
+  `minitouch_local_path`.
+- `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC`: sent to the PPOCR ONNX
+  provider with each OCR request (`node_placement_diagnostic`, omitted when
+  not injected); the provider still requires exactly `1` and an explicit CUDA
+  session.
+
+Precedence is otherwise unchanged: configured `device_paths`, then a
+per-instance `*_local_path`, then the injected variable (flag on only), then
+discovery or the bundled tool. `PATH`, `ProgramFiles`, `ProgramFiles(x86)`
+and `SystemRoot` stay discovery sources and are not governed by the flag.
+
+The flag is never silent. When it is off (absent or `false`), every variable
+above that is set is ignored and reported as `env_override_ignored:<VAR>`: in
+this command's `warnings` array and, at startup, in the reason of the
+`env_overrides` manifest subsystem, which the host records as the
+`config.subsystems` program fact (no `provider.startup_observed` kind carries
+a warning). The variable's value is never printed. When the flag is `true`
+nothing is ignored and `warnings` is empty; a bad injected value fails where
+it is used (for example `mumu_root_unresolved` below, or the backend open).
 
 ## Discovery-bound instances
 
@@ -283,7 +348,7 @@ Checked here, without discovery:
   `nemu_paired_input_configuration_missing`, `nemu_app_index_invalid`);
 - alias and application identity as the execution registry accepts them
   (`instance_registration_invalid`), and duplicate aliases or instance ids
-  (`execution_registry_invalid`).
+  (`duplicate_instance_alias` / `duplicate_instance_id`).
 
 Still deferred to startup, because each needs the discovery result
 (`contracts/provider-startup.md`): the `MuMuManager` version floor and
@@ -306,11 +371,13 @@ three shapes:
 - `mumu_root` absent and resolved:
   `{"path":"<resolved root>","source":"<source>"}`. The command runs
   `resolve_mumu_manager` once with no explicit root, the same resolution as
-  startup: `ACTINGCOMMAND_NEMU_FOLDER`, then the install root of a running MuMu
+  startup: `ACTINGCOMMAND_NEMU_FOLDER` (only under `allow_env_overrides`, see
+  "Environment overrides"), then the install root of a running MuMu
   process, then the Windows uninstall registry entries, then the vendor
   folders. `path` is the canonical root the resolver returns (on Windows a
   `\\?\` verbatim path), which startup accepts as `mumu_root`. `source` is
-  `env`, `running_process`, `registry_uninstall` or `vendor_enumeration`.
+  `env` (flag on only), `running_process`, `registry_uninstall` or
+  `vendor_enumeration`.
 - `mumu_root` absent and not resolved: `"mumu_root":null` plus a sibling
   `"mumu_root_unresolved":{"reason":"<reason>","message":"<message>"}`, and
   `mumu_discovery` is appended to `not_checked`. This is not a check failure:
@@ -328,8 +395,8 @@ three shapes:
 {"mumu_root":null,"mumu_root_unresolved":{"reason":"installation_absent","message":"no MuMu installation was found: configure mumu_root, set ACTINGCOMMAND_NEMU_FOLDER, start MuMu, or install it at a registered or vendor path"}}
 ```
 
-The resolution is read-only: it reads one environment variable, the process
-list (on Windows one `Get-CimInstance Win32_Process` query through PowerShell,
+The resolution is read-only: it uses the injected `ACTINGCOMMAND_NEMU_FOLDER`
+value (flag on only), the process list (on Windows one `Get-CimInstance Win32_Process` query through PowerShell,
 as startup does), the uninstall registry keys and the file system. It never
 runs `MuMuManager.exe` or ADB, starts or stops no instance and records nothing.
 With two installations the winner can differ between runs (a running process

@@ -116,11 +116,23 @@ impl VisionSpec {
 /// install root or, without one, from the resolver's own sources.
 pub struct DiscoverySpec {
     mumu_root: Option<PathBuf>,
+    /// The caller-injected `ACTINGCOMMAND_NEMU_FOLDER` value (Workflow #318 cfg3); the
+    /// resolver's environment rung takes part only when it is set.
+    env_nemu_folder: Option<PathBuf>,
 }
 
 impl DiscoverySpec {
     pub fn new(mumu_root: Option<PathBuf>) -> Self {
-        Self { mumu_root }
+        Self {
+            mumu_root,
+            env_nemu_folder: None,
+        }
+    }
+
+    /// Injects the `ACTINGCOMMAND_NEMU_FOLDER` fallback; `None` leaves that rung out.
+    pub fn with_env_nemu_folder(mut self, env_nemu_folder: Option<PathBuf>) -> Self {
+        self.env_nemu_folder = env_nemu_folder;
+        self
     }
 
     pub fn mumu_root(&self) -> Option<&Path> {
@@ -133,7 +145,8 @@ impl DiscoverySpec {
     /// timeout, decode or JSON failure) `instance_discovery_unavailable`. Binds, rebinds and
     /// registers nothing.
     pub fn discover(&self) -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>> {
-        discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
+        let env_nemu_folder = self.env_nemu_folder.as_deref();
+        discover_mumu_instances(self.mumu_root.as_deref(), env_nemu_folder).map_err(|error| {
             let code = if matches!(
                 error
                     .nemu_resolution_context()

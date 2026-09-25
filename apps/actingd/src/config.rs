@@ -8,8 +8,9 @@ use actingcommand_contract::{
     RuntimeConfigManifest,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget, Frame,
-    MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice, TouchBackendConfig,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
+    EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
+    TouchBackendConfig,
 };
 use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
 use actingcommand_policy::{
@@ -29,6 +30,7 @@ use actingcommand_vision_ffi::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -87,6 +89,11 @@ pub(super) struct ActingdConfigFile {
     /// bundled-tool behaviour.
     #[serde(default)]
     device_paths: Option<DevicePathsConfigFile>,
+    /// Workflow #318 (cfg3): whether the `ACTINGCOMMAND_*` environment fallbacks
+    /// (`EnvOverrides::VARIABLES`) are read at all (default `false`). Off, a set variable is
+    /// ignored and named as `env_override_ignored:<VAR>`, never silently used.
+    #[serde(default)]
+    allow_env_overrides: Option<bool>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -248,6 +255,10 @@ struct InstanceConfig {
     /// registered after discovery applies the same paths as an explicit one.
     #[serde(skip)]
     device_paths: DevicePathsConfigFile,
+    /// The injected environment fallbacks (empty unless `allow_env_overrides`), copied in by
+    /// `assemble` like `device_paths`.
+    #[serde(skip)]
+    env_overrides: EnvOverrides,
 }
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
@@ -309,6 +320,9 @@ pub(super) struct RuntimeAssembly {
     pub(super) manifest: RuntimeConfigManifest,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
     pub(super) resource_packages: BTreeMap<String, PathBuf>,
+    /// The `ACTINGCOMMAND_*` variables that are set but ignored because
+    /// `allow_env_overrides` is off, in `EnvOverrides::VARIABLES` order.
+    pub(super) ignored_env_overrides: Vec<&'static str>,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -424,6 +438,8 @@ pub(super) struct ConfiguredProvider {
     /// `(source_root, configured manifest path)` of the vision provider, read at startup.
     vision_manifest: Option<(PathBuf, PathBuf)>,
     mumu_root: Option<PathBuf>,
+    /// The injected environment fallbacks for discovery and the vision provider.
+    env_overrides: EnvOverrides,
 }
 
 /// The discovery binding key of one deferred instance.
@@ -582,12 +598,18 @@ impl ActingdConfigFile {
         }
         let device_paths = self.device_paths.unwrap_or_default();
         device_paths.validate()?;
+        let (env_overrides, ignored_env_overrides) =
+            env_overrides(self.allow_env_overrides.unwrap_or(false), |name| {
+                std::env::var_os(name)
+            });
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
         let mut stuck_recovery = BTreeMap::new();
+        let mut instance_parameters = Vec::with_capacity(instances.len());
         for instance in &mut instances {
             instance.device_paths = device_paths.clone();
+            instance.env_overrides = env_overrides.clone();
             let settings = actingcommand_contract::InstanceStuckRecovery {
                 enabled: instance.stuck_recovery.unwrap_or(true),
                 cooldown_secs: instance.stuck_recovery_cooldown_secs.unwrap_or(
@@ -598,6 +620,14 @@ impl ActingdConfigFile {
                 .validate()
                 .map_err(|_| "stuck_recovery_cooldown_invalid")?;
             stuck_recovery.insert(instance.alias.clone(), settings);
+            instance_parameters.push(manifest::InstanceParameters {
+                instance_id: instance.instance_id,
+                alias: instance.alias.clone(),
+                stuck_recovery_explicit: instance.stuck_recovery.is_some(),
+                stuck_recovery_cooldown_secs_explicit: instance
+                    .stuck_recovery_cooldown_secs
+                    .is_some(),
+            });
             if let Some(path) = instance.resource_package.take() {
                 // An empty path stays empty so admission reports it missing.
                 let path = if path.as_os_str().is_empty() || path.is_absolute() {
@@ -626,6 +656,7 @@ impl ActingdConfigFile {
             self.mumu_root,
             self.vision_provider_manifest
                 .map(|path| (self.source_root.clone(), path)),
+            env_overrides,
         );
         let policy = self
             .policy
@@ -674,6 +705,8 @@ impl ActingdConfigFile {
             secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
             mumu_root: provider.mumu_root(),
             device_paths: device_paths.entries(),
+            allow_env_overrides: self.allow_env_overrides,
+            ignored_env_overrides: &ignored_env_overrides,
             governance_configured: self.governance_capability.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
@@ -681,6 +714,7 @@ impl ActingdConfigFile {
             instances_count: provider.instance_count(),
             instances_deferred_count: provider.deferred.len(),
             instances_startup_package_count,
+            instances: &instance_parameters,
         })?;
         host = host.with_config_manifest(manifest.clone());
         if let Some(capability) = self.governance_capability {
@@ -713,7 +747,32 @@ impl ActingdConfigFile {
             policy,
             manifest,
             resource_packages,
+            ignored_env_overrides,
         })
+    }
+}
+
+/// The warning a set but ignored `ACTINGCOMMAND_*` variable produces (Workflow #318 cfg3),
+/// in `check-config`'s `warnings` and the `env_overrides` manifest subsystem reason.
+pub(super) fn env_override_warning(variable: &str) -> String {
+    format!("env_override_ignored:{variable}")
+}
+
+/// Workflow #318 (cfg3): the environment fallbacks `assemble` injects. Allowed, every
+/// `EnvOverrides::VARIABLES` entry is read through `lookup`; otherwise nothing is injected
+/// and every variable that is set is returned as ignored, so it is reported, not dropped.
+fn env_overrides(
+    allowed: bool,
+    lookup: impl Fn(&str) -> Option<OsString>,
+) -> (EnvOverrides, Vec<&'static str>) {
+    if allowed {
+        (EnvOverrides::from_lookup(lookup), Vec::new())
+    } else {
+        let ignored = EnvOverrides::VARIABLES
+            .into_iter()
+            .filter(|name| lookup(name).is_some())
+            .collect();
+        (EnvOverrides::default(), ignored)
     }
 }
 
@@ -1128,7 +1187,9 @@ impl InstanceConfig {
             connect,
         };
         let mut maatouch = MaaTouchConfig::default();
-        let mut minitouch = MinitouchConfig::default();
+        // The injected `ACTINGCOMMAND_MINITOUCH_PATH` (only under `allow_env_overrides`)
+        // replaces the bundled path; every configured path below keeps precedence over it.
+        let mut minitouch = MinitouchConfig::from_env_overrides(&self.env_overrides);
         // Daemon-level `device_paths` first; the per-instance path keeps precedence.
         if let Some(path) = &self.device_paths.maatouch_path {
             maatouch.local_path = path.clone();
@@ -1158,9 +1219,11 @@ impl InstanceConfig {
             maatouch.tap_hold = hold;
             minitouch.tap_hold = hold;
         }
+        // The injected environment fallbacks (empty unless `allow_env_overrides`) apply only
+        // where a daemon-level path below is absent; otherwise discovery applies.
         let mut capture = CaptureBackendConfig::new(adb.clone(), target.clone())
-            .with_requested(capture_requested);
-        // Absent daemon-level paths leave the backend defaults (env var, discovery) intact.
+            .with_requested(capture_requested)
+            .with_env_overrides(&self.env_overrides);
         if let Some(path) = &self.device_paths.droidcast_apk {
             capture.droidcast.local_apk = Some(path.clone());
         }
@@ -1268,6 +1331,7 @@ impl ConfiguredProvider {
         instances: Vec<ConfiguredInstance>,
         mumu_root: Option<PathBuf>,
         vision_manifest: Option<(PathBuf, PathBuf)>,
+        env_overrides: EnvOverrides,
     ) -> Self {
         let mut specs = Vec::new();
         let mut deferred = Vec::new();
@@ -1282,6 +1346,7 @@ impl ConfiguredProvider {
             deferred,
             vision_manifest,
             mumu_root,
+            env_overrides,
         }
     }
 
@@ -1329,6 +1394,19 @@ impl ConfiguredProvider {
         self.mumu_root.as_deref()
     }
 
+    /// The injected `ACTINGCOMMAND_NEMU_FOLDER` value (`None` unless `allow_env_overrides`),
+    /// the resolver's environment rung (`check-config` reporting, discovery).
+    pub(super) fn env_nemu_folder(&self) -> Option<&Path> {
+        self.env_overrides.nemu_folder.as_deref()
+    }
+
+    /// The discovery surface startup and `check-config` register: the configured
+    /// `mumu_root` plus the injected environment rung.
+    fn discovery_spec(&self) -> DiscoverySpec {
+        DiscoverySpec::new(self.mumu_root.clone())
+            .with_env_nemu_folder(self.env_overrides.nemu_folder.clone())
+    }
+
     fn instance_count(&self) -> usize {
         self.instances.len() + self.deferred.len()
     }
@@ -1338,17 +1416,17 @@ impl ConfiguredProvider {
     /// validates and reports through it; the daemon registers once, at startup, after
     /// discovery (`assemble_provider`).
     pub(super) fn into_registry(self) -> Result<ExecutionBackendRegistry, RuntimeHostError> {
+        let discovery = self.discovery_spec();
         let Self {
             mut instances,
             deferred,
-            mumu_root,
             ..
         } = self;
         instances.extend(deferred.into_iter().map(|entry| entry.stand_in));
         ExecutionBackendRegistry::from_assembly(ProviderAssembly {
             instances,
             vision: None,
-            discovery: Some(DiscoverySpec::new(mumu_root)),
+            discovery: Some(discovery),
         })
     }
 }
