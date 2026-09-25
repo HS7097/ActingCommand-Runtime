@@ -89,6 +89,16 @@ pub(super) struct ContainedRunControl {
     client_cancellable: bool,
     deadline_monotonic_ms: AtomicU64,
     cancellation_reason: AtomicU8,
+    /// The committed `task.failed` terminal of this run (slice #316-B4 trigger input).
+    failed_terminal: Mutex<Option<FailedTaskTerminal>>,
+}
+
+/// A committed `task.failed` terminal: the run it ended and its failure code.
+#[derive(Clone, Copy)]
+pub(super) struct FailedTaskTerminal {
+    pub(super) task_id: IssuedTaskId,
+    pub(super) run_id: IssuedRunId,
+    pub(super) failure_code: &'static str,
 }
 
 impl ContainedRunControl {
@@ -103,7 +113,13 @@ impl ContainedRunControl {
             client_cancellable,
             deadline_monotonic_ms: AtomicU64::new(0),
             cancellation_reason: AtomicU8::new(Self::NONE),
+            failed_terminal: Mutex::new(None),
         }
+    }
+
+    /// The run's committed `task.failed` terminal, taken once.
+    pub(super) fn take_failed_terminal(&self) -> RuntimeHostResult<Option<FailedTaskTerminal>> {
+        Ok(lock(&self.failed_terminal, "take_failed_task_terminal")?.take())
     }
 
     fn set_deadline(&self, deadline_monotonic_ms: u64) -> RuntimeHostResult<()> {
@@ -4077,7 +4093,7 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
-        self.execute_contained_task_with_lease(
+        let executed = self.execute_contained_task_with_lease(
             original,
             request,
             instance_alias,
@@ -4091,7 +4107,16 @@ impl HostShared {
             None,
             active_run.control(),
             None,
-        )
+        );
+        // Slice #316-B4: parked until the connection has written this request's receipt.
+        let staged = self.stage_recovery_ladder(
+            &active_run.control,
+            request,
+            &resolved,
+            task_request,
+            RecoveryLadderAdmission::AfterReceipt,
+        );
+        with_recovery_ladder_staging(executed, staged)
     }
 
     fn package_material_deadline(
@@ -4209,7 +4234,7 @@ impl HostShared {
                 ));
             }
             let mut host_error = RuntimeHostError::request(
-                "startup_package_adb_not_ready",
+                pending.run.adb_not_ready_code(),
                 "run_startup_package",
                 RuntimeErrorCode::BackendOperationFailed,
             )
@@ -4301,7 +4326,12 @@ impl HostShared {
             self.execution.vision_provider(),
             material_deadline,
         )
-        .map_err(startup_package_admission_failure)?;
+        .map_err(|failure| match pending.run {
+            startup_package::HostPackageRun::StartupPackage => {
+                startup_package_admission_failure(failure)
+            }
+            startup_package::HostPackageRun::ReturnHome => failure,
+        })?;
         let run_links = RuntimeRunLinks::new(task_id, run_id);
         self.append_scheduled_request_lifecycle(
             &task_request_message,
@@ -4587,7 +4617,7 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let success = self.execute_contained_task_with_lease(
+        let executed = self.execute_contained_task_with_lease(
             &task_request_message,
             &validated,
             instance_alias,
@@ -4601,7 +4631,17 @@ impl HostShared {
             Some(run_links),
             active_run.control(),
             Some(context.request().request_id()),
-        )?;
+        );
+        // Slice #316-B4: a scheduled run has no client receipt; its failure returns to the
+        // policy driver on this thread while the ladder waits on the scheduling thread.
+        let staged = self.stage_recovery_ladder(
+            &active_run.control,
+            &validated,
+            &resolved,
+            task_request,
+            RecoveryLadderAdmission::Now,
+        );
+        let success = with_recovery_ladder_staging(executed, staged)?;
         Ok((task_request_message, success))
     }
 
@@ -5786,6 +5826,22 @@ impl HostShared {
         })
     }
 
+    /// Keeps a committed `task.failed` on the control of the run that is still active under
+    /// `request_id`; a terminal appended for no active run (replay recovery) keeps nothing.
+    fn note_failed_task_terminal(
+        &self,
+        request_id: RequestId,
+        terminal: FailedTaskTerminal,
+    ) -> RuntimeHostResult<()> {
+        let control = lock(&self.contained_runs, "note_failed_task_terminal")?
+            .get(&request_id)
+            .cloned();
+        if let Some(control) = control {
+            *lock(&control.failed_terminal, "note_failed_task_terminal")? = Some(terminal);
+        }
+        Ok(())
+    }
+
     pub(super) fn append_contained_task_terminal(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -6068,6 +6124,19 @@ impl HostShared {
             for event in &appended {
                 self.observe_pipeline_event(event)
                     .map_err(RequestFailure::poison_without_terminal)?;
+            }
+            if draft.outcome == TaskOutcome::Failure
+                && let Some(failure_code) = draft.failure_code
+            {
+                self.note_failed_task_terminal(
+                    request.request_id(),
+                    FailedTaskTerminal {
+                        task_id: draft.task_id,
+                        run_id: draft.run_id,
+                        failure_code,
+                    },
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
             }
             if let Some(mut failure) = projection_failure {
                 failure.terminal = Some(terminal(&terminal_event));

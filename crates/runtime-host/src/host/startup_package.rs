@@ -23,6 +23,9 @@
 //! A configured package is always invoked after `start` / `restart`; an instance without one
 //! never has anything pulled. A daemon that finds the instance already running at startup
 //! schedules nothing: only the two control actions do.
+//!
+//! Slice #316-B4: the same queue and thread also carry stuck-recovery ladders
+//! (`recovery_ladder`), which run their rung packages through this module's runner.
 
 use super::*;
 use std::time::Duration;
@@ -30,15 +33,51 @@ use std::time::Duration;
 const SCHEDULE_OPERATION: &str = "schedule_startup_package";
 const STARTUP_PACKAGE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// One startup package emulator control handed to the scheduling thread.
+/// One unit of work for the host's own scheduling thread (slice #316-B4 generalised the
+/// startup package queue).
+pub(super) enum PendingHostWork {
+    StartupPackage(PendingStartupPackage),
+    RecoveryLadder(Box<super::recovery_ladder::PendingRecoveryLadder>),
+}
+
+/// Which host-scheduled package a run is: the typed admission codes and the failure record
+/// category depend on it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HostPackageRun {
+    /// The instance's startup package (#316-B3).
+    StartupPackage,
+    /// A failed run's bound recovery package, run standalone by the stuck-recovery ladder.
+    ReturnHome,
+}
+
+impl HostPackageRun {
+    pub(super) const fn adb_not_ready_code(self) -> &'static str {
+        match self {
+            Self::StartupPackage => "startup_package_adb_not_ready",
+            Self::ReturnHome => "recovery_ladder_adb_not_ready",
+        }
+    }
+
+    const fn failure_category(self) -> &'static str {
+        match self {
+            Self::StartupPackage => "startup_package",
+            Self::ReturnHome => "recovery_ladder",
+        }
+    }
+}
+
+/// One host-scheduled package run: a startup package emulator control handed to the
+/// scheduling thread, or a stuck-recovery rung's package (`run` tells which).
 pub(super) struct PendingStartupPackage {
     pub(super) instance_id: InstanceId,
     pub(super) instance_alias: String,
     pub(super) request: ContainedTaskRequest,
     /// Shared by the scheduling event and every event of the run.
     pub(super) causation_id: actingcommand_contract::IssuedCausationId,
-    /// The emulator control request that scheduled the package (task timing admission id).
+    /// The emulator control request, or the ladder, that scheduled the package (task timing
+    /// admission id).
     pub(super) control_request_id: RequestId,
+    pub(super) run: HostPackageRun,
 }
 
 /// Binds the configured startup packages to registered physical instances at startup. An
@@ -78,11 +117,7 @@ pub(super) fn resolve_startup_packages(
 /// time under the work guard, like the monitor thread drains its probes.
 pub(super) fn startup_package_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     while !shared.fatal.is_shutdown_requested() {
-        let pending = lock(
-            &shared.pending_startup_packages,
-            "read_pending_startup_packages",
-        )?
-        .pop_front();
+        let pending = lock(&shared.pending_host_work, "read_pending_host_work")?.pop_front();
         let Some(pending) = pending else {
             thread::sleep(STARTUP_PACKAGE_POLL_INTERVAL);
             continue;
@@ -90,7 +125,13 @@ pub(super) fn startup_package_loop(shared: Arc<HostShared>) -> RuntimeHostResult
         let Some(_work) = shared.begin_work()? else {
             return Ok(());
         };
-        if let Err(error) = shared.run_pending_startup_package(pending) {
+        let result = match pending {
+            PendingHostWork::StartupPackage(pending) => {
+                shared.run_pending_startup_package(&pending).map(|_| ())
+            }
+            PendingHostWork::RecoveryLadder(pending) => shared.run_recovery_ladder(&pending),
+        };
+        if let Err(error) = result {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }
@@ -99,17 +140,31 @@ pub(super) fn startup_package_loop(shared: Arc<HostShared>) -> RuntimeHostResult
 }
 
 impl HostShared {
-    /// Records the scheduling intent under the control request and queues the package.
-    /// `None` when the instance has no startup package configured.
+    /// Queues a package whose scheduling intent `prepare_startup_package` recorded; `None`
+    /// when the instance has no startup package configured.
     pub(super) fn schedule_startup_package(
+        &self,
+        pending: Option<PendingStartupPackage>,
+    ) -> Result<StartupPackageDisposition, RequestFailure> {
+        let Some(pending) = pending else {
+            return Ok(StartupPackageDisposition::None);
+        };
+        lock(&self.pending_host_work, SCHEDULE_OPERATION)?
+            .push_back(PendingHostWork::StartupPackage(pending));
+        Ok(StartupPackageDisposition::Scheduled)
+    }
+
+    /// Records the scheduling intent under `links` (a fresh causation id) and returns the
+    /// package to run; `None` when the instance has no startup package configured.
+    pub(super) fn prepare_startup_package(
         &self,
         resolved: &RegisteredInstance,
         links: EventLinksDraft,
         control_request_id: RequestId,
-    ) -> Result<StartupPackageDisposition, RequestFailure> {
+    ) -> Result<Option<PendingStartupPackage>, RequestFailure> {
         let instance_id = resolved.instance_id();
         let Some(request) = self.startup_packages.get(&instance_id) else {
-            return Ok(StartupPackageDisposition::None);
+            return Ok(None);
         };
         let causation_id = self
             .events
@@ -128,29 +183,30 @@ impl HostShared {
                 audit_path(Path::new(request.package_path())),
             ),
         )?;
-        lock(&self.pending_startup_packages, SCHEDULE_OPERATION)?.push_back(
-            PendingStartupPackage {
-                instance_id,
-                instance_alias: resolved.instance_alias.clone(),
-                request: request.clone(),
-                causation_id,
-                control_request_id,
-            },
-        );
-        Ok(StartupPackageDisposition::Scheduled)
+        Ok(Some(PendingStartupPackage {
+            instance_id,
+            instance_alias: resolved.instance_alias.clone(),
+            request: request.clone(),
+            causation_id,
+            control_request_id,
+            run: HostPackageRun::StartupPackage,
+        }))
     }
 
-    /// Runs one queued package; a non-fatal failure is recorded and consumed here, a fatal
-    /// one is returned so the thread poisons the host.
-    fn run_pending_startup_package(&self, pending: PendingStartupPackage) -> RuntimeHostResult<()> {
-        match self.run_startup_package(&pending) {
-            Ok(_) => Ok(()),
+    /// Runs one package; a non-fatal failure is recorded here and returned as its code, a
+    /// fatal one is returned as the error so the thread poisons the host.
+    pub(super) fn run_pending_startup_package(
+        &self,
+        pending: &PendingStartupPackage,
+    ) -> RuntimeHostResult<Result<OperationSuccess, &'static str>> {
+        match self.run_startup_package(pending) {
+            Ok(success) => Ok(Ok(success)),
             Err(failure) => {
-                self.record_startup_package_failure(&pending, &failure.error)?;
+                self.record_startup_package_failure(pending, &failure.error)?;
                 if failure.poison_runtime || failure.error.is_fatal() {
                     return Err(*failure.error);
                 }
-                Ok(())
+                Ok(Err(failure.error.code()))
             }
         }
     }
@@ -201,7 +257,7 @@ impl HostShared {
                     DiagnosticCode::RuntimeDiagnostic,
                     EffectDisposition::NotPerformed,
                     DiagnosticDetailDraft::new(
-                        "startup_package",
+                        pending.run.failure_category(),
                         RuntimeLifecycleFailureStage::OperationCleanup.as_str(),
                         "runtime_host",
                         error.operation(),

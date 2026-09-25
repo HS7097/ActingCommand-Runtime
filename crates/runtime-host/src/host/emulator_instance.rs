@@ -26,17 +26,30 @@
 //! bounded Sensitive vendor output (`native_detail`) and a typed primary detail. Success also
 //! records the instance program fact `device.connected` (and, after `Stop`, invalidates it
 //! with `device_closed`).
+//!
+//! Slice #316-B4: the stuck-recovery ladder's emulator-restart rung drives the same action
+//! through `drive_emulator_control` after recording its own `command.received` intent.
 
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use crate::{EmulatorControlFailure, EmulatorControlOutcome};
-use actingcommand_contract::{EmulatorInstanceAction, FactValue, StartupPackageDisposition};
+use actingcommand_contract::{EmulatorInstanceAction, FactValue};
 
 const CONTROL_OPERATION: &str = "control_emulator_instance";
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
 /// Longest wait for adbd after the vendor reports the instance running (#316-B3).
 const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
 const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// A performed control action: its result terminal and, after `start` / `restart` of an
+/// instance with a startup package, that package with its scheduling intent recorded but
+/// not yet queued.
+pub(super) struct EmulatorControlDriven {
+    outcome: EmulatorControlOutcome,
+    adb_wait_ms: u64,
+    pub(super) terminal: TerminalEvent,
+    pub(super) startup_package: Option<super::startup_package::PendingStartupPackage>,
+}
 
 impl HostShared {
     pub(super) fn control_emulator_instance(
@@ -47,10 +60,46 @@ impl HostShared {
         action: EmulatorInstanceAction,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
+        let links = self.append_client_command_intent(
+            original,
+            request,
+            resolved.instance_id(),
+            action.event_action(),
+            None,
+        )?;
+        let driven =
+            self.drive_emulator_control(&resolved, links, action, original.request_id())?;
+        // Slice #316-B3: after `start` / `restart` the configured startup package is only
+        // scheduled here (intent event + queue); it runs on the host's own scheduling thread.
+        let startup_package = self.schedule_startup_package(driven.startup_package)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(driven.terminal),
+            result: RuntimeResult::EmulatorInstanceControlled {
+                instance_alias: instance_alias.to_owned(),
+                action,
+                instance_index: driven.outcome.instance_index,
+                running: driven.outcome.running,
+                adb_port: driven.outcome.adb_port,
+                elapsed_ms: driven.outcome.elapsed_ms.saturating_add(driven.adb_wait_ms),
+                startup_package,
+            },
+        })
+    }
+
+    /// Performs one control action whose intent is already recorded under `links`: fence,
+    /// session close, provider control, rebinding, ADB baseline, `command.validated` (or
+    /// `command.rejected` + `runtime.failed`), `runtime.instance_bound`, `device.connected`,
+    /// and the startup package's scheduling intent.
+    pub(super) fn drive_emulator_control(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        action: EmulatorInstanceAction,
+        control_request_id: RequestId,
+    ) -> Result<EmulatorControlDriven, RequestFailure> {
         let instance_id = resolved.instance_id();
         let event_action = action.event_action();
-        let links =
-            self.append_client_command_intent(original, request, instance_id, event_action, None)?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, "lock_instance_admission")?;
         let fence = self
@@ -123,7 +172,7 @@ impl HostShared {
         };
         // Still under the admission guard: bind the reported port (or return to pending)
         // before any lease can be granted on the instance.
-        let rebound = match self.rebind_instance_endpoint(&resolved, action, &outcome) {
+        let rebound = match self.rebind_instance_endpoint(resolved, action, &outcome) {
             Ok(rebound) => rebound,
             Err(error) => {
                 return Err(self.emulator_control_failure(
@@ -180,25 +229,16 @@ impl HostShared {
             )?;
         }
         self.record_device_connected(instance_id, action, outcome.running, terminal_event)?;
-        // Slice #316-B3: after `start` / `restart` the configured startup package is only
-        // scheduled here (intent event + queue); it runs on the host's own scheduling thread.
         let startup_package = if action == EmulatorInstanceAction::Stop {
-            StartupPackageDisposition::None
+            None
         } else {
-            self.schedule_startup_package(&rebound, links, original.request_id())?
+            self.prepare_startup_package(&rebound, links, control_request_id)?
         };
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: Some(terminal_event),
-            result: RuntimeResult::EmulatorInstanceControlled {
-                instance_alias: instance_alias.to_owned(),
-                action,
-                instance_index: outcome.instance_index,
-                running: outcome.running,
-                adb_port: outcome.adb_port,
-                elapsed_ms: outcome.elapsed_ms.saturating_add(adb_wait_ms),
-                startup_package,
-            },
+        Ok(EmulatorControlDriven {
+            outcome,
+            adb_wait_ms,
+            terminal: terminal_event,
+            startup_package,
         })
     }
 

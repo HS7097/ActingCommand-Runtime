@@ -13,6 +13,8 @@ mod adb_recovery;
 pub use adb_recovery::*;
 mod owner_unlock;
 pub use owner_unlock::*;
+mod recovery_ladder;
+pub use recovery_ladder::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -1696,7 +1698,7 @@ impl ArtifactFailureRecord {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeLifecyclePhase {
     BackendOpenObserved,
@@ -1734,6 +1736,32 @@ pub enum RuntimeLifecyclePhase {
     /// under the same causation id.
     StartupPackageScheduled {
         instance_id: InstanceId,
+    },
+    /// Stuck-recovery ladder (slice #316-B4), linked to the instance and the trigger run's
+    /// correlation id: the ladder was started for the trigger terminal, with its fixed rung
+    /// plan (`pending` or `skipped` with a reason).
+    RecoveryLadderStarted {
+        trigger: RecoveryLadderTrigger,
+        rungs: Vec<RecoveryRungPlan>,
+    },
+    /// One rung ended; `run_id` names the rung's own contained task run when it ran one.
+    RecoveryRungFinished {
+        rung: RecoveryRung,
+        outcome: RecoveryRungOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<RunId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// The ladder ended; `rungs_tried` counts the rungs that were executed (not skipped).
+    RecoveryLadderFinished {
+        outcome: RecoveryLadderOutcome,
+        rungs_tried: u8,
+    },
+    /// A trigger inside the cool-down window, or while a ladder runs, started nothing.
+    RecoveryLadderSuppressed {
+        reason: RecoveryLadderSuppression,
+        until_unix_ms: u64,
     },
 }
 
@@ -1778,8 +1806,8 @@ impl RuntimeLifecyclePayload {
         self.owner_epoch
     }
 
-    pub const fn phase(&self) -> RuntimeLifecyclePhase {
-        self.phase
+    pub fn phase(&self) -> RuntimeLifecyclePhase {
+        self.phase.clone()
     }
 }
 
@@ -10499,7 +10527,7 @@ impl EventPayload {
                 }
                 None => None,
             };
-            if expected.is_some_and(|phase| phase != value.phase)
+            if expected.as_ref().is_some_and(|phase| *phase != value.phase)
                 || expected.is_none()
                     && matches!(
                         value.phase,
@@ -10537,6 +10565,7 @@ impl EventPayload {
             if let Some(recovery) = &value.adb_recovery {
                 recovery.validate()?;
             }
+            validate_recovery_ladder_phase(&value.phase)?;
             if let RuntimeLifecyclePhase::ShutdownRequest { target, decision } = value.phase
                 && (target.validate().is_err()
                     || (decision == crate::RuntimeShutdownDecision::Accepted

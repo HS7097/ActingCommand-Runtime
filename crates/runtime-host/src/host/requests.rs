@@ -988,6 +988,9 @@ fn connection_loop(
             _ => write_frame(stream, &receipt, maximum_frame_bytes),
         };
         context.timing.receipt_write.finish(written.is_ok());
+        // Slice #316-B4: a stuck-recovery ladder triggered by this request is admitted only
+        // now that its receipt was written (or the write failed); it never runs here.
+        shared.release_parked_recovery_ladder(request.request_id())?;
         match written {
             Ok(()) => {
                 #[cfg(feature = "test-observation")]
