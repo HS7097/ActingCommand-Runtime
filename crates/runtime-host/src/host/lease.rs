@@ -1026,7 +1026,38 @@ impl HostShared {
                 return Err(self.scheduler_denied(request, &resolved, None, error)?);
             }
         };
+        if !preparation.is_existing() {
+            self.require_performance_control_lease(request, &resolved, instance_alias)?;
+        }
         self.grant_prepared_lease(request, request_id, &resolved, preparation, run_links)
+    }
+
+    /// A new Business lease is refused while the instance's performance-control directive asks
+    /// for suspension or shutdown. Lower levels never block a lease; existing-lease replays,
+    /// renewals and resource-close-only leases do not pass through this gate.
+    fn require_performance_control_lease(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        resolved: &RegisteredInstance,
+        instance_alias: &str,
+    ) -> Result<(), RequestFailure> {
+        let directive = lock(&self.performance_control, "gate_lease_performance_control")?
+            .directive(instance_alias)?;
+        if !(directive.suspend_requested || directive.shutdown_requested) {
+            return Ok(());
+        }
+        self.append_lease_requested(request, resolved)?;
+        Err(self.scheduler_denied_error(
+            request,
+            Some(resolved.instance_id()),
+            None,
+            resolved.audit_endpoint(),
+            RuntimeHostError::request(
+                "lease_refused_performance_control",
+                "acquire_lease",
+                RuntimeErrorCode::InvalidRequest,
+            ),
+        )?)
     }
 
     fn grant_prepared_lease(
