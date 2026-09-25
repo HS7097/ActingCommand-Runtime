@@ -3,8 +3,9 @@
 //! The stuck-recovery ladder (Runtime slice #316-B4).
 //!
 //! A direct or scheduled contained task run on a physical instance that commits `task.failed`
-//! with `contained_task_page_unknown` or a `contained_task_recovery_*` code starts a ladder for
-//! its instance, unless the instance's `stuck_recovery` is off. The ladder never runs on the
+//! with `contained_task_page_unknown`, a `contained_task_recovery_*` or a
+//! `contained_task_home_recovery_*` code starts a ladder for its instance, unless the
+//! instance's `stuck_recovery` is off. The ladder never runs on the
 //! run's own thread: a direct run's trigger is parked until its connection wrote the receipt,
 //! a scheduled run's trigger is admitted when the run returned, and the accepted ladder waits
 //! in the startup package queue for the host's scheduling thread.

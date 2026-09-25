@@ -273,8 +273,10 @@ that belongs to emulator control:
 ## Stuck-recovery ladder (slice #316-B4)
 
 A contained task run on a physical instance, direct (`task-run`) or scheduled (policy), whose
-`task.failed` terminal carries `failure_code` `contained_task_page_unknown` or any
-`contained_task_recovery_*` code starts a recovery ladder for the instance, unless the
+`task.failed` terminal carries `failure_code` `contained_task_page_unknown`, any
+`contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
+return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
+recovery ladder for the instance, unless the
 instance's `stuck_recovery` is `false` (`contracts/actingd-check-config.md`). Fixture-simulated
 instances, startup package runs and the ladder's own rung runs never trigger one. The ladder
 never runs on the run's thread: a direct run's trigger waits until its connection wrote the

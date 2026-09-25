@@ -9,10 +9,12 @@ use crate::{RunId, TaskId};
 use serde::{Deserialize, Serialize};
 
 /// A contained task terminal starts a ladder when its `failure_code` is
-/// `contained_task_page_unknown` or any `contained_task_recovery_*` code.
+/// `contained_task_page_unknown`, any `contained_task_recovery_*` code or any
+/// `contained_task_home_recovery_*` (entry recovery / return home) code.
 pub fn is_stuck_recovery_trigger(failure_code: &str) -> bool {
     failure_code == "contained_task_page_unknown"
         || failure_code.starts_with("contained_task_recovery_")
+        || failure_code.starts_with("contained_task_home_recovery_")
 }
 
 /// The rungs of the ladder; `LADDER` is the fixed default order.
