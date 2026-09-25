@@ -625,6 +625,7 @@ impl HostShared {
                     reason,
                     deadline_disposition,
                     event,
+                    retry_after_ms,
                 } => {
                     if let Some(event) = event {
                         self.record_performance_events(&[
@@ -639,11 +640,33 @@ impl HostShared {
                     } else {
                         reason
                     };
-                    Some(RuntimeHostError::request(
+                    let mut projection =
+                        RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false);
+                    if let Some(retry_after_ms) = retry_after_ms {
+                        projection = projection.with_retry_after(retry_after_ms);
+                    }
+                    let mut error = RuntimeHostError::with_projection(
                         code,
                         "admit_policy_dispatch",
-                        RuntimeErrorCode::InvalidRequest,
-                    ))
+                        projection,
+                    );
+                    // A throttle deferral tells the driver when this instance may start: the
+                    // error carries the wait and the rejection record the absolute time.
+                    if let Some(retry_after_ms) = retry_after_ms {
+                        let next_eligible_unix_ms = context
+                            .now_unix_ms
+                            .checked_add(retry_after_ms)
+                            .ok_or_else(|| {
+                                policy_admission_fatal(
+                                    "policy_admission_clock_overflow",
+                                    "admit_policy_dispatch",
+                                )
+                            })?;
+                        let mut rejection = error.policy_rejection();
+                        rejection.next_eligible_unix_ms = Some(next_eligible_unix_ms);
+                        error.lifecycle.policy_rejection = Some(Box::new(rejection));
+                    }
+                    Some(error)
                 }
             };
             if gate_error.is_none()
