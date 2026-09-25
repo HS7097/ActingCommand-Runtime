@@ -72,8 +72,8 @@ pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
 pub const DEFAULT_RUNTIME_EVENT_QUERY_EVENTS: u16 = 128;
 pub const MAX_RUNTIME_EVENT_QUERY_EVENTS: u16 = 256;
 pub const MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES: usize = 768 * 1024;
-pub const MIN_GOVERNANCE_CAPABILITY_BYTES: usize = 32;
-pub const MAX_GOVERNANCE_CAPABILITY_BYTES: usize = 1024;
+pub const MAX_GOVERNANCE_CLIENT_BYTES: usize = 64;
+pub const MAX_GOVERNANCE_CLIENT_VERSION_BYTES: usize = 32;
 pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
     "actingcommand.runtime.planning-document.v1";
 pub const MAX_RUNTIME_PLANNING_DOCUMENT_BYTES: usize = 512 * 1024;
@@ -2888,8 +2888,10 @@ pub enum RuntimeOperation {
     RecordClientAction {
         action: ClientActionRecord,
     },
-    AuthenticateGovernance {
-        capability: String,
+    /// Declares who this connection is for governance writes (Workflow #318 cfg4). The
+    /// actor and source stay on the request envelope; the card never repeats them.
+    DeclareGovernanceIdentity {
+        card: GovernanceIdentityCard,
     },
     RecordApprovalDecision {
         decision: ApprovalDecisionRecord,
@@ -3029,15 +3031,7 @@ impl RuntimeOperation {
             Self::PublishFacts { observation } => observation
                 .validate()
                 .map_err(|error| RuntimeContractError::new(error.code())),
-            Self::AuthenticateGovernance { capability } => {
-                if !(MIN_GOVERNANCE_CAPABILITY_BYTES..=MAX_GOVERNANCE_CAPABILITY_BYTES)
-                    .contains(&capability.len())
-                    || capability.chars().any(char::is_control)
-                {
-                    return Err(RuntimeContractError::new("invalid_governance_capability"));
-                }
-                Ok(())
-            }
+            Self::DeclareGovernanceIdentity { card } => card.validate(),
             Self::RecordApprovalDecision { decision } => decision
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_approval_decision")),
@@ -3223,8 +3217,8 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordClientAction { .. } => {
                 "RuntimeOperation::RecordClientAction(<typed-redacted-action>)"
             }
-            Self::AuthenticateGovernance { .. } => {
-                "RuntimeOperation::AuthenticateGovernance(<redacted-capability>)"
+            Self::DeclareGovernanceIdentity { .. } => {
+                "RuntimeOperation::DeclareGovernanceIdentity(<identity-card>)"
             }
             Self::RecordApprovalDecision { .. } => {
                 "RuntimeOperation::RecordApprovalDecision(<typed-approval>)"
@@ -3347,10 +3341,18 @@ impl RuntimeRequest {
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
         }
+        // A governance identity card may be declared by the person (Ui) or the operator (Cli);
+        // approval decisions stay person-only.
         if matches!(
             self.operation,
-            RuntimeOperation::AuthenticateGovernance { .. }
-                | RuntimeOperation::RecordApprovalDecision { .. }
+            RuntimeOperation::DeclareGovernanceIdentity { .. }
+        ) && !valid_governance_declaration_origin(self.actor, self.source)
+        {
+            return Err(RuntimeContractError::new("invalid_governance_origin"));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::RecordApprovalDecision { .. }
         ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
         {
             return Err(RuntimeContractError::new("invalid_governance_origin"));
@@ -3967,7 +3969,7 @@ pub enum RuntimeResult {
         release: Box<crate::LabPinReleaseResult>,
     },
     ClientActionRecorded,
-    GovernanceAuthenticated,
+    GovernanceIdentityAccepted,
     ApprovalDecisionRecorded {
         approval_id: String,
         disposition: ApprovalDisposition,
@@ -4592,6 +4594,66 @@ pub fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
         return Err(RuntimeContractError::new("invalid_instance_alias"));
     }
     Ok(())
+}
+
+/// A governance connection's declarative identity card (Workflow #318 cfg4): the connecting
+/// client says who it is instead of presenting a shared secret. The Runtime verifies the card
+/// against its governance policy and records every declaration, accepted or refused, as a
+/// `governance.identity_declared` event. Actor and source are the request envelope's and are
+/// never repeated here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GovernanceIdentityCard {
+    /// The client name: `1..=64` bytes of `[A-Za-z0-9._-]` (`validate_governance_client`).
+    pub client: String,
+    /// The client's own version text: `1..=32` bytes without control characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_version: Option<String>,
+    /// The instance alias the client acts for; the Runtime requires it to be registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+}
+
+impl GovernanceIdentityCard {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        validate_governance_client(&self.client)?;
+        if let Some(version) = &self.client_version
+            && (version.is_empty()
+                || version.len() > MAX_GOVERNANCE_CLIENT_VERSION_BYTES
+                || version.chars().any(char::is_control))
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_governance_client_version",
+            ));
+        }
+        if let Some(instance) = &self.instance {
+            validate_instance_alias(instance)
+                .map_err(|_| RuntimeContractError::new("invalid_governance_instance"))?;
+        }
+        Ok(())
+    }
+}
+
+/// The card's client-name rule, shared with governance policy allow-lists.
+pub fn validate_governance_client(client: &str) -> RuntimeContractResult<()> {
+    if client.is_empty()
+        || client.len() > MAX_GOVERNANCE_CLIENT_BYTES
+        || !client
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(RuntimeContractError::new("invalid_governance_client"));
+    }
+    Ok(())
+}
+
+/// The origins that may declare a governance identity card: the person at the console
+/// (User, Ui) and the operator (Cli, Cli).
+pub const fn valid_governance_declaration_origin(actor: EventActor, source: EventSource) -> bool {
+    matches!(
+        (actor, source),
+        (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+    )
 }
 
 /// Bound of the configured game identifier a status instance carries (the scheduling

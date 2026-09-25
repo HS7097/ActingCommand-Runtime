@@ -12,7 +12,6 @@ pub(super) fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
         .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
         .with_procedure_manifest(procedure_manifest())
-        .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
         .with_io_timeout(Duration::from_millis(500))
         .with_scheduler(SchedulerConfig {
             maximum_client_heartbeat_interval_ms: 20,
@@ -112,6 +111,5 @@ fn policy_resources() -> EvaluationResources {
     }
 }
 
-const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capability";
 const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
 const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;

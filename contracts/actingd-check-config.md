@@ -44,7 +44,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 one entry per group; the real object carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":false,"reason":"capability absent"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"},{"name":"env_overrides","enabled":false,"reason":"flag absent"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":true,"reason":"declarative_identity; allowed_clients=any"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"manifest absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"},{"name":"env_overrides","enabled":false,"reason":"flag absent"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -128,7 +128,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
   side effect.
   - `subsystems` (`name`, `enabled`, `reason`): `frame_retention` (the
     `frame_retention_enabled` flag), `agent_dispatcher` (section present),
-    `governance` (`governance_capability` present), `policy_driver` (`policy`
+    `governance` (always on; the reason is `declarative_identity;
+    allowed_clients=<n>` with the size of the effective allow-list, or
+    `declarative_identity; allowed_clients=any` without a `governance` section,
+    see "Governance"), `policy_driver` (`policy`
     section present), `vision_provider` (`vision_provider_manifest` present),
     `device_diagnostic` (always on; the reason carries the mode),
     `performance_monitor` (always on with the default sample interval),
@@ -144,7 +147,10 @@ terminal with the chosen eligibility basis in the original eviction intent.
     `frame_retention_enabled`, `frame_retention_failed_run_successes`,
     `frame_retention_failed_run_days`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `allow_env_overrides`
-    (boolean, default `false`), `mumu_root` (only when
+    (boolean, default `false`), `governance.allowed_clients` (string: the
+    effective allow-list joined with `,`, which always includes
+    `actingd-policy-driver`, or `any`; `explicit` when the file has a
+    `governance` section, see "Governance"), `mumu_root` (only when
     set), `device_paths.<name>` (only the configured ones, see "Performance
     and device paths"), `instances_count`, `instances_deferred_count`,
     `instances_startup_package_count` (instances declaring a startup package),
@@ -197,14 +203,15 @@ terminal with the chosen eligibility basis in the original eviction intent.
 `duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
-`scheduled_execution_instance_unknown`, `policy_governance_capability_missing`,
-`config_manifest_value_out_of_range`, `config_manifest_invalid`,
+`scheduled_execution_instance_unknown`, `governance_capability_retired`,
+`governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
 `config_manifest_incomplete`),
 `validate` (`invalid_runtime_host_config`,
-`invalid_runtime_config_manifest`, `invalid_stuck_recovery` and the other
+`invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
+`invalid_governance_policy` and the other
 `RuntimeHostConfig::validate` codes) or `resource_package`
 (`resource_package_missing`, `resource_package_invalid`), in that order. The
-secret fingerprint salt and the governance capability bytes are never printed.
+secret fingerprint salt is never printed.
 
 A `resource_package` failure also carries `error.detail`; no other stage does:
 
@@ -282,6 +289,36 @@ discovery. Configured paths are reported as the manifest parameters
 `device_paths.<name>` with source `explicit`; unconfigured ones are omitted
 from the manifest and `null` in `device_paths` here (no `discovered` value
 is produced).
+
+## Governance
+
+Workflow #318 (cfg4) retires the shared governance secret: governance
+connections declare an identity card instead (`contracts/client-interactions.md`,
+"Governance connections: the identity card"). The top-level
+`governance_capability` key no longer exists. A file that still contains it,
+whatever its value (including `null`), fails at stage `assemble` with
+`governance_capability_retired`, before any other assembly check, both here and
+at startup; delete the key. `policy_governance_capability_missing` is retired
+with it: a `policy` section needs no governance setting.
+
+The optional top-level section `governance { allowed_clients }` restricts which
+card `client` names the daemon accepts. `allowed_clients` is required inside the
+section: at most 32 entries, each following the card's client rule (`1..=64`
+bytes of `[A-Za-z0-9._-]`), no duplicates; anything else fails with
+`governance_allowed_clients_invalid`. An empty list accepts only the daemon's
+own driver. The client `actingd-policy-driver` is always allowed, whatever the
+list names: it is the card the daemon's policy driver declares on its own
+(User, Ui) connection before it records the configured `catalog_approval_ids`.
+Without the section any well-formed card is accepted. The effective list is the
+manifest parameter `governance.allowed_clients` and its size is in the
+`governance` subsystem reason (see `config_manifest`).
+
+```json
+{"governance":{"allowed_clients":["ui"]}}
+```
+
+gives the parameter value `actingd-policy-driver,ui` (`explicit`) and the reason
+`declarative_identity; allowed_clients=2`.
 
 ## Environment overrides
 

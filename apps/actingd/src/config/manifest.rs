@@ -38,7 +38,8 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) allow_env_overrides: Option<bool>,
     /// The set `ACTINGCOMMAND_*` variables ignored because the flag is off.
     pub(super) ignored_env_overrides: &'a [&'static str],
-    pub(super) governance_configured: bool,
+    /// Whether the file named a `governance` section (Workflow #318 cfg4).
+    pub(super) governance_allowed_clients_explicit: bool,
     /// `(max_attempts, max_session_ms, max_projection_events)` of a present section.
     pub(super) agent_dispatcher: Option<(u16, u64, u16)>,
     pub(super) policy_configured: bool,
@@ -75,6 +76,16 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         .performance_monitor()
         .ok_or("config_manifest_incomplete")?;
     let discovery_bound = inputs.instances_deferred_count > 0;
+    // Workflow #318 cfg4: the effective allow-list read back from the host; `any` when the
+    // host accepts every well-formed card.
+    let governance_allowed_clients = host
+        .governance_policy()
+        .allowed_clients
+        .as_ref()
+        .map(|allowed| allowed.iter().map(String::as_str).collect::<Vec<_>>());
+    let governance_allowed_clients_count = governance_allowed_clients
+        .as_ref()
+        .map_or_else(|| "any".to_owned(), |allowed| allowed.len().to_string());
     let subsystems = vec![
         subsystem(
             "frame_retention",
@@ -90,11 +101,13 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             inputs.agent_dispatcher.is_some(),
             present(inputs.agent_dispatcher.is_some(), "section absent"),
         ),
-        subsystem(
-            "governance",
-            inputs.governance_configured,
-            present(inputs.governance_configured, "capability absent"),
-        ),
+        ConfigSubsystem {
+            name: "governance".to_owned(),
+            enabled: true,
+            reason: format!(
+                "declarative_identity; allowed_clients={governance_allowed_clients_count}"
+            ),
+        },
         subsystem(
             "policy_driver",
             inputs.policy_configured,
@@ -199,6 +212,14 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             key: "allow_env_overrides".to_owned(),
             value: FactScalar::Boolean(inputs.allow_env_overrides.unwrap_or(false)),
             source: explicit_or_default(inputs.allow_env_overrides.is_some()),
+        },
+        ConfigParameter {
+            key: "governance.allowed_clients".to_owned(),
+            value: FactScalar::String(
+                governance_allowed_clients
+                    .map_or_else(|| "any".to_owned(), |allowed| allowed.join(",")),
+            ),
+            source: explicit_or_default(inputs.governance_allowed_clients_explicit),
         },
     ];
     if let Some(mumu_root) = inputs.mumu_root {
@@ -384,7 +405,7 @@ fn subsystem(name: &str, enabled: bool, reason: &str) -> ConfigSubsystem {
     }
 }
 
-/// "configured" for a present section or capability, otherwise the absence reason.
+/// "configured" for a present section, otherwise the absence reason.
 const fn present(configured: bool, absent: &'static str) -> &'static str {
     if configured { "configured" } else { absent }
 }

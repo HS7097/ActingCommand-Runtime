@@ -363,22 +363,21 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
     )
     .expect("approval request");
     let connection = ConnectionId::new(99).expect("connection id");
-    let authentication = RuntimeRequest::new(
-        ids.mint_request_id().expect("authentication request"),
-        ids.mint_correlation_id()
-            .expect("authentication correlation"),
+    let declaration = RuntimeRequest::new(
+        ids.mint_request_id().expect("declaration request"),
+        ids.mint_correlation_id().expect("declaration correlation"),
         None,
         EventActor::User,
         EventSource::Ui,
         unix_ms_now().expect("wall clock"),
-        RuntimeOperation::AuthenticateGovernance {
-            capability: TEST_GOVERNANCE_CAPABILITY.to_owned(),
+        RuntimeOperation::DeclareGovernanceIdentity {
+            card: test_governance_card(),
         },
     )
-    .expect("authentication request");
+    .expect("declaration request");
     assert_eq!(
-        host.process_request_for_test(&authentication, connection)
-            .expect("authentication receipt")
+        host.process_request_for_test(&declaration, connection)
+            .expect("declaration receipt")
             .state(),
         RuntimeReceiptState::Completed
     );
@@ -417,7 +416,7 @@ fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
     let start = Arc::new(Barrier::new(3));
     let run = |mut client: TestClient, marker: char, start: Arc<Barrier>| {
         thread::spawn(move || {
-            client.authenticate_governance();
+            client.declare_governance_identity();
             let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
                 decision: ApprovalDecisionRecord::new(
                     "approval:concurrent-target",

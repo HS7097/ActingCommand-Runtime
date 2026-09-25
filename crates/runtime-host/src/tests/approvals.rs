@@ -35,7 +35,7 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     ));
 
     let mut client = TestClient::connect(&host);
-    client.authenticate_governance();
+    client.declare_governance_identity();
     let conflicting = client.governance_request(RuntimeOperation::RecordApprovalDecision {
         decision: ApprovalDecisionRecord::new(
             "approval:fixture-a",
@@ -122,7 +122,7 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
         catalog_version: 1,
     };
     let mut client = TestClient::connect(&host);
-    client.authenticate_governance();
+    client.declare_governance_identity();
     for index in 0..257 {
         let approval_id = format!("approval:history-{index}");
         let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
@@ -185,7 +185,7 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
     )
     .expect("reopen runtime host");
     let mut client = TestClient::connect(&reopened);
-    client.authenticate_governance();
+    client.declare_governance_identity();
     let conflict = client.governance_request(RuntimeOperation::RecordApprovalDecision {
         decision: ApprovalDecisionRecord::new(
             "approval:history-0",
@@ -205,9 +205,17 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
 }
 
 #[test]
-fn governance_authority_is_capability_authenticated_and_connection_bound() {
+fn governance_authority_requires_an_accepted_identity_card_and_is_connection_bound() {
     let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let host = RuntimeHost::start(
+        config(&root).with_governance_policy(test_governance_policy()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host with a governance allow-list");
     let target = ApprovalTarget::Catalog {
         catalog_hash: format!("sha256:{}", "a".repeat(64)),
         catalog_version: 1,
@@ -233,17 +241,20 @@ fn governance_authority_is_capability_authenticated_and_connection_bound() {
         RuntimeErrorCode::InvalidRequest
     );
 
-    let wrong_capability = client.governance_request(RuntimeOperation::AuthenticateGovernance {
-        capability: "wrong-governance-capability-value".to_owned(),
+    let not_allowed = client.governance_request(RuntimeOperation::DeclareGovernanceIdentity {
+        card: actingcommand_contract::GovernanceIdentityCard {
+            client: "not-allowed-client".to_owned(),
+            ..test_governance_card()
+        },
     });
-    let receipt = client.send(&wrong_capability);
+    let receipt = client.send(&not_allowed);
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-    assert_eq!(
-        receipt.error_projection().expect("denial").code,
-        RuntimeErrorCode::InvalidRequest
-    );
+    let denial = receipt.error_projection().expect("denial");
+    assert_eq!(denial.code, RuntimeErrorCode::InvalidRequest);
+    assert_eq!(denial.host_code(), Some("governance_client_not_allowed"));
+    assert!(receipt.terminal().is_some(), "the refusal is recorded");
 
-    client.authenticate_governance();
+    client.declare_governance_identity();
     let approved = client.governance_request(RuntimeOperation::RecordApprovalDecision {
         decision: approval(ApprovalDisposition::Approved),
     });
@@ -284,6 +295,34 @@ fn governance_authority_is_capability_authenticated_and_connection_bound() {
             && event.origin.module() == OriginModule::Governance
             && event.origin.actor() == EventActor::User
     }));
+    let declarations = projected_events(
+        &mut other,
+        EventQuery {
+            event_type: Some(EventType::GovernanceIdentityDeclared),
+            ..EventQuery::default()
+        },
+    );
+    let verdicts = declarations
+        .iter()
+        .map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Client(
+                    actingcommand_contract::ClientPayload::GovernanceIdentityDeclared(declared),
+                ) => declared.verdict(),
+                other => panic!("unexpected declaration payload {other:?}"),
+            },
+            other => panic!("unexpected declaration projection {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        verdicts,
+        [
+            actingcommand_contract::GovernanceIdentityVerdict::Refused {
+                code: actingcommand_contract::GovernanceIdentityRefusal::ClientNotAllowed,
+            },
+            actingcommand_contract::GovernanceIdentityVerdict::Accepted,
+        ]
+    );
     drop(client);
     drop(other);
     host.close().expect("close host");

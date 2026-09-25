@@ -364,7 +364,7 @@ fn record_policy_approval_disposition(
     )
     .expect("approval decision");
     let mut client = TestClient::connect(host);
-    client.authenticate_governance();
+    client.declare_governance_identity();
     let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
@@ -379,7 +379,7 @@ fn record_policy_approval_disposition(
 }
 
 fn record_target_approval(client: &mut TestClient, approval_id: &str, target: ApprovalTarget) {
-    client.authenticate_governance();
+    client.declare_governance_identity();
     let decision = ApprovalDecisionRecord::new(
         approval_id,
         ApprovalDisposition::Approved,

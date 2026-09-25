@@ -23,8 +23,7 @@ fn policy_dispatch_crash_child_process() {
     if let Some(package) = &package {
         fs::write(&package_path, package).expect("scheduled package");
     }
-    let mut runtime_config = RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
-        .with_governance_capability(TEST_GOVERNANCE_CAPABILITY);
+    let mut runtime_config = RuntimeHostConfig::new(&root, b"policy-crash-process-salt");
     let lease_expiry_clock = (recovery_case.as_deref() == Some("lease-expired"))
         .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
     runtime_config = match &package {
@@ -382,8 +381,7 @@ fn policy_pending_crash_child_process() {
         serde_json::from_slice(&instance_bytes).expect("instance identifiers");
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&root, b"policy-pending-process-salt")
-            .with_procedure_manifest(procedure_manifest())
-            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
+            .with_procedure_manifest(procedure_manifest()),
         Arc::new(FakeProvider::from_entries([
             (
                 POLICY_INSTANCE_ALIAS.to_owned(),

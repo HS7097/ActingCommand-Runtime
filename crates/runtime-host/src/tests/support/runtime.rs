@@ -47,9 +47,27 @@ impl RuntimeClock for ManualRuntimeClock {
     }
 }
 
+const TEST_GOVERNANCE_CLIENT: &str = "runtime-host-test";
+
+fn test_governance_policy() -> GovernancePolicy {
+    GovernancePolicy {
+        allowed_clients: Some(BTreeSet::from([TEST_GOVERNANCE_CLIENT.to_owned()])),
+    }
+}
+
+fn test_governance_card() -> actingcommand_contract::GovernanceIdentityCard {
+    actingcommand_contract::GovernanceIdentityCard {
+        client: TEST_GOVERNANCE_CLIENT.to_owned(),
+        client_version: None,
+        instance: None,
+    }
+}
+
 struct TestClient {
     stream: TcpStream,
     ids: IdentifierIssuer,
+    /// One governance identity card per connection (Workflow #318 cfg4).
+    governance_declared: bool,
 }
 
 impl TestClient {
@@ -76,6 +94,7 @@ impl TestClient {
         Self {
             stream,
             ids: IdentifierIssuer::new().expect("identifier issuer"),
+            governance_declared: false,
         }
     }
 
@@ -133,16 +152,20 @@ impl TestClient {
         .expect("governance runtime request")
     }
 
-    fn authenticate_governance(&mut self) {
-        let request = self.governance_request(RuntimeOperation::AuthenticateGovernance {
-            capability: TEST_GOVERNANCE_CAPABILITY.to_owned(),
+    fn declare_governance_identity(&mut self) {
+        if self.governance_declared {
+            return;
+        }
+        let request = self.governance_request(RuntimeOperation::DeclareGovernanceIdentity {
+            card: test_governance_card(),
         });
         let receipt = self.send(&request);
         assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
         assert!(matches!(
             receipt.result(),
-            Some(RuntimeResult::GovernanceAuthenticated)
+            Some(RuntimeResult::GovernanceIdentityAccepted)
         ));
+        self.governance_declared = true;
     }
 
     fn send(&mut self, request: &RuntimeRequest) -> RuntimeReceipt {
