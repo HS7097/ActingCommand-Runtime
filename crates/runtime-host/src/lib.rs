@@ -22,6 +22,7 @@ pub use ledger_maintenance::{
     LedgerMaintenanceRequest,
 };
 mod owner;
+pub use owner::PriorOwnerReleasedByExit;
 mod owner_unlock;
 pub use owner_unlock::{OwnerUnlockFailure, OwnerUnlockReceipt};
 mod performance;

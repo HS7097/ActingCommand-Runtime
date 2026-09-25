@@ -33,6 +33,30 @@ pub fn capacity_volume(path: &Path) -> Result<String, CapacityUnavailable> {
     capacity::volume(path)
 }
 
+/// One process id as the operating system reports it now, read with the same limited
+/// query and creation time as the process sampler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessProbe {
+    /// A running process has this id; its creation time in Unix milliseconds.
+    Running { created_at_unix_ms: u64 },
+    /// No running process has this id: none exists, or the one that exists has exited.
+    NotRunning,
+    /// The operating system did not decide, for example because it refused the query.
+    Unknown(&'static str),
+}
+
+pub fn probe_process(pid: u32) -> ProcessProbe {
+    #[cfg(windows)]
+    {
+        windows::probe_process(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        ProcessProbe::Unknown("process_probe_unsupported")
+    }
+}
+
 #[cfg(windows)]
 mod windows;
 

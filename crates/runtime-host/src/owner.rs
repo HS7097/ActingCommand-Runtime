@@ -4,6 +4,7 @@ use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     IdentifierIssuer, InstanceId, OwnerEpoch, OwnerResourceDisposition, RuntimeErrorCode,
 };
+use actingcommand_host_metrics::ProcessProbe;
 use actingcommand_ledger::owner_journal::{RuntimeOwnerJournal, RuntimeOwnerRecord as OwnerRecord};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -12,6 +13,9 @@ use std::process;
 
 pub(crate) const OWNER_FILE_NAME: &str = "owner.lock";
 const OWNER_SCHEMA_VERSION: &str = actingcommand_contract::OWNER_JOURNAL_SCHEMA;
+/// A running process whose creation time is further than this from the recorded
+/// `started_at_unix_ms` is another incarnation of a reused pid.
+const PID_REUSE_TOLERANCE_MS: u64 = 2_000;
 
 pub(crate) struct OwnerStartup {
     pub(crate) guard: OwnerGuard,
@@ -19,6 +23,86 @@ pub(crate) struct OwnerStartup {
     pub(crate) takeover_instances: Vec<InstanceId>,
     pub(crate) takeover: bool,
     pub(crate) journal: RuntimeOwnerJournal,
+    pub(crate) released_by_exit: Option<PriorOwnerReleasedByExit>,
+}
+
+/// Slice #315-B2c-2: the previous owner whose last journal record still declared resources
+/// `in_use` or `unconfirmed` and whose process had exited, so startup treated them as
+/// released for owner purposes, as `actingd unlock-owner --confirm-resources-released` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PriorOwnerReleasedByExit {
+    pub pid: u32,
+    pub started_at_unix_ms: u64,
+    pub last_disposition: OwnerResourceDisposition,
+}
+
+impl PriorOwnerReleasedByExit {
+    pub(crate) fn phase(self) -> actingcommand_contract::RuntimeLifecyclePhase {
+        actingcommand_contract::RuntimeLifecyclePhase::PriorEpochOwnerReleasedByExit {
+            pid: self.pid,
+            started_at_unix_ms: self.started_at_unix_ms,
+            last_disposition: self.last_disposition,
+        }
+    }
+}
+
+/// The daemon's startup line for the same decision.
+impl std::fmt::Display for PriorOwnerReleasedByExit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let last_disposition = match self.last_disposition {
+            OwnerResourceDisposition::None => "none",
+            OwnerResourceDisposition::InUse => "in_use",
+            OwnerResourceDisposition::ConfirmedClosed => "confirmed_closed",
+            OwnerResourceDisposition::Unconfirmed => "unconfirmed",
+        };
+        write!(
+            formatter,
+            "owner_resources_released_by_exit pid={} started_at_unix_ms={} last_disposition={last_disposition}",
+            self.pid, self.started_at_unix_ms
+        )
+    }
+}
+
+/// A v2 InUse/Unconfirmed last record (a failed close included) is released only when its
+/// process is dead: no running process has the pid, or the running one was created more
+/// than `PID_REUSE_TOLERANCE_MS` away from the recorded start. Alive, or a probe that
+/// cannot decide, keeps the `owner_resource_unconfirmed` refusal with the probe outcome.
+fn release_exited_owner(
+    previous: Option<&OwnerRecord>,
+) -> RuntimeHostResult<Option<PriorOwnerReleasedByExit>> {
+    let Some((record, last_disposition)) =
+        previous.and_then(|record| match record.resource_disposition {
+            Some(
+                disposition @ (OwnerResourceDisposition::InUse
+                | OwnerResourceDisposition::Unconfirmed),
+            ) if record.schema_version == OWNER_SCHEMA_VERSION => Some((record, disposition)),
+            _ => None,
+        })
+    else {
+        return Ok(None);
+    };
+    let probe = match actingcommand_host_metrics::probe_process(record.pid) {
+        ProcessProbe::Running { created_at_unix_ms }
+            if created_at_unix_ms.abs_diff(record.started_at_unix_ms) <= PID_REUSE_TOLERANCE_MS =>
+        {
+            format!("pid {} alive", record.pid)
+        }
+        ProcessProbe::Unknown(reason) => format!("probe unknown: {reason}"),
+        ProcessProbe::NotRunning | ProcessProbe::Running { .. } => {
+            return Ok(Some(PriorOwnerReleasedByExit {
+                pid: record.pid,
+                started_at_unix_ms: record.started_at_unix_ms,
+                last_disposition,
+            }));
+        }
+    };
+    let mut refused = RuntimeHostError::fatal(
+        "owner_resource_unconfirmed",
+        "acquire_owner_file",
+        RuntimeErrorCode::OwnerConflict,
+    );
+    refused.lifecycle.owner_probe = Some(probe);
+    Err(refused)
 }
 
 pub(crate) struct OwnerGuard {
@@ -54,20 +138,7 @@ impl OwnerGuard {
         try_lock_owner_file(&file, "owner_conflict", "acquire_owner_file")?;
         let journal = read_owner_journal(&mut file)?;
         let previous = journal.last().cloned();
-        if previous.as_ref().is_some_and(|record| {
-            record.schema_version == OWNER_SCHEMA_VERSION
-                && matches!(
-                    record.resource_disposition,
-                    Some(OwnerResourceDisposition::InUse)
-                        | Some(OwnerResourceDisposition::Unconfirmed)
-                )
-        }) {
-            return Err(RuntimeHostError::fatal(
-                "owner_resource_unconfirmed",
-                "acquire_owner_file",
-                RuntimeErrorCode::OwnerConflict,
-            ));
-        }
+        let released_by_exit = release_exited_owner(previous.as_ref())?;
         let owner_epoch = *issuer
             .mint_owner_epoch()
             .map_err(|_| {
@@ -121,6 +192,7 @@ impl OwnerGuard {
             takeover_instances,
             takeover,
             journal,
+            released_by_exit,
         })
     }
 
@@ -513,33 +585,78 @@ mod tests {
             .expect("takeover rejected");
         assert_eq!(error.code(), "owner_conflict");
 
-        let stale_root = tempfile::tempdir().expect("stale owner root");
-        let mut stale_file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(stale_root.path().join(OWNER_FILE_NAME))
-            .expect("stale owner file");
-        append_record(
-            &mut stale_file,
-            &OwnerRecord {
-                schema_version: OWNER_SCHEMA_VERSION.to_owned(),
-                revision: 1,
-                owner_epoch: *issuer.mint_owner_epoch().expect("stale epoch").transport(),
-                pid: process::id(),
-                started_at_unix_ms: 1,
-                active: true,
-                active_instances: Vec::new(),
-                closed_at_unix_ms: None,
-                resource_disposition: Some(OwnerResourceDisposition::Unconfirmed),
-            },
-        )
-        .expect("write stale unconfirmed owner");
-        drop(stale_file);
-        let stale_error = OwnerGuard::acquire(stale_root.path(), &issuer, 3)
+        // Slice #315-B2c-2: an unlocked Unconfirmed record whose pid is a running process.
+        let stale_root = |started_at_unix_ms| {
+            let stale_root = tempfile::tempdir().expect("stale owner root");
+            let mut stale_file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(stale_root.path().join(OWNER_FILE_NAME))
+                .expect("stale owner file");
+            append_record(
+                &mut stale_file,
+                &OwnerRecord {
+                    schema_version: OWNER_SCHEMA_VERSION.to_owned(),
+                    revision: 1,
+                    owner_epoch: *issuer.mint_owner_epoch().expect("stale epoch").transport(),
+                    pid: process::id(),
+                    started_at_unix_ms,
+                    active: true,
+                    active_instances: Vec::new(),
+                    closed_at_unix_ms: None,
+                    resource_disposition: Some(OwnerResourceDisposition::Unconfirmed),
+                },
+            )
+            .expect("write stale unconfirmed owner");
+            stale_root
+        };
+        // The recorded start matches this process's creation time: still alive, refused.
+        let ProcessProbe::Running { created_at_unix_ms } =
+            actingcommand_host_metrics::probe_process(process::id())
+        else {
+            panic!("own process probe must report a running process");
+        };
+        let alive_root = stale_root(created_at_unix_ms);
+        let stale_error = OwnerGuard::acquire(alive_root.path(), &issuer, 3)
             .err()
             .expect("stale takeover rejected");
         assert_eq!(stale_error.code(), "owner_resource_unconfirmed");
+        assert_eq!(
+            stale_error.lifecycle.owner_probe,
+            Some(format!("pid {} alive", process::id()))
+        );
+
+        // A creation time far from the recorded start is a reused pid: the previous owner is
+        // dead and its epoch is taken over without an unlock record.
+        let reused_root = stale_root(1);
+        let OwnerStartup {
+            guard: mut released,
+            owner_epoch,
+            takeover,
+            released_by_exit,
+            ..
+        } = OwnerGuard::acquire(reused_root.path(), &issuer, 4).expect("dead owner released");
+        assert!(takeover);
+        assert_eq!(
+            released_by_exit,
+            Some(PriorOwnerReleasedByExit {
+                pid: process::id(),
+                started_at_unix_ms: 1,
+                last_disposition: OwnerResourceDisposition::Unconfirmed,
+            })
+        );
+        let record = read_last_record(released.file_mut("read_released_owner").expect("handle"))
+            .expect("persisted released owner")
+            .expect("owner record");
+        assert_eq!(record.revision, 2);
+        assert_eq!(record.owner_epoch, owner_epoch);
+        assert!(record.active);
+        assert_eq!(
+            record.resource_disposition,
+            Some(OwnerResourceDisposition::None)
+        );
+        released.close(5).expect("close released owner");
     }
 }

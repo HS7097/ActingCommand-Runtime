@@ -93,6 +93,10 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let host =
         RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
             .map_err(ActingdError::runtime)?;
+    // Slice #315-B2c-2: the same decision the Ledger records as a lifecycle observation.
+    if let Some(released) = host.owner_released_by_exit() {
+        println!("actingd {released}");
+    }
     let initial_policy_cycle = (|| {
         let Some(_work) = host.begin_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);

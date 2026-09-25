@@ -11,8 +11,8 @@ use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_MORE_FILES, FILETIME, GetLastError, HANDLE,
-    INVALID_HANDLE_VALUE, RECT,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME,
+    GetLastError, HANDLE, INVALID_HANDLE_VALUE, RECT, STILL_ACTIVE,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -29,12 +29,12 @@ use windows_sys::Win32::System::Performance::{
 use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
-    GetProcessInformation, GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS,
-    OpenProcess, PROCESS_PROTECTION_LEVEL_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_VM_READ, PROTECTION_LEVEL_ANTIMALWARE_LIGHT, PROTECTION_LEVEL_AUTHENTICODE,
-    PROTECTION_LEVEL_CODEGEN_LIGHT, PROTECTION_LEVEL_LSA_LIGHT, PROTECTION_LEVEL_PPL_APP,
-    PROTECTION_LEVEL_WINDOWS, PROTECTION_LEVEL_WINDOWS_LIGHT, PROTECTION_LEVEL_WINTCB,
-    PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo,
+    GetExitCodeProcess, GetProcessInformation, GetProcessIoCounters, GetProcessTimes,
+    GetSystemTimes, IO_COUNTERS, OpenProcess, PROCESS_PROTECTION_LEVEL_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, PROTECTION_LEVEL_ANTIMALWARE_LIGHT,
+    PROTECTION_LEVEL_AUTHENTICODE, PROTECTION_LEVEL_CODEGEN_LIGHT, PROTECTION_LEVEL_LSA_LIGHT,
+    PROTECTION_LEVEL_PPL_APP, PROTECTION_LEVEL_WINDOWS, PROTECTION_LEVEL_WINDOWS_LIGHT,
+    PROTECTION_LEVEL_WINTCB, PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
@@ -438,6 +438,51 @@ pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, &'
             total_bytes: status.ullTotalPhys,
             available_bytes: status.ullAvailPhys,
         })
+    }
+}
+
+/// FILETIME of 1970-01-01T00:00:00Z in 100 ns intervals since 1601-01-01.
+const UNIX_EPOCH_WINDOWS_100NS: u64 = 116_444_736_000_000_000;
+
+/// Only `ERROR_INVALID_PARAMETER` from the limited open means no process has the id; any
+/// other refusal, protected processes included, leaves the answer unknown.
+pub(super) fn probe_process(pid: u32) -> super::ProcessProbe {
+    use super::ProcessProbe;
+    if pid == 0 {
+        return ProcessProbe::Unknown("process_id_reserved");
+    }
+    // SAFETY: OpenProcess takes no pointers; a non-null handle is closed by OwnedHandle.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return match unsafe { GetLastError() } {
+            ERROR_INVALID_PARAMETER => ProcessProbe::NotRunning,
+            ERROR_ACCESS_DENIED => ProcessProbe::Unknown("process_query_refused"),
+            _ => ProcessProbe::Unknown("process_open_failed"),
+        };
+    }
+    let handle = OwnedHandle(handle);
+    let mut exit_code = 0u32;
+    // SAFETY: the handle is live and the out pointer is valid for the call.
+    if unsafe { GetExitCodeProcess(handle.0, &mut exit_code) } == 0 {
+        return ProcessProbe::Unknown("process_exit_code_unavailable");
+    }
+    // An exited process whose object another handle still holds is not running.
+    if exit_code != STILL_ACTIVE as u32 {
+        return ProcessProbe::NotRunning;
+    }
+    let mut creation: FILETIME = unsafe { zeroed() };
+    let mut exit: FILETIME = unsafe { zeroed() };
+    let mut kernel: FILETIME = unsafe { zeroed() };
+    let mut user: FILETIME = unsafe { zeroed() };
+    // SAFETY: the handle is live and all FILETIME out pointers are valid for the call.
+    if unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
+        return ProcessProbe::Unknown("process_times_unavailable");
+    }
+    match filetime(creation).checked_sub(UNIX_EPOCH_WINDOWS_100NS) {
+        Some(since_epoch) if since_epoch > 0 => ProcessProbe::Running {
+            created_at_unix_ms: since_epoch / 10_000,
+        },
+        _ => ProcessProbe::Unknown("process_creation_time_invalid"),
     }
 }
 

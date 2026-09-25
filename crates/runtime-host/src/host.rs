@@ -745,6 +745,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
 pub struct RuntimeHost {
     info: RuntimeInfo,
     info_path: PathBuf,
+    owner_released_by_exit: Option<crate::PriorOwnerReleasedByExit>,
     shared: Option<Arc<HostShared>>,
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
@@ -812,6 +813,7 @@ impl RuntimeHost {
             takeover_instances,
             takeover,
             journal,
+            released_by_exit,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
         let mut fresh_storage = true;
         for material in [
@@ -1306,6 +1308,14 @@ impl RuntimeHost {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
+        // Slice #315-B2c-2: the automatic release of a dead previous owner is recorded here.
+        if let Some(released) = released_by_exit
+            && let Err(original) =
+                shared.append_lifecycle_observed(released.phase(), EventLinksDraft::default())
+        {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
         // Slice #313-f4: the configured policy instances seed the instance fact store once the
         // store is synchronized; every evaluation reads its instance set from the store.
         if let Err(original) = shared.seed_policy_instance_facts() {
@@ -1440,6 +1450,7 @@ impl RuntimeHost {
         Ok(Self {
             info,
             info_path,
+            owner_released_by_exit: released_by_exit,
             shared: Some(shared),
             accept_thread: Some(accept_thread),
             sweep_thread: Some(sweep_thread),
@@ -1451,6 +1462,11 @@ impl RuntimeHost {
 
     pub const fn runtime_info(&self) -> &RuntimeInfo {
         &self.info
+    }
+
+    /// The previous owner this start released because its process had exited, if any.
+    pub const fn owner_released_by_exit(&self) -> Option<crate::PriorOwnerReleasedByExit> {
+        self.owner_released_by_exit
     }
 
     /// The daemon checks fatal_error first, then returns through its owned close path.

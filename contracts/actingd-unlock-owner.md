@@ -1,14 +1,45 @@
 # actingd owner unlock
 
 `actingd unlock-owner` is the offline maintenance command for a state root whose
-last Runtime owner exited while device resources were open. Startup refuses such
-a root with `owner_resource_unconfirmed`: the last record of the owner journal
+last Runtime owner left device resources open. Startup refuses such a root with
+`owner_resource_unconfirmed` when the last record of the owner journal
 (`<state_root>/owner.lock`, schema `actingcommand.runtime-owner.v2`) carries the
-resource disposition `in_use` or `unconfirmed`, and nothing proves those
-resources were released. The command records the operator's confirmation that
-they were. It never deletes or rewrites the journal, which remains the native
-proof the ledger checks at every start (`contracts/ledger-store.md`, "Proven
-prior-epoch scope close").
+resource disposition `in_use` or `unconfirmed`, nothing proves those resources
+were released, and the recorded owner process is still running or cannot be
+probed; a dead owner process is released by startup itself (see "When startup
+releases the owner itself"). The command records the operator's confirmation
+that the resources were released. It never deletes or rewrites the journal,
+which remains the native proof the ledger checks at every start
+(`contracts/ledger-store.md`, "Prior-epoch scope close (proven or unproven)").
+
+## When startup releases the owner itself
+
+Before refusing, startup probes the process named by the last record's `pid`
+and `started_at_unix_ms` (Workflow #315 B2c-2):
+
+- dead: no running process has the pid (none exists, or the one that exists has
+  exited), or the running one was created more than 2 s away from
+  `started_at_unix_ms` (a reused pid). Startup takes the epoch over with the
+  owner semantics of `--confirm-resources-released`: it appends only its own new
+  active record (no `confirmed_closed` record is written for the old epoch),
+  takes over the old epoch's active instances as after a crash, appends one
+  `runtime.lifecycle_observed` fact with phase
+  `prior_epoch_owner_released_by_exit` carrying `pid`, `started_at_unix_ms` and
+  `last_disposition`, and prints
+  `actingd owner_resources_released_by_exit pid=<pid> started_at_unix_ms=<ms> last_disposition=<in_use|unconfirmed>`
+  on stdout before `actingd ready`. This command is not needed.
+- alive: the pid is running with a creation time within 2 s of
+  `started_at_unix_ms`. The refusal stays and its message ends in
+  `: pid <pid> alive`.
+- unknown: the probe cannot decide, for example because the query is refused
+  (a protected process) or the exit status or creation time cannot be read. The
+  refusal stays and its message ends in `: probe unknown: <reason>`. A probe
+  failure is never read as dead.
+
+The automatic release concerns the owner guard only. It is not close evidence
+for the ledger, and device writes still require a live scheduler lease: taken
+over instances go through the takeover cool-down, reconnection and a new lease
+as before. In the alive and unknown cases this command remains required.
 
 ## Invocation
 
