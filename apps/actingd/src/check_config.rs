@@ -7,8 +7,10 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_manager};
 use actingcommand_runtime_host::{
-    ExecutionBackendProvider, ResolvedAdbEndpoint, ResolvedInstanceEndpoint,
+    ExecutionBackendProvider, ExecutionBackendRegistry, ResolvedAdbEndpoint,
+    ResolvedInstanceEndpoint, RuntimeHostConfig,
 };
+use config::InstanceBindingKey;
 use serde_json::json;
 use std::path::Path;
 
@@ -54,17 +56,39 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         .map_err(|code| (code, "load"))
         .and_then(|file| file.assemble().map_err(|code| (code, "assemble")))
         .and_then(|assembly| {
-            assembly
-                .host
-                .validate()
+            let RuntimeAssembly {
+                host,
+                provider,
+                policy,
+                manifest,
+                resource_packages,
+            } = assembly;
+            let modes = provider.modes();
+            let deferred = provider.deferred_bindings();
+            let mumu_root = provider.mumu_root().map(Path::to_path_buf);
+            // Registered exactly as startup registers, short of discovery: the registry's own
+            // refusals (duplicate aliases or instance ids) carry the code startup would report.
+            let registry = provider
+                .into_registry()
+                .map_err(|error| (error.code(), "assemble"))?;
+            host.validate()
                 .map_err(|error| (error.code(), "validate"))?;
-            let resource_packages = config::validate_resource_packages(&assembly.resource_packages)
+            let resource_packages = config::validate_resource_packages(&resource_packages)
                 .map_err(|refused| {
                     let code = refused.code;
                     rejection = Some(refused);
                     (code, "resource_package")
                 })?;
-            summarize(&config_path, &assembly, &resource_packages)
+            let checked = CheckedAssembly {
+                host,
+                registry,
+                modes,
+                deferred,
+                mumu_root,
+                policy_configured: policy.is_some(),
+                manifest,
+            };
+            summarize(&config_path, &checked, &resource_packages)
         });
     let (report, result) = match checked {
         Ok(report) => (report, Ok(())),
@@ -91,36 +115,48 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     result
 }
 
+/// Everything `summarize` reports once every check passed: the registry as configured and
+/// the declarations only startup can complete.
+struct CheckedAssembly {
+    host: RuntimeHostConfig,
+    registry: ExecutionBackendRegistry,
+    modes: BTreeMap<String, ScheduledExecutionMode>,
+    deferred: BTreeMap<String, InstanceBindingKey>,
+    mumu_root: Option<PathBuf>,
+    policy_configured: bool,
+    manifest: RuntimeConfigManifest,
+}
+
 fn summarize(
     config_path: &Path,
-    assembly: &RuntimeAssembly,
+    checked: &CheckedAssembly,
     resource_packages: &BTreeMap<String, InstanceResourcePackage>,
 ) -> Result<serde_json::Value, (&'static str, &'static str)> {
-    let registry = &assembly.registry;
+    let registry = &checked.registry;
     let mut instances = registry
         .instance_aliases()
         .into_iter()
         .map(|alias| {
-            let mode = match registry.mode_for_alias(&alias) {
+            let mode = match checked.modes.get(&alias) {
                 Some(ScheduledExecutionMode::DeviceRegistry) => "device_registry",
                 Some(ScheduledExecutionMode::FixtureSimulation) => "fixture_simulation",
                 None => return Err(("execution_backend_registry_incomplete", "validate")),
             };
             // The startup package as assembled: locator and digest, neither opened nor hashed.
-            let startup_package = assembly.host.startup_packages().get(&alias).map(|request| {
+            let startup_package = checked.host.startup_packages().get(&alias).map(|request| {
                 json!({
                     "package": request.package_path(),
                     "expected_sha256": request.expected_sha256(),
                 })
             });
             // The effective stuck-recovery ladder settings (slice #316-B4).
-            let stuck_recovery = assembly
+            let stuck_recovery = checked
                 .host
                 .stuck_recovery()
                 .get(&alias)
                 .copied()
                 .unwrap_or_default();
-            if let Some(key) = registry.deferred_binding(&alias) {
+            if let Some(key) = checked.deferred.get(&alias) {
                 // Bound at startup by one MuMuManager discovery run; nothing is spawned here.
                 return Ok(json!({
                     "alias": alias,
@@ -167,22 +203,22 @@ fn summarize(
     {
         not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
     }
-    let (mumu_root, mumu_root_unresolved) = mumu_root_report(registry.mumu_root());
+    let (mumu_root, mumu_root_unresolved) = mumu_root_report(checked.mumu_root.as_deref());
     if mumu_root_unresolved.is_some() {
         not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
     }
-    let bind_address = assembly.host.bind_address();
+    let bind_address = checked.host.bind_address();
     // The new tunables (Workflow #318, cfg2) echoed from the manifest, so this report and
     // `actingctl status --config` cannot disagree.
     let performance = json!({
         "pressure_start_samples":
-            manifest_integer(&assembly.manifest, "performance_monitor.pressure_start_samples")?,
+            manifest_integer(&checked.manifest, "performance_monitor.pressure_start_samples")?,
         "pressure_end_samples":
-            manifest_integer(&assembly.manifest, "performance_monitor.pressure_end_samples")?,
+            manifest_integer(&checked.manifest, "performance_monitor.pressure_end_samples")?,
     });
     let mut device_paths = serde_json::Map::new();
     for name in DEVICE_PATH_NAMES {
-        let value = match manifest_parameter(&assembly.manifest, &format!("device_paths.{name}")) {
+        let value = match manifest_parameter(&checked.manifest, &format!("device_paths.{name}")) {
             Some(ConfigParameter {
                 value: FactScalar::String(path),
                 source,
@@ -197,15 +233,15 @@ fn summarize(
         "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
         "status": "ok",
         "config_path": config_path.to_string_lossy(),
-        "state_root": assembly.host.state_root().to_string_lossy(),
+        "state_root": checked.host.state_root().to_string_lossy(),
         "bind_host": bind_address.ip().to_string(),
         "bind_port": bind_address.port(),
         "instance_count": instances.len(),
         "instances": instances,
-        "policy_configured": assembly.policy.is_some(),
+        "policy_configured": checked.policy_configured,
         "performance": performance,
         "device_paths": device_paths,
-        "config_manifest": assembly.manifest,
+        "config_manifest": checked.manifest,
         "not_checked": not_checked,
         "mumu_root": mumu_root,
     });

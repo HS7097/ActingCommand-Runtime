@@ -8,185 +8,155 @@ use actingcommand_contract::{
 use actingcommand_device::{
     DiscoveredMumuInstance, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityProfile, MUMU_CAPABILITY_PROVIDER_ID, MumuDiscoveryReport,
-    MumuEmulatorCapabilityBackend, NemuResolutionReason, discover_mumu_instances,
+    MumuEmulatorCapabilityBackend,
 };
-use actingcommand_execution_kernel::{
-    InstanceDiscoveryFailure, ProviderDiscoveredInstance, ProviderInstanceDiscovery,
-};
+use actingcommand_execution_kernel::InstanceDiscoveryFailure;
 use actingcommand_runtime_host::{
     DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
 };
 use actingcommand_vision_ffi::{FastDeployPpocrBackend, OnnxRuntimeBackend, VisionFfiError};
 use std::io;
 
-impl ConfiguredExecutionBackendRegistry {
+impl ConfiguredProvider {
+    /// Provider startup: completes the discovery-bound instances, constructs the vision
+    /// provider and hands everything to the registry once. Every refusal is recorded as a
+    /// Provider startup failure before startup fails.
     pub(crate) fn assemble_provider(
-        mut self,
+        self,
         startup: &mut ProviderStartup<'_>,
     ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>> {
-        if !self.deferred.is_empty() {
-            self.bind_discovered_instances(startup)?;
+        let Self {
+            mut instances,
+            deferred,
+            vision_manifest,
+            mumu_root,
+        } = self;
+        let discovery = DiscoverySpec::new(mumu_root);
+        if !deferred.is_empty() {
+            instances.extend(bind_discovered_instances(startup, &discovery, deferred)?);
         }
-        let Some((source_root, configured_path)) = self.pending_vision.take() else {
-            startup.record(ProviderBackend::Configured, Observation::NotConfigured)?;
-            return Ok(Arc::new(self));
+        let vision = match vision_manifest {
+            None => {
+                startup.record(ProviderBackend::Configured, Observation::NotConfigured)?;
+                None
+            }
+            Some((source_root, configured_path)) => Some(VisionSpec::new(
+                assemble_vision_provider(startup, &source_root, &configured_path)?,
+            )),
         };
-        let provider = assemble_vision_provider(startup, &source_root, &configured_path)?;
-        if let Some(registry) = self.devices.take() {
-            self.devices = Some(registry.with_vision_provider(Arc::clone(&provider)));
-        }
-        if let Some(registry) = &mut self.fixtures {
-            registry.vision_provider = Some(provider);
-        }
-        startup.record(ProviderBackend::Configured, Observation::Ready)?;
-        Ok(Arc::new(self))
-    }
-
-    /// Runs `MuMuManager` discovery once per startup and registers every deferred instance.
-    /// Every refusal is recorded as a Provider startup failure before startup fails.
-    fn bind_discovered_instances(
-        &mut self,
-        startup: &mut ProviderStartup<'_>,
-    ) -> RuntimeHostResult<()> {
-        let backend = ProviderBackend::MumuManager;
-        let stage = Stage::InstanceDiscovery;
-        startup.record(backend, Observation::Started { stage })?;
-        let mumu_root = self
-            .mumu_root
-            .as_deref()
-            .map_or_else(|| "<unset>".to_owned(), |root| root.display().to_string());
-        let report = discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
-            let classification = discovery_refusal_code(&error);
-            let code = error
-                .nemu_resolution_context()
-                .map(|context| context.reason().as_str().to_owned())
-                .or_else(|| {
-                    error.diagnostic().map(|diagnostic| {
-                        format!("{}.{}", diagnostic.category().as_str(), diagnostic.stage())
-                    })
-                })
-                .unwrap_or_else(|| "device_error".to_owned());
+        let vision_configured = vision.is_some();
+        let registry = ExecutionBackendRegistry::from_assembly(ProviderAssembly {
+            instances,
+            vision,
+            discovery: Some(discovery),
+        })
+        .map_err(|error| {
             startup.failed(
-                backend,
-                stage,
-                classification,
+                ProviderBackend::Configured,
+                Stage::RegistryBinding,
+                error.code(),
                 ProviderNativeFailure {
-                    module: "actingcommand_device::mumu_manager".into(),
-                    code,
-                    severity: format!("{:?}", error.severity()).to_ascii_lowercase(),
-                    message: format!(
-                        "mumu_root={mumu_root}; {}; diagnostic={}",
-                        error.message(),
-                        error.diagnostic_message().unwrap_or("unavailable")
-                    ),
+                    module: "actingcommand_runtime_host::provider".into(),
+                    code: error.code().into(),
+                    severity: "fatal".into(),
+                    message: "execution backend registration was refused".into(),
                 },
             )
         })?;
-        let profile = admit_capability_profile(startup, &report, &mumu_root)?;
-        let mut bound = BTreeMap::new();
-        let mut resolved = Vec::new();
-        let mut refusal = None;
-        for entry in std::mem::take(&mut self.deferred) {
-            let alias = entry.alias.clone();
-            match resolve_deferred_instance(entry, &report, &profile) {
-                Ok((instance_index, device)) => {
-                    bound.insert(instance_index, alias);
-                    resolved.push(device);
-                }
-                Err(failure) => {
-                    refusal = Some(failure);
-                    break;
-                }
-            }
+        if vision_configured {
+            startup.record(ProviderBackend::Configured, Observation::Ready)?;
         }
-        // `run_json` already refused a non-UTF-8 MuMuManager path, so this is lossless here.
-        startup.record(
-            backend,
-            Observation::InstanceDiscovery {
-                source: report.source.as_str().to_owned(),
-                mumu_manager_path: report.mumu_manager_path.to_string_lossy().into_owned(),
-                version: report.version.to_string(),
-                instances: report
-                    .instances
-                    .iter()
-                    .map(|instance| DiscoveredInstanceObservation {
-                        instance_index: instance.instance_index,
-                        instance_name: instance.instance_name.clone(),
-                        adb_host: instance.adb_host.clone(),
-                        adb_port: instance.adb_port,
-                        running: instance.running,
-                        bound_alias: bound.get(&instance.instance_index).cloned(),
-                    })
-                    .collect(),
-            },
-        )?;
-        if let Some((classification, failure)) = refusal {
-            return Err(startup.failed(backend, stage, classification, failure));
-        }
-        for device in resolved {
-            self.register_device(device).map_err(|code| {
-                startup.failed(
-                    backend,
-                    Stage::RegistryBinding,
-                    code,
-                    ProviderNativeFailure {
-                        module: "actingd.config".into(),
-                        code: code.into(),
-                        severity: "fatal".into(),
-                        message: "discovered instance registration was refused".into(),
-                    },
-                )
-            })?;
-        }
-        startup.record(backend, Observation::Completed { stage })
-    }
-
-    /// On-demand discovery: the same `MuMuManager` resolution as startup, mapped to the
-    /// provider view. Binds, rebinds, registers and records nothing.
-    pub(super) fn discover_instances_on_demand(
-        &self,
-    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
-        let report = discover_mumu_instances(self.mumu_root.as_deref()).map_err(|error| {
-            Box::new(InstanceDiscoveryFailure {
-                code: discovery_refusal_code(&error),
-                error,
-            })
-        })?;
-        Ok(ProviderInstanceDiscovery {
-            provider_version: report.version.to_string(),
-            instances: report
-                .instances
-                .into_iter()
-                .map(|instance| ProviderDiscoveredInstance {
-                    instance_index: instance.instance_index,
-                    instance_name: instance.instance_name,
-                    adb_host: instance.adb_host,
-                    adb_port: instance.adb_port,
-                    running: instance.running,
-                    android_version: instance.android_version,
-                })
-                .collect(),
-        })
+        Ok(Arc::new(registry))
     }
 }
 
-/// Classifies one discovery refusal, at startup and on demand: a version below the policy
-/// floor or unparseable is `mumu_manager_version_unsupported`, anything else (no install,
-/// tool spawn, exit, timeout, decode or JSON failure) `instance_discovery_unavailable`.
-fn discovery_refusal_code(error: &DeviceError) -> &'static str {
-    if matches!(
-        error
+/// Runs `MuMuManager` discovery once per startup and completes every deferred instance into
+/// its registration; the registry registers them together with the explicit ones. Every
+/// refusal is recorded as a Provider startup failure before startup fails.
+fn bind_discovered_instances(
+    startup: &mut ProviderStartup<'_>,
+    discovery: &DiscoverySpec,
+    deferred: Vec<DeferredInstance>,
+) -> RuntimeHostResult<Vec<InstanceSpec>> {
+    let backend = ProviderBackend::MumuManager;
+    let stage = Stage::InstanceDiscovery;
+    startup.record(backend, Observation::Started { stage })?;
+    let mumu_root = discovery
+        .mumu_root()
+        .map_or_else(|| "<unset>".to_owned(), |root| root.display().to_string());
+    let report = discovery.discover().map_err(|failure| {
+        let InstanceDiscoveryFailure {
+            code: classification,
+            error,
+        } = *failure;
+        let code = error
             .nemu_resolution_context()
-            .map(|context| context.reason()),
-        Some(
-            NemuResolutionReason::ProviderVersionBelowMinimum
-                | NemuResolutionReason::ProviderVersionUnparseable
+            .map(|context| context.reason().as_str().to_owned())
+            .or_else(|| {
+                error.diagnostic().map(|diagnostic| {
+                    format!("{}.{}", diagnostic.category().as_str(), diagnostic.stage())
+                })
+            })
+            .unwrap_or_else(|| "device_error".to_owned());
+        startup.failed(
+            backend,
+            stage,
+            classification,
+            ProviderNativeFailure {
+                module: "actingcommand_device::mumu_manager".into(),
+                code,
+                severity: format!("{:?}", error.severity()).to_ascii_lowercase(),
+                message: format!(
+                    "mumu_root={mumu_root}; {}; diagnostic={}",
+                    error.message(),
+                    error.diagnostic_message().unwrap_or("unavailable")
+                ),
+            },
         )
-    ) {
-        "mumu_manager_version_unsupported"
-    } else {
-        "instance_discovery_unavailable"
+    })?;
+    let profile = admit_capability_profile(startup, &report, &mumu_root)?;
+    let mut bound = BTreeMap::new();
+    let mut resolved = Vec::new();
+    let mut refusal = None;
+    for entry in deferred {
+        let alias = entry.alias.clone();
+        match resolve_deferred_instance(entry, &report, &profile) {
+            Ok((instance_index, spec)) => {
+                bound.insert(instance_index, alias);
+                resolved.push(spec);
+            }
+            Err(failure) => {
+                refusal = Some(failure);
+                break;
+            }
+        }
     }
+    // `run_json` already refused a non-UTF-8 MuMuManager path, so this is lossless here.
+    startup.record(
+        backend,
+        Observation::InstanceDiscovery {
+            source: report.source.as_str().to_owned(),
+            mumu_manager_path: report.mumu_manager_path.to_string_lossy().into_owned(),
+            version: report.version.to_string(),
+            instances: report
+                .instances
+                .iter()
+                .map(|instance| DiscoveredInstanceObservation {
+                    instance_index: instance.instance_index,
+                    instance_name: instance.instance_name.clone(),
+                    adb_host: instance.adb_host.clone(),
+                    adb_port: instance.adb_port,
+                    running: instance.running,
+                    bound_alias: bound.get(&instance.instance_index).cloned(),
+                })
+                .collect(),
+        },
+    )?;
+    if let Some((classification, failure)) = refusal {
+        return Err(startup.failed(backend, stage, classification, failure));
+    }
+    startup.record(backend, Observation::Completed { stage })?;
+    Ok(resolved)
 }
 
 /// Admits the capability profile derived from the discovery report (pure, nothing is
@@ -273,8 +243,10 @@ fn resolve_deferred_instance(
     entry: DeferredInstance,
     report: &MumuDiscoveryReport,
     profile: &EmulatorCapabilityProfile,
-) -> Result<(u16, ConfiguredInstanceBackend), DeferredRefusal> {
-    let DeferredInstance { alias, key, config } = entry;
+) -> Result<(u16, InstanceSpec), DeferredRefusal> {
+    let DeferredInstance {
+        alias, key, config, ..
+    } = entry;
     let facts = format!(
         "alias={alias} {key} source={} mumu_manager_path={} version={}",
         report.source.as_str(),
@@ -400,38 +372,15 @@ fn resolve_deferred_instance(
         instance.mumu_manager_path.clone(),
     );
     let adb_port = instance.adb_port;
-    let device = config
+    let registration = config
         .device_registration(adb_path.to_owned(), adb_host, adb_port)
         .map_err(|code| (code, failure(code, format!("{facts}; {discovered}"))))?;
-    let ConfiguredInstanceBackend::Device {
-        alias,
-        instance_id,
-        input_backend,
-        capture_backend,
-        registration,
-    } = device
-    else {
-        return Err((
-            "instance_registration_invalid",
-            failure("instance_registration_invalid", facts),
-        ));
-    };
-    Ok((
-        instance.instance_index,
-        ConfiguredInstanceBackend::Device {
-            alias,
-            instance_id,
-            input_backend,
-            capture_backend,
-            registration: Box::new(
-                match adb_port {
-                    Some(_) => registration.with_discovered_binding(binding),
-                    None => registration.with_pending_discovered_binding(binding),
-                }
-                .with_capability_profile(profile.clone()),
-            ),
-        },
-    ))
+    let registration = match adb_port {
+        Some(_) => registration.with_discovered_binding(binding),
+        None => registration.with_pending_discovered_binding(binding),
+    }
+    .with_capability_profile(profile.clone());
+    Ok((instance.instance_index, InstanceSpec::real(registration)))
 }
 
 fn assemble_vision_provider(
