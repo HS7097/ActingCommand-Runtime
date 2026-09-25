@@ -365,6 +365,10 @@ impl PerformanceProcessSummary {
     }
 }
 
+/// `observed_at_unix_ms` is the sample that completed the transition: for a started pressure
+/// it equals `pressure.last_observed_at_unix_ms`; for an ended pressure it is the completing
+/// below-end sample, at or after the last sample that still held the end threshold. The
+/// contract requires `started_at <= last_observed_at <= observed_at` (non-zero `observed_at`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerformancePressureEventData {
     pub observed_at_unix_ms: u64,

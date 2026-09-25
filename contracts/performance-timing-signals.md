@@ -80,8 +80,9 @@ or straight to the ledger (contained task, input receipt, lifecycle,
 governance, planning, release control, policy catalog) observe explicitly once
 the gate is dropped. The pipeline maxima therefore appear in the host-level
 `perf.summary`. It has one producer, recorded on the summary interval (60 s) or
-on a material capacity change (see `capacity-admission.md`), never on every
-sample; each recorded summary carries both the monitor context of that moment
+on a material capacity change (see `capacity-admission.md`; at most every 10 s
+unless a volume's capacity state changed), never on every sample; each
+recorded summary carries both the monitor context of that moment
 and the capacity admission fact. Its context is `PerformanceContext::unavailable`
 only when counters are disabled or the window holds no data.
 
@@ -96,6 +97,18 @@ over all instances, not a per-instance breakdown. Per-instance contexts (policy
 failure `perf_context`, the runtime API context) keep filtering by the
 requested instance alias.
 
+## Pressure event time
+
+`perf.pressure_started` is observed at the sample that completed the start
+streak: `observed_at_unix_ms == pressure.last_observed_at_unix_ms`, while
+`started_at_unix_ms` is the streak's first sample. `perf.pressure_ended` is
+observed at the sample that completed the end streak, so
+`observed_at_unix_ms >= pressure.last_observed_at_unix_ms`: the record keeps the
+last sample that still held the end threshold. The contract (draft sanitization
+and payload validation) requires a non-zero `observed_at_unix_ms` and
+`started_at_unix_ms <= last_observed_at_unix_ms <= observed_at_unix_ms`;
+anything else fails with `invalid_performance_pressure_time`.
+
 ## Observation events the contract rejects
 
 A performance observation event (`perf.pressure_started`, `perf.pressure_ended`,
@@ -104,12 +117,16 @@ A performance observation event (`perf.pressure_started`, `perf.pressure_ended`,
 sanitization no longer ends the runtime. The host drops that one event and
 records the failure through the existing monitor machinery
 (`record_monitor_failure`): a `perf.monitor_degraded` event is written whose
-`failure_code` is the contract's own sanitization code (for example
-`invalid_performance_process`), `consecutive_failures` counts up, and after
-`max_consecutive_failures` the degraded event is `terminal`. Recovery follows
-the existing degraded rules. The capacity summary path keeps clearing the
-committed capacity fact on the failed append. Every other ledger write (task,
-lease, command, fact, lifecycle) still fails fatally, and every fatal
+`failure_code` is the contract's own sanitization code followed by the rejected
+event type (`<code>.<event type>`, for example
+`invalid_performance_process.perf.summary`), `consecutive_failures` counts up,
+and after `max_consecutive_failures` the degraded event is `terminal`. A
+degraded event is written for the first failure and once more on the
+transition into terminal; later failures only count (saturating) and write
+nothing. Recovery follows the existing degraded rules. The capacity summary
+path keeps clearing the committed capacity fact on the failed append. Every
+other ledger write (task, lease, command, fact, lifecycle) still fails fatally,
+and every fatal
 sanitization message now carries the concrete contract code instead of
 `event_sanitization_failed`. A degraded event that fails sanitization itself is
 fatal as before. Windows process records are normalised at the sampler boundary
