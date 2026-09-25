@@ -473,6 +473,16 @@ impl DeclarationReader {
                     ),
                 ));
             }
+            if let Some(package) = &entry.default_package_id
+                && !is_package_id(package)
+            {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "servers.{server}.default_package_id {package:?} must be 1-128 bytes matching ^[a-z0-9]+(\\.[a-z0-9_]+)+$"
+                    ),
+                ));
+            }
             if let Some(previous) = owners.insert(entry.application_id.as_str(), server) {
                 return Err(invalid(
                     path,
@@ -805,6 +815,13 @@ struct ApplicationTable {
 struct ApplicationEntry {
     application_id: String,
     label: String,
+    /// Absent stays `None`; a present value must be a string (explicit `null` fails).
+    #[serde(default, deserialize_with = "present_string")]
+    default_package_id: Option<String>,
+}
+
+fn present_string<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<String>, D::Error> {
+    <String as serde::Deserialize>::deserialize(value).map(Some)
 }
 
 /// Only the table directly under the repository root belongs to the applications family.
@@ -822,6 +839,22 @@ fn is_application_id(id: &str) -> bool {
                 .next()
                 .is_some_and(|first| first.is_ascii_alphabetic())
                 && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+}
+
+/// `^[a-z0-9]+(\.[a-z0-9_]+)+$`, at most 128 bytes.
+fn is_package_id(id: &str) -> bool {
+    let plain = |character: char| character.is_ascii_lowercase() || character.is_ascii_digit();
+    id.len() <= 128
+        && id.split_once('.').is_some_and(|(first, rest)| {
+            !first.is_empty()
+                && first.chars().all(plain)
+                && rest.split('.').all(|segment| {
+                    !segment.is_empty()
+                        && segment
+                            .chars()
+                            .all(|character| plain(character) || character == '_')
+                })
         })
 }
 
