@@ -30,8 +30,38 @@ pub struct OwnerClosedRevision {
     pub disposition: OwnerResourceDisposition,
 }
 
-/// A suffix of the complete, validated native journal, starting at its final positive
-/// close revision for this epoch. Only the locked native reader can import this evidence.
+/// Why a prior-epoch close carries no native positive proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum UnprovenReason {
+    /// The owner's journal epoch contains a record older than the v2 schema.
+    LegacyJournal,
+    /// No journal epoch for the owner, or one whose records support no positive close.
+    ProofMissing,
+    /// A v2 epoch that ends in a normal exit record and never recorded `ConfirmedClosed`.
+    ProcessExitOnly,
+}
+
+/// The basis of a prior-epoch import or scope close. The field is additive: sealed facts
+/// written before it existed carry no `basis` and deserialize as `Proven`, which keeps
+/// today's evidence validation for them. An unproven close authorises nothing on the
+/// device side; it only makes the closed scope's material eligible for retention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PriorEpochCloseBasis {
+    #[default]
+    Proven,
+    Unproven {
+        reason: UnprovenReason,
+    },
+}
+
+/// For a proven import: a suffix of the complete, validated native journal, starting at
+/// its final positive close revision for this epoch. For an unproven import the same
+/// structure records the native reader's observation instead: no positive close
+/// (`confirmed_revision` 0, empty `suffix`), the epoch's identity and revision span when
+/// a journal block exists (all zero when none does), and the complete-read bounds. Only
+/// the locked native reader can import either form.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OwnerEpochCloseEvidence {
@@ -94,12 +124,47 @@ impl OwnerEpochCloseEvidence {
         }
         Ok(())
     }
+
+    /// Whether the native reader saw a journal block for the subject epoch.
+    pub fn observed_block(&self) -> bool {
+        self.first_revision != 0
+    }
+
+    /// The observation form recorded by an unproven import: never a positive close.
+    pub fn validate_unproven(&self) -> Result<(), SanitizationError> {
+        let invalid =
+            || SanitizationError::new("invalid_owner_close_observation", "prior_epoch_close");
+        let block = self.observed_block();
+        if self.schema_version != OWNER_JOURNAL_SCHEMA
+            || self.confirmed_revision != 0
+            || !self.suffix.is_empty()
+            || self.journal_bytes > OWNER_JOURNAL_LIMIT
+            || self.journal_sha256.len() != 64
+            || !self
+                .journal_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            || block
+                && (self.pid == 0
+                    || self.started_at_unix_ms == 0
+                    || self.first_revision > self.final_revision
+                    || self.final_revision > self.journal_through_revision
+                    || self.journal_bytes == 0)
+            || !block && (self.pid != 0 || self.started_at_unix_ms != 0 || self.final_revision != 0)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PriorEpochOwnerImport {
     pub evidence: OwnerEpochCloseEvidence,
+    /// Additive; absent in facts sealed before unproven closes existed, hence `Proven`.
+    #[serde(default)]
+    pub basis: PriorEpochCloseBasis,
     /// The authenticated prefix at first import, never refreshed by a later startup.
     pub through_sequence: u64,
     pub scope_upper_sequence: u64,
@@ -113,6 +178,10 @@ pub struct PriorEpochScopeClose {
     pub scope_source: TerminalEvent,
     pub through_sequence: u64,
     pub scope_upper_sequence: u64,
+    /// Additive; absent in facts sealed before unproven closes existed, hence `Proven`.
+    /// Always equals the basis of the import that `proof` references.
+    #[serde(default)]
+    pub basis: PriorEpochCloseBasis,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +202,7 @@ impl PriorEpochCloseFact {
             Self::OwnerImported(record) => PriorEpochCloseSummary::OwnerImported {
                 writer,
                 subject: record.evidence.subject,
+                basis: record.basis,
                 confirmed_revision: record.evidence.confirmed_revision,
                 final_revision: record.evidence.final_revision,
                 journal_through_revision: record.evidence.journal_through_revision,
@@ -151,7 +221,18 @@ impl PriorEpochCloseFact {
         let invalid = || SanitizationError::new("invalid_prior_epoch_close", "prior_epoch_close");
         let (subject, through, upper) = match self {
             Self::OwnerImported(record) => {
-                record.evidence.validate()?;
+                match record.basis {
+                    PriorEpochCloseBasis::Proven => record.evidence.validate()?,
+                    PriorEpochCloseBasis::Unproven { reason } => {
+                        record.evidence.validate_unproven()?;
+                        // Only an absent block can be reported as missing proof without one.
+                        if reason != UnprovenReason::ProofMissing
+                            && !record.evidence.observed_block()
+                        {
+                            return Err(invalid());
+                        }
+                    }
+                }
                 (
                     record.evidence.subject,
                     record.through_sequence,
@@ -189,6 +270,7 @@ pub enum PriorEpochCloseSummary {
     OwnerImported {
         writer: OwnerEpoch,
         subject: OwnerEpoch,
+        basis: PriorEpochCloseBasis,
         confirmed_revision: u64,
         final_revision: u64,
         journal_through_revision: u64,
