@@ -5,7 +5,11 @@ use crate::agent_dispatcher::{
 };
 use crate::approval::ApprovalProjection;
 use crate::events::RuntimeEvents;
-use crate::fact_store::InstanceFactStore;
+use crate::fact_store::{
+    InstanceFactStore, POLICY_INSTANCE_AVAILABLE_KEY, POLICY_INSTANCE_CAPABILITIES_KEY,
+    POLICY_INSTANCE_OPERATION_FIELD, POLICY_INSTANCE_PREFERRED_TASKS_KEY,
+    POLICY_INSTANCE_TASK_FIELD,
+};
 use crate::ipc::DEFAULT_RUNTIME_MAX_FRAME_BYTES;
 use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
@@ -50,11 +54,12 @@ use actingcommand_contract::{
     EffectDisposition, EffectiveCaptureSelection, EffectiveConfigurationFacts,
     EffectiveConfigurationRecord, EffectiveInputSelection, EffectiveMumuInstallation, EventAction,
     EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
-    EventSource, EventType, FactPayloadDraft, FactRecord, FencedWrite, FrameId, InputAction,
-    InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload, InputPayloadDraft,
-    InstanceBindingSource, InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId,
-    IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId,
-    IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
+    EventSource, EventType, FactContent, FactPayloadDraft, FactRecord, FactScalar, FactScope,
+    FactValue as ContractFactValue, FencedWrite, FrameId, InputAction, InputExecutionPlanEvent,
+    InputExecutionPlanRecord, InputPayload, InputPayloadDraft, InstanceBindingSource,
+    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
+    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
+    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_RUNTIME_FACTS,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     ObservedMicroseconds, OriginModule, OwnerResourceDisposition, PackageDebugLayout,
@@ -107,11 +112,11 @@ use actingcommand_pack_containment::{
     Sha256Hash,
 };
 use actingcommand_policy::{
-    CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
-    EvaluationTime, FactValue as PolicyFactValue, ForwardProjection, ForwardProjectionConfig,
-    MaintenanceAssessment, MaintenanceTrendPolicy, ObservedOutcome, StrategicBand,
-    StrategicEvidencePointer, StrategicProjection, StrategicReport, project_forward,
-    project_strategic_report,
+    CatalogSources, DecisionReason, DecisionReasonChain, DispatchIntent, EvaluationFacts,
+    EvaluationResources, EvaluationTime, FactValue as PolicyFactValue, ForwardProjection,
+    ForwardProjectionConfig, InstanceSnapshot, MaintenanceAssessment, MaintenanceTrendPolicy,
+    ObservedOutcome, StrategicBand, StrategicEvidencePointer, StrategicProjection, StrategicReport,
+    project_forward, project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::facts::{RuntimeFactChange, RuntimeFactError, RuntimeFactStore};
@@ -286,6 +291,39 @@ impl PolicyInputSnapshot {
     pub fn resources(&self) -> &EvaluationResources {
         &self.resources
     }
+
+    /// The configured static identities (Workflow #313 item 4), in configuration order. The
+    /// policy input authority check compares the registered alias set with these; the
+    /// evaluation's instance set is read from the instance fact store, never from the
+    /// configured `instances` snapshot.
+    pub(crate) fn instance_identities(&self) -> impl Iterator<Item = PolicyInstanceIdentity<'_>> {
+        self.facts
+            .instances
+            .iter()
+            .map(|instance| PolicyInstanceIdentity {
+                instance_id: &instance.instance_id,
+                host_id: &instance.host_id,
+                server_id: &instance.server_id,
+                game_id: &instance.game_id,
+            })
+    }
+
+    /// The configured seed values (`available`, `capability_operation_ids`,
+    /// `preferred_task_ids`) per instance, read once when the instance fact store is seeded.
+    pub(crate) fn instance_seeds(&self) -> impl Iterator<Item = &InstanceSnapshot> {
+        self.facts.instances.iter()
+    }
+}
+
+/// The configured static identity of one policy instance: the alias and the host, server and
+/// game it is bound to. Availability, capabilities and preferred tasks are not identity; the
+/// instance fact store owns them and the configuration only seeds them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PolicyInstanceIdentity<'a> {
+    pub(crate) instance_id: &'a str,
+    pub(crate) host_id: &'a str,
+    pub(crate) server_id: &'a str,
+    pub(crate) game_id: &'a str,
 }
 
 #[cfg(test)]
@@ -1222,6 +1260,12 @@ impl RuntimeHost {
             fatal,
         });
         if let Err(original) = shared.synchronize_fact_store() {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
+        // Slice #313-f4: the configured policy instances seed the instance fact store once the
+        // store is synchronized; every evaluation reads its instance set from the store.
+        if let Err(original) = shared.seed_policy_instance_facts() {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
