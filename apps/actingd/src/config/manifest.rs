@@ -2,36 +2,38 @@
 
 //! Builds the in-memory runtime configuration manifest from what `assemble` actually
 //! applies: which subsystems the host runs and why, and every effective parameter value
-//! with its source. Data only; the host records it as the two `config.*` runtime facts.
+//! with its source. Every value is read back from the assembled `RuntimeHostConfig`; the
+//! configuration file only decides whether a value is `explicit` or `default`. Data only;
+//! the host records it as the two `config.*` runtime facts.
 
 use actingcommand_contract::{
-    CapacityThresholds, ConfigParameter, ConfigParameterSource, ConfigSubsystem,
-    DeviceDiagnosticMode, FactScalar, RuntimeConfigManifest,
+    ConfigParameter, ConfigParameterSource, ConfigSubsystem, DeviceDiagnosticMode, FactScalar,
+    RuntimeConfigManifest,
 };
 use actingcommand_device::{
     MUMU_MANAGER_CONTROL_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,
 };
-use actingcommand_runtime_host::{
-    PerformanceControlConfig, PerformanceMonitorConfig, PolicyCadence, SchedulerConfig,
-};
-use std::net::IpAddr;
+use actingcommand_runtime_host::RuntimeHostConfig;
 use std::path::Path;
 use std::time::Duration;
 
-/// Everything the manifest reports, taken from the configuration file and the assembled
-/// host before either is consumed. `None` in an `Option` of a defaulted field means the
-/// file did not name it, so the library default applies.
+/// Everything the manifest reports: the assembled host, whose effective values are read
+/// back, and what the configuration file named, which decides each parameter's source.
 pub(super) struct ManifestInputs<'a> {
-    pub(super) bind_host: IpAddr,
-    pub(super) bind_port: Option<u16>,
-    pub(super) device_diagnostic_mode: Option<DeviceDiagnosticMode>,
+    pub(super) host: &'a RuntimeHostConfig,
+    pub(super) bind_port_explicit: bool,
+    pub(super) device_diagnostic_mode_explicit: bool,
+    /// The file's `frame_retention_enabled` as declared; the subsystem reason names it.
     pub(super) frame_retention_enabled: Option<bool>,
-    pub(super) failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy,
     pub(super) failed_run_successes_explicit: bool,
     pub(super) failed_run_days_explicit: bool,
-    pub(super) capacity_thresholds: Option<CapacityThresholds>,
+    pub(super) capacity_thresholds_explicit: bool,
+    pub(super) pressure_start_samples_explicit: bool,
+    pub(super) pressure_end_samples_explicit: bool,
     pub(super) secret_fingerprint_salt_bytes: usize,
     pub(super) mumu_root: Option<&'a Path>,
+    /// The daemon-level `device_paths` by manifest name; `None` is not configured.
+    pub(super) device_paths: [(&'static str, Option<&'a Path>); 5],
     pub(super) governance_configured: bool,
     /// `(max_attempts, max_session_ms, max_projection_events)` of a present section.
     pub(super) agent_dispatcher: Option<(u16, u64, u16)>,
@@ -40,18 +42,23 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
     pub(super) instances_startup_package_count: usize,
-    pub(super) policy_cadence: &'a PolicyCadence,
-    pub(super) io_timeout: Duration,
-    pub(super) maximum_frame_bytes: usize,
 }
 
 pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, &'static str> {
-    let device_diagnostic_mode = inputs.device_diagnostic_mode.unwrap_or_default();
-    let frame_retention_enabled = inputs.frame_retention_enabled.unwrap_or(true);
-    let capacity_thresholds = inputs.capacity_thresholds.unwrap_or_default();
-    let performance_monitor = PerformanceMonitorConfig::default();
-    let performance_control = PerformanceControlConfig::default();
-    let scheduler = SchedulerConfig::default();
+    let host = inputs.host;
+    let bind_address = host.bind_address();
+    let device_diagnostic_mode = host.device_diagnostic_mode();
+    let frame_retention_enabled = host.frame_retention_enabled();
+    let failed_run_retention = host.failed_run_retention();
+    let capacity_thresholds = host.capacity_thresholds();
+    let scheduler = host.scheduler();
+    let policy_cadence = host.policy_cadence();
+    let performance_control = host.performance_control();
+    // A host without a performance monitor configuration cannot report one: that is a
+    // build error, never a default written in its place.
+    let performance_monitor = host
+        .performance_monitor()
+        .ok_or("config_manifest_incomplete")?;
     let discovery_bound = inputs.instances_deferred_count > 0;
     let subsystems = vec![
         subsystem(
@@ -139,19 +146,19 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
     let mut parameters = vec![
         explicit(
             "bind_host",
-            FactScalar::String(inputs.bind_host.to_string()),
+            FactScalar::String(bind_address.ip().to_string()),
         ),
         ConfigParameter {
             key: "bind_port".to_owned(),
-            value: FactScalar::Integer(i64::from(inputs.bind_port.unwrap_or_default())),
-            source: explicit_or_default(inputs.bind_port.is_some()),
+            value: FactScalar::Integer(i64::from(bind_address.port())),
+            source: explicit_or_default(inputs.bind_port_explicit),
         },
         ConfigParameter {
             key: "device_diagnostic_mode".to_owned(),
             value: FactScalar::String(
                 device_diagnostic_mode_name(device_diagnostic_mode).to_owned(),
             ),
-            source: explicit_or_default(inputs.device_diagnostic_mode.is_some()),
+            source: explicit_or_default(inputs.device_diagnostic_mode_explicit),
         },
         ConfigParameter {
             key: "frame_retention_enabled".to_owned(),
@@ -160,12 +167,12 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         },
         ConfigParameter {
             key: "frame_retention_failed_run_successes".to_owned(),
-            value: FactScalar::Integer(i64::from(inputs.failed_run_retention.successor_successes)),
+            value: FactScalar::Integer(i64::from(failed_run_retention.successor_successes)),
             source: explicit_or_default(inputs.failed_run_successes_explicit),
         },
         ConfigParameter {
             key: "frame_retention_failed_run_days".to_owned(),
-            value: FactScalar::Integer(i64::from(inputs.failed_run_retention.retention_days)),
+            value: FactScalar::Integer(i64::from(failed_run_retention.retention_days)),
             source: explicit_or_default(inputs.failed_run_days_explicit),
         },
         explicit(
@@ -178,6 +185,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             "mumu_root",
             FactScalar::String(mumu_root.display().to_string()),
         ));
+    }
+    // Only configured device paths are reported; nothing discovered is invented here.
+    for (name, path) in inputs.device_paths {
+        if let Some(path) = path {
+            parameters.push(explicit(
+                &format!("device_paths.{name}"),
+                FactScalar::String(path.display().to_string()),
+            ));
+        }
     }
     parameters.extend([
         explicit("instances_count", integer(inputs.instances_count)?),
@@ -211,22 +227,22 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         ),
         default(
             "policy_cadence.debounce_ms",
-            FactScalar::DurationMs(inputs.policy_cadence.debounce_ms),
+            FactScalar::DurationMs(policy_cadence.debounce_ms),
         ),
         default(
             "policy_cadence.cooldown_ms",
-            FactScalar::DurationMs(inputs.policy_cadence.cooldown_ms),
+            FactScalar::DurationMs(policy_cadence.cooldown_ms),
         ),
         default(
             "policy_cadence.reconciliation_interval_ms",
-            FactScalar::DurationMs(inputs.policy_cadence.reconciliation_interval_ms),
+            FactScalar::DurationMs(policy_cadence.reconciliation_interval_ms),
         ),
         default(
             "policy_cadence.clock_jump_threshold_ms",
-            FactScalar::DurationMs(inputs.policy_cadence.clock_jump_threshold_ms),
+            FactScalar::DurationMs(policy_cadence.clock_jump_threshold_ms),
         ),
-        default("io_timeout_ms", duration_ms(inputs.io_timeout)?),
-        default("maximum_frame_bytes", integer(inputs.maximum_frame_bytes)?),
+        default("io_timeout_ms", duration_ms(host.io_timeout())?),
+        default("maximum_frame_bytes", integer(host.maximum_frame_bytes())?),
         default(
             "performance_control.escalation_samples",
             FactScalar::Integer(i64::from(performance_control.escalation_samples())),
@@ -258,14 +274,24 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             duration_ms(performance_monitor.sample_interval())?,
         ),
         ConfigParameter {
+            key: "performance_monitor.pressure_start_samples".to_owned(),
+            value: FactScalar::Integer(i64::from(performance_monitor.pressure_start_samples())),
+            source: explicit_or_default(inputs.pressure_start_samples_explicit),
+        },
+        ConfigParameter {
+            key: "performance_monitor.pressure_end_samples".to_owned(),
+            value: FactScalar::Integer(i64::from(performance_monitor.pressure_end_samples())),
+            source: explicit_or_default(inputs.pressure_end_samples_explicit),
+        },
+        ConfigParameter {
             key: "capacity_thresholds.hard_bytes".to_owned(),
             value: integer(capacity_thresholds.hard_bytes)?,
-            source: explicit_or_default(inputs.capacity_thresholds.is_some()),
+            source: explicit_or_default(inputs.capacity_thresholds_explicit),
         },
         ConfigParameter {
             key: "capacity_thresholds.soft_bytes".to_owned(),
             value: integer(capacity_thresholds.soft_bytes)?,
-            source: explicit_or_default(inputs.capacity_thresholds.is_some()),
+            source: explicit_or_default(inputs.capacity_thresholds_explicit),
         },
     ]);
     if let Some((max_attempts, max_session_ms, max_projection_events)) = inputs.agent_dispatcher {

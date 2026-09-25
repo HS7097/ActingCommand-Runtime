@@ -7,8 +7,9 @@
 mod shutdown_wait;
 
 use actingcommand_contract::{
-    CaptureSequenceSpec, ContainedTaskRecoveryBinding, ContainedTaskRequest,
-    EmulatorInstanceAction, EventActor, EventSource, RuntimeMonitorPolicy,
+    CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
+    ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
+    EventSource, RuntimeMonitorPolicy,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
@@ -108,6 +109,24 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .map_err(ActingctlError::runtime)?,
         ),
         Command::Status => serde_json::to_value(client.status().map_err(ActingctlError::runtime)?),
+        // The same program-fact read as `facts --program`, reduced to the two records the
+        // daemon's configuration manifest produced; no new operation.
+        Command::StatusConfig => {
+            let snapshot = client
+                .runtime_fact_snapshot()
+                .map_err(ActingctlError::runtime)?;
+            let records = [CONFIG_SUBSYSTEMS_FACT_KEY, CONFIG_PARAMETERS_FACT_KEY]
+                .into_iter()
+                .map(|key| {
+                    snapshot
+                        .records
+                        .iter()
+                        .find(|record| record.key == key)
+                        .ok_or(ActingctlError::ConfigFactsMissing)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            serde_json::to_value(records)
+        }
         Command::ProgramFacts => serde_json::to_value(
             client
                 .runtime_fact_snapshot()
@@ -228,6 +247,8 @@ enum Command {
     Observe,
     Reset,
     Status,
+    /// `status --config`: the `config.*` records of the runtime fact snapshot.
+    StatusConfig,
     ProgramFacts,
     MonitorStatus,
     MonitorSet {
@@ -277,6 +298,7 @@ impl Invocation {
         let mut recovery_expected_sha256 = None;
         let mut recovery_enabled = false;
         let mut program = false;
+        let mut config = false;
         let mut record_file = None;
         let mut shutdown_wait = None;
         let mut index = if emulator_action.is_some() { 2 } else { 1 };
@@ -328,6 +350,7 @@ impl Invocation {
                 }
                 "--recover" => recovery_enabled = true,
                 "--program" => program = true,
+                "--config" if command == "status" && !config => config = true,
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -354,6 +377,7 @@ impl Invocation {
             "request-shutdown" => Command::RequestShutdown,
             "reset" => Command::Reset,
             "observe" => Command::Observe,
+            "status" if config => Command::StatusConfig,
             "status" => Command::Status,
             "facts" => {
                 // The per-instance read is not built; only the program store is readable.
@@ -431,6 +455,7 @@ impl Command {
         !matches!(
             self,
             Self::Status
+                | Self::StatusConfig
                 | Self::ProgramFacts
                 | Self::MonitorStatus
                 | Self::EmulatorDiscover
@@ -470,6 +495,8 @@ enum ActingctlError {
     Package,
     FactRecord,
     InstanceUnknown,
+    /// `status --config`: the snapshot carries no `config.subsystems` / `config.parameters`.
+    ConfigFactsMissing,
     Output,
     /// `request-shutdown --wait` failed after the shutdown was accepted; `detail` is JSON.
     ShutdownWait {
@@ -488,11 +515,12 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
             Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
+            Self::ConfigFactsMissing => formatter.write_str("config_facts_missing: the runtime fact snapshot holds no config.subsystems / config.parameters record"),
             Self::Output => formatter.write_str("failed to write JSON output"),
             Self::ShutdownWait { code, detail } => {
                 write!(formatter, "{code} during wait_shutdown: {detail}")

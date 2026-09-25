@@ -81,9 +81,80 @@ pub(super) struct ActingdConfigFile {
     /// Explicit MuMu install root: the highest-priority `MuMuManager.exe` discovery source.
     #[serde(default)]
     mumu_root: Option<PathBuf>,
+    /// Workflow #318 (cfg2): performance monitor tunables that had no file field.
+    #[serde(default)]
+    performance: Option<PerformanceConfigFile>,
+    /// Workflow #318 (cfg2): daemon-level device tool paths, applied to every device
+    /// instance's backend configuration; absent fields keep today's env / discovery /
+    /// bundled-tool behaviour.
+    #[serde(default)]
+    device_paths: Option<DevicePathsConfigFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
+}
+
+/// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PerformanceConfigFile {
+    #[serde(default)]
+    pressure_start_samples: Option<u16>,
+    #[serde(default)]
+    pressure_end_samples: Option<u16>,
+}
+
+/// The upper bound `PerformanceMonitorConfig::validate` applies to both pressure streaks;
+/// checked here so the refusal carries `invalid_pressure_samples` before host validation.
+const MAX_PRESSURE_STREAK_SAMPLES: u16 = 30;
+
+/// Daemon-level device tool paths. Each set path must be absolute and exist
+/// (`device_path_invalid`); it is then passed to the backend configuration it names.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevicePathsConfigFile {
+    /// `NemuIpcConfig.nemu_folder`: the MuMu installation root Nemu IPC connects to.
+    #[serde(default)]
+    nemu_folder: Option<PathBuf>,
+    /// `NemuIpcConfig.dll_path`: the Nemu IPC capture DLL.
+    #[serde(default)]
+    nemu_ipc_dll: Option<PathBuf>,
+    /// `DroidcastRawConfig.local_apk`: the DroidCast_raw APK pushed to the device.
+    #[serde(default)]
+    droidcast_apk: Option<PathBuf>,
+    /// `MinitouchConfig.local_path`; a per-instance `minitouch_local_path` wins over it.
+    #[serde(default)]
+    minitouch_path: Option<PathBuf>,
+    /// `MaaTouchConfig.local_path`; a per-instance `maatouch_local_path` wins over it.
+    #[serde(default)]
+    maatouch_path: Option<PathBuf>,
+}
+
+impl DevicePathsConfigFile {
+    /// Every configured path with its manifest name, in a fixed order.
+    fn entries(&self) -> [(&'static str, Option<&Path>); 5] {
+        [
+            ("nemu_folder", self.nemu_folder.as_deref()),
+            ("nemu_ipc_dll", self.nemu_ipc_dll.as_deref()),
+            ("droidcast_apk", self.droidcast_apk.as_deref()),
+            ("minitouch_path", self.minitouch_path.as_deref()),
+            ("maatouch_path", self.maatouch_path.as_deref()),
+        ]
+    }
+
+    /// A configured path must be absolute and exist; nothing is opened or resolved.
+    fn validate(&self) -> Result<(), &'static str> {
+        for (_, path) in self.entries() {
+            if let Some(path) = path
+                && (path.as_os_str().is_empty()
+                    || !path.is_absolute()
+                    || fs::metadata(path).is_err())
+            {
+                return Err("device_path_invalid");
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -175,6 +246,10 @@ struct InstanceConfig {
     stuck_recovery_cooldown_secs: Option<u32>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
+    /// The daemon-level `device_paths`, copied in by `assemble` so a deferred instance
+    /// registered after discovery applies the same paths as an explicit one.
+    #[serde(skip)]
+    device_paths: DevicePathsConfigFile,
 }
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
@@ -499,11 +574,38 @@ impl ActingdConfigFile {
         failed_run_retention
             .validate()
             .map_err(|_| "invalid_failed_run_retention_policy")?;
+        let mut performance_monitor = PerformanceMonitorConfig::default();
+        let (pressure_start_samples, pressure_end_samples) =
+            self.performance
+                .as_ref()
+                .map_or((None, None), |performance| {
+                    (
+                        performance.pressure_start_samples,
+                        performance.pressure_end_samples,
+                    )
+                });
+        for samples in [pressure_start_samples, pressure_end_samples]
+            .into_iter()
+            .flatten()
+        {
+            if !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&samples) {
+                return Err("invalid_pressure_samples");
+            }
+        }
+        if let Some(samples) = pressure_start_samples {
+            performance_monitor = performance_monitor.with_pressure_start_samples(samples);
+        }
+        if let Some(samples) = pressure_end_samples {
+            performance_monitor = performance_monitor.with_pressure_end_samples(samples);
+        }
+        let device_paths = self.device_paths.unwrap_or_default();
+        device_paths.validate()?;
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
         let mut stuck_recovery = BTreeMap::new();
         for instance in &mut instances {
+            instance.device_paths = device_paths.clone();
             let settings = actingcommand_contract::InstanceStuckRecovery {
                 enabled: instance.stuck_recovery.unwrap_or(true),
                 cooldown_secs: instance.stuck_recovery_cooldown_secs.unwrap_or(
@@ -570,22 +672,25 @@ impl ActingdConfigFile {
                     self.bind_port.unwrap_or_default(),
                 ))
                 .with_policy_cadence(policy_cadence.clone())
-                .with_performance_monitor(PerformanceMonitorConfig::default());
+                .with_performance_monitor(performance_monitor);
         let instances_startup_package_count = startup_packages.len();
         host = host
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery);
+        // Every effective value is read back from `host`; the file only says what it named.
         let manifest = manifest::build(&manifest::ManifestInputs {
-            bind_host,
-            bind_port: self.bind_port,
-            device_diagnostic_mode: self.device_diagnostic_mode,
+            host: &host,
+            bind_port_explicit: self.bind_port.is_some(),
+            device_diagnostic_mode_explicit: self.device_diagnostic_mode.is_some(),
             frame_retention_enabled: self.frame_retention_enabled,
-            failed_run_retention,
             failed_run_successes_explicit: self.frame_retention_failed_run_successes.is_some(),
             failed_run_days_explicit: self.frame_retention_failed_run_days.is_some(),
-            capacity_thresholds: self.capacity_thresholds,
+            capacity_thresholds_explicit: self.capacity_thresholds.is_some(),
+            pressure_start_samples_explicit: pressure_start_samples.is_some(),
+            pressure_end_samples_explicit: pressure_end_samples.is_some(),
             secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
             mumu_root: registry.mumu_root.as_deref(),
+            device_paths: device_paths.entries(),
             governance_configured: self.governance_capability.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
@@ -593,9 +698,6 @@ impl ActingdConfigFile {
             instances_count: registry.modes.len(),
             instances_deferred_count: registry.deferred.len(),
             instances_startup_package_count,
-            policy_cadence: &policy_cadence,
-            io_timeout: host.io_timeout(),
-            maximum_frame_bytes: host.maximum_frame_bytes(),
         })?;
         host = host.with_config_manifest(manifest.clone());
         if let Some(capability) = self.governance_capability {
@@ -1044,6 +1146,13 @@ impl InstanceConfig {
         };
         let mut maatouch = MaaTouchConfig::default();
         let mut minitouch = MinitouchConfig::default();
+        // Daemon-level `device_paths` first; the per-instance path keeps precedence.
+        if let Some(path) = &self.device_paths.maatouch_path {
+            maatouch.local_path = path.clone();
+        }
+        if let Some(path) = &self.device_paths.minitouch_path {
+            minitouch.local_path = path.clone();
+        }
         if let Some(path) = self.maatouch_local_path {
             maatouch.local_path = path;
         }
@@ -1066,8 +1175,18 @@ impl InstanceConfig {
             maatouch.tap_hold = hold;
             minitouch.tap_hold = hold;
         }
-        let capture = CaptureBackendConfig::new(adb.clone(), target.clone())
+        let mut capture = CaptureBackendConfig::new(adb.clone(), target.clone())
             .with_requested(capture_requested);
+        // Absent daemon-level paths leave the backend defaults (env var, discovery) intact.
+        if let Some(path) = &self.device_paths.droidcast_apk {
+            capture.droidcast.local_apk = Some(path.clone());
+        }
+        if let Some(path) = &self.device_paths.nemu_folder {
+            capture.nemu.nemu_folder = Some(path.clone());
+        }
+        if let Some(path) = &self.device_paths.nemu_ipc_dll {
+            capture.nemu.dll_path = Some(path.clone());
+        }
         let touch = TouchBackendConfig::new(adb, target, maatouch)
             .with_minitouch_config(minitouch)
             .with_requested(requested);
@@ -2646,10 +2765,77 @@ mod tests {
                 value["frame_retention_enabled"] = json!(configured);
                 value["frame_retention_failed_run_successes"] = json!(4);
                 value["frame_retention_failed_run_days"] = json!(9);
+                // Workflow #318 cfg2: the new tunables ride the same explicit/default toggle.
+                value["performance"] = json!({
+                    "pressure_start_samples": 5,
+                    "pressure_end_samples": 7
+                });
+                value["device_paths"] = json!({ "nemu_folder": root.path() });
             }
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
             assert_eq!(config.frame_retention_enabled, configured);
             let assembly = config.assemble().expect("runtime assembly");
+            let parameter = |key: &str| {
+                assembly
+                    .manifest
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == key)
+            };
+            // cfg2: every reported value is the host's effective one, not a library default.
+            let performance_monitor = assembly
+                .host
+                .performance_monitor()
+                .expect("assembled performance monitor");
+            for (key, expected, effective) in [
+                (
+                    "performance_monitor.pressure_start_samples",
+                    if configured.is_some() { 5 } else { 3 },
+                    performance_monitor.pressure_start_samples(),
+                ),
+                (
+                    "performance_monitor.pressure_end_samples",
+                    if configured.is_some() { 7 } else { 3 },
+                    performance_monitor.pressure_end_samples(),
+                ),
+            ] {
+                let parameter = parameter(key).expect("pressure streak parameter");
+                assert_eq!(parameter.value, FactScalar::Integer(expected));
+                assert_eq!(parameter.value, FactScalar::Integer(i64::from(effective)));
+                assert_eq!(parameter.source, source);
+            }
+            let sample_interval = parameter("performance_monitor.sample_interval_ms")
+                .expect("sample interval parameter");
+            assert_eq!(
+                sample_interval.value,
+                FactScalar::DurationMs(
+                    u64::try_from(performance_monitor.sample_interval().as_millis())
+                        .expect("sample interval ms")
+                )
+            );
+            assert_eq!(sample_interval.source, ConfigParameterSource::Default);
+            let scheduler = assembly.host.scheduler();
+            assert_eq!(
+                parameter("scheduler.lease_ttl_ms")
+                    .expect("scheduler parameter")
+                    .value,
+                FactScalar::DurationMs(scheduler.lease_ttl_ms)
+            );
+            match parameter("device_paths.nemu_folder") {
+                Some(nemu_folder) => {
+                    assert!(configured.is_some());
+                    assert_eq!(
+                        nemu_folder.value,
+                        FactScalar::String(root.path().display().to_string())
+                    );
+                    assert_eq!(nemu_folder.source, ConfigParameterSource::Explicit);
+                }
+                None => assert!(configured.is_none()),
+            }
+            assert!(
+                parameter("device_paths.nemu_ipc_dll").is_none(),
+                "an unconfigured device path is omitted, never invented"
+            );
             assert_eq!(assembly.host.state_root(), root.path());
             assert_eq!(
                 assembly.registry.device_input_backends.get("node.a"),
@@ -2708,6 +2894,35 @@ mod tests {
                 config.assemble(),
                 Err("invalid_failed_run_retention_policy")
             ));
+        }
+        // cfg2: a pressure streak outside 1..=30 and a relative or missing device path are
+        // refused at assembly with their own codes.
+        for (section, invalid, code) in [
+            (
+                "performance",
+                json!({ "pressure_start_samples": 0 }),
+                "invalid_pressure_samples",
+            ),
+            (
+                "performance",
+                json!({ "pressure_end_samples": 31 }),
+                "invalid_pressure_samples",
+            ),
+            (
+                "device_paths",
+                json!({ "minitouch_path": "external-tools/minitouch/minitouch" }),
+                "device_path_invalid",
+            ),
+            (
+                "device_paths",
+                json!({ "droidcast_apk": root.path().join("missing.apk") }),
+                "device_path_invalid",
+            ),
+        ] {
+            let mut value = value.clone();
+            value[section] = invalid;
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            assert_eq!(config.assemble().err(), Some(code));
         }
     }
 

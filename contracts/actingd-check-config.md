@@ -36,7 +36,7 @@ control-plane-only daemon.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"}}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_provider_manifest","state_root"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -103,12 +103,26 @@ terminal with the chosen eligibility basis in the original eviction intent.
   that declares one: the admitted `{ path, kind }` (see "Instance resource
   package"); an instance without the field carries no `resource_package` key.
 - `policy_configured` states whether a `policy` section was assembled.
+- `performance` echoes the effective pressure streaks of the performance
+  monitor (see "Performance and device paths"): `pressure_start_samples` and
+  `pressure_end_samples`, each `{ value, source }` with `source` `explicit`
+  when the file's `performance` section named it and `default` otherwise. The
+  values are read from the manifest, so they equal the
+  `performance_monitor.pressure_*` parameters there and what
+  `actingctl status --config` shows after startup.
+- `device_paths` echoes the daemon-level device tool paths, always with all
+  five names (`nemu_folder`, `nemu_ipc_dll`, `droidcast_apk`,
+  `minitouch_path`, `maatouch_path`): `{ path, source: "explicit" }` for a
+  configured path, `null` for an absent one (today's environment-variable,
+  discovery or bundled-tool behaviour then applies; nothing discovered is
+  reported here).
 - `config_manifest` is the in-memory runtime configuration manifest exactly
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
   `contracts/runtime-fact-store.md`, "Producers"); at startup the daemon
   records the same content as the program facts `config.subsystems` and
-  `config.parameters`, which `actingctl facts --program` returns. Printing it
-  here has no side effect.
+  `config.parameters`, which `actingctl facts --program` returns whole and
+  `actingctl status --config` returns on their own. Printing it here has no
+  side effect.
   - `subsystems` (`name`, `enabled`, `reason`): `frame_retention` (the
     `frame_retention_enabled` flag), `agent_dispatcher` (section present),
     `governance` (`governance_capability` present), `policy_driver` (`policy`
@@ -124,16 +138,23 @@ terminal with the chosen eligibility basis in the original eviction intent.
     `frame_retention_enabled`, `frame_retention_failed_run_successes`,
     `frame_retention_failed_run_days`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `mumu_root` (only when
-    set), `instances_count`, `instances_deferred_count`,
+    set), `device_paths.<name>` (only the configured ones, see "Performance
+    and device paths"), `instances_count`, `instances_deferred_count`,
     `instances_startup_package_count` (instances declaring a startup package), the
-    `capacity_thresholds.*` bytes and, when the section is present, the
-    `agent_dispatcher.*` budget; plus the library defaults the daemon applies
-    without a file field: `scheduler.*`, `policy_cadence.*`, `io_timeout_ms`,
-    `maximum_frame_bytes`, `performance_control.*`,
-    `performance_monitor.sample_interval_ms` and `mumu_manager.*`. `source`
-    is `explicit` when the file named the value and `default` otherwise;
-    `discovered` is reserved and not produced yet. A `value` is a typed
-    scalar (`string`, `integer`, `boolean`, `duration_ms`).
+    `capacity_thresholds.*` bytes, the performance monitor's
+    `performance_monitor.pressure_start_samples` /
+    `performance_monitor.pressure_end_samples` and, when the section is
+    present, the `agent_dispatcher.*` budget; plus the values the daemon
+    applies without a file field: `scheduler.*`, `policy_cadence.*`,
+    `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
+    `performance_monitor.sample_interval_ms` and `mumu_manager.*`. Every
+    value is read back from the assembled `RuntimeHostConfig` (Workflow #318,
+    cfg2), never copied from a library `Default`; a host that cannot report
+    one (no performance monitor configuration installed) fails assembly with
+    `config_manifest_incomplete`. `source` is `explicit` when the file named
+    the value and `default` otherwise; `discovered` is reserved and not
+    produced yet. A `value` is a typed scalar (`string`, `integer`,
+    `boolean`, `duration_ms`).
 - `not_checked` lists what this command did not validate. It always starts
   with `vision_provider_manifest` (only read and validated inside host startup,
   which records `provider.startup_observed`) and `state_root` (nothing under it
@@ -153,10 +174,12 @@ terminal with the chosen eligibility basis in the original eviction intent.
 (`config_unavailable`, `config_size_invalid`, `config_read_failed`,
 `config_decode_failed`), `assemble` (the typed configuration codes, for example
 `config_invalid`, `bind_host_not_loopback`, `execution_registry_invalid`,
-`stuck_recovery_cooldown_invalid`,
+`stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
+`device_path_invalid`,
 `instance_binding_key_invalid`, `mumu_root_invalid`,
 `scheduled_execution_instance_unknown`, `policy_governance_capability_missing`,
-`config_manifest_value_out_of_range`, `config_manifest_invalid`),
+`config_manifest_value_out_of_range`, `config_manifest_invalid`,
+`config_manifest_incomplete`),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery` and the other
 `RuntimeHostConfig::validate` codes) or `resource_package`
@@ -203,6 +226,41 @@ The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
 and reported by the instance status entry (`RuntimeInstanceStatus`,
 `ProjectInstanceView`) as `resource_package`, omitted when none is configured.
 Nothing else consumes it yet.
+
+## Performance and device paths
+
+Workflow #318 (cfg2) adds two optional top-level sections. Both are checked
+here exactly as at startup, at stage `assemble`.
+
+`performance { pressure_start_samples, pressure_end_samples }` sets the
+performance monitor's pressure streaks (`PerformanceMonitorConfig` in
+`crates/runtime-host/src/performance.rs`): the consecutive samples above a start
+threshold before a pressure is recorded, and below an end threshold before it
+is ended. Each is optional, default `3`, range `1..=30`; a value outside the
+range fails with `invalid_pressure_samples` before host validation. The
+effective values appear as `performance` here and as the manifest parameters
+`performance_monitor.pressure_start_samples` /
+`performance_monitor.pressure_end_samples` (`explicit` when named).
+
+`device_paths { nemu_folder, nemu_ipc_dll, droidcast_apk, minitouch_path,
+maatouch_path }` names the device tool paths every device instance's backend
+configuration receives: `nemu_folder` and `nemu_ipc_dll` become
+`NemuIpcConfig.nemu_folder` / `.dll_path` (the explicit MuMu root and capture
+DLL of Nemu IPC capture and input), `droidcast_apk` becomes
+`DroidcastRawConfig.local_apk`, and `minitouch_path` / `maatouch_path` become
+the `MinitouchConfig` / `MaaTouchConfig` `local_path`. Each is optional; a set
+path must be absolute and exist (`device_path_invalid` otherwise; nothing is
+opened, resolved or compared against `mumu_root`). An absent path leaves
+today's behaviour unchanged: the `ACTINGCOMMAND_NEMU_FOLDER`,
+`ACTINGCOMMAND_NEMU_IPC_DLL`, `ACTINGCOMMAND_DROIDCAST_RAW_APK` and
+`ACTINGCOMMAND_MINITOUCH_PATH` environment variables, MuMu discovery and the
+bundled tool lookup. A per-instance `minitouch_local_path` /
+`maatouch_local_path` keeps precedence over the daemon-level value. A
+discovery-bound instance receives the same paths when it is registered after
+discovery. Configured paths are reported as the manifest parameters
+`device_paths.<name>` with source `explicit`; unconfigured ones are omitted
+from the manifest and `null` in `device_paths` here (no `discovered` value
+is produced).
 
 ## Discovery-bound instances
 
