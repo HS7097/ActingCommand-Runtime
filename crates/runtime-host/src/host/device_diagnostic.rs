@@ -104,11 +104,34 @@ impl HostShared {
         record: DeviceDiagnosticBudgetRecord,
     ) -> RuntimeHostResult<()> {
         // This is an additional ledger fact; it never re-enters the observation hook.
+        // Its append is deferred; this boundary confirms it with the same wait a
+        // synchronous append had, so a failure keeps the same code and error path.
         let result =
-            append_device_diagnostic_record(&self.ledger, &self.events, self.owner_epoch, record);
+            append_device_diagnostic_record(&self.ledger, &self.events, self.owner_epoch, record)
+                .and_then(|()| {
+                    confirm_deferred_appends(
+                        &self.ledger,
+                        GlobalLedger::REPLY_TIMEOUT,
+                        "append_device_diagnostic_budget",
+                    )
+                });
         if let Err(error) = &result {
             self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Confirms every deferred append at a host boundary; a failed reply sets the existing
+    /// lifecycle latch and surfaces through `operation` exactly as a synchronous failure.
+    pub(super) fn confirm_deferred_appends(
+        &self,
+        deadline: Duration,
+        operation: &'static str,
+    ) -> RuntimeHostResult<()> {
+        let result = confirm_deferred_appends(&self.ledger, deadline, operation);
+        if result.is_err() {
+            self.lifecycle_append_failed.store(true, Ordering::Release);
         }
         result
     }
@@ -158,6 +181,9 @@ pub(super) fn summary_incomplete(
     failure
 }
 
+/// Hands the close summary to the ledger without awaiting its commit. Acceptance is not
+/// persistence: the calling boundary confirms it through `confirm_deferred_appends`, and
+/// nothing reads the summary's event id before that.
 pub(super) fn append_device_diagnostic_record(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
@@ -176,10 +202,28 @@ pub(super) fn append_device_diagnostic_record(
         .and_then(|draft| events.sanitize(draft))
         .and_then(|draft| {
             ledger
-                .append(draft)
+                .append_deferred(draft)
                 .map(|_| ())
                 .map_err(|_| ledger_error("append_device_diagnostic_budget"))
         })
+}
+
+/// One confirmation boundary: a failed deferred reply fails the boundary through the same
+/// ledger error a synchronous append failure produced; pending replies are left to the
+/// ledger's own shutdown, which refuses to drop them silently.
+pub(super) fn confirm_deferred_appends(
+    ledger: &GlobalLedger,
+    deadline: Duration,
+    operation: &'static str,
+) -> RuntimeHostResult<()> {
+    let summary = ledger
+        .confirm_deferred(deadline)
+        .map_err(|_| ledger_error(operation))?;
+    if summary.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(ledger_error(operation))
+    }
 }
 
 pub(super) fn record_host_close_result(

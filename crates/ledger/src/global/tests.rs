@@ -2333,6 +2333,7 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         sender: Some(sender),
         writer: Some(writer),
         commit_statistics: Arc::new(CommitStatistics::new(0).expect("statistics")),
+        deferred: Mutex::new(Vec::new()),
     };
     let (done_sender, done_receiver) = mpsc::channel();
     thread::spawn(move || {

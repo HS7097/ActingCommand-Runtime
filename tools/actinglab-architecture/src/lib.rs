@@ -625,6 +625,27 @@ pub fn inspect_ledger_append_ingress(owners: &[LedgerOwnerModule]) -> Result<Vec
                         continue;
                     }
                 }
+                // Workflow #325 C-1: the deferred ingress takes the same sanitized draft as
+                // `append`; only the reply wait differs.
+                if method.sig.ident == "append_deferred" && is_public(&method.vis) {
+                    let typed = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .filter_map(|input| match input {
+                            FnArg::Receiver(_) => None,
+                            FnArg::Typed(argument) => Some(argument),
+                        })
+                        .collect::<Vec<_>>();
+                    if typed.len() == 1
+                        && method.sig.generics.params.is_empty()
+                        && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
+                        && type_last_ident(&typed[0].ty)
+                            .is_some_and(|ident| ident == "SanitizedEventDraft")
+                    {
+                        continue;
+                    }
+                }
                 if is_public(&method.vis)
                     && (method.sig.ident.to_string().starts_with("append")
                         || method_accepts_event_ingress(method)
@@ -3508,6 +3529,7 @@ mod tests {
             impl GlobalLedger {
                 pub fn append(&self, draft: SanitizedEventDraft) {}
                 pub fn append_transaction(&self, draft: SanitizedEventDraft, work: Box<dyn LedgerTransactionWork>) {}
+                pub fn append_deferred(&self, draft: SanitizedEventDraft) {}
             }
         "#;
         assert!(
@@ -3518,6 +3540,10 @@ mod tests {
         for invalid in [
             joint.replace("draft: SanitizedEventDraft,", "draft: serde_json::Value,"),
             joint.replace("Box<dyn LedgerTransactionWork>", "Box<dyn Fn()>"),
+            joint.replace(
+                "append_deferred(&self, draft: SanitizedEventDraft)",
+                "append_deferred(&self, draft: serde_json::Value)",
+            ),
         ] {
             assert!(
                 !super::inspect_global_append_ingress("fixture.rs", &invalid)

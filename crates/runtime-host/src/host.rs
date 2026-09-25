@@ -1184,6 +1184,8 @@ impl RuntimeHost {
             match prepared {
                 Ok(prepared) => prepared,
                 Err(original) => {
+                    // The aborted start is this summary's boundary: confirm it here so a
+                    // failed commit reaches the caller instead of the ledger's own drop.
                     if let Err(error) = device_diagnostic::append_device_diagnostic_record(
                         &ledger,
                         &events,
@@ -1192,7 +1194,14 @@ impl RuntimeHost {
                             owner_epoch,
                             config.device_diagnostic_mode,
                         ),
-                    ) {
+                    )
+                    .and_then(|()| {
+                        device_diagnostic::confirm_deferred_appends(
+                            &ledger,
+                            GlobalLedger::REPLY_TIMEOUT,
+                            "append_device_diagnostic_budget",
+                        )
+                    }) {
                         return Err(device_diagnostic::summary_incomplete(
                             Some(original),
                             &error,
@@ -3177,6 +3186,11 @@ impl HostShared {
             }
         }
         self.finish_device_diagnostics(&mut failure);
+        // Every deferred append is confirmed before the ledger writer is shut down.
+        record_failure(
+            &mut failure,
+            self.confirm_deferred_appends(GlobalLedger::REPLY_TIMEOUT, "confirm_deferred_appends"),
+        );
         let HostShared { owner, ledger, .. } = self;
         if ledger.close().is_err() {
             record_failure(&mut failure, Err(ledger_error("close_global_ledger")));

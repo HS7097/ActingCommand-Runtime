@@ -41,7 +41,7 @@ pub use read_only::{
 
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    CorrelationId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
+    CorrelationId, EventId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
     PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, SanitizationError, SanitizedEventDraft,
     SchedulingOutcomeIdentity, SchedulingOutcomeProjection, SecretField, SecretFingerprinter,
@@ -53,7 +53,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, TryLockError, Weak,
+    Arc, Mutex, MutexGuard, TryLockError, Weak,
     mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 use std::thread::{self, JoinHandle};
@@ -816,10 +816,88 @@ enum WriterCommand {
     TestSubscriberCount { response: SyncSender<usize> },
 }
 
+/// One deferred append whose writer reply has not been awaited yet.
+struct PendingReply {
+    receiver: Receiver<LedgerAppendOutcome>,
+    event_type: EventType,
+    enqueued_at: Instant,
+}
+
+/// Acceptance ticket of a deferred append. Acceptance is not commit: the event id was
+/// issued before the fact reached the store, so nothing may link to it or treat the fact
+/// as persisted until `confirm_deferred` reports it committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeferredAppend {
+    ticket: usize,
+    event_id: EventId,
+}
+
+impl DeferredAppend {
+    /// Position in the pending queue at acceptance; meaningful only until the next confirmation.
+    pub const fn ticket(&self) -> usize {
+        self.ticket
+    }
+
+    /// The draft's runtime-issued id; it is not a committed reference before confirmation.
+    pub const fn event_id(&self) -> &EventId {
+        &self.event_id
+    }
+}
+
+/// Reference to a fact whose commit an actual writer reply confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersistedEventRef {
+    event_id: EventId,
+    sequence: u64,
+    event_type: EventType,
+}
+
+impl PersistedEventRef {
+    fn from_event(event: &PersistedEvent) -> Self {
+        Self {
+            event_id: *event.event_id(),
+            sequence: event.sequence(),
+            event_type: event.event_type(),
+        }
+    }
+
+    pub const fn event_id(&self) -> &EventId {
+        &self.event_id
+    }
+
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub const fn event_type(&self) -> EventType {
+        self.event_type
+    }
+}
+
+/// Outcome of one confirmation boundary. `failed` holds the writer's replies verbatim;
+/// `pending` counts replies that had not arrived by the deadline.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DeferredSummary {
+    pub committed: Vec<PersistedEventRef>,
+    pub failed: Vec<GlobalLedgerError>,
+    pub pending: usize,
+}
+
+impl DeferredSummary {
+    fn record(&mut self, result: GlobalLedgerResult<PersistedEvent>) {
+        match result {
+            Ok(event) => self.committed.push(PersistedEventRef::from_event(&event)),
+            Err(error) => self.failed.push(error),
+        }
+    }
+}
+
 pub struct GlobalLedger {
     sender: Option<SyncSender<WriterCommand>>,
     writer: Option<JoinHandle<GlobalLedgerResult<()>>>,
     commit_statistics: Arc<CommitStatistics>,
+    // Replies of accepted-but-unconfirmed appends, oldest first.
+    deferred: Mutex<Vec<PendingReply>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1112,6 +1190,9 @@ impl fmt::Debug for GlobalLedger {
 }
 
 impl GlobalLedger {
+    /// Wait bound of one writer reply; boundaries confirming deferred appends reuse it.
+    pub const REPLY_TIMEOUT: Duration = COMMAND_TIMEOUT;
+
     /// Does not enqueue a writer command or wait for an I/O lock.
     pub fn sample_commit_statistics(&self) -> GlobalLedgerResult<GlobalLedgerCommitObservation> {
         self.check_writer_health()?;
@@ -1233,6 +1314,7 @@ impl GlobalLedger {
                 sender: Some(sender),
                 writer: Some(writer),
                 commit_statistics,
+                deferred: Mutex::new(Vec::new()),
             }),
             Err(mpsc::SendError(store)) => {
                 drop(sender);
@@ -1318,6 +1400,108 @@ impl GlobalLedger {
             ),
             Ok(reply) => reply,
             Err(error) => (Err(error), observation),
+        }
+    }
+
+    /// Accepts one fact on the same writer command as `append` without awaiting its reply:
+    /// same ingress queue, store transaction, subscription delivery and writer ordering.
+    /// Acceptance is not commit; the outcome is known only when `confirm_deferred` returns
+    /// it as committed or failed. The returned event id exists before commit, so callers
+    /// must not link to it until it is confirmed. A full ingress queue stays the fatal
+    /// `ingress_full`: the bounded queue is the backpressure.
+    pub fn append_deferred(
+        &self,
+        draft: SanitizedEventDraft,
+    ) -> GlobalLedgerResult<DeferredAppend> {
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_deferred"))?;
+        let event_id = *draft.event_id();
+        let event_type = draft.event_type();
+        let (response, receiver) = mpsc::sync_channel(1);
+        // Held across the send so a concurrent confirmation cannot miss this reply.
+        let mut deferred = self.deferred_replies("append_deferred")?;
+        send_command(
+            sender,
+            WriterCommand::Append {
+                draft: Box::new(draft),
+                queued_at: None,
+                response,
+            },
+            "append_deferred",
+        )?;
+        let ticket = deferred.len();
+        deferred.push(PendingReply {
+            receiver,
+            event_type,
+            enqueued_at: Instant::now(),
+        });
+        Ok(DeferredAppend { ticket, event_id })
+    }
+
+    /// Confirms deferred appends at a boundary: every reply that has already arrived is
+    /// drained without blocking, then the rest are awaited oldest first until `deadline`
+    /// elapses. Each failed reply is kept verbatim, never merged or downgraded; replies
+    /// still missing at the deadline stay pending and are counted. A zero deadline is a
+    /// drain-only confirmation.
+    pub fn confirm_deferred(&self, deadline: Duration) -> GlobalLedgerResult<DeferredSummary> {
+        let mut deferred = self.deferred_replies("confirm_deferred")?;
+        let mut summary = DeferredSummary::default();
+        let mut waiting = Vec::new();
+        for pending in deferred.drain(..) {
+            match pending.receiver.try_recv() {
+                Ok((result, _)) => summary.record(result),
+                Err(TryRecvError::Empty) => waiting.push(pending),
+                Err(TryRecvError::Disconnected) => summary.record(Err(GlobalLedgerError::fatal(
+                    "writer_unavailable",
+                    "confirm_deferred",
+                ))),
+            }
+        }
+        let started = Instant::now();
+        for pending in waiting {
+            let remaining = deadline.saturating_sub(started.elapsed());
+            match pending.receiver.recv_timeout(remaining) {
+                Ok((result, _)) => summary.record(result),
+                Err(mpsc::RecvTimeoutError::Timeout) => deferred.push(pending),
+                Err(mpsc::RecvTimeoutError::Disconnected) => summary.record(Err(
+                    GlobalLedgerError::fatal("writer_unavailable", "confirm_deferred"),
+                )),
+            }
+        }
+        summary.pending = deferred.len();
+        Ok(summary)
+    }
+
+    fn deferred_replies(
+        &self,
+        operation: &'static str,
+    ) -> GlobalLedgerResult<MutexGuard<'_, Vec<PendingReply>>> {
+        self.deferred
+            .lock()
+            .map_err(|_| GlobalLedgerError::fatal("deferred_replies_poisoned", operation))
+    }
+
+    /// A reply still pending when the writer is asked to stop; never a silent drop.
+    fn deferred_unconfirmed(&self, operation: &'static str) -> GlobalLedgerError {
+        let detail = self.deferred.lock().ok().and_then(|deferred| {
+            deferred.first().map(|oldest| {
+                format!(
+                    "{} unconfirmed; oldest {:?} accepted {:?} ago",
+                    deferred.len(),
+                    oldest.event_type,
+                    oldest.enqueued_at.elapsed()
+                )
+            })
+        });
+        GlobalLedgerError {
+            code: "deferred_append_unconfirmed",
+            operation,
+            detail,
+            terminal: true,
+            rolled_back_work: None,
+            io_kind: None,
         }
     }
 
@@ -1560,6 +1744,15 @@ impl GlobalLedger {
                 .join()
                 .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;
         };
+        // Deferred appends are confirmed before the writer is asked to stop: a failed reply
+        // fails the close with that error and a still-pending reply is fatal, never dropped.
+        let deferred_result = self.confirm_deferred(COMMAND_TIMEOUT).and_then(|summary| {
+            match summary.failed.into_iter().next() {
+                Some(first) => Err(first),
+                None if summary.pending > 0 => Err(self.deferred_unconfirmed("shutdown_writer")),
+                None => Ok(()),
+            }
+        });
         let (response, receiver) = mpsc::sync_channel(1);
         let send_result = sender
             .send(WriterCommand::Shutdown { response })
@@ -1570,7 +1763,7 @@ impl GlobalLedger {
         let join_result = writer
             .join()
             .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;
-        response_result.and(join_result)
+        deferred_result.and(response_result).and(join_result)
     }
 }
 

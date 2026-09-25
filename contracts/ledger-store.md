@@ -57,6 +57,37 @@ quarantine and rotation remain owned by `storage.rs`. Commit statistics describe
 successful writes by the current owner; timings and the owner incarnation are
 observations, not event identity or portable equality inputs.
 
+## Deferred append
+
+`GlobalLedger::append_deferred(draft)` accepts a sanitized draft on the same writer
+command as `append`: the same bounded ingress queue, the same store transaction, the
+same acknowledgement-before-live-delivery order and the same writer exit rules. The
+only difference is that the caller does not wait for the reply; the ledger keeps the
+reply channel with the draft's event type and acceptance time. Acceptance is not
+commit. A full ingress queue is still the fatal `ingress_full`: the bounded queue is
+the backpressure, and no unbounded buffer exists behind a deferred append.
+
+`confirm_deferred(deadline)` establishes outcomes at explicit boundaries. It first
+drains every reply that has already arrived without blocking, then waits up to
+`deadline` for the rest, oldest first. Each committed reply becomes a
+`PersistedEventRef` (event id, sequence, type); each failed reply is returned
+verbatim in `failed`, never merged, downgraded or summarized into another error;
+replies still missing at the deadline stay pending and are counted. A zero deadline
+is a drain-only confirmation. Host boundaries are `HostShared::close`,
+`finish_device_diagnostics` (and the aborted-start summary) and the performance
+sampling tick that hosts the summary producer, each with the writer reply wait as
+its budget except the drain-only tick. A boundary that finds a failure sets the
+existing `lifecycle_append_failed` latch (once the host exists) and fails through
+its existing error path, so close fails exactly as a synchronous append failure did.
+
+Writer shutdown confirms deferred appends first, with the writer reply wait as its
+budget. A failed reply fails the close with that error; a reply still pending is the
+fatal `deferred_append_unconfirmed`, never a silent drop. The event id returned at
+acceptance exists before commit: nothing may link to it, or treat the fact as
+persisted, until a confirmation reports it committed. The device diagnostic close
+summary is the first deferred producer; `append` and `append_transaction`,
+subscriptions, the critical path and the writer exit rules are unchanged.
+
 ## Prior-epoch scope close (proven or unproven)
 
 Before Provider assembly, Host completes pending eviction recovery and capacity
