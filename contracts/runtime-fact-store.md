@@ -181,6 +181,14 @@ dirty. `RuntimeHost::runtime_fact_snapshot` and
 JSON. `facts` without `--program` (the per-instance read) is not built and is a
 usage error; the command takes no `--instance`.
 
+`actingctl status --config --state-root <state-root>` runs the same
+`runtime_fact_snapshot` read (no new operation) and prints only the two
+`config.subsystems` and `config.parameters` records, as a JSON array of
+`RuntimeFactRecord` objects in that order and in the same shape the snapshot
+carries them. A snapshot without both records is an error
+(`config_facts_missing`, exit code 1), never an empty array. Plain `status`
+is unchanged; `--config` on any other command is a usage error.
+
 ## Offline read
 
 `actingcommand_ledger_forensics::runtime_facts_at(state_root, position,
@@ -300,13 +308,22 @@ above with source `runtime`.
     `string`, `integer`, `boolean` or `duration_ms`), `source` (`explicit` for
     a value set in the configuration file, `default` for a library default,
     `discovered` is reserved for values learned at startup and is not produced
-    yet). Values are effective values, not raw file contents. The secret
-    fingerprint salt is never a value: only `secret_fingerprint_salt_bytes`,
-    its byte length, is reported.
+    yet). Values are effective values, not raw file contents: since Workflow
+    #318 cfg2 every one is read back from the assembled `RuntimeHostConfig`
+    (scheduler, policy cadence, performance control, performance monitor
+    including `performance_monitor.pressure_start_samples` /
+    `performance_monitor.pressure_end_samples`, I/O timeout, frame bound,
+    capacity thresholds, frame retention), and a host that cannot report one
+    fails assembly with `config_manifest_incomplete` instead of writing a
+    default. Configured daemon-level device tool paths appear as
+    `device_paths.<name>` (`explicit`); unconfigured ones are omitted. The
+    secret fingerprint salt is never a value: only
+    `secret_fingerprint_salt_bytes`, its byte length, is reported.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of
-the snapshot.
+the snapshot and `actingctl status --config` returns just the two (see "Read
+operation").
 
 ## Typed codes
 

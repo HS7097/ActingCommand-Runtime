@@ -99,6 +99,16 @@ impl PerformanceMonitorConfig {
         self.sample_interval
     }
 
+    /// The effective start streak (`with_pressure_start_samples`, default 3).
+    pub const fn pressure_start_samples(&self) -> u16 {
+        self.pressure_start_samples
+    }
+
+    /// The effective end streak (`with_pressure_end_samples`, default 3).
+    pub const fn pressure_end_samples(&self) -> u16 {
+        self.pressure_end_samples
+    }
+
     pub fn validate(&self) -> RuntimeHostResult<()> {
         if !(Duration::from_secs(1)..=Duration::from_secs(5)).contains(&self.sample_interval)
             || self.context_window < self.sample_interval

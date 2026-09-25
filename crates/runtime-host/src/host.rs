@@ -549,6 +549,41 @@ impl RuntimeHostConfig {
         self.maximum_frame_bytes
     }
 
+    /// The effective values below are what the host applies; the configuration manifest
+    /// (Workflow #318) reads them back here instead of repeating the library defaults.
+    pub const fn device_diagnostic_mode(&self) -> actingcommand_contract::DeviceDiagnosticMode {
+        self.device_diagnostic_mode
+    }
+
+    pub const fn scheduler(&self) -> SchedulerConfig {
+        self.scheduler
+    }
+
+    pub const fn policy_cadence(&self) -> &PolicyCadence {
+        &self.policy_cadence
+    }
+
+    /// `None` when no performance monitor configuration was installed.
+    pub const fn performance_monitor(&self) -> Option<&PerformanceMonitorConfig> {
+        self.performance_monitor.as_ref()
+    }
+
+    pub const fn performance_control(&self) -> &PerformanceControlConfig {
+        &self.performance_control
+    }
+
+    pub const fn capacity_thresholds(&self) -> actingcommand_contract::CapacityThresholds {
+        self.capacity_thresholds
+    }
+
+    pub const fn frame_retention_enabled(&self) -> bool {
+        self.frame_retention_enabled
+    }
+
+    pub const fn failed_run_retention(&self) -> actingcommand_contract::FailedRunRetentionPolicy {
+        self.failed_run_retention
+    }
+
     pub fn validate(&self) -> RuntimeHostResult<()> {
         self.scheduler
             .validate()
