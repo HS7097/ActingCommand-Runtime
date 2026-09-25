@@ -86,6 +86,7 @@ fn load_catalog(paths: &SchedulingCatalogPaths) -> LabResult<CompiledCatalog> {
         pools: read_source(&paths.pools)?,
         activity: read_source(&paths.activity)?,
         timeline: read_source(&paths.timeline)?,
+        selection: None,
     };
     match compile_catalog(&sources) {
         Ok(catalog) => Ok(catalog),

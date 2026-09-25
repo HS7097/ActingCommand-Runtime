@@ -1660,6 +1660,7 @@ mod tests {
                 capability_operation_ids: vec!["operation-a".to_owned()],
                 preferred_task_ids: vec!["task-a".to_owned()],
             }],
+            priority_offsets: Vec::new(),
         };
         let resources = resources();
         let canonical = store

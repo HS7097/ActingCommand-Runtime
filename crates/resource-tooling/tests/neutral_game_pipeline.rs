@@ -370,6 +370,7 @@ fn neutral_catalog_sources() -> CatalogSources {
                 "../../../contracts/scheduling/examples/h1-neutral-activity/timeline.json"
             )),
         ),
+        selection: None,
     }
 }
 

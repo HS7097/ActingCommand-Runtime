@@ -165,6 +165,31 @@ depth 16 and predicate nodes 512 per gate, matching the scheduling predicate
 limits; identifiers, fact keys, and outcome keys 128 bytes; one document 512
 KiB.
 
+## Scheduling consumer
+
+The scheduling policy crate consumes a selection-policy document as the optional
+fifth catalog document (see [the scheduling contract](scheduling/README.md),
+section "Score-Assisted Priority"). It uses the document as a scorer, not as a
+chooser:
+
+- Candidates are the eligible (task, instance) pairs of one evaluation,
+  identified as `<task_id>@<instance_id>`, with the fields `task.priority`,
+  `task.strategic_weight_milli`, `task.urgency_milli`, `task.aging_ms`,
+  `task.load_cost_milli`, `instance.affinity`, plus the instance's scalar facts
+  under their own keys. A document declares whichever of these it reads.
+- The fact snapshot is the instance's own projection of the evaluation's facts,
+  built the same way `from_fact_records` builds one: most specific scope per key,
+  record lists unusable, timestamps and durations as integer milliseconds. The
+  evaluator is called once per instance.
+- Only `score_milli` of a `ranked` verdict is read. `selection`, `tie_break`,
+  the outcome and the chosen identifiers are ignored, except that an `unknown`
+  outcome ends the scheduling evaluation with an error, so a document meant for
+  scheduling should prefer `drop_candidate` or a substitution over
+  `abort_evaluation` unless stopping the round is the intent.
+- The document is hashed into the catalog identity and validated at catalog
+  compile time with this crate's `validate`, so an invalid document rejects the
+  whole catalog instead of being skipped.
+
 ## Offline tool
 
 `selection-eval --policy <file> --candidates <file> --facts <file>

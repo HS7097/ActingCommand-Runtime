@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use actingcommand_selection_policy::SelectionPolicy;
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::{canonical_serialized, catalog_hash};
-use crate::source::{ParsedDocument, parse_document};
+use crate::source::{ParsedDocument, parse_document, parse_selection_document};
 use crate::validation::{CatalogSourceMaps, sort_diagnostics, validate_catalog};
 use crate::{
     ActivityDocument, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode,
@@ -52,6 +53,7 @@ pub struct DiagnosticStatistics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledCatalog {
     catalog: CatalogBundle,
+    selection: Option<SelectionPolicy>,
     summary: CatalogIrSummary,
     warnings: Vec<CatalogDiagnostic>,
 }
@@ -59,6 +61,12 @@ pub struct CompiledCatalog {
 impl CompiledCatalog {
     pub fn catalog(&self) -> &CatalogBundle {
         &self.catalog
+    }
+
+    /// The optional fifth document, already validated by the selection-policy crate and
+    /// hashed into `catalog_hash`.
+    pub fn selection_policy(&self) -> Option<&SelectionPolicy> {
+        self.selection.as_ref()
     }
 
     pub fn into_catalog(self) -> CatalogBundle {
@@ -259,15 +267,24 @@ pub fn compile_catalog(sources: &CatalogSources) -> Result<CompiledCatalog, Cata
         parse_document::<ActivityDocument>(&sources.activity, SchedulingDocumentKind::Activity);
     let timeline =
         parse_document::<TimelineDocument>(&sources.timeline, SchedulingDocumentKind::Timeline);
+    let selection = sources
+        .selection
+        .as_ref()
+        .map(parse_selection_document)
+        .transpose();
 
     let mut parse_diagnostics = Vec::new();
     collect_parse_error(&tasks, &mut parse_diagnostics);
     collect_parse_error(&pools, &mut parse_diagnostics);
     collect_parse_error(&activity, &mut parse_diagnostics);
     collect_parse_error(&timeline, &mut parse_diagnostics);
+    if let Err(diagnostic) = &selection {
+        parse_diagnostics.push((**diagnostic).clone());
+    }
     if !parse_diagnostics.is_empty() {
         return Err(CatalogCompileFailure::new(parse_diagnostics));
     }
+    let selection = selection.expect("parse diagnostics were checked");
 
     let ParsedDocument {
         value: tasks,
@@ -300,12 +317,13 @@ pub fn compile_catalog(sources: &CatalogSources) -> Result<CompiledCatalog, Cata
             activity: &activity_map,
             timeline: &timeline_map,
         },
+        selection.is_some(),
     );
     if !diagnostics.is_empty() {
         return Err(CatalogCompileFailure::new(diagnostics));
     }
 
-    let hash = catalog_hash(&catalog).map_err(|reason| {
+    let hash = catalog_hash(&catalog, selection.as_ref()).map_err(|reason| {
         CatalogCompileFailure::new(vec![tasks_map.diagnostic(
             CatalogDiagnosticCode::TypeMismatch,
             "",
@@ -319,6 +337,7 @@ pub fn compile_catalog(sources: &CatalogSources) -> Result<CompiledCatalog, Cata
     let summary = build_summary(&catalog, hash);
     Ok(CompiledCatalog {
         catalog,
+        selection,
         summary,
         warnings: Vec::new(),
     })
@@ -334,12 +353,15 @@ fn collect_parse_error<T>(
 }
 
 fn preflight_sources(sources: &CatalogSources) -> Vec<CatalogDiagnostic> {
-    let documents = [
+    let mut documents = vec![
         (&sources.tasks, SchedulingDocumentKind::Tasks),
         (&sources.pools, SchedulingDocumentKind::Pools),
         (&sources.activity, SchedulingDocumentKind::Activity),
         (&sources.timeline, SchedulingDocumentKind::Timeline),
     ];
+    if let Some(selection) = &sources.selection {
+        documents.push((selection, SchedulingDocumentKind::Selection));
+    }
     let mut diagnostics = Vec::new();
     let total_bytes = documents.iter().fold(0_usize, |total, (source, _)| {
         total.saturating_add(source.bytes.len())
@@ -482,6 +504,7 @@ mod tests {
                 include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
                     .to_vec(),
             ),
+            selection: None,
         }
     }
 

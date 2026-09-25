@@ -3,7 +3,7 @@
 The versioned [V2 contract](v2/README.md) adds explicit timeline availability
 through the same compiler and evaluator. This document specifies V1.
 
-The scheduling catalog is a four-document, data-only contract. It cannot contain executable code, scripts, network requests, device actions, or implicit defaults.
+The scheduling catalog is a data-only contract of four required documents plus one optional selection document. It cannot contain executable code, scripts, network requests, device actions, or implicit defaults.
 
 ## Offline inspection
 
@@ -60,6 +60,9 @@ the Runtime's normal chain; an offline query establishes no production run fact.
 - `activity.schema.json`: scoped activity windows, per-instance importance, bounded sessions, sampling policy, and goals.
 - `timeline.schema.json`: scoped reset, maintenance, activity, and deadline events.
 - `diagnostic.schema.json`: stable compiler diagnostic envelope.
+- `selection` (optional fifth document): an `actingcommand.selection-policy.v1` scoring
+  policy owned by [the selection-policy contract](../selection-policy.md). It carries its
+  own schema version and no `catalog` descriptor.
 
 All four catalog documents must carry the exact schema version `actingcommand.scheduling.v1` and an identical `catalog` descriptor. A mismatch rejects the whole catalog.
 
@@ -103,6 +106,52 @@ JSON Schema bounds alias character length; the shared contract/compiler also
 enforces the UTF-8 byte limit.
 
 Activity sampling uses a ledger-derived seed and `same_round_stable`: the host records the seed once and must reuse the sampled value throughout the same scheduling round. Resampling within a round is invalid.
+
+## Score-Assisted Priority
+
+The predicate gate (trigger, feedback stop, timeline validity, cooldown, placement)
+decides eligibility on its own; a score never overrides it. Between that gate and
+ranking, the evaluator runs an optional score stage:
+
+- With a `selection` document, every eligible (task, instance) pair becomes one
+  selection candidate `<task_id>@<instance_id>` whose fields are `task.priority`,
+  `task.strategic_weight_milli`, `task.urgency_milli`, `task.aging_ms`,
+  `task.load_cost_milli` (integers), `instance.affinity` (boolean), and every
+  scalar fact the instance can see (its own, its server's and its game's scope,
+  the most specific scope per key; timestamps and durations become integer
+  milliseconds; record lists are unusable). The document is evaluated once per
+  instance over that instance's candidates and its own fact projection, pinned to
+  the evaluation's `fact_snapshot_id` and instant. Only the per-candidate
+  `score_milli` of a `ranked` verdict is consumed; a rejected or dropped verdict
+  yields no score, and an `unknown` outcome (`abort_evaluation`) fails the whole
+  evaluation with `selection_evaluation_aborted`. A document the crate cannot
+  evaluate fails with `selection_policy_invalid`.
+- `EvaluationFacts.priority_offsets` carries manual offsets
+  `{task_id, instance_id?, offset_milli, origin: user|agent, observed_at_unix_ms}`;
+  an instance-level entry overrides the task-level entry, `|offset_milli|` is
+  bounded to 1,000,000, and duplicate `(task_id, instance_id)` pairs are input
+  errors. Offsets apply with or without a selection document.
+- `effective_milli = score_milli (0 when absent) + offset_milli` is added to the
+  candidate's `total_score` as `effective_milli * 1000`, the same unit as the
+  urgency and strategic terms.
+- The tasks document may declare a catalog-level `priority_selection` block
+  `{defer_below_milli, defer_for_ms (1..=86,400,000), promote_above_milli}` with
+  `defer_below_milli < promote_above_milli`; it is only allowed next to a
+  selection document (`priority_selection_without_document` otherwise). A scored
+  candidate with `effective_milli < defer_below_milli` is deferred with reason
+  `score_deferred` and wakes at `now + defer_for_ms`, consuming no host budget;
+  one with `effective_milli > promote_above_milli` is promoted and ranks ahead of
+  every other candidate (`score_promoted`). An unscored candidate is never
+  deferred or promoted: only its offset applies and the reason
+  `score_unknown:<gate or term id>` records why.
+- Every candidate that passed through the stage carries the reason `scored`
+  with detail `score=<milli|none> offset=<milli> effective=<milli>
+  disposition=<deferred|promoted|none>`. Reason codes are free strings; the
+  dispatch-intent shape and the decision identity are unchanged.
+
+Without a selection document and without offsets the stage is a no-op and every
+evaluation output is byte-identical to a catalog compiled before this stage
+existed.
 
 ## Runtime Enforcement
 
@@ -197,7 +246,9 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Item | Limit |
 | --- | ---: |
 | One document | 1,048,576 bytes |
-| Four-document catalog | 4,194,304 bytes |
+| Selection document | 524,288 bytes |
+| Catalog (all documents together) | 4,194,304 bytes |
+| Priority offsets per evaluation | 16,384, each within ±1,000,000 milli |
 | Identifier/reference | 128 bytes |
 | Registered instance alias | 256 UTF-8 bytes |
 | Diagnostic text, fact string, or source URI | 1,024 bytes |
@@ -217,9 +268,9 @@ Loop budgets are mandatory. Arrays and strings that exceed their limit reject th
 
 The catalog hash is computed as follows:
 
-1. Parse all four documents while rejecting duplicate object keys and invalid UTF-8.
+1. Parse all four documents while rejecting duplicate object keys and invalid UTF-8. Parse the optional selection document with the selection-policy crate's own reader and validation.
 2. Validate the exact V1 schemas and cross-document invariants.
-3. Construct the JSON object `{"activity": A, "pools": P, "tasks": T, "timeline": L}` from the validated documents. No field is removed and no default is inserted.
+3. Construct the JSON object `{"activity": A, "pools": P, "tasks": T, "timeline": L}` from the validated documents, adding `"selection": S` only when a selection document is present. No field is removed and no default is inserted, so a catalog without a selection document keeps its existing hash.
 4. Serialize that object with RFC 8785 JSON Canonicalization Scheme. Object keys are sorted by JCS rules, array order is preserved, and no insignificant whitespace is emitted.
 5. Compute SHA-256 over the canonical UTF-8 bytes.
 6. Encode the result as `sha256:` followed by 64 lowercase hexadecimal characters.
@@ -234,7 +285,7 @@ Any error-severity diagnostic rejects the complete four-document catalog. Warnin
 
 ## Compiler Boundary
 
-`actingcommand_policy::compile_catalog` accepts four in-memory `CatalogDocumentSource` values. It performs no file access, script execution, network request, clock read, sleep, ledger write, lease operation, or device action. Success returns one complete `CompiledCatalog`; any error returns `CatalogCompileFailure` and no partial IR. Both outcomes expose canonical, byte-stable dry-run JSON.
+`actingcommand_policy::compile_catalog` accepts four in-memory `CatalogDocumentSource` values plus an optional fifth for the selection document. It performs no file access, script execution, network request, clock read, sleep, ledger write, lease operation, or device action. Success returns one complete `CompiledCatalog`; any error returns `CatalogCompileFailure` and no partial IR. Both outcomes expose canonical, byte-stable dry-run JSON.
 
 ## Neutral Example
 

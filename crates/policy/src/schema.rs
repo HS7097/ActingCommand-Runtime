@@ -30,6 +30,10 @@ pub const MIN_DST_OFFSET_MINUTES: i16 = -120;
 pub const MAX_DST_OFFSET_MINUTES: i16 = 120;
 pub const MIN_CANONICAL_INTEGER: i64 = -9_007_199_254_740_991;
 pub const MAX_CANONICAL_INTEGER: i64 = 9_007_199_254_740_991;
+/// Longest score-deferral a catalog may declare: one day.
+pub const MAX_DEFER_FOR_MS: u64 = 86_400_000;
+/// Largest manual priority offset magnitude accepted as evaluation input.
+pub const MAX_PRIORITY_OFFSET_MILLI: i32 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -81,6 +85,7 @@ pub enum CatalogDiagnosticCode {
     LoopBudgetMissing,
     EffectIncompatible,
     ApprovalMissing,
+    PrioritySelectionWithoutDocument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -106,6 +111,8 @@ pub enum SchedulingDocumentKind {
     Pools,
     Activity,
     Timeline,
+    /// The optional fifth document: an `actingcommand.selection-policy.v1` scoring policy.
+    Selection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +129,21 @@ pub struct TasksDocument {
     pub schema_version: String,
     pub catalog: CatalogDescriptor,
     pub tasks: Vec<TaskSpec>,
+    /// Catalog-level score thresholds; allowed only next to a selection document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_selection: Option<PrioritySelection>,
+}
+
+/// Turns a selection-policy score into a scheduling disposition.
+///
+/// A candidate whose effective score is below `defer_below_milli` is deferred for
+/// `defer_for_ms`; one above `promote_above_milli` ranks ahead of every other candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrioritySelection {
+    pub defer_below_milli: i64,
+    pub defer_for_ms: u64,
+    pub promote_above_milli: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -25,6 +25,7 @@ fn policy_sources(version: u64) -> CatalogSources {
             include_bytes!("../../../../../contracts/scheduling/examples/catalog-a/timeline.json")
                 .to_vec(),
         ),
+        selection: None,
     };
     for source in [
         &mut sources.tasks,

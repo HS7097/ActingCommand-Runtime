@@ -88,6 +88,7 @@ fn policy_facts() -> EvaluationFacts {
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         }],
+        priority_offsets: Vec::new(),
     }
 }
 

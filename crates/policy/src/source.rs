@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use actingcommand_selection_policy::{SelectionError, SelectionErrorCode, SelectionPolicy};
 use serde::de::DeserializeOwned;
 
 use crate::{
@@ -30,6 +31,8 @@ pub struct CatalogSources {
     pub pools: CatalogDocumentSource,
     pub activity: CatalogDocumentSource,
     pub timeline: CatalogDocumentSource,
+    /// Optional fifth document: an `actingcommand.selection-policy.v1` scoring policy.
+    pub selection: Option<CatalogDocumentSource>,
 }
 
 /// Parse one scheduling declaration with the same wire parser used by production compilation.
@@ -38,6 +41,7 @@ pub fn validate_catalog_declaration(
     kind: SchedulingDocumentKind,
 ) -> Result<(), Box<CatalogDiagnostic>> {
     let (version, catalog, source_map) = match kind {
+        SchedulingDocumentKind::Selection => return parse_selection_document(source).map(|_| ()),
         SchedulingDocumentKind::Tasks => {
             let parsed = parse_document::<crate::TasksDocument>(source, kind)?;
             (
@@ -78,6 +82,79 @@ pub fn validate_catalog_declaration(
     ) {
         Some(error) => Err(Box::new(error)),
         None => Ok(()),
+    }
+}
+
+/// Parses the optional fifth document with the selection-policy crate's own rules: its byte
+/// limit, its canonical reader (no floats, no unsafe integers, no duplicate keys) and its
+/// document validation. Any failure is a compile diagnostic, never a silent fallback.
+pub(crate) fn parse_selection_document(
+    source: &CatalogDocumentSource,
+) -> Result<SelectionPolicy, Box<CatalogDiagnostic>> {
+    let kind = SchedulingDocumentKind::Selection;
+    if source.bytes.len() > actingcommand_selection_policy::MAX_DOCUMENT_BYTES {
+        return Err(Box::new(basic_diagnostic(
+            source,
+            kind,
+            CatalogDiagnosticCode::DocumentTooLarge,
+            String::new(),
+            1,
+            1,
+            format!(
+                "selection document size {} exceeds {} bytes",
+                source.bytes.len(),
+                actingcommand_selection_policy::MAX_DOCUMENT_BYTES
+            ),
+        )));
+    }
+    let parsed = parse_document::<SelectionPolicy>(source, kind)?;
+    let schema_version = parsed.source_map.schema_version.as_deref();
+    actingcommand_selection_policy::parse_canonical_json(&source.bytes)
+        .map_err(|error| selection_diagnostic(source, schema_version, error))?;
+    parsed
+        .value
+        .validate()
+        .map_err(|error| selection_diagnostic(source, schema_version, error))?;
+    Ok(parsed.value)
+}
+
+fn selection_diagnostic(
+    source: &CatalogDocumentSource,
+    schema_version: Option<&str>,
+    error: SelectionError,
+) -> Box<CatalogDiagnostic> {
+    let mut diagnostic = basic_diagnostic(
+        source,
+        SchedulingDocumentKind::Selection,
+        selection_diagnostic_code(error.code()),
+        String::new(),
+        1,
+        1,
+        error.detail().to_owned(),
+    );
+    diagnostic.schema_version = RequiredNullable(schema_version.map(str::to_owned));
+    Box::new(diagnostic)
+}
+
+fn selection_diagnostic_code(code: SelectionErrorCode) -> CatalogDiagnosticCode {
+    match code {
+        SelectionErrorCode::DocumentTooLarge => CatalogDiagnosticCode::DocumentTooLarge,
+        SelectionErrorCode::DuplicateKey => CatalogDiagnosticCode::DuplicateKey,
+        SelectionErrorCode::DuplicateId => CatalogDiagnosticCode::DuplicateId,
+        SelectionErrorCode::DanglingReference => CatalogDiagnosticCode::DanglingReference,
+        SelectionErrorCode::LimitExceeded | SelectionErrorCode::IntegerOutOfRange => {
+            CatalogDiagnosticCode::LimitExceeded
+        }
+        SelectionErrorCode::MissingRequiredField => CatalogDiagnosticCode::MissingRequiredField,
+        SelectionErrorCode::UnsupportedSchemaVersion => {
+            CatalogDiagnosticCode::UnsupportedSchemaVersion
+        }
+        SelectionErrorCode::InvalidJson => CatalogDiagnosticCode::InvalidJson,
+        SelectionErrorCode::ArithmeticOverflow
+        | SelectionErrorCode::FloatRejected
+        | SelectionErrorCode::InvalidArguments
+        | SelectionErrorCode::ReadFailed
+        | SelectionErrorCode::TypeMismatch => CatalogDiagnosticCode::TypeMismatch,
     }
 }
 

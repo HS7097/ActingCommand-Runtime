@@ -3216,6 +3216,7 @@ fn policy_sources(version: u64) -> CatalogSources {
             include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
                 .to_vec(),
         ),
+        selection: None,
     };
     for source in [
         &mut sources.tasks,
@@ -3440,6 +3441,7 @@ fn policy_facts() -> EvaluationFacts {
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         }],
+        priority_offsets: Vec::new(),
     }
 }
 
@@ -3479,6 +3481,7 @@ fn configured_policy_facts(_now_unix_ms: u64) -> EvaluationFacts {
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         }],
+        priority_offsets: Vec::new(),
     }
 }
 

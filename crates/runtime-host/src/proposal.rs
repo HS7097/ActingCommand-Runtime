@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 pub(crate) enum PreparedProposal {
     Ready {
         preview: ProposalPreview,
-        sources: CatalogSources,
+        sources: Box<CatalogSources>,
     },
     NeedsHumanSpecification {
         preview: ProposalPreview,
@@ -32,7 +32,7 @@ impl PreparedProposal {
 
     pub(crate) fn into_ready(self) -> RuntimeHostResult<(ProposalPreview, CatalogSources)> {
         match self {
-            Self::Ready { preview, sources } => Ok((preview, sources)),
+            Self::Ready { preview, sources } => Ok((preview, *sources)),
             Self::NeedsHumanSpecification { .. } => Err(request(
                 "proposal_requires_human_specification",
                 "promote_proposal",
@@ -78,7 +78,10 @@ fn compile_ready(
     validate_compiled_target(proposal, &compiled)?;
     let preview = ProposalPreview::ready(proposal, compiled.catalog_hash().to_owned())
         .map_err(|_| fatal("proposal_preview_invalid", "compile_proposal"))?;
-    Ok(PreparedProposal::Ready { preview, sources })
+    Ok(PreparedProposal::Ready {
+        preview,
+        sources: Box::new(sources),
+    })
 }
 
 fn validate_compiled_target(
@@ -221,6 +224,7 @@ impl ProposalDocuments {
             pools: encode_document(&sources.pools, self.pools)?,
             activity: encode_document(&sources.activity, self.activity)?,
             timeline: encode_document(&sources.timeline, self.timeline)?,
+            selection: None,
         })
     }
 }
