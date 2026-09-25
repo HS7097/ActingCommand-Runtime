@@ -4,7 +4,7 @@ use super::{
     PerformanceMonitor, PerformanceMonitorConfig, PerformanceSemanticEvent, PerformanceTick,
     system_performance_sampler,
 };
-use crate::events::RuntimeEvents;
+use crate::events::{RuntimeEvents, is_sanitization_failure};
 use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -460,7 +460,17 @@ impl PerformanceMonitor {
                     .committed
                     .lock()
                     .map_err(|_| failure("capacity_projection_poisoned"))? = None;
-                return Err(error);
+                // A summary the contract rejects degrades the monitor instead of ending the
+                // runtime; the cleared fact above is the existing failed-append disposition.
+                if !is_sanitization_failure(&error) || self.config.is_none() {
+                    return Err(error);
+                }
+                return self.degrade_for_rejected_summary(
+                    now.unix_ms,
+                    error.code(),
+                    ledger,
+                    events,
+                );
             }
         };
         capacity.projection.commit(sample.clone(), &event)?;
@@ -471,6 +481,23 @@ impl PerformanceMonitor {
             for summary in &tick.events {
                 self.record_event_reference(summary, *event.event_id())?;
             }
+        }
+        Ok(())
+    }
+
+    /// The dropped summary is visible as `perf.monitor_degraded` carrying the contract's
+    /// sanitization code; a degraded event that fails itself is fatal as before.
+    fn degrade_for_rejected_summary(
+        &mut self,
+        observed_at_unix_ms: u64,
+        code: &'static str,
+        ledger: &GlobalLedger,
+        events: &RuntimeEvents,
+    ) -> RuntimeHostResult<()> {
+        let tick = self.record_monitor_failure(observed_at_unix_ms, code, None)?;
+        for event in &tick.events {
+            let persisted = append(ledger, events, event.severity(), event.payload())?;
+            self.record_event_reference(event, *persisted.event_id())?;
         }
         Ok(())
     }

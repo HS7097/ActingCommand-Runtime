@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::events::is_sanitization_failure;
 use crate::planning::collect_maintenance_evidence;
 use actingcommand_policy::assess_predictive_maintenance;
 
 pub(super) enum CapacityUse {
     Business,
     Drain,
+}
+
+/// One observation event's append: recorded, or its draft rejected by contract sanitization.
+enum ObservationAppend {
+    Recorded,
+    Rejected(RuntimeHostError),
 }
 
 impl HostShared {
@@ -197,47 +204,69 @@ impl HostShared {
         .directive(instance_id)
     }
 
+    /// An observation event the contract rejects is dropped and degrades the monitor
+    /// instead of ending the runtime; every other failure stays fatal.
     pub(super) fn record_performance_events(
         &self,
         events: &[PerformanceSemanticEvent],
     ) -> RuntimeHostResult<()> {
         for event in events {
-            let payload = match event {
-                PerformanceSemanticEvent::PressureStarted(data) => {
-                    PerformancePayloadDraft::pressure_started(data.clone(), AuditInput::new())
+            if let ObservationAppend::Rejected(error) = self.record_performance_event(event)? {
+                self.degrade_performance_monitor(error)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn record_performance_event(
+        &self,
+        event: &PerformanceSemanticEvent,
+    ) -> RuntimeHostResult<ObservationAppend> {
+        let (result, observation) = self.append_event_observed(
+            event.severity(),
+            EventSource::Runtime,
+            OriginModule::PerformanceMonitor,
+            EventActor::Runtime,
+            self.events.system_links()?,
+            event.payload(),
+        );
+        let persisted = match result {
+            Ok(persisted) => persisted,
+            Err(failure) => {
+                let error = *failure.error;
+                // The append hook also sanitizes fact invalidations once this draft is
+                // persisted; only the draft stage itself rejecting the event is the
+                // contract's verdict on the observation.
+                if observation.draft.result == Some(TaskTimingResult::Err)
+                    && is_sanitization_failure(&error)
+                {
+                    return Ok(ObservationAppend::Rejected(error));
                 }
-                PerformanceSemanticEvent::PressureEnded(data) => {
-                    PerformancePayloadDraft::pressure_ended(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::StutterDetected(data) => {
-                    PerformancePayloadDraft::stutter_detected(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::Summary(data) => {
-                    PerformancePayloadDraft::summary(data.as_ref().clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::MonitorDegraded(data) => {
-                    PerformancePayloadDraft::monitor_degraded(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::MonitorRecovered(data) => {
-                    PerformancePayloadDraft::monitor_recovered(data.clone(), AuditInput::new())
-                }
-                PerformanceSemanticEvent::BalanceChanged(data) => {
-                    PerformancePayloadDraft::balance_changed(data.clone(), AuditInput::new())
-                }
-            };
-            let persisted = self.append_event_raw(
-                event.severity(),
-                EventSource::Runtime,
-                OriginModule::PerformanceMonitor,
-                EventActor::Runtime,
-                self.events.system_links()?,
-                payload,
-            )?;
-            let mut performance = lock(&self.performance, "record_performance_event_reference")?;
-            if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
-                || performance.counters_enabled()
-            {
-                performance.record_event_reference(event, *persisted.event_id())?;
+                return Err(error);
+            }
+        };
+        let mut performance = lock(&self.performance, "record_performance_event_reference")?;
+        if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
+            || performance.counters_enabled()
+        {
+            performance.record_event_reference(event, *persisted.event_id())?;
+        }
+        Ok(ObservationAppend::Recorded)
+    }
+
+    /// The dropped event is visible as `perf.monitor_degraded` carrying the contract's
+    /// sanitization code; a degraded event that fails itself is fatal as before.
+    fn degrade_performance_monitor(&self, rejection: RuntimeHostError) -> RuntimeHostResult<()> {
+        let tick = {
+            let mut performance = lock(&self.performance, "degrade_performance_monitor")?;
+            if !performance.counters_enabled() {
+                return Err(rejection);
+            }
+            performance.record_monitor_failure(unix_ms_now()?, rejection.code(), None)?
+        };
+        for event in &tick.events {
+            if let ObservationAppend::Rejected(error) = self.record_performance_event(event)? {
+                return Err(error);
             }
         }
         Ok(())
