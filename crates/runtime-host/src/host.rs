@@ -60,25 +60,25 @@ use actingcommand_contract::{
     InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
     IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_RUNTIME_FACTS,
-    MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
-    ObservedMicroseconds, OriginModule, OwnerResourceDisposition, PackageDebugLayout,
-    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PinnedFrameReason,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProposalClass, ProposalPromotion, RUNTIME_FACT_SNAPSHOT_INTERVAL_MS,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
-    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, ResourceQuiescence, RetentionClass,
-    RunId, RuntimeCaptureBackend, RuntimeConfigManifest, RuntimeContractError,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryPageRequest,
-    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeFactInvalidation, RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope,
-    RuntimeFactSnapshot, RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus,
-    RuntimeLifecyclePhase, RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayload, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    MAX_EFFECTIVE_CONFIGURATION_BYTES, MAX_RUNTIME_FACTS, MonitorPayloadDraft,
+    MonitorRecoveryCoordinationReason, ObservedMicroseconds, OriginModule,
+    OwnerResourceDisposition, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary,
+    PerformanceContext, PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectDecisionPageRequest,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProposalClass,
+    ProposalPromotion, RUNTIME_FACT_SNAPSHOT_INTERVAL_MS, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
+    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
+    ResourceAuthoringPhase, ResourceQuiescence, RetentionClass, RunId, RuntimeCaptureBackend,
+    RuntimeConfigManifest, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventBatch, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeFactInvalidation,
+    RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeInstanceStatus, RuntimeLifecyclePhase,
+    RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayload,
+    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
     RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
@@ -351,6 +351,14 @@ fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
     Err(ledger_error("append_policy_execution"))
 }
 
+/// Workflow #318 cfg4: which governance identity cards the host accepts. `None` accepts any
+/// well-formed card; a set accepts only a card whose `client` it contains. Nothing here is a
+/// secret: a card is a declaration the host verifies and records, not a credential.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GovernancePolicy {
+    pub allowed_clients: Option<BTreeSet<String>>,
+}
+
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
     state_root: PathBuf,
@@ -367,8 +375,7 @@ pub struct RuntimeHostConfig {
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
-    governance_capability_sha256: Option<[u8; 32]>,
-    governance_capability_invalid: bool,
+    governance_policy: GovernancePolicy,
     clock: Arc<dyn RuntimeClock>,
     policy_inputs: Option<PolicyInputSnapshot>,
     procedure_manifest: Option<ProcedureManifest>,
@@ -402,8 +409,7 @@ impl RuntimeHostConfig {
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
-            governance_capability_sha256: None,
-            governance_capability_invalid: false,
+            governance_policy: GovernancePolicy::default(),
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
             procedure_manifest: None,
@@ -489,15 +495,16 @@ impl RuntimeHostConfig {
         self
     }
 
-    pub fn with_governance_capability(mut self, capability: impl AsRef<[u8]>) -> Self {
-        let capability = capability.as_ref();
-        self.governance_capability_invalid = !(MIN_GOVERNANCE_CAPABILITY_BYTES
-            ..=MAX_GOVERNANCE_CAPABILITY_BYTES)
-            .contains(&capability.len())
-            || capability.iter().any(u8::is_ascii_control);
-        self.governance_capability_sha256 =
-            (!self.governance_capability_invalid).then(|| Sha256::digest(capability).into());
+    /// Installs the governance identity policy (Workflow #318 cfg4); without one the host
+    /// accepts any well-formed governance identity card.
+    pub fn with_governance_policy(mut self, governance_policy: GovernancePolicy) -> Self {
+        self.governance_policy = governance_policy;
         self
+    }
+
+    /// The governance identity policy the host verifies cards against.
+    pub const fn governance_policy(&self) -> &GovernancePolicy {
+        &self.governance_policy
     }
 
     /// Overrides the Runtime-owned clock, primarily for deterministic boundary tests.
@@ -676,13 +683,25 @@ impl RuntimeHostConfig {
                 ));
             }
         }
+        if self
+            .governance_policy
+            .allowed_clients
+            .iter()
+            .flatten()
+            .any(|client| actingcommand_contract::validate_governance_client(client).is_err())
+        {
+            return Err(RuntimeHostError::fatal(
+                "invalid_governance_policy",
+                "validate_runtime_config",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         if self.state_root.as_os_str().is_empty()
             || !self.bind_address.ip().is_loopback()
             || self.io_timeout.is_zero()
             || self.maximum_frame_bytes == 0
             || self.maximum_frame_bytes > DEFAULT_RUNTIME_MAX_FRAME_BYTES
             || self.secret_fingerprint_salt.is_empty()
-            || self.governance_capability_invalid
         {
             return Err(RuntimeHostError::fatal(
                 "invalid_runtime_host_config",
@@ -712,12 +731,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
-            .field(
-                "governance_capability_sha256",
-                &self
-                    .governance_capability_sha256
-                    .map(|_| "<redacted-digest>"),
-            )
+            .field("governance_policy", &self.governance_policy)
             .field("clock", &"<runtime-owned>")
             .field(
                 "policy_inputs",
@@ -1233,7 +1247,7 @@ impl RuntimeHost {
                     .then(|| frame_retention::FrameRetention::new(config.failed_run_retention)),
             ),
             governance_write_gate: Mutex::new(()),
-            governance_capability_sha256: config.governance_capability_sha256,
+            governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
             signature_write_gate: Mutex::new(()),
@@ -2755,7 +2769,7 @@ struct HostShared {
     frame_retention: Mutex<Option<frame_retention::FrameRetention>>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
-    governance_capability_sha256: Option<[u8; 32]>,
+    governance_policy: GovernancePolicy,
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,

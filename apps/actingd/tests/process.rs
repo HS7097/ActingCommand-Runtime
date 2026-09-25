@@ -2262,7 +2262,6 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
     let mut config: Value =
         serde_json::from_slice(&fs::read(&config_path).expect("read strategic daemon config"))
             .expect("strategic daemon config JSON");
-    config["governance_capability"] = json!("actingd-policy-bootstrap-capability");
     config["policy"] = json!({
         "facts": configured_policy_facts(unix_ms_now()),
         "resources": configured_policy_resources(unix_ms_now()),
@@ -2622,7 +2621,6 @@ fn write_legacy_physical_policy_config(path: &Path, state_root: &Path, instance_
         "bind_host": "127.0.0.1",
         "bind_port": 0,
         "secret_fingerprint_salt": PROCESS_TEST_SALT,
-        "governance_capability": "actingd-policy-bootstrap-capability",
         "policy": {
             "facts": configured_policy_facts(now_unix_ms),
             "resources": configured_policy_resources(now_unix_ms),
@@ -2709,7 +2707,6 @@ fn write_policy_execution_config_with_package(
         "bind_host": "127.0.0.1",
         "bind_port": 0,
         "secret_fingerprint_salt": PROCESS_TEST_SALT,
-        "governance_capability": "actingd-policy-bootstrap-capability",
         "policy": {
             "facts": configured_policy_facts(now_unix_ms),
             "resources": configured_policy_resources(now_unix_ms),

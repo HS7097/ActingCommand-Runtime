@@ -46,8 +46,8 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在模拟器上�
 2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。
 3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
 4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
-5. **校验**（`actingcommand-contract`）：`RuntimeRequest::validate()` 依次拒绝错误 schema、零时间戳、不在允许表内的 actor/source 组合，再施加按族的来源门：关机必须 User/Ui 或 Cli/Cli，Lab 与调试必须 Lab/Lab，治理必须 User/Ui，事实与规划必须 Agent/Adapter。失败产出 Denied + InvalidRequest 回执。
-6. **授权**（`runtime-host`）：治理类操作还要求该连接此前通过 `AuthenticateGovernance`，凭据以常数时间比较 SHA-256 摘要，成功后按 ConnectionId 记录。
+5. **校验**（`actingcommand-contract`）：`RuntimeRequest::validate()` 依次拒绝错误 schema、零时间戳、不在允许表内的 actor/source 组合，再施加按族的来源门：关机必须 User/Ui 或 Cli/Cli，Lab 与调试必须 Lab/Lab，治理身份牌须由 User/Ui 或 Cli/Cli 声明、审批决定必须 User/Ui，事实与规划必须 Agent/Adapter。失败产出 Denied + InvalidRequest 回执。
+6. **授权**（`runtime-host`）：审批决定还要求该连接此前以 `DeclareGovernanceIdentity` 声明的治理身份牌已被接受（客户端名、可选版本与实例，无共享密钥）。宿主按允许的客户端与已注册实例核验身份牌，每次声明无论接受或拒绝都记为账本事件 `governance.identity_declared`，接受后按 ConnectionId 记录。
 7. **分派**（`runtime-host`）：`process_validated` 是从操作族到处理器的唯一穷尽匹配；带租约的族先断言目标别名/ID 是物理实例。
 8. **容量准入**（`runtime-host`）：授权新业务前先查容量投影。该投影读取进程内缓存的最后一条已提交容量样本（缓存项带有指回账本事件的引用），遇到无样本、owner epoch 变化、超出新鲜度窗口、卷绑定变化、卷不可读或硬阈值压力时拒绝；拒绝会追加一条 Scheduler `denied` 事件并随回执返回。请求侧的四个业务入口受此保护（同一投影另有非请求路径的调用点）：授予租约、采集观测、运行受限任务、运行已调度的受限任务。
 9. **租约**（`scheduler`）：在按实例的准入锁下两阶段准备并提交租约；受限任务的 TTL 由请求自身的期限推导，任务期限再被夹到「租约到期减心跳预留」。

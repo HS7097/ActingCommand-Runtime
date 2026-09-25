@@ -53,8 +53,6 @@ use actingcommand_runtime_host::test_observation::{
 #[cfg(feature = "test-observation")]
 use std::collections::BTreeSet;
 
-const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
-
 // Authorized D02 regression: https://github.com/HS7097/ActingCommand-Runtime/pull/301#discussion_r3940629855
 #[test]
 fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
@@ -1380,7 +1378,6 @@ fn instance_id() -> InstanceId {
 fn host(root: &TempDir, state: Arc<FakeState>, lease_ttl_ms: u64) -> RuntimeHost {
     RuntimeHost::start(
         RuntimeHostConfig::new(root.path(), b"runtime-client-test-salt")
-            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
             .with_io_timeout(Duration::from_millis(500))
             .with_scheduler(SchedulerConfig {
                 maximum_client_heartbeat_interval_ms: 20,
@@ -2747,8 +2744,12 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
         )
         .expect("record client action");
     client
-        .authenticate_governance(TEST_GOVERNANCE_CAPABILITY)
-        .expect("authenticate governance");
+        .declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+            client: "runtime-client-test".to_owned(),
+            client_version: None,
+            instance: None,
+        })
+        .expect("declare governance identity");
     client
         .record_approval_decision(
             ApprovalDecisionRecord::new(
@@ -2778,6 +2779,13 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
         events
             .iter()
             .filter(|event| event.event_type == EventType::ApprovalDecision)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::GovernanceIdentityDeclared)
             .count(),
         1
     );

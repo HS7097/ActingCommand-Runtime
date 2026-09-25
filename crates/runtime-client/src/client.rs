@@ -8,13 +8,13 @@ use actingcommand_contract::{
     ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal, ClientActionRecord,
     ContainedTaskCancellationReason, ContainedTaskCancellationStatus, ContainedTaskRequest,
     CorrelationId, EffectDisposition, EmulatorInstanceAction, EventActor, EventId, EventPayload,
-    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
-    InputAction, InputFrameReference, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OCR_FIELDS_REPORT_SCHEMA,
-    OcrFieldPrivacy, OcrFieldReason, OcrFieldResult, OcrFieldType, OcrFieldValue,
-    OcrFieldsDeclaration, OcrFieldsReport, OriginModule, OwnerEpoch, PackageDebugRequest,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, GovernanceIdentityCard,
+    IdentifierIssuer, InputAction, InputFrameReference, InputPayload, IssuedCorrelationId,
+    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    OCR_FIELDS_REPORT_SCHEMA, OcrFieldPrivacy, OcrFieldReason, OcrFieldResult, OcrFieldType,
+    OcrFieldValue, OcrFieldsDeclaration, OcrFieldsReport, OriginModule, OwnerEpoch,
+    PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
     ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
     ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
     ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
@@ -1595,19 +1595,19 @@ impl RuntimeClient {
         Ok(receipt)
     }
 
-    /// Authenticates this connection for governance writes without extending authority to peers.
-    pub fn authenticate_governance(
+    /// Declares this connection's governance identity card (Workflow #318 cfg4); the Runtime
+    /// verifies and records it, and governance writes on this connection only follow an
+    /// accepted card. Peers gain no authority from it.
+    pub fn declare_governance_identity(
         &self,
-        capability: impl Into<String>,
+        card: &GovernanceIdentityCard,
     ) -> RuntimeClientResult<()> {
         match self.execute(
-            "authenticate_governance",
-            RuntimeOperation::AuthenticateGovernance {
-                capability: capability.into(),
-            },
+            "declare_governance_identity",
+            RuntimeOperation::DeclareGovernanceIdentity { card: card.clone() },
         )? {
-            RuntimeResult::GovernanceAuthenticated => Ok(()),
-            _ => Err(self.unexpected_result("authenticate_governance")),
+            RuntimeResult::GovernanceIdentityAccepted => Ok(()),
+            _ => Err(self.unexpected_result("declare_governance_identity")),
         }
     }
 

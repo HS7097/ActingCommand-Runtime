@@ -52,6 +52,86 @@ page = interaction.query_event_page(query, original_profile, original_page_reque
 Those submissions have different request IDs and the same selected correlation.
 An approval or control call on that handle still needs its original authorization.
 
+## Governance connections: the identity card
+
+Workflow #318 (cfg4) retires the shared governance secret. A connection that
+records approval decisions first declares who it is with a
+`GovernanceIdentityCard`; the Runtime verifies the card, records the
+declaration in the ledger and binds governance authority to that connection.
+Nothing secret is configured, stored, compared or printed.
+
+`RuntimeOperation::DeclareGovernanceIdentity { card }` (wire operation
+`declare_governance_identity`) carries:
+
+- `client`: `1..=64` bytes of `[A-Za-z0-9._-]` (`invalid_governance_client`);
+- `client_version` (optional): `1..=32` bytes without control characters
+  (`invalid_governance_client_version`);
+- `instance` (optional): the instance alias the client acts for; it must pass the
+  instance alias rule (`invalid_governance_instance`) and be registered with the
+  Runtime (see below).
+
+The card never repeats the actor or source: those stay on the request envelope,
+as for every other request. Only (User, Ui), the person at the console, and
+(Cli, Cli), the operator, may declare; any other origin is refused with
+`invalid_governance_origin`. Recording an approval decision still requires
+(User, Ui) and a connection whose card was accepted
+(`governance_authority_required` otherwise); the approval event, its actor ==
+User rule and approval consumption are unchanged.
+
+The Runtime checks, in this order:
+
+1. the card (the rules above);
+2. the origin;
+3. the policy's `allowed_clients` contains `client`, when the host has an
+   allow-list (`governance_client_not_allowed`); without one any well-formed
+   card passes;
+4. `instance`, when present, is a registered instance alias
+   (`governance_instance_unknown`);
+5. the connection has not already had a card accepted: one card per connection
+   (`governance_identity_already_declared`).
+
+A malformed card or a wrong origin is refused by request validation before
+dispatch (Denied + `InvalidRequest`, nothing recorded); the host repeats both
+checks and trusts no caller. Every declaration that reaches steps 3-5 is
+recorded as one `governance.identity_declared` event (family `client`, origin
+module `governance`, source and actor of the declaring request, links to the
+request, its correlation and the card's instance when it is registered):
+
+```json
+{"card":{"client":"ui","client_version":"0.4.0"},"peer":"loopback","verdict":{"kind":"accepted"},"audit":{}}
+{"card":{"client":"manual-check"},"peer":"loopback","verdict":{"kind":"refused","code":"governance_client_not_allowed"},"audit":{}}
+```
+
+`peer` is always `loopback`: the Runtime binds a loopback address only. An
+accepted card is recorded at severity `info`, then the connection joins the
+governance set and the receipt is Completed with result
+`governance_identity_accepted` and the event as its terminal. A refused card is
+recorded at severity `warning` first; the receipt is then Denied +
+`InvalidRequest` with the refusal as `host_code` and the event as its terminal.
+A failed append poisons the Runtime exactly as a failed approval append does
+(Failed receipt, no authority granted). Governance authority lives only as long
+as the connection: disconnecting removes it and a new connection declares again.
+`RuntimeClient::declare_governance_identity(&card)` sends the declaration and
+returns once it is accepted.
+
+`actingd` builds the allow-list from its configuration's optional
+`governance { allowed_clients }` section (`contracts/actingd-check-config.md`,
+"Governance"); without the section any well-formed card is accepted. The client
+name `actingd-policy-driver` is always allowed, whatever the section lists: it is
+the card of the daemon's own policy driver, which connects to the Runtime as
+(User, Ui) at startup to transcribe the person's configured
+`catalog_approval_ids` and declares
+`{ client: "actingd-policy-driver", client_version: <actingd version> }`, so the
+ledger shows the daemon recorded those approvals.
+
+The change is additive on the event wire (new event type
+`governance.identity_declared`, client payload kind
+`governance_identity_declared`, event action `governance.identity_declare`);
+readers that deny unknown fields bump their pin. The request operation
+`authenticate_governance` and the result `governance_authenticated` no longer
+exist: a request that still carries the old operation cannot be decoded and the
+Runtime closes that connection as a protocol error.
+
 ## Current flow and OCR ownership
 
 The original complete paginated correlation query first reaches one frozen Ledger

@@ -402,6 +402,8 @@ pub enum EventType {
     CliCommand,
     #[serde(rename = "lab.request")]
     LabRequest,
+    #[serde(rename = "governance.identity_declared")]
+    GovernanceIdentityDeclared,
     #[serde(rename = "state.migrated")]
     StateMigrated,
     #[serde(rename = "release.staged")]
@@ -537,9 +539,11 @@ impl EventType {
             | Self::ResourcePromoteIntent
             | Self::ResourcePromoted
             | Self::ResourcePromoteFailed => EventFamily::ResourceAuthoring,
-            Self::UiAction | Self::ClientAction | Self::CliCommand | Self::LabRequest => {
-                EventFamily::Client
-            }
+            Self::UiAction
+            | Self::ClientAction
+            | Self::CliCommand
+            | Self::LabRequest
+            | Self::GovernanceIdentityDeclared => EventFamily::Client,
             Self::StateMigrated => EventFamily::State,
             Self::ReleaseStaged
             | Self::ReleaseTransitionIntent

@@ -112,6 +112,7 @@ closed_code!(EventAction {
     FactSnapshot => "fact.snapshot",
     ClientAction => "client.action",
     ApprovalDecision => "approval.decision",
+    GovernanceIdentityDeclare => "governance.identity_declare",
     StateMigrate => "state.migrate",
     ReleaseStage => "release.stage",
     ReleaseActivate => "release.activate",
@@ -188,6 +189,14 @@ closed_code!(DiagnosticCode {
     PolicyRejected => "policy.rejected",
     CatalogTransitionFailed => "catalog.transition_failed",
     ReleaseTransitionFailed => "release.transition_failed",
+});
+
+// Workflow #318 cfg4: why the Runtime refused a governance identity card; the
+// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
+closed_code!(GovernanceIdentityRefusal {
+    ClientNotAllowed => "governance_client_not_allowed",
+    InstanceUnknown => "governance_instance_unknown",
+    AlreadyDeclared => "governance_identity_already_declared",
 });
 
 closed_code!(RecognitionVerdict {

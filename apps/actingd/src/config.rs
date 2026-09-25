@@ -19,7 +19,7 @@ use actingcommand_policy::{
 };
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, DiscoverySpec, ExecutionBackendProvider, ExecutionBackendRegistration,
-    ExecutionBackendRegistry, FixtureInstanceSpec, InstanceMode, InstanceSpec,
+    ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy, InstanceMode, InstanceSpec,
     PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
     ProcedureManifest, ProviderAssembly, RecognitionVisionProvider, RuntimeHostConfig,
     RuntimeHostError, VisionFfiProvider, VisionModelIdentity, VisionSpec,
@@ -27,7 +27,7 @@ use actingcommand_runtime_host::{
 use actingcommand_vision_ffi::{
     NnEngine, OcrEngine, VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -48,6 +48,11 @@ const MAX_FIXTURE_FRAMES: usize = 32;
 const MAX_FIXTURE_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FIXTURE_RESIDENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FIXTURE_INPUTS: u16 = 32;
+/// Workflow #318 cfg4: the most `governance.allowed_clients` entries a file may name.
+const MAX_GOVERNANCE_ALLOWED_CLIENTS: usize = 32;
+/// The governance identity card `client` of the daemon's own policy driver connection; it is
+/// always allowed, whatever `governance.allowed_clients` names.
+pub(super) const GOVERNANCE_POLICY_DRIVER_CLIENT: &str = "actingd-policy-driver";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,8 +75,18 @@ pub(super) struct ActingdConfigFile {
     frame_retention_failed_run_successes: Option<u16>,
     #[serde(default)]
     frame_retention_failed_run_days: Option<u16>,
+    /// Workflow #318 cfg4: the retired shared governance secret. Kept only so a file that
+    /// still names the key, whatever its value, is refused with the precise
+    /// `governance_capability_retired` instead of the generic decode failure.
+    #[serde(
+        default,
+        rename = "governance_capability",
+        deserialize_with = "retired_key_present"
+    )]
+    governance_capability_retired: bool,
+    /// Workflow #318 cfg4: which governance identity cards the daemon accepts.
     #[serde(default)]
-    governance_capability: Option<String>,
+    governance: Option<GovernanceConfigFile>,
     #[serde(default)]
     agent_dispatcher: Option<AgentDispatcherConfigFile>,
     #[serde(default)]
@@ -160,6 +175,42 @@ impl DevicePathsConfigFile {
         }
         Ok(())
     }
+}
+
+/// `governance { allowed_clients }` (Workflow #318 cfg4): the identity card `client` names
+/// the daemon accepts, each following the card's rule (`1..=64` bytes of `[A-Za-z0-9._-]`),
+/// at most 32, no duplicates. Without the section any well-formed card is accepted.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GovernanceConfigFile {
+    allowed_clients: Vec<String>,
+}
+
+impl GovernanceConfigFile {
+    /// The host policy: the named clients plus the daemon's own policy driver.
+    fn policy(&self) -> Result<GovernancePolicy, &'static str> {
+        let mut allowed = BTreeSet::new();
+        if self.allowed_clients.len() > MAX_GOVERNANCE_ALLOWED_CLIENTS {
+            return Err("governance_allowed_clients_invalid");
+        }
+        for client in &self.allowed_clients {
+            if actingcommand_contract::validate_governance_client(client).is_err()
+                || !allowed.insert(client.clone())
+            {
+                return Err("governance_allowed_clients_invalid");
+            }
+        }
+        allowed.insert(GOVERNANCE_POLICY_DRIVER_CLIENT.to_owned());
+        Ok(GovernancePolicy {
+            allowed_clients: Some(allowed),
+        })
+    }
+}
+
+/// Present whatever the value: only called by serde when the key is in the file.
+fn retired_key_present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
 #[derive(Deserialize)]
@@ -417,7 +468,6 @@ pub(super) fn validate_resource_packages(
 
 pub(super) struct PolicyBootstrap {
     pub(super) state_root: PathBuf,
-    pub(super) governance_capability: String,
     pub(super) catalog_approval_ids: Vec<String>,
     pub(super) catalog: CatalogSources,
     pub(super) scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
@@ -534,18 +584,21 @@ impl ActingdConfigFile {
     }
 
     pub(super) fn assemble(self) -> Result<RuntimeAssembly, &'static str> {
+        if self.governance_capability_retired {
+            return Err("governance_capability_retired");
+        }
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
             || !(16..=1024).contains(&self.secret_fingerprint_salt.len())
-            || self.governance_capability.as_ref().is_some_and(|value| {
-                !(actingcommand_contract::MIN_GOVERNANCE_CAPABILITY_BYTES
-                    ..=actingcommand_contract::MAX_GOVERNANCE_CAPABILITY_BYTES)
-                    .contains(&value.len())
-                    || value.chars().any(char::is_control)
-            })
         {
             return Err("config_invalid");
         }
+        let governance_policy = self
+            .governance
+            .as_ref()
+            .map(GovernanceConfigFile::policy)
+            .transpose()?
+            .unwrap_or_default();
         let bind_host = self
             .bind_host
             .parse::<IpAddr>()
@@ -666,7 +719,6 @@ impl ActingdConfigFile {
             policy.validate_registry_modes(&provider)?;
         }
         let policy_state_root = self.state_root.clone();
-        let policy_governance_capability = self.governance_capability.clone();
         let policy_cadence = PolicyCadence::default();
         let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
             (
@@ -686,7 +738,8 @@ impl ActingdConfigFile {
                     self.bind_port.unwrap_or_default(),
                 ))
                 .with_policy_cadence(policy_cadence.clone())
-                .with_performance_monitor(performance_monitor);
+                .with_performance_monitor(performance_monitor)
+                .with_governance_policy(governance_policy);
         let instances_startup_package_count = startup_packages.len();
         host = host
             .with_startup_packages(startup_packages)
@@ -707,7 +760,7 @@ impl ActingdConfigFile {
             device_paths: device_paths.entries(),
             allow_env_overrides: self.allow_env_overrides,
             ignored_env_overrides: &ignored_env_overrides,
-            governance_configured: self.governance_capability.is_some(),
+            governance_allowed_clients_explicit: self.governance.is_some(),
             agent_dispatcher: agent_dispatcher_budget,
             policy_configured: policy.is_some(),
             vision_provider_configured: provider.vision_manifest.is_some(),
@@ -717,21 +770,15 @@ impl ActingdConfigFile {
             instances: &instance_parameters,
         })?;
         host = host.with_config_manifest(manifest.clone());
-        if let Some(capability) = self.governance_capability {
-            host = host.with_governance_capability(capability);
-        }
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
         let policy = if let Some(policy) = policy {
-            let governance_capability =
-                policy_governance_capability.ok_or("policy_governance_capability_missing")?;
             host = host
                 .with_policy_inputs(policy.inputs)
                 .with_procedure_manifest(policy.procedure_manifest);
             Some(PolicyBootstrap {
                 state_root: policy_state_root,
-                governance_capability,
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
                 scheduled_tasks: policy.scheduled_tasks,

@@ -17,10 +17,10 @@ mod c4_support;
 
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
-    EventFamily, EventPayload, EventQuery, EventSource, EventType, MAX_RUNTIME_SUBSCRIPTION_EVENTS,
-    PolicyExecutionEventData, ProjectedEvent, ProjectionPayload, ProjectionProfile, RunId,
-    RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeSubscriptionRequest,
-    SchedulingOutcomeProjection, SubscriptionCursor,
+    EventFamily, EventPayload, EventQuery, EventSource, EventType, GovernanceIdentityCard,
+    MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, RunId, RuntimeEventQueryPageRequest, RuntimeReceipt,
+    RuntimeSubscriptionRequest, SchedulingOutcomeProjection, SubscriptionCursor,
 };
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -162,8 +162,14 @@ fn initialize_policy(
             .with_io_timeout(Duration::from_secs(5)),
     )
     .map_err(ActingdError::client)?;
+    // Workflow #318 cfg4: the driver transcribes the person's configured approvals, so it
+    // stays (User, Ui); its card names the daemon, so the ledger shows who recorded them.
     governance
-        .authenticate_governance(&policy.governance_capability)
+        .declare_governance_identity(&GovernanceIdentityCard {
+            client: config::GOVERNANCE_POLICY_DRIVER_CLIENT.to_owned(),
+            client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            instance: None,
+        })
         .map_err(ActingdError::client)?;
     let approval_events = governance
         .query_events(
@@ -1705,7 +1711,6 @@ mod tests {
         let now = system_unix_ms().expect("system clock");
         let host = RuntimeHost::start(
             RuntimeHostConfig::new(root.path(), b"0123456789abcdef")
-                .with_governance_capability("actingd-policy-bootstrap-capability")
                 .with_policy_inputs(PolicyInputSnapshot::new(
                     resident_test_facts(),
                     resident_test_resources(now),
@@ -1716,7 +1721,6 @@ mod tests {
         .expect("start formal-provider runtime");
         let policy = PolicyBootstrap {
             state_root: root.path().to_path_buf(),
-            governance_capability: "actingd-policy-bootstrap-capability".to_string(),
             catalog_approval_ids: vec!["approval:fixture-a".to_string()],
             catalog,
             scheduled_tasks: BTreeMap::from([(

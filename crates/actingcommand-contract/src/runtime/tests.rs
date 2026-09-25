@@ -1889,14 +1889,19 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
 }
 
 #[test]
-fn governance_operations_require_user_ui_origin_and_redact_capabilities() {
-    let capability = "g".repeat(MIN_GOVERNANCE_CAPABILITY_BYTES);
-    let operation = RuntimeOperation::AuthenticateGovernance {
-        capability: capability.clone(),
+fn governance_identity_cards_require_person_or_operator_origin_and_a_valid_card() {
+    let card = GovernanceIdentityCard {
+        client: "ui.console-1_a".to_owned(),
+        client_version: Some("1.2.3".to_owned()),
+        instance: None,
     };
-    let valid = governance_request(operation.clone());
-    valid.validate().expect("valid governance request");
-    assert!(!format!("{operation:?}").contains(&capability));
+    let operation = RuntimeOperation::DeclareGovernanceIdentity { card: card.clone() };
+    governance_request(operation.clone())
+        .validate()
+        .expect("person governance identity");
+    request(operation.clone())
+        .validate()
+        .expect("operator governance identity");
 
     let ids = issuer();
     let rejected = RuntimeRequest::new(
@@ -1906,12 +1911,43 @@ fn governance_operations_require_user_ui_origin_and_redact_capabilities() {
         EventActor::Agent,
         EventSource::Adapter,
         1,
-        RuntimeOperation::AuthenticateGovernance { capability },
+        operation,
     );
     assert_eq!(
         rejected.expect_err("agent governance request").code(),
         "invalid_governance_origin"
     );
+    for (invalid, code) in [
+        (
+            GovernanceIdentityCard {
+                client: "ui console".to_owned(),
+                ..card.clone()
+            },
+            "invalid_governance_client",
+        ),
+        (
+            GovernanceIdentityCard {
+                client_version: Some("v".repeat(MAX_GOVERNANCE_CLIENT_VERSION_BYTES + 1)),
+                ..card.clone()
+            },
+            "invalid_governance_client_version",
+        ),
+        (
+            GovernanceIdentityCard {
+                instance: Some(String::new()),
+                ..card.clone()
+            },
+            "invalid_governance_instance",
+        ),
+    ] {
+        assert_eq!(
+            RuntimeOperation::DeclareGovernanceIdentity { card: invalid }
+                .validate()
+                .expect_err("invalid governance identity card")
+                .code(),
+            code
+        );
+    }
 
     let approval = ApprovalDecisionRecord::new(
         "approval:agent-self-approval",

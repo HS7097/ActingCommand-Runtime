@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::{
+    GovernanceIdentityCard, GovernanceIdentityRefusal, GovernanceIdentityVerdict, GovernancePeer,
+    valid_governance_declaration_origin,
+};
 
 impl HostShared {
     pub(super) fn record_approval_decision(
@@ -123,56 +127,122 @@ impl HostShared {
         })
     }
 
-    pub(super) fn authenticate_governance(
+    /// Workflow #318 cfg4: verifies one declarative governance identity card and records it
+    /// as `governance.identity_declared` with the request's actor and source. Order: card,
+    /// origin (both already refused by the request envelope; repeated so this entry trusts
+    /// no caller), then the policy's `allowed_clients`, then the card's instance alias, then
+    /// one card per connection. A refusal is appended before its Denied receipt returns; an
+    /// append failure poisons the Runtime exactly as an approval append does.
+    pub(super) fn declare_governance_identity(
         &self,
         request: &RuntimeRequest,
+        validated: &ValidatedRuntimeRequest<'_>,
         connection_id: ConnectionId,
-        capability: &str,
+        card: &GovernanceIdentityCard,
     ) -> Result<OperationSuccess, RequestFailure> {
-        if request.actor() != EventActor::User || request.source() != EventSource::Ui {
-            return Err(governance_authentication_denied(
-                "governance_origin_untrusted",
+        if card.validate().is_err() {
+            return Err(governance_identity_denied(
+                "invalid_governance_identity_card",
+                None,
             ));
         }
-        let expected = self.governance_capability_sha256.ok_or_else(|| {
-            governance_authentication_denied("governance_authentication_unavailable")
-        })?;
-        let actual: [u8; 32] = Sha256::digest(capability.as_bytes()).into();
-        if !constant_time_digest_eq(&expected, &actual) {
-            return Err(governance_authentication_denied(
-                "governance_authentication_failed",
+        if !valid_governance_declaration_origin(request.actor(), request.source()) {
+            return Err(governance_identity_denied(
+                "invalid_governance_origin",
+                None,
             ));
         }
-        lock(
+        let _gate = lock(&self.governance_write_gate, "declare_governance_identity")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let instance_id = match card.instance.as_deref() {
+            Some(alias) => lock(
+                &self.registered_instances,
+                "resolve_governance_identity_instance",
+            )?
+            .values()
+            .find(|instance| instance.instance_alias == alias)
+            .map(RegisteredInstance::instance_id),
+            None => None,
+        };
+        let client_allowed = self
+            .governance_policy
+            .allowed_clients
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(&card.client));
+        let verdict = if !client_allowed {
+            GovernanceIdentityVerdict::Refused {
+                code: GovernanceIdentityRefusal::ClientNotAllowed,
+            }
+        } else if card.instance.is_some() && instance_id.is_none() {
+            GovernanceIdentityVerdict::Refused {
+                code: GovernanceIdentityRefusal::InstanceUnknown,
+            }
+        } else if lock(&self.governance_connections, "read_governance_connection")?
+            .contains(&connection_id)
+        {
+            GovernanceIdentityVerdict::Refused {
+                code: GovernanceIdentityRefusal::AlreadyDeclared,
+            }
+        } else {
+            GovernanceIdentityVerdict::Accepted
+        };
+        let severity = match verdict {
+            GovernanceIdentityVerdict::Accepted => EventSeverity::Info,
+            GovernanceIdentityVerdict::Refused { .. } => EventSeverity::Warning,
+        };
+        let persisted = self.append_event(
+            severity,
+            request.source(),
+            OriginModule::Governance,
+            request.actor(),
+            validated.event_links(instance_id, None, None),
+            ClientPayloadDraft::governance_identity_declared(
+                card.clone(),
+                GovernancePeer::Loopback,
+                verdict,
+                AuditInput::new(),
+            ),
+        )?;
+        if let GovernanceIdentityVerdict::Refused { code } = verdict {
+            return Err(governance_identity_denied(
+                code.as_str(),
+                Some(terminal(&persisted)),
+            ));
+        }
+        if !lock(
             &self.governance_connections,
-            "authenticate_governance_connection",
+            "declare_governance_connection",
         )?
-        .insert(connection_id);
+        .insert(connection_id)
+        {
+            return Err(RequestFailure::poison(
+                RuntimeHostError::fatal(
+                    "governance_connection_state_conflict",
+                    "declare_governance_identity",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+                Some(terminal(&persisted)),
+            ));
+        }
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
-            terminal: None,
-            result: RuntimeResult::GovernanceAuthenticated,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::GovernanceIdentityAccepted,
         })
     }
 }
 
-fn governance_authentication_denied(code: &'static str) -> RequestFailure {
+fn governance_identity_denied(
+    code: &'static str,
+    terminal: Option<TerminalEvent>,
+) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "authenticate_governance",
+            "declare_governance_identity",
             RuntimeErrorCode::InvalidRequest,
         ),
         RuntimeReceiptState::Denied,
-        None,
+        terminal,
     )
-}
-
-fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    left.iter()
-        .zip(right)
-        .fold(0_u8, |difference, (left, right)| {
-            difference | (left ^ right)
-        })
-        == 0
 }

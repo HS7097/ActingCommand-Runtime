@@ -408,8 +408,8 @@ impl HostShared {
             RuntimeOperation::RecordClientAction { action } => {
                 self.record_client_action(request, validated, action)
             }
-            RuntimeOperation::AuthenticateGovernance { capability } => {
-                self.authenticate_governance(request, connection_id, capability)
+            RuntimeOperation::DeclareGovernanceIdentity { card } => {
+                self.declare_governance_identity(request, validated, connection_id, card)
             }
             RuntimeOperation::RecordApprovalDecision { decision } => {
                 self.record_approval_decision(request, validated, decision, connection_id)
