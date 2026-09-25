@@ -2585,6 +2585,10 @@ impl CatalogStore {
             write_new_file(&temporary.join("pools.json"), &sources.pools.bytes)?;
             write_new_file(&temporary.join("activity.json"), &sources.activity.bytes)?;
             write_new_file(&temporary.join("timeline.json"), &sources.timeline.bytes)?;
+            // The optional fifth document (Workflow #308 slice 4a-2).
+            if let Some(selection) = &sources.selection {
+                write_new_file(&temporary.join("selection.json"), &selection.bytes)?;
+            }
             let manifest = serde_json::to_vec_pretty(&generation)
                 .map_err(|_| fatal("catalog_manifest_encode_failed", "stage_catalog_generation"))?;
             write_new_file(&temporary.join("manifest.json"), &manifest)?;
@@ -2683,12 +2687,23 @@ impl CatalogStore {
                 "load_catalog_generation",
             ));
         }
+        // A generation records its selection document only when it has one; its absence is
+        // the four-document catalog, never a missing file.
+        let selection = if generation
+            .sources
+            .iter()
+            .any(|record| record.kind == "selection")
+        {
+            Some(self.load_source(&path, &generation, "selection")?)
+        } else {
+            None
+        };
         let sources = CatalogSources {
             tasks: self.load_source(&path, &generation, "tasks")?,
             pools: self.load_source(&path, &generation, "pools")?,
             activity: self.load_source(&path, &generation, "activity")?,
             timeline: self.load_source(&path, &generation, "timeline")?,
-            selection: None,
+            selection,
         };
         let compiled = compile_catalog(&sources)
             .map_err(|_| fatal("catalog_generation_invalid", "load_catalog_generation"))?;
@@ -2777,17 +2792,21 @@ impl CatalogStore {
 
 fn generation_from(compiled: &CompiledCatalog, sources: &CatalogSources) -> CatalogGeneration {
     let summary = compiled.summary();
+    let mut records = vec![
+        source_record("tasks", &sources.tasks),
+        source_record("pools", &sources.pools),
+        source_record("activity", &sources.activity),
+        source_record("timeline", &sources.timeline),
+    ];
+    if let Some(selection) = &sources.selection {
+        records.push(source_record("selection", selection));
+    }
     CatalogGeneration {
         schema_version: CATALOG_STATE_SCHEMA.to_owned(),
         catalog_id: summary.catalog_id.clone(),
         catalog_version: summary.catalog_version,
         catalog_hash: summary.catalog_hash.clone(),
-        sources: vec![
-            source_record("tasks", &sources.tasks),
-            source_record("pools", &sources.pools),
-            source_record("activity", &sources.activity),
-            source_record("timeline", &sources.timeline),
-        ],
+        sources: records,
     }
 }
 

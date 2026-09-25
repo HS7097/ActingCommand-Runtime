@@ -1278,6 +1278,10 @@ pub struct RuntimeInstanceStatus {
     /// The instance's configured default resource package; absent when none is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_package: Option<InstanceResourcePackage>,
+    /// The game of the instance's configured policy identity (Workflow #308 slice 4a-2);
+    /// absent when the host runs without policy inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    game_id: Option<String>,
 }
 
 impl RuntimeInstanceStatus {
@@ -1302,6 +1306,7 @@ impl RuntimeInstanceStatus {
             capabilities: None,
             adb_port: None,
             resource_package: None,
+            game_id: None,
         };
         status.validate()?;
         Ok(status)
@@ -1309,6 +1314,13 @@ impl RuntimeInstanceStatus {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         validate_instance_alias(&self.instance_alias)?;
+        if let Some(game_id) = &self.game_id {
+            validate_bounded_text(
+                game_id,
+                MAX_STATUS_GAME_ID_BYTES,
+                "invalid_runtime_status_game",
+            )?;
+        }
         if self.capabilities.is_some() && self.backend_provenance.is_none() {
             return Err(RuntimeContractError::new(
                 "runtime_capabilities_provenance_missing",
@@ -1388,6 +1400,16 @@ impl RuntimeInstanceStatus {
 
     pub const fn resource_package(&self) -> Option<&InstanceResourcePackage> {
         self.resource_package.as_ref()
+    }
+
+    pub fn with_game_id(mut self, game_id: Option<String>) -> RuntimeContractResult<Self> {
+        self.game_id = game_id;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn game_id(&self) -> Option<&str> {
+        self.game_id.as_deref()
     }
 }
 
@@ -3345,14 +3367,44 @@ impl RuntimeRequest {
         ) {
             return Err(RuntimeContractError::new("invalid_emulator_control_origin"));
         }
+        // Fact publication (Workflow #308 slice 4a-2): an observation whose every key is a
+        // manual priority offset may also come from the person (Ui) or the operator (Cli);
+        // every other key stays Agent/Adapter only, and offsets never share an observation
+        // with other keys.
+        let fact_keys = match &self.operation {
+            RuntimeOperation::PublishFact { record } => Some(vec![record.key.as_str()]),
+            RuntimeOperation::PublishFacts { observation } => Some(
+                observation
+                    .records
+                    .iter()
+                    .map(|record| record.key.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        if let Some(keys) = fact_keys {
+            let offsets = keys
+                .iter()
+                .filter(|key| crate::priority_offset_task_id(key).is_some())
+                .count();
+            if offsets > 0 && offsets < keys.len() {
+                return Err(RuntimeContractError::new("fact_origin_mixed"));
+            }
+            let agent = (self.actor, self.source) == (EventActor::Agent, EventSource::Adapter);
+            let person = matches!(
+                (self.actor, self.source),
+                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+            );
+            if !(agent || (offsets > 0 && person)) {
+                return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
+            }
+        }
         if matches!(
             self.operation,
             RuntimeOperation::StartAgentSession { .. }
                 | RuntimeOperation::ResumeAgentSession { .. }
                 | RuntimeOperation::AgentSessionStatus { .. }
                 | RuntimeOperation::RecordAgentResponse { .. }
-                | RuntimeOperation::PublishFact { .. }
-                | RuntimeOperation::PublishFacts { .. }
                 | RuntimeOperation::ProjectPolicyInputIdentity { .. }
                 | RuntimeOperation::PrepareStrategicReport { .. }
                 | RuntimeOperation::ProjectPolicyForward { .. }
@@ -4541,6 +4593,10 @@ pub fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
     }
     Ok(())
 }
+
+/// Bound of the configured game identifier a status instance carries (the scheduling
+/// identifier bound).
+const MAX_STATUS_GAME_ID_BYTES: usize = 128;
 
 fn validate_bounded_text(
     value: &str,

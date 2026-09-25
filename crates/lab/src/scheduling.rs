@@ -23,6 +23,8 @@ pub struct SchedulingCatalogPaths {
     pub pools: PathBuf,
     pub activity: PathBuf,
     pub timeline: PathBuf,
+    /// The optional fifth document: an `actingcommand.selection-policy.v1` scoring policy.
+    pub selection: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +88,7 @@ fn load_catalog(paths: &SchedulingCatalogPaths) -> LabResult<CompiledCatalog> {
         pools: read_source(&paths.pools)?,
         activity: read_source(&paths.activity)?,
         timeline: read_source(&paths.timeline)?,
-        selection: None,
+        selection: paths.selection.as_deref().map(read_source).transpose()?,
     };
     match compile_catalog(&sources) {
         Ok(catalog) => Ok(catalog),

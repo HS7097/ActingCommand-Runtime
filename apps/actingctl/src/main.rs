@@ -9,7 +9,7 @@ mod shutdown_wait;
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
     ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
-    EventSource, RuntimeMonitorPolicy,
+    EventSource, FactObservation, FactRecord, FactScope, RuntimeMonitorPolicy,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
@@ -19,10 +19,12 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Upper bound for `request-shutdown --wait <seconds>`.
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
+/// `source_detector` of the priority offsets `task-offset` publishes.
+const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -79,11 +81,77 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     let (actor, source) = command.origin();
     let client = RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
         .map_err(ActingctlError::runtime)?;
+    let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
     let output = match command {
         Command::AgentPublishFacts { .. } => Ok(serde_json::json!({
             "event_id": client.publish_facts(observation.ok_or(ActingctlError::FactRecord)?).map_err(ActingctlError::runtime)?,
         })),
+        // One manual priority offset (Workflow #308 slice 4a-2) through the ordinary fact
+        // publication, with this CLI's Cli/Cli origin.
+        Command::TaskOffset {
+            task_id,
+            offset_milli,
+        } => {
+            let status = client.status().map_err(ActingctlError::runtime)?;
+            let scope = match optional_instance.as_deref() {
+                Some(alias) => {
+                    if !status
+                        .instances()
+                        .iter()
+                        .any(|registered| registered.instance_alias() == alias)
+                    {
+                        return Err(ActingctlError::InstanceUnknown);
+                    }
+                    FactScope::Instance {
+                        instance_id: alias.to_owned(),
+                    }
+                }
+                // A task-level offset applies to every instance of the configured game; the
+                // registered instances must name exactly one.
+                None => {
+                    let games = status
+                        .instances()
+                        .iter()
+                        .map(|registered| registered.game_id())
+                        .collect::<Vec<_>>();
+                    match games.first() {
+                        Some(Some(game_id)) if games.iter().all(|game| *game == Some(*game_id)) => {
+                            FactScope::Game {
+                                game_id: (*game_id).to_owned(),
+                            }
+                        }
+                        _ => return Err(ActingctlError::TaskOffsetScopeAmbiguous),
+                    }
+                }
+            };
+            let observed_at_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+                .filter(|millis| *millis > 0)
+                .ok_or(ActingctlError::Clock)?;
+            let record = FactRecord::priority_offset(
+                scope,
+                &task_id,
+                offset_milli,
+                observed_at_unix_ms,
+                TASK_OFFSET_DETECTOR,
+            )
+            .map_err(|_| ActingctlError::PriorityOffsetInvalid)?;
+            let (scope, key) = (record.scope.clone(), record.key.clone());
+            let event_id = client
+                .publish_facts(FactObservation {
+                    records: vec![record],
+                })
+                .map_err(ActingctlError::runtime)?;
+            Ok(serde_json::json!({
+                "event_id": event_id,
+                "scope": scope,
+                "key": key,
+                "offset_milli": offset_milli,
+            }))
+        }
         Command::RequestShutdown => match shutdown_wait {
             None => Ok(serde_json::json!({
                 "receipt": client.request_shutdown().map_err(ActingctlError::runtime)?,
@@ -243,6 +311,11 @@ enum Command {
     AgentPublishFacts {
         record_file: PathBuf,
     },
+    /// `task-offset <task_id> <offset_milli> [--instance <alias>]`.
+    TaskOffset {
+        task_id: String,
+        offset_milli: i64,
+    },
     RequestShutdown,
     Observe,
     Reset,
@@ -301,7 +374,29 @@ impl Invocation {
         let mut config = false;
         let mut record_file = None;
         let mut shutdown_wait = None;
-        let mut index = if emulator_action.is_some() { 2 } else { 1 };
+        // `task-offset` takes the task and the offset as the second and third tokens.
+        let task_offset = if command == "task-offset" {
+            let task_id = arguments
+                .get(1)
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.starts_with("--"))
+                .ok_or(ActingctlError::Usage)?;
+            let offset_milli = arguments
+                .get(2)
+                .and_then(|value| value.to_str())
+                .and_then(|value| value.parse::<i64>().ok())
+                .ok_or(ActingctlError::Usage)?;
+            Some((task_id.to_owned(), offset_milli))
+        } else {
+            None
+        };
+        let mut index = if emulator_action.is_some() {
+            2
+        } else if task_offset.is_some() {
+            3
+        } else {
+            1
+        };
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
             match flag {
@@ -374,6 +469,24 @@ impl Invocation {
                     record_file: record_file.ok_or(ActingctlError::Usage)?,
                 }
             }
+            "task-offset" => {
+                if arguments
+                    .iter()
+                    .skip(3)
+                    .filter_map(|argument| argument.to_str())
+                    .any(|argument| {
+                        argument.starts_with("--")
+                            && !matches!(argument, "--state-root" | "--instance")
+                    })
+                {
+                    return Err(ActingctlError::Usage);
+                }
+                let (task_id, offset_milli) = task_offset.ok_or(ActingctlError::Usage)?;
+                Command::TaskOffset {
+                    task_id,
+                    offset_milli,
+                }
+            }
             "request-shutdown" => Command::RequestShutdown,
             "reset" => Command::Reset,
             "observe" => Command::Observe,
@@ -430,7 +543,10 @@ impl Invocation {
             }
             _ => return Err(ActingctlError::Usage),
         };
-        if command.requires_instance() != instance.is_some() {
+        // `task-offset` takes `--instance` optionally: without it the offset is task-level.
+        if !matches!(command, Command::TaskOffset { .. })
+            && command.requires_instance() != instance.is_some()
+        {
             return Err(ActingctlError::Usage);
         }
         Ok(Self {
@@ -495,6 +611,13 @@ enum ActingctlError {
     Package,
     FactRecord,
     InstanceUnknown,
+    /// `task-offset` without `--instance`: the registered instances do not name exactly one
+    /// configured game.
+    TaskOffsetScopeAmbiguous,
+    /// `task-offset`: the task identifier cannot form a valid priority offset record.
+    PriorityOffsetInvalid,
+    /// The system clock is before the Unix epoch or out of range.
+    Clock,
     /// `status --config`: the snapshot carries no `config.subsystems` / `config.parameters`.
     ConfigFactsMissing,
     Output,
@@ -515,11 +638,14 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
             Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
+            Self::TaskOffsetScopeAmbiguous => formatter.write_str("task_offset_scope_ambiguous: the registered instances do not name exactly one configured game; pass --instance <alias>"),
+            Self::PriorityOffsetInvalid => formatter.write_str("priority_offset_invalid: the task identifier cannot form a priority offset fact"),
+            Self::Clock => formatter.write_str("clock_unavailable: the system clock is before the Unix epoch or out of range"),
             Self::ConfigFactsMissing => formatter.write_str("config_facts_missing: the runtime fact snapshot holds no config.subsystems / config.parameters record"),
             Self::Output => formatter.write_str("failed to write JSON output"),
             Self::ShutdownWait { code, detail } => {

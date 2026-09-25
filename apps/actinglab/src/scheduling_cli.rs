@@ -12,10 +12,10 @@ pub(crate) fn run_scheduling(
     global: &GlobalOptions,
     args: &[String],
 ) -> CliOutcome<Value> {
-    // Four source paths and at most 4096 event IDs fit the catalog's 1 MiB budget.
-    if args.len() > 8210 || args.iter().map(String::len).sum::<usize>() > 1_048_576 {
+    // Five source paths and at most 4096 event IDs fit the catalog's 1 MiB budget.
+    if args.len() > 8212 || args.iter().map(String::len).sum::<usize>() > 1_048_576 {
         return Err(CliError::usage(
-            "scheduling arguments exceed 8210 tokens or 1 MiB",
+            "scheduling arguments exceed 8212 tokens or 1 MiB",
         ));
     }
     if global.run_root.is_some()
@@ -38,12 +38,19 @@ pub(crate) fn run_scheduling(
     let flags = FlagArgs::parse_values(args)?;
     flags.expect_positionals("scheduling", 0)?;
     let allowed = match sub {
-        "compile" => &["--tasks", "--pools", "--activity", "--timeline"][..],
+        "compile" => &[
+            "--tasks",
+            "--pools",
+            "--activity",
+            "--timeline",
+            "--selection",
+        ][..],
         "timeline" => &[
             "--tasks",
             "--pools",
             "--activity",
             "--timeline",
+            "--selection",
             "--event-id",
             "--unix-ms",
             "--monotonic-ms",
@@ -77,6 +84,8 @@ pub(crate) fn run_scheduling(
         pools: required("--pools")?.into(),
         activity: required("--activity")?.into(),
         timeline: required("--timeline")?.into(),
+        // The optional fifth document (Workflow #308 slice 4a-2).
+        selection: flags.optional("--selection").map(Into::into),
     };
     match sub {
         "compile" => serde_json::to_value(compile_scheduling_files(&paths)?).map_err(|error| {

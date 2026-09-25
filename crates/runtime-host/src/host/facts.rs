@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::fact_store::{priority_offset_milli, valid_priority_offset_task_id};
+use actingcommand_contract::priority_offset_task_id;
 
 /// `source_detector` of the three configuration-seeded policy instance facts.
 const POLICY_INSTANCE_SEED_DETECTOR: &str = "runtime.policy-configuration";
@@ -157,6 +159,37 @@ impl HostShared {
         source_request: Option<&ValidatedRuntimeRequest<'_>>,
     ) -> RuntimeHostResult<EventId> {
         let result: RuntimeHostResult<EventId> = (|| {
+            // A priority offset (Workflow #308 slice 4a-2) names a task of the scheduling
+            // identifier charset, holds an inline integer within ±1 000 000 milli, and is never
+            // invalidated by events (its lifetime is the publisher's TTL).
+            for record in &observation.records {
+                if let Some(task_id) = priority_offset_task_id(&record.key)
+                    && (!valid_priority_offset_task_id(task_id)
+                        || priority_offset_milli(record).is_none()
+                        || !record.invalidate_on.is_empty())
+                {
+                    return Err(RuntimeHostError::request(
+                        "priority_offset_invalid",
+                        "publish_facts",
+                        RuntimeErrorCode::InvalidRequest,
+                    ));
+                }
+            }
+            // An offset-only observation keeps its request's origin on the `fact.published`
+            // event, so the ledger shows who set the offset; every other publication stays a
+            // Runtime fact-store event.
+            let (event_source, event_actor) = match source_request {
+                Some(request)
+                    if !observation.records.is_empty()
+                        && observation
+                            .records
+                            .iter()
+                            .all(|record| priority_offset_task_id(&record.key).is_some()) =>
+                {
+                    (request.source(), request.actor())
+                }
+                _ => (EventSource::Runtime, EventActor::Runtime),
+            };
             let _gate = lock(&self.fact_write_gate, "publish_fact")?;
             self.synchronize_fact_store_under_gate()?;
             if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_observation(
@@ -206,9 +239,9 @@ impl HostShared {
             };
             let event = self.append_event_under_fact_gate(
                 EventSeverity::Info,
-                EventSource::Runtime,
+                event_source,
                 OriginModule::FactStore,
-                EventActor::Runtime,
+                event_actor,
                 links,
                 payload,
             )?;
