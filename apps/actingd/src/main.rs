@@ -2263,6 +2263,7 @@ mod tests {
                 include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
                     .to_vec(),
             ),
+            selection: None,
         };
         let mut tasks: Value =
             serde_json::from_slice(&sources.tasks.bytes).expect("task catalog JSON");
@@ -2354,6 +2355,7 @@ mod tests {
                 capability_operation_ids: vec!["operation.observe".to_string()],
                 preferred_task_ids: Vec::new(),
             }],
+            priority_offsets: Vec::new(),
         }
     }
 

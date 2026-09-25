@@ -206,6 +206,7 @@ impl SimulationState {
                     preferred_task_ids: vec!["neutral.consume-expiring-item".to_string()],
                 },
             ],
+            priority_offsets: Vec::new(),
         }
     }
 
@@ -380,6 +381,7 @@ fn neutral_sources() -> CatalogSources {
                 "../../../contracts/scheduling/examples/h1-neutral-activity/timeline.json"
             ),
         ),
+        selection: None,
     }
 }
 

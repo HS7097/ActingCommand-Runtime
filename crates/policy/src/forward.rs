@@ -1044,6 +1044,7 @@ mod tests {
                 include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
                     .to_vec(),
             ),
+            selection: None,
         })
         .expect("compiled catalog")
     }
@@ -1075,6 +1076,7 @@ mod tests {
                 capability_operation_ids: vec!["operation.observe".to_owned()],
                 preferred_task_ids: Vec::new(),
             }],
+            priority_offsets: Vec::new(),
         }
     }
 

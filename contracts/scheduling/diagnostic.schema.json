@@ -32,7 +32,8 @@
         "predicate_uncomputable",
         "loop_budget_missing",
         "effect_incompatible",
-        "approval_missing"
+        "approval_missing",
+        "priority_selection_without_document"
       ]
     },
     "severity": { "enum": ["error", "warning"] },
@@ -41,7 +42,7 @@
       "type": "object",
       "required": ["document", "source_uri", "line", "column"],
       "properties": {
-        "document": { "enum": ["tasks", "pools", "activity", "timeline"] },
+        "document": { "enum": ["tasks", "pools", "activity", "timeline", "selection"] },
         "source_uri": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "column": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }

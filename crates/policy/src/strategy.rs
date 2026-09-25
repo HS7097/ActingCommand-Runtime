@@ -1663,6 +1663,7 @@ mod tests {
                     "events": []
                 }),
             ),
+            selection: None,
         }
     }
 
@@ -1800,6 +1801,7 @@ mod tests {
                 outcomes: Vec::new(),
                 tasks: Vec::new(),
                 instances,
+                priority_offsets: Vec::new(),
             },
             EvaluationResources {
                 pools: vec![crate::PoolValueSnapshot {

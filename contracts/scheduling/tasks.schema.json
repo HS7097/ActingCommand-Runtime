@@ -12,10 +12,21 @@
       "minItems": 1,
       "maxItems": 4096,
       "items": { "$ref": "#/$defs/task" }
-    }
+    },
+    "priority_selection": { "$ref": "#/$defs/prioritySelection" }
   },
   "additionalProperties": false,
   "$defs": {
+    "prioritySelection": {
+      "type": "object",
+      "required": ["defer_below_milli", "defer_for_ms", "promote_above_milli"],
+      "properties": {
+        "defer_below_milli": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "defer_for_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "promote_above_milli": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
     "operationRef": {
       "type": "object",
       "required": ["operation_id"],

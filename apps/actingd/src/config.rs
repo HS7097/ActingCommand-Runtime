@@ -743,6 +743,7 @@ impl PolicyCatalogConfigFile {
             pools: read_catalog_document(source_root, &self.pools)?,
             activity: read_catalog_document(source_root, &self.activity)?,
             timeline: read_catalog_document(source_root, &self.timeline)?,
+            selection: None,
         };
         let total_bytes = [
             &sources.tasks,

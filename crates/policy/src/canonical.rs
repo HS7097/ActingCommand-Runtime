@@ -6,18 +6,29 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use actingcommand_selection_policy::SelectionPolicy;
+
 use crate::CatalogBundle;
 
 const ECMASCRIPT_SAFE_INTEGER_MIN: i64 = -9_007_199_254_740_991;
 const ECMASCRIPT_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
 
-pub(crate) fn catalog_hash(bundle: &CatalogBundle) -> Result<String, String> {
-    let envelope = serde_json::json!({
+/// Hashes the four documents, plus the fifth under `selection` only when it is present, so
+/// every catalog without a selection document keeps its existing identity byte for byte.
+pub(crate) fn catalog_hash(
+    bundle: &CatalogBundle,
+    selection: Option<&SelectionPolicy>,
+) -> Result<String, String> {
+    let mut envelope = serde_json::json!({
         "activity": &bundle.activity,
         "pools": &bundle.pools,
         "tasks": &bundle.tasks,
         "timeline": &bundle.timeline,
     });
+    if let Some(selection) = selection {
+        envelope["selection"] =
+            serde_json::to_value(selection).map_err(|error| error.to_string())?;
+    }
     let canonical = canonical_json(&envelope)?;
     let digest = Sha256::digest(canonical);
     Ok(format!("sha256:{digest:x}"))

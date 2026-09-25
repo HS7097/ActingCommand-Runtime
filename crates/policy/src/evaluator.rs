@@ -6,13 +6,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use actingcommand_selection_policy::{
+    Candidate, CandidateStatus, CandidateVerdict, GateOutcome, ScalarValue, SelectionFactEntry,
+    SelectionFactSnapshot, SelectionOutcome, SelectionPolicy, TermOutcome, UnknownReason,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
-    FactValue, LoadProfile, MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec,
-    ResourceEffectSpec, ScopeSelector, TaskSpec, TaskTerminalState, TimelineEvent,
+    FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ObservationRef, PoolSpec,
+    PredicateSpec, ResourceEffectSpec, ScopeSelector, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -21,6 +25,7 @@ pub const MAX_EVALUATION_TASK_STATES: usize = 8_192;
 pub const MAX_EVALUATION_INSTANCES: usize = 1_024;
 pub const MAX_EVALUATION_POOLS: usize = 4_096;
 pub const MAX_EVALUATION_HOSTS: usize = 1_024;
+pub const MAX_EVALUATION_PRIORITY_OFFSETS: usize = 16_384;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +91,27 @@ pub struct InstanceSnapshot {
     pub preferred_task_ids: Vec<String>,
 }
 
+/// Who published a manual priority offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PriorityOffsetOrigin {
+    User,
+    Agent,
+}
+
+/// One manual priority offset in milli. An entry naming an instance overrides the task-level
+/// entry for that instance; a candidate without either gets no offset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriorityOffset {
+    pub task_id: String,
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    pub offset_milli: i32,
+    pub origin: PriorityOffsetOrigin,
+    pub observed_at_unix_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationFacts {
@@ -95,6 +121,9 @@ pub struct EvaluationFacts {
     pub outcomes: Vec<ObservedOutcome>,
     pub tasks: Vec<TaskRuntimeSnapshot>,
     pub instances: Vec<InstanceSnapshot>,
+    /// Manual priority offsets; absent in older planning documents and fixtures.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub priority_offsets: Vec<PriorityOffset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,6 +428,20 @@ impl PolicyEvaluationError {
     fn overflow(message: impl Into<String>) -> Self {
         Self {
             code: "policy_evaluation_numeric_overflow",
+            message: message.into(),
+        }
+    }
+
+    fn selection_invalid(message: impl Into<String>) -> Self {
+        Self {
+            code: "selection_policy_invalid",
+            message: message.into(),
+        }
+    }
+
+    fn selection_aborted(message: impl Into<String>) -> Self {
+        Self {
+            code: "selection_evaluation_aborted",
             message: message.into(),
         }
     }
@@ -886,7 +929,7 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
                                 )? {
                                     PlacementResult::Candidate(candidate) => {
                                         task_work.rank = Some(candidate.rank.clone());
-                                        candidates.push(candidate);
+                                        candidates.push(*candidate);
                                     }
                                     PlacementResult::Blocked(blocked_reason) => {
                                         task_work.state = SchedulingDecisionState::Blocked;
@@ -903,11 +946,13 @@ pub fn evaluate_with_eligibility<E: From<PolicyEvaluationError>>(
         }
     }
 
+    let mut candidates = apply_priority_selection(catalog, facts, time, candidates, &mut work)?;
+
     candidates.sort_by(|left, right| {
         right
-            .rank
-            .total_score
-            .cmp(&left.rank.total_score)
+            .promoted
+            .cmp(&left.promoted)
+            .then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
             .then_with(|| right.affinity.cmp(&left.affinity))
             .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
             .then_with(|| left.task_id.cmp(&right.task_id))
@@ -1118,6 +1163,8 @@ struct PlacementCandidate {
     load: ResourceLoad,
     rank: TaskRank,
     affinity: bool,
+    /// Set by the score stage; a promoted candidate ranks ahead of every other candidate.
+    promoted: bool,
     tie_breaker: u64,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
@@ -1263,6 +1310,7 @@ fn build_candidate(
             .preferred_task_ids
             .iter()
             .any(|task_id| task_id == &task.id),
+        promoted: false,
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
         activity_profile_id: activity_profile.id.clone(),
@@ -1270,6 +1318,361 @@ fn build_candidate(
         window_iteration_limit: task.loop_budget.window_iteration_limit,
         max_runtime_ms: task.loop_budget.max_runtime_ms,
     })))
+}
+
+/// What the selection document said about one candidate, before any manual offset.
+#[derive(Debug, Clone)]
+enum CandidateScore {
+    Scored(i64),
+    /// The verdict carried no score; names the gate or term that settled the candidate.
+    Unknown(String),
+}
+
+enum ScoreDisposition {
+    Deferred {
+        wake_unix_ms: u64,
+        defer_below_milli: i64,
+    },
+    Promoted {
+        promote_above_milli: i64,
+    },
+    Neutral,
+}
+
+impl ScoreDisposition {
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::Deferred { .. } => "deferred",
+            Self::Promoted { .. } => "promoted",
+            Self::Neutral => "none",
+        }
+    }
+}
+
+/// The score stage between the predicate gate and ranking. Predicate outcomes are never
+/// revisited here: only candidates that already passed trigger, feedback stop, cooldown and
+/// placement are scored. Without a selection document and without offsets it is a no-op.
+fn apply_priority_selection(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    candidates: Vec<PlacementCandidate>,
+    work: &mut [TaskWork],
+) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
+    let policy = catalog.selection_policy();
+    if policy.is_none() && facts.priority_offsets.is_empty() {
+        return Ok(candidates);
+    }
+    let thresholds = catalog.catalog().tasks.priority_selection;
+    let scores = match policy {
+        Some(policy) => score_candidates(policy, facts, time, &candidates)?,
+        None => vec![None; candidates.len()],
+    };
+    let mut ranked = Vec::with_capacity(candidates.len());
+    for (mut candidate, score) in candidates.into_iter().zip(scores) {
+        let offset = effective_priority_offset(facts, &candidate.task_id, &candidate.instance_id);
+        if policy.is_none() && offset.is_none() {
+            ranked.push(candidate);
+            continue;
+        }
+        let offset_milli = i64::from(offset.unwrap_or(0));
+        let (score_milli, unknown_rule) = match score {
+            Some(CandidateScore::Scored(score)) => (Some(score), None),
+            Some(CandidateScore::Unknown(rule)) => (None, Some(rule)),
+            None => (None, None),
+        };
+        let effective_milli = score_milli
+            .unwrap_or(0)
+            .checked_add(offset_milli)
+            .ok_or_else(|| {
+                PolicyEvaluationError::overflow(format!(
+                    "task '{}' effective score overflowed",
+                    candidate.task_id
+                ))
+            })?;
+        candidate.rank.total_score = candidate
+            .rank
+            .total_score
+            .saturating_add(effective_milli.saturating_mul(1_000));
+        // An unknown verdict never defers or promotes; only a scored one meets the thresholds.
+        let disposition = match (thresholds, score_milli) {
+            (Some(thresholds), Some(_)) if effective_milli < thresholds.defer_below_milli => {
+                ScoreDisposition::Deferred {
+                    wake_unix_ms: time
+                        .unix_ms
+                        .checked_add(thresholds.defer_for_ms)
+                        .ok_or_else(|| {
+                            PolicyEvaluationError::overflow("score deferral wake overflowed")
+                        })?,
+                    defer_below_milli: thresholds.defer_below_milli,
+                }
+            }
+            (Some(thresholds), Some(_)) if effective_milli > thresholds.promote_above_milli => {
+                ScoreDisposition::Promoted {
+                    promote_above_milli: thresholds.promote_above_milli,
+                }
+            }
+            _ => ScoreDisposition::Neutral,
+        };
+        let task_work = &mut work[candidate.work_index];
+        task_work.rank = Some(candidate.rank.clone());
+        task_work.reasons.push(reason(
+            "scored",
+            format!(
+                "score={} offset={offset_milli} effective={effective_milli} disposition={}",
+                score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string()),
+                disposition.label()
+            ),
+        ));
+        if let Some(rule) = unknown_rule {
+            task_work.reasons.push(reason(
+                format!("score_unknown:{rule}"),
+                "the selection document could not score this candidate; only the manual offset applies",
+            ));
+        }
+        match disposition {
+            ScoreDisposition::Deferred {
+                wake_unix_ms,
+                defer_below_milli,
+            } => {
+                task_work.state = SchedulingDecisionState::Deferred;
+                task_work.reasons.push(reason(
+                    "score_deferred",
+                    format!(
+                        "effective score {effective_milli} is below defer_below_milli {defer_below_milli}; reevaluation at {wake_unix_ms}"
+                    ),
+                ));
+                task_work.next_wake_unix_ms =
+                    min_wake(task_work.next_wake_unix_ms, Some(wake_unix_ms));
+            }
+            ScoreDisposition::Promoted {
+                promote_above_milli,
+            } => {
+                candidate.promoted = true;
+                task_work.reasons.push(reason(
+                    "score_promoted",
+                    format!(
+                        "effective score {effective_milli} is above promote_above_milli {promote_above_milli}"
+                    ),
+                ));
+                ranked.push(candidate);
+            }
+            ScoreDisposition::Neutral => ranked.push(candidate),
+        }
+    }
+    Ok(ranked)
+}
+
+/// Runs the selection document once per instance over that instance's eligible candidates
+/// and its own fact projection. Per-candidate scores do not depend on the other candidates,
+/// so grouping by instance changes nothing but which facts the snapshot can answer.
+fn score_candidates(
+    policy: &SelectionPolicy,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    candidates: &[PlacementCandidate],
+) -> PolicyEvaluationResult<Vec<Option<CandidateScore>>> {
+    let mut by_instance: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        by_instance
+            .entry(candidate.instance_id.as_str())
+            .or_default()
+            .push(index);
+    }
+    let mut scores = vec![None; candidates.len()];
+    for (instance_id, indices) in by_instance {
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "candidate instance '{instance_id}' is missing from the snapshot"
+                ))
+            })?;
+        let projection = instance_fact_projection(facts, instance);
+        let snapshot = SelectionFactSnapshot {
+            snapshot_id: facts.fact_snapshot_id.clone(),
+            snapshot_at_unix_ms: time.unix_ms,
+            facts: projection.entries,
+        };
+        let selection_candidates = indices
+            .iter()
+            .map(|&index| selection_candidate(&candidates[index], &projection.fields))
+            .collect::<PolicyEvaluationResult<Vec<_>>>()?;
+        let decision = actingcommand_selection_policy::evaluate(
+            policy,
+            &selection_candidates,
+            &snapshot,
+            time.unix_ms,
+        )
+        .map_err(|error| {
+            PolicyEvaluationError::selection_invalid(format!("instance '{instance_id}': {error}"))
+        })?;
+        if let SelectionOutcome::Unknown { reason, detail } = &decision.outcome {
+            return Err(PolicyEvaluationError::selection_aborted(format!(
+                "instance '{instance_id}': {detail} ({reason:?})"
+            )));
+        }
+        for (&index, selection_candidate) in indices.iter().zip(&selection_candidates) {
+            let verdict = decision
+                .candidates
+                .iter()
+                .find(|verdict| verdict.candidate_id == selection_candidate.candidate_id)
+                .ok_or_else(|| {
+                    PolicyEvaluationError::selection_invalid(format!(
+                        "verdict for candidate '{}' is missing",
+                        selection_candidate.candidate_id
+                    ))
+                })?;
+            scores[index] = Some(match (verdict.status, verdict.score_milli) {
+                (CandidateStatus::Ranked, Some(score)) => CandidateScore::Scored(score),
+                _ => CandidateScore::Unknown(unscored_rule_id(verdict)),
+            });
+        }
+    }
+    Ok(scores)
+}
+
+/// The gate or term at which a verdict stopped carrying a score.
+fn unscored_rule_id(verdict: &CandidateVerdict) -> String {
+    verdict
+        .gates
+        .iter()
+        .find(|gate| {
+            !matches!(
+                gate.outcome,
+                GateOutcome::Passed | GateOutcome::UnknownSubstituted { passes: true, .. }
+            )
+        })
+        .map(|gate| gate.gate_id.clone())
+        .or_else(|| {
+            verdict
+                .terms
+                .iter()
+                .find(|term| matches!(term.outcome, TermOutcome::UnknownDropped { .. }))
+                .map(|term| term.term_id.clone())
+        })
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+struct InstanceFactProjection {
+    entries: BTreeMap<String, SelectionFactEntry>,
+    fields: BTreeMap<String, ScalarValue>,
+}
+
+/// Projects the facts one instance can see (its own, its server's and its game's scope, the
+/// most specific scope winning per key) into the snapshot the document reads as `fact`
+/// sources and the scalar fields every candidate on that instance carries.
+fn instance_fact_projection(
+    facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+) -> InstanceFactProjection {
+    let mut chosen: BTreeMap<&str, (u8, &ObservedFact)> = BTreeMap::new();
+    for fact in &facts.facts {
+        if !scope_matches_instance(&fact.scope, instance) {
+            continue;
+        }
+        let specificity = activity_scope_specificity(&fact.scope);
+        match chosen.get(fact.fact_key.as_str()) {
+            Some((previous, _)) if *previous >= specificity => {}
+            _ => {
+                chosen.insert(fact.fact_key.as_str(), (specificity, fact));
+            }
+        }
+    }
+    let mut entries = BTreeMap::new();
+    let mut fields = BTreeMap::new();
+    for (key, (_, fact)) in chosen {
+        let entry = match selection_scalar(&fact.value) {
+            Ok(value) => {
+                fields.insert(key.to_owned(), value.clone());
+                SelectionFactEntry::Published {
+                    value,
+                    published_at_unix_ms: fact.observed_at_unix_ms,
+                    expires_at_unix_ms: fact.expires_at_unix_ms,
+                    confidence_milli: fact.confidence_milli,
+                }
+            }
+            Err(reason) => SelectionFactEntry::Unusable { reason },
+        };
+        entries.insert(key.to_owned(), entry);
+    }
+    InstanceFactProjection { entries, fields }
+}
+
+fn selection_scalar(value: &FactValue) -> Result<ScalarValue, UnknownReason> {
+    match value {
+        FactValue::Boolean(value) => Ok(ScalarValue::Boolean(*value)),
+        FactValue::Integer(value) => Ok(ScalarValue::Integer(*value)),
+        FactValue::String(value) => Ok(ScalarValue::String(value.clone())),
+        FactValue::TimestampMs(value) | FactValue::DurationMs(value) => i64::try_from(*value)
+            .map(ScalarValue::Integer)
+            .map_err(|_| UnknownReason::TypeMismatch),
+        FactValue::RecordList(_) => Err(UnknownReason::FactNotScalar),
+    }
+}
+
+fn selection_candidate(
+    candidate: &PlacementCandidate,
+    instance_fields: &BTreeMap<String, ScalarValue>,
+) -> PolicyEvaluationResult<Candidate> {
+    let aging_ms = i64::try_from(candidate.rank.aging_ms).map_err(|_| {
+        PolicyEvaluationError::overflow(format!(
+            "task '{}' aging exceeds the scoring range",
+            candidate.task_id
+        ))
+    })?;
+    let mut fields = instance_fields.clone();
+    for (name, value) in [
+        (
+            "task.priority",
+            ScalarValue::Integer(i64::from(candidate.rank.priority)),
+        ),
+        (
+            "task.strategic_weight_milli",
+            ScalarValue::Integer(i64::from(candidate.rank.strategic_weight_milli)),
+        ),
+        (
+            "task.urgency_milli",
+            ScalarValue::Integer(i64::from(candidate.rank.urgency_milli)),
+        ),
+        ("task.aging_ms", ScalarValue::Integer(aging_ms)),
+        (
+            "task.load_cost_milli",
+            ScalarValue::Integer(i64::from(candidate.rank.load_cost_milli)),
+        ),
+        (
+            "instance.affinity",
+            ScalarValue::Boolean(candidate.affinity),
+        ),
+    ] {
+        fields.insert(name.to_owned(), value);
+    }
+    Ok(Candidate {
+        candidate_id: format!("{}@{}", candidate.task_id, candidate.instance_id),
+        fields,
+    })
+}
+
+/// The instance-level entry wins over the task-level entry; neither means no offset.
+fn effective_priority_offset(
+    facts: &EvaluationFacts,
+    task_id: &str,
+    instance_id: &str,
+) -> Option<i32> {
+    let mut task_level = None;
+    for offset in &facts.priority_offsets {
+        if offset.task_id != task_id {
+            continue;
+        }
+        match offset.instance_id.as_deref() {
+            Some(instance) if instance == instance_id => return Some(offset.offset_milli),
+            Some(_) => {}
+            None => task_level = Some(offset.offset_milli),
+        }
+    }
+    task_level
 }
 
 fn select_activity_profile<'a>(
@@ -2660,7 +3063,36 @@ fn validate_inputs(
     validate_count("instances", facts.instances.len(), MAX_EVALUATION_INSTANCES)?;
     validate_count("pools", resources.pools.len(), MAX_EVALUATION_POOLS)?;
     validate_count("hosts", resources.hosts.len(), MAX_EVALUATION_HOSTS)?;
+    validate_count(
+        "priority offsets",
+        facts.priority_offsets.len(),
+        MAX_EVALUATION_PRIORITY_OFFSETS,
+    )?;
     validate_id("fact snapshot id", &facts.fact_snapshot_id)?;
+
+    let mut offset_keys = BTreeSet::new();
+    for offset in &facts.priority_offsets {
+        validate_id("priority offset task id", &offset.task_id)?;
+        if let Some(instance_id) = &offset.instance_id {
+            validate_instance_alias(instance_id)?;
+        }
+        validate_observation_time("priority offset", offset.observed_at_unix_ms, time.unix_ms)?;
+        if offset.offset_milli < -MAX_PRIORITY_OFFSET_MILLI
+            || offset.offset_milli > MAX_PRIORITY_OFFSET_MILLI
+        {
+            return Err(PolicyEvaluationError::invalid(format!(
+                "priority offset for task '{}' exceeds {MAX_PRIORITY_OFFSET_MILLI} milli",
+                offset.task_id
+            )));
+        }
+        if !offset_keys.insert((offset.task_id.as_str(), offset.instance_id.as_deref())) {
+            return Err(PolicyEvaluationError::invalid(format!(
+                "duplicate priority offset '{}:{}'",
+                offset.task_id,
+                offset.instance_id.as_deref().unwrap_or("*")
+            )));
+        }
+    }
 
     let task_ids: BTreeSet<&str> = catalog
         .catalog()
@@ -4811,6 +5243,7 @@ mod tests {
                 "memory://fixture/timeline.json",
                 serde_json::to_vec(&documents.3).expect("timeline bytes"),
             ),
+            selection: None,
         })
         .expect("compiled catalog")
     }
@@ -4858,6 +5291,7 @@ mod tests {
                 capability_operation_ids: vec!["operation.observe".to_owned()],
                 preferred_task_ids: Vec::new(),
             }],
+            priority_offsets: Vec::new(),
         }
     }
 

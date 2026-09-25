@@ -2688,6 +2688,7 @@ impl CatalogStore {
             pools: self.load_source(&path, &generation, "pools")?,
             activity: self.load_source(&path, &generation, "activity")?,
             timeline: self.load_source(&path, &generation, "timeline")?,
+            selection: None,
         };
         let compiled = compile_catalog(&sources)
             .map_err(|_| fatal("catalog_generation_invalid", "load_catalog_generation"))?;

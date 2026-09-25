@@ -8,14 +8,14 @@ use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
     ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
-    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CLOCK_DRIFT_MS, MAX_DST_OFFSET_MINUTES,
-    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
-    MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
-    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
-    MAX_UTC_OFFSET_MINUTES, MAX_WINDOWS_PER_PROFILE, MIN_DST_OFFSET_MINUTES,
-    MIN_UTC_OFFSET_MINUTES, MetricRef, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec,
-    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
-    TimelineDocument,
+    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
+    MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS,
+    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_POOLS,
+    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
+    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
+    MIN_DST_OFFSET_MINUTES, MIN_UTC_OFFSET_MINUTES, MetricRef, ObservationRef, PoolSpec,
+    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
+    ScopeSelector, TaskSpec, TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -28,9 +28,11 @@ pub(crate) struct CatalogSourceMaps<'a> {
 pub(crate) fn validate_catalog(
     bundle: &CatalogBundle,
     maps: CatalogSourceMaps<'_>,
+    has_selection_document: bool,
 ) -> Vec<CatalogDiagnostic> {
     let mut diagnostics = Vec::new();
     validate_descriptors(bundle, &maps, &mut diagnostics);
+    validate_priority_selection(bundle, maps.tasks, has_selection_document, &mut diagnostics);
 
     let task_ids: HashSet<&str> = bundle
         .tasks
@@ -207,6 +209,58 @@ fn validate_descriptors(
                 bundle.tasks.catalog.catalog_version,
             )),
         ));
+    }
+}
+
+fn validate_priority_selection(
+    bundle: &CatalogBundle,
+    map: &SourceMap,
+    has_selection_document: bool,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(selection) = &bundle.tasks.priority_selection else {
+        return;
+    };
+    let descriptor = Some((
+        bundle.tasks.catalog.catalog_id.as_str(),
+        bundle.tasks.catalog.catalog_version,
+    ));
+    if !has_selection_document {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PrioritySelectionWithoutDocument,
+            "/priority_selection",
+            "priority_selection requires a selection document in the same catalog",
+            descriptor,
+        ));
+    }
+    if selection.defer_below_milli >= selection.promote_above_milli {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            "/priority_selection",
+            "defer_below_milli must be less than promote_above_milli",
+            descriptor,
+        ));
+    }
+    if selection.defer_for_ms == 0 || selection.defer_for_ms > MAX_DEFER_FOR_MS {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            "/priority_selection/defer_for_ms",
+            format!("defer_for_ms must be within 1..={MAX_DEFER_FOR_MS}"),
+            descriptor,
+        ));
+    }
+    for (field, value) in [
+        ("defer_below_milli", selection.defer_below_milli),
+        ("promote_above_milli", selection.promote_above_milli),
+    ] {
+        if !(MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&value) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("/priority_selection/{field}"),
+                "priority selection thresholds must be canonical safe integers",
+                descriptor,
+            ));
+        }
     }
 }
 

@@ -718,6 +718,7 @@ mod tests {
                 include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
                     .to_vec(),
             ),
+            selection: None,
         }
     }
 
