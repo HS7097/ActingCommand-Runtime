@@ -1342,6 +1342,12 @@ impl RuntimeHost {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
+        // Workflow #308 slice 5b: settlements replayed or reconciled above reach the runtime
+        // fact store exactly as a live settlement does; identical records append nothing.
+        if let Err(original) = shared.record_policy_settlement_facts_on_start() {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
         if let Err(original) = shared.expire_agent_sessions() {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);

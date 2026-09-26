@@ -189,14 +189,20 @@ impl HostShared {
             })?;
         let (outcome_keys, facts, resources, missing_instance_facts, unknown_offset_tasks) = {
             let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let outcome_keys =
-                lock(&self.policy, "read_policy_outcome_keys")?.outcome_key_snapshot()?;
+            let outcome_keys = {
+                let mut policy = lock(&self.policy, "read_policy_outcome_keys")?;
+                // The previous evaluated cycle's eligibility verdicts take effect here, before
+                // this cycle's inputs are projected (Workflow #308 slice 5b).
+                policy.apply_eligibility_verdicts();
+                policy.outcome_key_snapshot()?
+            };
             let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
             let (facts, resources, missing_instance_facts, unknown_offset_tasks) = self
                 .project_authoritative_policy_inputs_with_gaps_under_gate(
                     "evaluate_policy_cycle",
                     &outcome_keys,
                     None,
+                    Some(time.unix_ms),
                     Some(time.unix_ms),
                 )?;
             (
@@ -219,10 +225,10 @@ impl HostShared {
             Some(seed) => seed,
             None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
         };
-        let mut cycle = {
+        let (mut cycle, eligibility_unknown_pairs) = {
             let mut policy = lock(&self.policy, "evaluate_policy_cycle")?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
-            policy.evaluate(
+            let cycle = policy.evaluate(
                 &facts,
                 &controlled_resources,
                 PolicyEvaluationContext {
@@ -232,8 +238,15 @@ impl HostShared {
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
                 },
-            )?
+            )?;
+            let unknown = if cycle.evaluation.is_some() {
+                policy.eligibility_unknown_pairs()
+            } else {
+                BTreeSet::new()
+            };
+            (cycle, unknown)
         };
+        attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
             &mut cycle,
             &missing_instance_facts,
@@ -280,6 +293,7 @@ impl HostShared {
                 outcome_keys,
                 as_of_ledger_position,
                 None,
+                None,
             )?;
         Ok((facts, resources))
     }
@@ -289,12 +303,15 @@ impl HostShared {
     /// and the tasks named by a priority offset that the active catalog does not declare
     /// (Workflow #308 slice 4a-2). `offsets_at_unix_ms` is the evaluation instant: an offset
     /// whose TTL has elapsed by then is not passed; without it every active offset is.
+    /// `eligibility_as_of_unix_ms` is the evaluation instant whose memory-only eligibility
+    /// ages are projected (Workflow #308 slice 5b); without it none are.
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
         operation: &'static str,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
         offsets_at_unix_ms: Option<u64>,
+        eligibility_as_of_unix_ms: Option<u64>,
     ) -> RuntimeHostResult<(
         EvaluationFacts,
         EvaluationResources,
@@ -382,7 +399,7 @@ impl HostShared {
             base_facts.priority_offsets.push(offset);
         }
         base_facts.tasks = lock(&self.policy, "project_policy_task_state")?
-            .task_runtime_snapshots(ledger_position)?;
+            .task_runtime_snapshots(ledger_position, eligibility_as_of_unix_ms)?;
         base_facts.tasks.retain(|state| {
             base_facts
                 .instances
@@ -863,11 +880,16 @@ impl HostShared {
                     ));
                 }
                 let fact_gate = lock(&self.fact_write_gate, "validate_policy_fact_freshness")?;
-                let (current_facts, _) = self.project_authoritative_policy_inputs_under_gate(
-                    "admit_policy_dispatch",
-                    &outcome_keys,
-                    None,
-                )?;
+                // The eligibility ages are projected as of the intent's evaluation instant, as
+                // that evaluation projected them (Workflow #308 slice 5b).
+                let (current_facts, _, _, _) = self
+                    .project_authoritative_policy_inputs_with_gaps_under_gate(
+                        "admit_policy_dispatch",
+                        &outcome_keys,
+                        None,
+                        None,
+                        Some(trusted.intent.prerequisites.evaluated_at_unix_ms),
+                    )?;
                 (outcome_keys, current_facts, fact_gate)
             };
             if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
@@ -1396,6 +1418,37 @@ fn attach_missing_instance_fact_reasons(
                 ),
             });
         }
+    }
+}
+
+/// Records `eligible_since_unknown` on every decision whose pair started aging in a cycle
+/// evaluated before any cycle's eligibility verdicts were applied since the host started
+/// (Workflow #308 slice 5b). Eligibility ages are memory-only and no ledger event records an
+/// evaluation, so the age such a pair had before this host is not rebuilt: it counts from this
+/// cycle.
+fn attach_eligible_since_unknown_reasons(
+    cycle: &mut PolicyCycle,
+    unknown_pairs: &BTreeSet<(String, String)>,
+) {
+    if unknown_pairs.is_empty() {
+        return;
+    }
+    let Some(evaluation) = cycle.evaluation.as_mut() else {
+        return;
+    };
+    for decision in &mut evaluation.decisions {
+        let Some(instance_id) = decision.instance_id.clone() else {
+            continue;
+        };
+        if !unknown_pairs.contains(&(decision.task_id.clone(), instance_id)) {
+            continue;
+        }
+        decision.reasons.push(DecisionReason {
+            code: "eligible_since_unknown".to_owned(),
+            detail: "eligibility age is kept in memory only and is not rebuilt after a start; \
+                     this candidate's age counts from this cycle"
+                .to_owned(),
+        });
     }
 }
 

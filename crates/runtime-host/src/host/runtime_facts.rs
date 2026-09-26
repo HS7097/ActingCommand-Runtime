@@ -8,7 +8,8 @@
 //! periodic snapshot only shortens replay.
 
 use super::*;
-use actingcommand_contract::FactValue;
+use crate::policy_host::PolicySettlement;
+use actingcommand_contract::{FactValue, MAX_RUNTIME_FACT_KEY_BYTES};
 
 /// Key families that stop describing the device once a new owner epoch starts.
 const TAKEOVER_INVALIDATED_FAMILIES: [&str; 3] = ["device.", "backend.", "application."];
@@ -21,6 +22,49 @@ pub(super) const TASK_PAGE_FACT_KEY: &str = "task.page";
 
 /// Single keys outside [`TAKEOVER_INVALIDATED_FAMILIES`] that a takeover also drops.
 const TAKEOVER_INVALIDATED_KEYS: [&str; 1] = [TASK_PAGE_FACT_KEY];
+
+/// Settlement fact keys are `task.<catalog_task_id>.<suffix>` (Workflow #308 slice 5b).
+const TASK_LAST_DURATION_SUFFIX: &str = "last_duration_ms";
+const TASK_LAST_OUTCOME_SUFFIX: &str = "last_outcome";
+const TASK_FAILURE_STREAK_SUFFIX: &str = "failure_streak";
+const TASK_COMPLETED_AT_SUFFIX: &str = "completed_at_unix_ms";
+const TASK_SETTLEMENT_SUFFIXES: [&str; 4] = [
+    TASK_LAST_DURATION_SUFFIX,
+    TASK_LAST_OUTCOME_SUFFIX,
+    TASK_FAILURE_STREAK_SUFFIX,
+    TASK_COMPLETED_AT_SUFFIX,
+];
+
+fn task_settlement_fact_key(task_id: &str, suffix: &str) -> String {
+    format!("task.{task_id}.{suffix}")
+}
+
+/// Refuses a catalog with a task whose settlement fact keys would exceed the 128-byte runtime
+/// fact key bound (`task_id_too_long_for_facts`): a task id may be at most 102 bytes, checked
+/// when a catalog becomes active, before any run of it.
+pub(super) fn validate_settlement_fact_keys(
+    catalog: &actingcommand_policy::CompiledCatalog,
+) -> RuntimeHostResult<()> {
+    for task in &catalog.catalog().tasks.tasks {
+        if TASK_SETTLEMENT_SUFFIXES.iter().any(|suffix| {
+            task_settlement_fact_key(&task.id, suffix).len() > MAX_RUNTIME_FACT_KEY_BYTES
+        }) {
+            return Err(RuntimeHostError::request(
+                "task_id_too_long_for_facts",
+                "activate_policy_catalog",
+                RuntimeErrorCode::InvalidRequest,
+            )
+            .with_native_detail(format!(
+                "task id '{}' is {} bytes; its settlement fact keys allow at most {} bytes",
+                task.id,
+                task.id.len(),
+                MAX_RUNTIME_FACT_KEY_BYTES
+                    - task_settlement_fact_key("", TASK_COMPLETED_AT_SUFFIX).len()
+            )));
+        }
+    }
+    Ok(())
+}
 
 impl HostShared {
     /// Records the in-memory runtime configuration manifest as its two
@@ -111,6 +155,122 @@ impl HostShared {
             Err(error) if error.code() == "runtime_fact_stale" => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// Records the four settlement facts of one (task, instance) pair's latest executed policy
+    /// run (Workflow #308 slice 5b), ledger-first through [`Self::record_runtime_fact`], in the
+    /// instance scope of the run's registered instance with source `policy` and no lifetime.
+    /// Identical stored records append nothing, so a replayed or reconciled settlement never
+    /// appends a record twice. Any refusal is fatal: the settlement itself is already durable.
+    pub(super) fn record_policy_settlement_facts(
+        &self,
+        settlement: &PolicySettlement,
+    ) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            let instance_id = self
+                .settlement_instance_id(&settlement.instance_alias)?
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "policy_settlement_instance_unknown",
+                        "record_policy_settlement_facts",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            self.record_settlement_fact_records(settlement, instance_id)
+        })();
+        let result = result.map_err(|error| {
+            if error.is_fatal() {
+                error
+            } else {
+                error.into_fatal()
+            }
+        });
+        if let Err(error) = &result {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Re-derives the settlement facts of every registered instance's pairs from the recovered
+    /// dispatches once per startup, so a settlement recorded or reconciled without its facts
+    /// (a stop between the two appends, or startup reconciliation, which runs before this
+    /// store exists) reaches the same store state as the live path. Identical records append
+    /// nothing; a pair of an instance no longer registered has no instance scope and is left
+    /// as the ledger holds it.
+    pub(super) fn record_policy_settlement_facts_on_start(&self) -> RuntimeHostResult<()> {
+        let settlements = lock(&self.policy, "read_policy_settlements")?.latest_settlements()?;
+        for settlement in &settlements {
+            if self
+                .settlement_instance_id(&settlement.instance_alias)?
+                .is_none()
+            {
+                continue;
+            }
+            self.record_policy_settlement_facts(settlement)?;
+        }
+        Ok(())
+    }
+
+    fn settlement_instance_id(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<InstanceId>> {
+        Ok(lock(
+            &self.registered_instances,
+            "resolve_policy_settlement_instance",
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .map(|instance| instance.instance_id))
+    }
+
+    fn record_settlement_fact_records(
+        &self,
+        settlement: &PolicySettlement,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        let integer = |value: u64| {
+            i64::try_from(value).map(FactValue::Integer).map_err(|_| {
+                RuntimeHostError::fatal(
+                    "policy_settlement_fact_overflow",
+                    "record_policy_settlement_facts",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })
+        };
+        let values = [
+            (TASK_LAST_DURATION_SUFFIX, integer(settlement.duration_ms)?),
+            (
+                TASK_LAST_OUTCOME_SUFFIX,
+                FactValue::String(
+                    if settlement.succeeded {
+                        "succeeded"
+                    } else {
+                        "failed"
+                    }
+                    .to_owned(),
+                ),
+            ),
+            (
+                TASK_FAILURE_STREAK_SUFFIX,
+                integer(settlement.failure_streak)?,
+            ),
+            (
+                TASK_COMPLETED_AT_SUFFIX,
+                integer(settlement.completed_at_unix_ms)?,
+            ),
+        ];
+        for (suffix, value) in values {
+            self.record_runtime_fact(RuntimeFactRecord {
+                scope: RuntimeFactScope::Instance { instance_id },
+                key: task_settlement_fact_key(&settlement.catalog_task_id, suffix),
+                value,
+                observed_at_unix_ms: settlement.completed_at_unix_ms,
+                source: OriginModule::Policy,
+                ttl_ms: None,
+            })?;
+        }
+        Ok(())
     }
 
     /// Appends `runtime.fact_invalidated` first, then drops the record from

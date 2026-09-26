@@ -105,6 +105,9 @@ impl HostShared {
         promotion: Option<CatalogPromotionAuthorization>,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let result = (|| -> RuntimeHostResult<CatalogGeneration> {
+            // Every task's settlement fact keys must fit the runtime fact key bound before the
+            // catalog can dispatch a run (Workflow #308 slice 5b).
+            runtime_facts::validate_settlement_fact_keys(catalog.compiled())?;
             let generation = catalog.generation().clone();
             let expected_active_hash = previous
                 .as_ref()
