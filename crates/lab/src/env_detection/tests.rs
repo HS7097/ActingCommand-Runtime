@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::ports::DisabledSemanticInput;
-use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts};
+use crate::{
+    CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabInputPort, LabPorts,
+};
 use actingcommand_recognition::ScenePixelFormat;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;

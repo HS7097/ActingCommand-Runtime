@@ -94,7 +94,47 @@ Boundary of this step: connection-time writes of backend opening (`connect`,
 `push`, `chmod`, `forward`, `shell_spawn`) stay under the existing open-phase
 authority; read-only operations (capture, `dumpsys`, `wm size`, version probes,
 foreground observation) take no witness; the close side is unchanged and keeps
-`DeviceCloseAuthority`. The Host's position-only checks (`validate_write` and
-related) remain alongside the witness. Witness semantics, the Scheduler's issue
-and consume, wire formats and the ledger's `input.committed` sequence are
-unchanged.
+`DeviceCloseAuthority`. Host position-only checks remain only on non-write paths
+(below). Witness semantics, the Scheduler's issue and consume, wire formats and
+the ledger's `input.committed` sequence are unchanged.
+
+Source guards pin the table: the production callers of `issue_fenced_write` are
+exactly `SeedScheduler::begin_destructive_step`, which mints Business, and
+`SeedScheduler::begin_resource_close`, which mints ResourceClose. In `crates/device`
+and `crates/execution-kernel`, every `InputBackend` method other than its
+read-only accessors and closes, every public `Adb` method other than its
+read-only and open-phase commands, and every Kernel `input*` /
+`control_application*` entry takes a `FencedWrite` parameter; `close_once`,
+`close_with_authority`, `close_with_input_check` and every public function
+calling one take a `DeviceCloseAuthority` parameter unless they pass only
+`DeviceCloseAuthority::LocalOnly`.
+
+### Lab port and the lease field
+
+Lab reaches input only through `SemanticInputExecutor`. Inside `crates/lab`, only
+its implementations call the `LabInputPort` write methods; an env-detection touch
+step goes through the factory-backed implementation, which opens one port for
+the action and closes it before returning. `crates/lab` names no device input
+backend (`InputBackend`, `Adb` or a touch backend). A source guard pins both.
+
+`InputBackendRequest.lease` carries a lease the caller already holds. With
+`Some`, the ActingLab Runtime port submits each input under that lease and
+acquires, renews and releases none: the holder does, and the port reports
+`lease_held`. With `None`, the port acquires its own lease through
+`RuntimeInputProxy` as before. A lease belongs to the Runtime connection that
+holds it; the Runtime refuses one presented on another connection with its
+existing lease denial. In both cases Lab holds no witness: the Runtime validates
+the lease and mints the `FencedWrite` for each input. Offline and fixture paths
+are unchanged.
+
+### Position validation remains only on non-write paths
+
+Host lease validation by position (`validate_write` without a witness) remains
+only where it admits a request before any witness exists:
+`HostShared::validated_instance`, used by lease renewal and release, input and
+application admission, contained-task admission and the Lab-operation capture
+fences. It authorizes no device write. The Nemu input check validates only the
+step's witness (`validate_destructive_step`); its former second `validate_write`
+on the same token repeated that validation and is removed. The Scheduler's own
+`validate_write` inside `begin_destructive_step` remains the Business mint's
+admission. The ledger event sequence is unchanged.

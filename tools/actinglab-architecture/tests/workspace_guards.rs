@@ -540,9 +540,12 @@ fn c6_actinglab_does_not_construct_live_device_backends() {
     let capture_production = capture
         .split_once("#[cfg(test)]")
         .map_or(capture.as_str(), |(production, _)| production);
+    // Workflow #314 fw2: its own lease goes through the proxy, a caller's held lease
+    // through the Runtime client; both reach input only through the Runtime.
     assert!(
-        input.contains("proxy: RuntimeInputProxy")
-            && input.contains("self.proxy.input(action)")
+        input.contains("Acquired(RuntimeInputProxy)")
+            && input.contains("proxy.input(action)")
+            && input.contains("client.input(token, action)")
             && !input.contains("AdbConfig")
             && !input.contains("ExecutionBackendProvider"),
         "ActingLab input adapter must remain a Runtime proxy without provider authority"
@@ -1029,15 +1032,28 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
 // Workflow #314 FENCED-CLOSE-v1: approved issuer/close invariant.
 // Source first red: 14b7addc crates/device/src/error.rs DeviceCloseAuthority
 // had a zero-field FencedDeviceWrite; Workflow #314 issuecomment-5766924100.
+// Workflow #314 fw2: the issuer inventory covers both purposes, naming the scheduler
+// admission that mints Business and the one that mints ResourceClose.
 #[test]
 fn fenced_close_requires_scheduler_witness() {
+    let sources = workspace_sources(&["crates", "apps", "providers", "tools"]);
+    let violations = actingcommand_actinglab_architecture::inspect_fenced_write_issuers(&sources)
+        .expect("parse fenced-write issuer source inventory");
+    assert!(
+        violations.is_empty(),
+        "fenced-write issuer violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn workspace_sources(directories: &[&str]) -> Vec<(String, String)> {
     let root = workspace_root();
     let mut files = Vec::new();
-    for directory in ["crates", "apps", "providers", "tools"] {
+    for directory in directories {
         collect_rust_files(&root.join(directory), &mut files);
     }
     files.sort();
-    let sources = files
+    files
         .into_iter()
         .map(|file| {
             let path = file
@@ -1049,13 +1065,41 @@ fn fenced_close_requires_scheduler_witness() {
                 fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
             (path, source)
         })
-        .collect::<Vec<_>>();
-    let violations = actingcommand_actinglab_architecture::inspect_fenced_close_sources(&sources)
-        .expect("parse fenced-close source inventory");
+        .collect()
+}
+
+// Workflow #314 goal 6: device and kernel input writes take `FencedWrite` and closes take
+// `DeviceCloseAuthority`. The table is printed so its dry-run record stays reproducible.
+#[test]
+fn fenced_write_shape_table_carries_witness_and_close_authority() {
+    let sources = workspace_sources(&["crates/device/src", "crates/execution-kernel/src"]);
+    let report = actingcommand_actinglab_architecture::inspect_fenced_write_shapes(&sources)
+        .expect("parse device and kernel shape table");
+    for row in &report.rows {
+        println!("{row}");
+    }
     assert!(
-        violations.is_empty(),
-        "fenced-close violations:\n{}",
-        violations.join("\n")
+        report.violations.is_empty(),
+        "fenced write shape violations:\n{}",
+        report.violations.join("\n")
+    );
+}
+
+// Workflow #314 goal 5: `SemanticInputExecutor` is Lab's only input face, and `crates/lab`
+// names no device input backend.
+#[test]
+fn lab_input_face_is_semantic_input_executor() {
+    let lab = workspace_sources(&["crates/lab"]);
+    let device = workspace_sources(&["crates/device/src"]);
+    let report = actingcommand_actinglab_architecture::inspect_lab_input_face(&lab, &device)
+        .expect("parse Lab input face inventory");
+    println!("LabInputPort writes: {:?}", report.port_writes);
+    println!("input faces: {:?}", report.faces);
+    println!("forbidden device names: {:?}", report.forbidden);
+    assert!(
+        report.violations.is_empty(),
+        "Lab input face violations:\n{}",
+        report.violations.join("\n")
     );
 }
 
