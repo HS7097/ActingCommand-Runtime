@@ -84,6 +84,9 @@ pub enum LeaseReleaseReason {
     /// The dedicated close lease of an instance scheduling pause handing the device back
     /// (Workflow #191 ps2); it names no transfer.
     InstancePaused,
+    /// The dedicated preparation lease of an instance's connection preparation phase
+    /// (Workflow #317 sc3, #191 h2); it names no transfer.
+    ConnectionPrepared,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

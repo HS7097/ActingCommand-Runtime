@@ -1787,7 +1787,8 @@ impl HostShared {
             | LeaseReleaseReason::Preempted
             | LeaseReleaseReason::BackendFailure
             | LeaseReleaseReason::HostShutdown
-            | LeaseReleaseReason::InstancePaused => None,
+            | LeaseReleaseReason::InstancePaused
+            | LeaseReleaseReason::ConnectionPrepared => None,
         };
         if let Some(transfer_reason) = transfer_reason {
             let transfer = lock(&self.scheduler, "prepare_cleanup_transfer")?
