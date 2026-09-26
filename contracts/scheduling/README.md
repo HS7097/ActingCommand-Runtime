@@ -227,6 +227,51 @@ projects carries what earlier runs of that task on that instance settled:
   evaluated after a start adds `eligible_since_unknown` to every decision whose
   pair starts aging there, and those ages count from that cycle.
 
+## Settlement Outcome Records
+
+In the Runtime (Workflow #313 goal 5) every settled policy run that projects its
+mapped outcome record projects three `ObservedOutcome` records for its task and
+instance:
+
+- `<outcome_key>`: `Boolean(true)`, as before; predicate semantics are unchanged.
+- `<outcome_key>.duration_ms`: `Integer` milliseconds, the same value slice 5b
+  records as the `last_duration_ms` settlement fact, i.e. the run's `runtime_ms`.
+  A failed run projects no outcome record at all (an outcome residual for it
+  remains the fatal `policy_outcome_failed_run_residual`), so the failure form
+  of that duration never reaches these records.
+- `<outcome_key>.completed_at_unix_ms`: `Integer`, the run's terminal timestamp.
+
+The three share `observed_at_unix_ms` (the terminal timestamp),
+`activity_window_id` and `expires_at_unix_ms` (none). A value beyond the `i64`
+range fails with the fatal `policy_settlement_outcome_overflow`. Because the
+three share observation, window and expiry, the window-result and feedback-stop
+checks reach the same result as with the mapped record alone. The derived keys
+obey the evaluator's input bounds: 128 bytes per key (a mapped key longer than
+107 bytes makes the evaluation input invalid once its run settles) and 16,384
+outcome records per evaluation, now three per settled pair. `fact_snapshot_id` hashes the projected
+outcomes, so it differs from before for any input with a settled run, and the
+decision identities derived from it follow; this is not a wire change. The
+policy input structures, the ledger event set and the decision identity rules
+are unchanged.
+
+A strategic goal's `MetricRef::Outcome` reads the record with its exact key for
+the assessment's instance. As for `MetricRef::Fact`, an `Integer` value is the
+metric, any other value is none, and a record whose `expires_at_unix_ms` is
+before the report's `as_of_unix_ms` is none. Naming
+`<outcome_key>.duration_ms` or `<outcome_key>.completed_at_unix_ms` reads the
+settled duration or completion time.
+
+Before it projects a completed run, the host confirms from the ledger that the
+run's admission request is the run's only `policy.dispatch_admitted` up to its
+terminal (Workflow #317 item F). The confirmation is cached in memory only,
+keyed by the run's `(decision_id, completed_sequence)` and held once per
+(task, instance) pair: a repeated cycle that projects the same run through the
+same terminal does not read the ledger again, while a different key (a newer
+run of the pair), a different run identity or terminal, or a restarted host
+confirms again. A failed confirmation is not cached and keeps its error. The
+failed-run residual check, the run and outcome identity match and the outcome
+re-projection still run on every cycle.
+
 ## Runtime Enforcement
 
 Time validity is evaluated over the pinned input snapshot. Timeline invalidation

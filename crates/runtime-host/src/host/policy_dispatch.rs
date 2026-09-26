@@ -503,20 +503,67 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
-            validate_completed_run_admission_request(
-                &self.ledger,
-                expected_run,
-                identity.terminal_sequence(),
-            )?;
-            base_facts.outcomes.push(ObservedOutcome {
-                task_id: identity.catalog_task_id().to_owned(),
-                instance_id: identity.instance_alias().to_owned(),
-                outcome_key: outcome.disposition().outcome_key().to_owned(),
-                value: PolicyFactValue::Boolean(true),
-                observed_at_unix_ms: outcome.terminal_timestamp_unix_ms(),
-                expires_at_unix_ms: None,
-                activity_window_id: Some(expected_run.activity_window_id.clone()),
-            });
+            // The ledger is append-only, so a run's admission request confirmed through its
+            // terminal stays confirmed: a repeated cycle does not re-read it (Workflow #313
+            // goal 5, #317 item F).
+            let through_sequence = identity.terminal_sequence();
+            if !lock(&self.policy, "read_confirmed_run_admission")?
+                .completed_run_admission_confirmed(expected_run, through_sequence)
+            {
+                validate_completed_run_admission_request(
+                    &self.ledger,
+                    expected_run,
+                    through_sequence,
+                )?;
+                lock(&self.policy, "record_confirmed_run_admission")?
+                    .record_completed_run_admission_confirmed(expected_run, through_sequence);
+            }
+            // A failed run was skipped above, so the settled duration is the success's
+            // `runtime_ms`, the value slice 5b records as `last_duration_ms`.
+            let PolicyExecutionOutcome::Succeeded { runtime_ms } = &expected_run.execution_outcome
+            else {
+                return Err(RuntimeHostError::fatal(
+                    "policy_outcome_failed_run_residual",
+                    operation,
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            };
+            let settlement_value = |value: u64| {
+                i64::try_from(value)
+                    .map(PolicyFactValue::Integer)
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "policy_settlement_outcome_overflow",
+                            operation,
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })
+            };
+            // Every settled run projects its outcome and two settlement records that share its
+            // observation instant, activity window and expiry (Workflow #313 goal 5).
+            let outcome_key = outcome.disposition().outcome_key();
+            let observed_at_unix_ms = outcome.terminal_timestamp_unix_ms();
+            for (outcome_key, value) in [
+                (outcome_key.to_owned(), PolicyFactValue::Boolean(true)),
+                (
+                    format!("{outcome_key}.duration_ms"),
+                    settlement_value(*runtime_ms)?,
+                ),
+                (
+                    format!("{outcome_key}.completed_at_unix_ms"),
+                    settlement_value(observed_at_unix_ms)?,
+                ),
+            ] {
+                base_facts.outcomes.push(ObservedOutcome {
+                    task_id: identity.catalog_task_id().to_owned(),
+                    instance_id: identity.instance_alias().to_owned(),
+                    outcome_key,
+                    value,
+                    observed_at_unix_ms,
+                    expires_at_unix_ms: None,
+                    activity_window_id: Some(expected_run.activity_window_id.clone()),
+                });
+            }
         }
         let catalog = lock(&self.policy, "project_fact_pool_catalog")?.active_loaded();
         let mut unknown_offset_tasks = UnknownPriorityOffsetTasks::new();

@@ -771,6 +771,10 @@ pub(crate) struct PolicyHost {
     /// Memory-only arbitration input per instance (Workflow #308 slice 5c): the latest cycle
     /// that had an Eligible or Selected decision for the instance sets its entry.
     arbitration: BTreeMap<String, InstanceArbitrationRank>,
+    /// Memory-only re-projection cache (Workflow #313 goal 5, #317 item F): per (task,
+    /// instance) pair, the completed run whose admission request the ledger confirmed and the
+    /// terminal sequence it was read through. A host starts with none.
+    confirmed_run_admissions: BTreeMap<(String, String), (CompletedPolicyRunIdentity, u64)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -801,6 +805,7 @@ impl PolicyHost {
             control: PolicyControlState::default(),
             eligibility: EligibilityAges::default(),
             arbitration: BTreeMap::new(),
+            confirmed_run_admissions: BTreeMap::new(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1583,6 +1588,35 @@ impl PolicyHost {
             ));
         }
         Ok(())
+    }
+
+    /// Whether the admission request of `run` was confirmed through `through_sequence` since
+    /// this host opened (Workflow #313 goal 5, #317 item F). The cache key is the run's
+    /// `(decision_id, completed_sequence)`; a hit needs the pair's entry to hold that same run
+    /// identity (which carries both) and terminal sequence, so any change re-validates.
+    pub(crate) fn completed_run_admission_confirmed(
+        &self,
+        run: &CompletedPolicyRunIdentity,
+        through_sequence: u64,
+    ) -> bool {
+        self.confirmed_run_admissions
+            .get(&(run.catalog_task_id.clone(), run.instance_alias.clone()))
+            .is_some_and(|(confirmed, confirmed_through)| {
+                confirmed == run && *confirmed_through == through_sequence
+            })
+    }
+
+    /// Records a confirmed admission request. It replaces the pair's previous entry: a pair
+    /// projects only its latest completed run, so the cache holds one entry per pair.
+    pub(crate) fn record_completed_run_admission_confirmed(
+        &mut self,
+        run: &CompletedPolicyRunIdentity,
+        through_sequence: u64,
+    ) {
+        self.confirmed_run_admissions.insert(
+            (run.catalog_task_id.clone(), run.instance_alias.clone()),
+            (run.clone(), through_sequence),
+        );
     }
 
     pub(crate) fn completed_policy_runs(
