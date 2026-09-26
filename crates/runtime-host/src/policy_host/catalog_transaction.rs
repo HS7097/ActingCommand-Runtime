@@ -323,12 +323,28 @@ impl CatalogStore {
         ledger: &GlobalLedger,
         through: u64,
     ) -> RuntimeHostResult<Option<LoadedCatalog>> {
-        let events = ledger
-            .query(EventQuery {
-                to_sequence: Some(through),
-                ..EventQuery::default()
-            })
-            .map_err(|error| catalog_ledger_error(&error))?;
+        // One indexed query per event type the loop consumes, merged back into ledger order
+        // (Workflow #317 rf2). The loop skips every other event, so it sees exactly the events
+        // the unfiltered read gave it.
+        let mut events = Vec::new();
+        for event_type in [
+            EventType::StateMigrated,
+            EventType::CatalogTransitionIntent,
+            EventType::CatalogActivated,
+            EventType::CatalogRolledBack,
+            EventType::CatalogTransitionFailed,
+        ] {
+            events.extend(
+                ledger
+                    .query(EventQuery {
+                        to_sequence: Some(through),
+                        event_type: Some(event_type),
+                        ..EventQuery::default()
+                    })
+                    .map_err(|error| catalog_ledger_error(&error))?,
+            );
+        }
+        events.sort_by_key(PersistedEvent::sequence);
         let mut current: Option<(String, u64, String)> = None;
         let mut intents = BTreeMap::new();
         let mut migrations = BTreeSet::new();
