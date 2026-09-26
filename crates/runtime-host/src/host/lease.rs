@@ -1518,6 +1518,10 @@ impl HostShared {
         })
     }
 
+    /// Lease validation on non-write paths: admits a lease-scoped request (lease renewal and
+    /// release, input and application admission, contained-task and Lab-operation captures)
+    /// by lease position before any witness exists. It authorizes no device write; each write
+    /// runs under the `FencedWrite` that `begin_destructive_step` mints afterwards.
     pub(super) fn validated_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,

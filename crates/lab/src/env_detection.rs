@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{
-    CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, Lab, LabInputPort, LabPorts,
-};
-use actingcommand_contract::{EnvResolved, LabError, LabResult, NeedsDetection};
-use actingcommand_device::{CaptureBackendConfig, Frame, PixelFormat, combine_operation_and_close};
+use crate::{CaptureBackendFactory, Clock, ConfigSource, Lab, LabPorts, SemanticInputExecutor};
+use actingcommand_contract::{EnvResolved, InputAction, LabError, LabResult, NeedsDetection};
+use actingcommand_device::{CaptureBackendConfig, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
     EnvCandidateMatcher, EnvDetectionCandidate, EnvDetectionCatalog, EnvDetectionKey,
     EnvDetectionStep, EnvDetectionStepPlan, EnvDetector, EnvironmentCandidateObservation,
@@ -773,26 +771,20 @@ fn run_detection_steps<P: LabPorts>(
             let config = request.touch_config.clone().ok_or_else(|| {
                 LabError::device("env detection touch step requires device configuration")
             })?;
-            let observation = crate::InputBackendObservation::default();
-            let mut backend = lab
-                .ports()
-                .input_factory()
-                .open(crate::InputBackendRequest {
-                    instance_alias: Some(request.scope.instance.clone()),
-                    config,
-                    observation: Some(observation.clone()),
-                })?;
-            let operation = run_touch_action(&action, backend.as_mut());
-            let close = backend.close();
-            combine_operation_and_close(operation, close)
-                .map_err(|error| LabError::device(error.to_string()))?;
+            let backend = crate::ports::PortSemanticInput {
+                factory: lab.ports().input_factory(),
+                instance_alias: Some(request.scope.instance.clone()),
+                config,
+                lease: None,
+            }
+            .execute(touch_input_action(&action))?;
             crate::EnvDetectionStepReport {
                 index,
                 status: Some("executed".to_string()),
                 step: planned,
                 result: Some(crate::EnvTouchResult {
                     status: "sent".to_string(),
-                    backend: observation.snapshot()?,
+                    backend,
                     control_mode: "env_detection_step".to_string(),
                     safety_gate: "declared_env_detection_step".to_string(),
                     action,
@@ -821,14 +813,11 @@ fn run_detection_steps<P: LabPorts>(
     })
 }
 
-fn run_touch_action(
-    action: &crate::EnvTouchAction,
-    backend: &mut dyn LabInputPort,
-) -> actingcommand_device::DeviceResult<()> {
-    match action {
-        crate::EnvTouchAction::Tap { x, y } => backend.tap(*x, *y),
+fn touch_input_action(action: &crate::EnvTouchAction) -> InputAction {
+    match *action {
+        crate::EnvTouchAction::Tap { x, y } => InputAction::Tap { x, y },
         crate::EnvTouchAction::LongTap { x, y, duration_ms } => {
-            backend.long_tap(*x, *y, *duration_ms)
+            InputAction::LongTap { x, y, duration_ms }
         }
         crate::EnvTouchAction::Swipe {
             x1,
@@ -836,7 +825,13 @@ fn run_touch_action(
             x2,
             y2,
             duration_ms,
-        } => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
+        } => InputAction::Swipe {
+            x1,
+            y1,
+            x2,
+            y2,
+            duration_ms,
+        },
     }
 }
 

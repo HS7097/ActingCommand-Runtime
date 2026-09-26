@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::UserConfig;
-use actingcommand_contract::{InputAction, LabResult};
+use actingcommand_contract::{InputAction, LabError, LabResult, LeaseToken};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
-    CaptureBackendName, DeviceResult, TouchBackendConfig,
+    CaptureBackendName, DeviceResult, TouchBackendConfig, combine_operation_and_close,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -15,6 +15,11 @@ pub struct InputBackendRequest {
     pub instance_alias: Option<String>,
     pub config: TouchBackendConfig,
     pub observation: Option<InputBackendObservation>,
+    /// A lease the caller already holds on the port's Runtime connection. With `Some`, the
+    /// port's input requests run under it and the port acquires, renews and releases no
+    /// lease of its own; the holder keeps renewing and releasing it. With `None`, the port
+    /// acquires its own lease as before.
+    pub lease: Option<LeaseToken>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -106,8 +111,65 @@ pub trait InputBackendFactory {
 }
 
 /// Temporary Lab client port. Production implementations submit to Runtime; sealed tests may fake it.
+///
+/// This is Lab's only input face: inside `crates/lab`, only its implementations call the
+/// `LabInputPort` write methods (workspace guard).
 pub trait SemanticInputExecutor {
     fn execute(&self, action: InputAction) -> LabResult<InputBackendReport>;
+}
+
+/// Lab's input face over an `InputBackendFactory` port: each action opens one port, performs
+/// the action, closes the port and returns the report the port published.
+pub(crate) struct PortSemanticInput<'a, F> {
+    pub(crate) factory: &'a F,
+    pub(crate) instance_alias: Option<String>,
+    pub(crate) config: TouchBackendConfig,
+    pub(crate) lease: Option<LeaseToken>,
+}
+
+type PortAction = Box<dyn FnOnce(&mut dyn LabInputPort) -> DeviceResult<()>>;
+
+impl<F: InputBackendFactory> SemanticInputExecutor for PortSemanticInput<'_, F> {
+    fn execute(&self, action: InputAction) -> LabResult<InputBackendReport> {
+        let perform: PortAction = match action {
+            InputAction::Tap { x, y } => {
+                Box::new(move |port: &mut dyn LabInputPort| port.tap(x, y))
+            }
+            InputAction::LongTap { x, y, duration_ms } => {
+                Box::new(move |port: &mut dyn LabInputPort| port.long_tap(x, y, duration_ms))
+            }
+            InputAction::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => {
+                Box::new(move |port: &mut dyn LabInputPort| port.swipe(x1, y1, x2, y2, duration_ms))
+            }
+            InputAction::Key { key } => Box::new(move |port: &mut dyn LabInputPort| port.key(&key)),
+            InputAction::Text { text } => {
+                Box::new(move |port: &mut dyn LabInputPort| port.text(&text))
+            }
+            InputAction::SingleTouchDragWithVerticalBrakeV1 { .. } | InputAction::Reset => {
+                return Err(LabError::usage(
+                    "Lab input port performs only tap, long tap, swipe, key and text actions",
+                ));
+            }
+        };
+        let observation = InputBackendObservation::default();
+        let mut port = self.factory.open(InputBackendRequest {
+            instance_alias: self.instance_alias.clone(),
+            config: self.config.clone(),
+            observation: Some(observation.clone()),
+            lease: self.lease.clone(),
+        })?;
+        let operation = perform(port.as_mut());
+        let close = port.close();
+        combine_operation_and_close(operation, close)
+            .map_err(|error| LabError::device(error.to_string()))?;
+        observation.snapshot()
+    }
 }
 
 #[cfg(test)]

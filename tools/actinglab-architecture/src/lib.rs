@@ -2,7 +2,7 @@
 
 //! Source-derived architecture guards for ActingCommand Runtime ownership rules.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 mod ledger_owners;
 pub use ledger_owners::{LedgerOwnerModule, discover_ledger_owners};
@@ -1249,10 +1249,20 @@ pub fn ledger_owns_query_matching(path: &str, source: &str) -> Result<bool, Stri
     }))
 }
 
-/// Workflow #314 FENCED-CLOSE: inspect the issuing bridge and its close consumers.
-/// Import aliases are propagated across this bounded workspace inventory, including
-/// re-exports. This is a source guard, not a claim of Rust cross-crate privacy.
-pub fn inspect_fenced_close_sources(sources: &[(String, String)]) -> Result<Vec<String>, String> {
+/// Scheduler admission that mints each `FencedWritePurpose`: the only production callers
+/// of the contract's `issue_fenced_write` bridge.
+pub const FENCED_WRITE_ISSUERS: &[(&str, &str)] = &[
+    ("begin_destructive_step", "Business"),
+    ("begin_resource_close", "ResourceClose"),
+];
+
+/// Workflow #314 FENCED-CLOSE and fw2: inspect the witness issuing bridge for both purposes
+/// (Business input/application writes and ResourceClose) and its close consumers. The
+/// production callers of `issue_fenced_write` must be exactly `FENCED_WRITE_ISSUERS`, each
+/// minting only its named purpose. Import aliases are propagated across this bounded
+/// workspace inventory, including re-exports. This is a source guard, not a claim of Rust
+/// cross-crate privacy.
+pub fn inspect_fenced_write_issuers(sources: &[(String, String)]) -> Result<Vec<String>, String> {
     let mut parsed = Vec::new();
     for (path, source) in sources {
         let file = syn::parse_file(source).map_err(|error| format!("parse {path}: {error}"))?;
@@ -1299,6 +1309,7 @@ pub fn inspect_fenced_close_sources(sources: &[(String, String)]) -> Result<Vec<
     }
     let mut violations = Vec::new();
     let mut issuers = HashSet::new();
+    let mut minted = BTreeMap::new();
     let mut witness_definitions = 0;
     let mut close_authorities = 0;
     let mut bridge_definitions = 0;
@@ -1313,6 +1324,7 @@ pub fn inspect_fenced_close_sources(sources: &[(String, String)]) -> Result<Vec<
             self_type: String::new(),
             violations: &mut violations,
             issuers: &mut issuers,
+            minted: &mut minted,
         };
         for item in items {
             visitor.visit_item(item);
@@ -1408,14 +1420,22 @@ pub fn inspect_fenced_close_sources(sources: &[(String, String)]) -> Result<Vec<
             "fenced close requires one witness, issuing bridge and close authority".to_string(),
         );
     }
-    if issuers
-        != HashSet::from([
-            "begin_destructive_step".to_string(),
-            "begin_resource_close".to_string(),
-        ])
-    {
+    let expected_issuers = FENCED_WRITE_ISSUERS
+        .iter()
+        .map(|(issuer, _)| issuer.to_string())
+        .collect::<HashSet<_>>();
+    if issuers != expected_issuers {
         violations.push(format!(
-            "fenced close production issuers differ from scheduler admission: {issuers:?}"
+            "fenced write production issuers differ from scheduler admission: {issuers:?}"
+        ));
+    }
+    let expected_purposes = FENCED_WRITE_ISSUERS
+        .iter()
+        .map(|(issuer, purpose)| (issuer.to_string(), BTreeSet::from([purpose.to_string()])))
+        .collect::<BTreeMap<_, _>>();
+    if minted != expected_purposes {
+        violations.push(format!(
+            "fenced write purposes differ from scheduler admission (expected {expected_purposes:?}): {minted:?}"
         ));
     }
     Ok(violations)
@@ -1430,9 +1450,19 @@ struct FencedCloseVisitor<'a> {
     self_type: String,
     violations: &'a mut Vec<String>,
     issuers: &'a mut HashSet<String>,
+    /// `FencedWritePurpose` variants named inside each scheduler issuer.
+    minted: &'a mut BTreeMap<String, BTreeSet<String>>,
 }
 
 impl FencedCloseVisitor<'_> {
+    fn in_scheduler_issuer(&self) -> bool {
+        self.path == "crates/scheduler/src/lib.rs"
+            && self.self_type == "SeedScheduler"
+            && FENCED_WRITE_ISSUERS
+                .iter()
+                .any(|(issuer, _)| *issuer == self.function)
+    }
+
     fn close_signature(&mut self, signature: &syn::Signature) {
         let name = signature.ident.to_string();
         let close = name == "close_once"
@@ -1496,17 +1526,26 @@ impl<'ast> Visit<'ast> for FencedCloseVisitor<'_> {
     }
 
     fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        let segments = &expression.path.segments;
+        if segments.len() >= 2
+            && self.in_scheduler_issuer()
+            && resolve_alias(
+                &segments[segments.len() - 2].ident.to_string(),
+                self.aliases,
+            ) == "FencedWritePurpose"
+        {
+            self.minted
+                .entry(self.function.clone())
+                .or_default()
+                .insert(segments[segments.len() - 1].ident.to_string());
+        }
         if expression
             .path
             .segments
             .last()
             .is_some_and(|name| self.issuer_names.contains(&name.ident.to_string()))
         {
-            if self.path == "crates/scheduler/src/lib.rs"
-                && self.self_type == "SeedScheduler"
-                && ["begin_destructive_step", "begin_resource_close"]
-                    .contains(&self.function.as_str())
-            {
+            if self.in_scheduler_issuer() {
                 self.issuers.insert(self.function.clone());
             } else {
                 self.violations.push(format!(
@@ -1533,6 +1572,724 @@ impl<'ast> Visit<'ast> for FencedCloseVisitor<'_> {
             ));
         }
         syn::visit::visit_expr_struct(self, expression);
+    }
+}
+
+/// Workflow #314 goal 6: `InputBackend` methods outside the write table (read-only accessors).
+/// Every other `InputBackend` method is an input write unless it is a close.
+pub const INPUT_BACKEND_READ_ONLY: &[&str] = &[
+    "take_backend_open_observations",
+    "opened_geometry",
+    "take_adb_recovery",
+    "selection_context",
+    "supports_segmented_swipe",
+];
+
+/// Public `Adb` methods outside the write table: the constructor and read-only commands.
+pub const ADB_READ_ONLY: &[&str] = &[
+    "new",
+    "get_state",
+    "ensure_device",
+    "ensure_device_until",
+    "screen_size",
+    "foreground_package",
+    "screencap",
+    "run",
+];
+
+/// Public `Adb` connection-time commands of backend opening, under the open-phase authority.
+/// Every other public `Adb` method is an input write.
+pub const ADB_OPEN_PHASE: &[&str] = &["connect", "forward", "shell_spawn", "push", "chmod"];
+
+/// Kernel owners whose `input*` and `control_application*` entries are input writes.
+pub const KERNEL_WRITE_OWNERS: &[&str] = &[
+    "ExecutionKernel",
+    "ExecutionSession",
+    "ExecutionBackendProvider",
+];
+
+/// The close table: these functions and their implementations take `DeviceCloseAuthority`.
+/// `close_with_input_check` implements the kernel session's `close_with_authority`.
+pub const DEVICE_CLOSE_FUNCTIONS: &[&str] = &[
+    "close_once",
+    "close_with_authority",
+    "close_with_input_check",
+];
+
+/// Rows the shape table must find, so a rename cannot silently drop an entry from the guard.
+pub const FENCED_SHAPE_REQUIRED_ROWS: &[&str] = &[
+    "InputBackend::tap",
+    "InputBackend::tap_in_frame",
+    "InputBackend::long_tap",
+    "InputBackend::swipe",
+    "InputBackend::segmented_swipe",
+    "InputBackend::segmented_swipe_prepared",
+    "InputBackend::segmented_swipe_prepared_in_frame",
+    "InputBackend::key",
+    "InputBackend::text",
+    "InputBackend::reset",
+    "InputBackend::close_once",
+    "Adb::shell_input_tap",
+    "Adb::shell_input_swipe",
+    "Adb::force_stop",
+    "Adb::launch_package",
+    "Adb::run_write",
+    "ExecutionKernel::input",
+    "ExecutionKernel::control_application",
+    "ExecutionSession::input",
+    "ExecutionSession::control_application",
+    "ExecutionBackendProvider::control_application",
+    "ExecutionSession::close_with_authority",
+];
+
+/// Classified rows and violations of the goal-6 shape table.
+#[derive(Debug, Default)]
+pub struct FencedShapeReport {
+    /// One `class path: Owner::function` line per function in the table.
+    pub rows: Vec<String>,
+    pub violations: Vec<String>,
+}
+
+struct ShapeSite<'a> {
+    path: &'a str,
+    /// The trait for trait declarations and implementations, the self type for inherent
+    /// methods, empty for free functions.
+    owner: String,
+    display: String,
+    inherent: bool,
+    public: bool,
+    signature: &'a syn::Signature,
+    aliases: &'a LocalTypeAliases,
+    /// Close-table calls in the body, and whether each passes `DeviceCloseAuthority::LocalOnly`.
+    close_calls: Vec<bool>,
+}
+
+fn is_test_source(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component == "tests" || component == "tests.rs")
+}
+
+/// Workflow #314 goal 6: a structural shape table over `crates/device` and
+/// `crates/execution-kernel` production sources. Input writes (the `InputBackend` write
+/// methods and their implementations, the public `Adb` write methods, the kernel `input*` /
+/// `control_application*` entries) must take a `FencedWrite` parameter. Closes (the
+/// `DEVICE_CLOSE_FUNCTIONS` and every public function calling one) must take a
+/// `DeviceCloseAuthority` parameter unless each such call passes
+/// `DeviceCloseAuthority::LocalOnly`. Read-only functions are outside the table. Types are
+/// resolved through each file's import and type aliases; signatures are parsed, not matched
+/// as text.
+pub fn inspect_fenced_write_shapes(
+    sources: &[(String, String)],
+) -> Result<FencedShapeReport, String> {
+    let mut parsed = Vec::new();
+    for (path, source) in sources {
+        if !(path.starts_with("crates/device/src/")
+            || path.starts_with("crates/execution-kernel/src/"))
+            || is_test_source(path)
+        {
+            continue;
+        }
+        let file = syn::parse_file(source).map_err(|error| format!("parse {path}: {error}"))?;
+        let items = ledger_owners::production_items(&file.items)?;
+        let aliases = local_type_aliases(&items);
+        parsed.push((path.as_str(), items, aliases));
+    }
+    let public_traits = parsed
+        .iter()
+        .flat_map(|(_, items, _)| {
+            let mut nested = Vec::new();
+            collect_nested_items(items, &mut nested);
+            nested
+                .into_iter()
+                .filter_map(|item| match item {
+                    Item::Trait(value) => Some((value.ident.to_string(), is_public(&value.vis))),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<HashMap<_, _>>();
+    let mut sites = Vec::new();
+    for (path, items, aliases) in &parsed {
+        let mut nested = Vec::new();
+        collect_nested_items(items, &mut nested);
+        for item in nested {
+            match item {
+                Item::Trait(value) => {
+                    let owner = value.ident.to_string();
+                    for member in &value.items {
+                        if let syn::TraitItem::Fn(method) = member {
+                            sites.push(shape_site(
+                                path,
+                                (owner.clone(), owner.clone()),
+                                (false, is_public(&value.vis)),
+                                &method.sig,
+                                method.default.as_ref(),
+                                aliases,
+                            ));
+                        }
+                    }
+                }
+                Item::Impl(value) => {
+                    let self_type = impl_self_ident(value)
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let trait_name = value
+                        .trait_
+                        .as_ref()
+                        .and_then(|(_, path, _)| path.segments.last())
+                        .map(|name| resolve_alias(&name.ident.to_string(), aliases));
+                    for member in &value.items {
+                        if let syn::ImplItem::Fn(method) = member {
+                            let (names, visibility) = match &trait_name {
+                                // A trait declared outside these crates is public here.
+                                Some(name) => (
+                                    (name.clone(), format!("{self_type} as {name}")),
+                                    (false, public_traits.get(name).copied().unwrap_or(true)),
+                                ),
+                                None => (
+                                    (resolve_alias(&self_type, aliases), self_type.clone()),
+                                    (true, is_public(&method.vis)),
+                                ),
+                            };
+                            sites.push(shape_site(
+                                path,
+                                names,
+                                visibility,
+                                &method.sig,
+                                Some(&method.block),
+                                aliases,
+                            ));
+                        }
+                    }
+                }
+                Item::Fn(value) => sites.push(shape_site(
+                    path,
+                    (String::new(), String::new()),
+                    (false, is_public(&value.vis)),
+                    &value.sig,
+                    Some(&value.block),
+                    aliases,
+                )),
+                _ => {}
+            }
+        }
+    }
+    // The trait's own close methods (declared by name or by closing in their default body).
+    let input_backend_closes = sites
+        .iter()
+        .filter(|site| site.owner == "InputBackend" && site.display == "InputBackend")
+        .filter(|site| close_class(site).is_some())
+        .map(|site| site.signature.ident.to_string())
+        .collect::<BTreeSet<_>>();
+    let mut report = FencedShapeReport::default();
+    let mut found = BTreeSet::new();
+    for site in &sites {
+        let classes = [write_class(site, &input_backend_closes), close_class(site)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if classes.is_empty() {
+            continue;
+        }
+        let name = site.signature.ident.to_string();
+        let display = if site.display.is_empty() {
+            name.clone()
+        } else {
+            format!("{}::{name}", site.display)
+        };
+        let label = classes
+            .iter()
+            .map(|(class, _)| *class)
+            .collect::<Vec<_>>()
+            .join("+");
+        report
+            .rows
+            .push(format!("{label:<17} {}: {display}", site.path));
+        found.insert(format!("{}::{name}", site.owner));
+        for (class, requirement) in classes {
+            if let Some(needle) = requirement
+                && !signature_takes(site.signature, needle, site.aliases)
+            {
+                report.violations.push(format!(
+                    "{}: {display} is a {class} entry without a {needle} parameter",
+                    site.path
+                ));
+            }
+        }
+    }
+    for row in FENCED_SHAPE_REQUIRED_ROWS {
+        if !found.contains(*row) {
+            report
+                .violations
+                .push(format!("fenced write shape table lost its {row} row"));
+        }
+    }
+    Ok(report)
+}
+
+fn shape_site<'a>(
+    path: &'a str,
+    (owner, display): (String, String),
+    (inherent, public): (bool, bool),
+    signature: &'a syn::Signature,
+    body: Option<&'a syn::Block>,
+    aliases: &'a LocalTypeAliases,
+) -> ShapeSite<'a> {
+    let mut calls = CloseCallVisitor {
+        aliases,
+        calls: Vec::new(),
+    };
+    if let Some(body) = body {
+        calls.visit_block(body);
+    }
+    ShapeSite {
+        path,
+        owner,
+        display,
+        inherent,
+        public,
+        signature,
+        aliases,
+        close_calls: calls.calls,
+    }
+}
+
+/// The close row of a function, with the parameter type it must take: a close-table
+/// function, or a public function calling one. A caller that only passes
+/// `DeviceCloseAuthority::LocalOnly` is a local close and needs no authority parameter.
+fn close_class(site: &ShapeSite<'_>) -> Option<(&'static str, Option<&'static str>)> {
+    if DEVICE_CLOSE_FUNCTIONS.contains(&site.signature.ident.to_string().as_str()) {
+        return Some(("close", Some("DeviceCloseAuthority")));
+    }
+    if !site.public || site.close_calls.is_empty() {
+        return None;
+    }
+    if site.close_calls.iter().all(|local_only| *local_only)
+        && !signature_takes(site.signature, "DeviceCloseAuthority", site.aliases)
+    {
+        return Some(("local-close", None));
+    }
+    Some(("close", Some("DeviceCloseAuthority")))
+}
+
+/// The write row of a function, with the parameter type it must take. Every `InputBackend`
+/// method other than its read-only accessors and its close methods is an input write.
+fn write_class(
+    site: &ShapeSite<'_>,
+    input_backend_closes: &BTreeSet<String>,
+) -> Option<(&'static str, Option<&'static str>)> {
+    let name = site.signature.ident.to_string();
+    let name = name.as_str();
+    if site.owner == "InputBackend" {
+        if INPUT_BACKEND_READ_ONLY.contains(&name) {
+            return Some(("read-only", None));
+        }
+        if input_backend_closes.contains(name) {
+            return None;
+        }
+        return Some(("write", Some("FencedWrite")));
+    }
+    if site.owner == "Adb" && site.inherent && site.public {
+        if ADB_READ_ONLY.contains(&name) {
+            return Some(("read-only", None));
+        }
+        if ADB_OPEN_PHASE.contains(&name) {
+            return Some(("open-phase", None));
+        }
+        return Some(("write", Some("FencedWrite")));
+    }
+    if KERNEL_WRITE_OWNERS.contains(&site.owner.as_str())
+        && (name == "input"
+            || name.starts_with("input_")
+            || name == "control_application"
+            || name.starts_with("control_application_"))
+    {
+        return Some(("write", Some("FencedWrite")));
+    }
+    None
+}
+
+fn signature_takes(signature: &syn::Signature, needle: &str, aliases: &LocalTypeAliases) -> bool {
+    signature.inputs.iter().any(|input| {
+        matches!(input, FnArg::Typed(argument)
+            if type_uses_resolved_ident(&argument.ty, needle, aliases))
+    })
+}
+
+struct CloseCallVisitor<'a> {
+    aliases: &'a LocalTypeAliases,
+    calls: Vec<bool>,
+}
+
+impl CloseCallVisitor<'_> {
+    fn record(
+        &mut self,
+        callee: &syn::Ident,
+        arguments: &syn::punctuated::Punctuated<Expr, syn::Token![,]>,
+    ) {
+        if DEVICE_CLOSE_FUNCTIONS.contains(&callee.to_string().as_str()) {
+            let local_only = arguments.iter().any(|argument| {
+                let Expr::Path(argument) = argument else {
+                    return false;
+                };
+                let segments = &argument.path.segments;
+                segments.len() >= 2
+                    && segments[segments.len() - 1].ident == "LocalOnly"
+                    && resolve_alias(
+                        &segments[segments.len() - 2].ident.to_string(),
+                        self.aliases,
+                    ) == "DeviceCloseAuthority"
+            });
+            self.calls.push(local_only);
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for CloseCallVisitor<'_> {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.record(&call.method, &call.args);
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let Expr::Path(function) = call.func.as_ref()
+            && let Some(callee) = function.path.segments.last()
+        {
+            self.record(&callee.ident, &call.args);
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
+
+/// Workflow #314 goal 5: Lab's input face and its device boundary.
+#[derive(Debug, Default)]
+pub struct LabInputFaceReport {
+    /// `SemanticInputExecutor` implementations that call `LabInputPort` write methods.
+    pub faces: Vec<String>,
+    /// The `LabInputPort` write methods, read from the trait.
+    pub port_writes: Vec<String>,
+    /// Device input-backend names `crates/lab` must not name, derived from `crates/device`.
+    pub forbidden: Vec<String>,
+    pub violations: Vec<String>,
+}
+
+/// Workflow #314 goal 5: `SemanticInputExecutor` is Lab's only input face. In `crates/lab`
+/// production sources, only `SemanticInputExecutor` implementations call the `LabInputPort`
+/// write methods (every trait method except `close`), by method or by path. No `crates/lab`
+/// source, tests included, names a device input-backend type: `InputBackend`, `Adb`, the
+/// `InputBackend` implementations in `crates/device`, and the public device items whose
+/// fields or signatures carry one of them.
+pub fn inspect_lab_input_face(
+    lab: &[(String, String)],
+    device: &[(String, String)],
+) -> Result<LabInputFaceReport, String> {
+    let forbidden = device_input_backend_names(device)?;
+    let mut parsed = Vec::new();
+    for (path, source) in lab {
+        if !path.starts_with("crates/lab/") {
+            continue;
+        }
+        let file = syn::parse_file(source).map_err(|error| format!("parse {path}: {error}"))?;
+        let production = if is_test_source(path) {
+            Vec::new()
+        } else {
+            ledger_owners::production_items(&file.items)?
+        };
+        parsed.push((path.as_str(), file, production));
+    }
+    let mut port_writes = BTreeSet::new();
+    let mut ports = 0;
+    for (_, _, production) in &parsed {
+        let mut nested = Vec::new();
+        collect_nested_items(production, &mut nested);
+        for item in nested {
+            if let Item::Trait(value) = item
+                && value.ident == "LabInputPort"
+            {
+                ports += 1;
+                for member in &value.items {
+                    if let syn::TraitItem::Fn(method) = member
+                        && method.sig.ident != "close"
+                    {
+                        port_writes.insert(method.sig.ident.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let mut report = LabInputFaceReport::default();
+    if ports != 1 || port_writes.is_empty() {
+        report
+            .violations
+            .push("crates/lab must define one LabInputPort with write methods".to_string());
+    }
+    let mut faces = BTreeSet::new();
+    for (path, file, production) in &parsed {
+        let mut names = ForbiddenNameVisitor {
+            forbidden: &forbidden,
+            named: BTreeSet::new(),
+        };
+        names.visit_file(file);
+        for name in names.named {
+            report.violations.push(format!(
+                "{path}: crates/lab names device input backend {name}"
+            ));
+        }
+        let aliases = local_type_aliases(production);
+        let mut calls = PortWriteVisitor {
+            path,
+            aliases: &aliases,
+            writes: &port_writes,
+            self_type: String::new(),
+            trait_name: None,
+            function: String::new(),
+            faces: &mut faces,
+            violations: &mut report.violations,
+        };
+        for item in production {
+            calls.visit_item(item);
+        }
+    }
+    report.faces = faces.into_iter().collect();
+    report.port_writes = port_writes.into_iter().collect();
+    report.forbidden = forbidden.into_iter().collect();
+    Ok(report)
+}
+
+/// `InputBackend`, `Adb`, every `InputBackend` implementation in `crates/device`, and every
+/// public device item whose fields or signature carry one of those backends.
+fn device_input_backend_names(device: &[(String, String)]) -> Result<BTreeSet<String>, String> {
+    let mut parsed = Vec::new();
+    for (path, source) in device {
+        if !path.starts_with("crates/device/src/") || is_test_source(path) {
+            continue;
+        }
+        let file = syn::parse_file(source).map_err(|error| format!("parse {path}: {error}"))?;
+        let items = ledger_owners::production_items(&file.items)?;
+        let aliases = local_type_aliases(&items);
+        parsed.push((items, aliases));
+    }
+    if parsed.is_empty() {
+        return Err("crates/device production sources are missing".to_string());
+    }
+    let mut names = BTreeSet::from(["InputBackend".to_string()]);
+    for (items, aliases) in &parsed {
+        let mut nested = Vec::new();
+        collect_nested_items(items, &mut nested);
+        for item in nested {
+            if let Item::Impl(value) = item
+                && value
+                    .trait_
+                    .as_ref()
+                    .and_then(|(_, path, _)| path.segments.last())
+                    .is_some_and(|name| {
+                        resolve_alias(&name.ident.to_string(), aliases) == "InputBackend"
+                    })
+                && let Some(self_type) = impl_self_ident(value)
+            {
+                names.insert(self_type.to_string());
+            }
+        }
+    }
+    loop {
+        let before = names.len();
+        for (items, aliases) in &parsed {
+            let mut nested = Vec::new();
+            collect_nested_items(items, &mut nested);
+            for item in nested {
+                let carries = |value_type: &Type| type_names_any(value_type, &names, aliases);
+                let signature_carries = |signature: &syn::Signature| {
+                    signature.inputs.iter().any(
+                        |input| matches!(input, FnArg::Typed(argument) if carries(&argument.ty)),
+                    ) || matches!(&signature.output, ReturnType::Type(_, output) if carries(output))
+                };
+                let carrier = match item {
+                    Item::Struct(value) if is_public(&value.vis) => value
+                        .fields
+                        .iter()
+                        .any(|field| carries(&field.ty))
+                        .then(|| value.ident.to_string()),
+                    Item::Enum(value) if is_public(&value.vis) => value
+                        .variants
+                        .iter()
+                        .flat_map(|variant| variant.fields.iter())
+                        .any(|field| carries(&field.ty))
+                        .then(|| value.ident.to_string()),
+                    Item::Trait(value) if is_public(&value.vis) => value
+                        .items
+                        .iter()
+                        .any(|member| {
+                            matches!(member, syn::TraitItem::Fn(method)
+                                if signature_carries(&method.sig))
+                        })
+                        .then(|| value.ident.to_string()),
+                    Item::Fn(value) if is_public(&value.vis) => {
+                        signature_carries(&value.sig).then(|| value.sig.ident.to_string())
+                    }
+                    Item::Type(value) if is_public(&value.vis) => {
+                        carries(&value.ty).then(|| value.ident.to_string())
+                    }
+                    _ => None,
+                };
+                if let Some(carrier) = carrier {
+                    names.insert(carrier);
+                }
+            }
+        }
+        if names.len() == before {
+            break;
+        }
+    }
+    names.insert("Adb".to_string());
+    Ok(names)
+}
+
+/// Whether any path in the type, trait-object and `impl` bounds included, names one of
+/// `names` after alias resolution.
+fn type_names_any(value_type: &Type, names: &BTreeSet<String>, aliases: &LocalTypeAliases) -> bool {
+    struct PathNames<'a> {
+        names: &'a BTreeSet<String>,
+        aliases: &'a LocalTypeAliases,
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for PathNames<'_> {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            if path.segments.iter().any(|segment| {
+                self.names
+                    .contains(&resolve_alias(&segment.ident.to_string(), self.aliases))
+            }) {
+                self.found = true;
+            }
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let mut visitor = PathNames {
+        names,
+        aliases,
+        found: false,
+    };
+    visitor.visit_type(value_type);
+    visitor.found
+}
+
+struct ForbiddenNameVisitor<'a> {
+    forbidden: &'a BTreeSet<String>,
+    named: BTreeSet<String>,
+}
+
+impl ForbiddenNameVisitor<'_> {
+    fn check(&mut self, name: &syn::Ident) {
+        let name = name.to_string();
+        if self.forbidden.contains(&name) {
+            self.named.insert(name);
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ForbiddenNameVisitor<'_> {
+    fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+        self.check(&segment.ident);
+        syn::visit::visit_path_segment(self, segment);
+    }
+
+    fn visit_use_path(&mut self, tree: &'ast syn::UsePath) {
+        self.check(&tree.ident);
+        syn::visit::visit_use_path(self, tree);
+    }
+
+    fn visit_use_name(&mut self, tree: &'ast syn::UseName) {
+        self.check(&tree.ident);
+    }
+
+    fn visit_use_rename(&mut self, tree: &'ast syn::UseRename) {
+        self.check(&tree.ident);
+    }
+}
+
+struct PortWriteVisitor<'a> {
+    path: &'a str,
+    aliases: &'a LocalTypeAliases,
+    writes: &'a BTreeSet<String>,
+    self_type: String,
+    trait_name: Option<String>,
+    function: String,
+    faces: &'a mut BTreeSet<String>,
+    violations: &'a mut Vec<String>,
+}
+
+impl PortWriteVisitor<'_> {
+    fn port_write(&mut self, method: &str) {
+        if self.trait_name.as_deref() == Some("SemanticInputExecutor") {
+            self.faces
+                .insert(format!("{}: {}", self.path, self.self_type));
+            return;
+        }
+        let caller = if self.self_type.is_empty() {
+            format!("fn {}", self.function)
+        } else {
+            format!("{}::{}", self.self_type, self.function)
+        };
+        self.violations.push(format!(
+            "{}: {caller} calls LabInputPort::{method} outside SemanticInputExecutor",
+            self.path
+        ));
+    }
+}
+
+impl<'ast> Visit<'ast> for PortWriteVisitor<'_> {
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let self_type = std::mem::replace(
+            &mut self.self_type,
+            impl_self_ident(item)
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        let trait_name = std::mem::replace(
+            &mut self.trait_name,
+            item.trait_
+                .as_ref()
+                .and_then(|(_, path, _)| path.segments.last())
+                .map(|name| resolve_alias(&name.ident.to_string(), self.aliases)),
+        );
+        syn::visit::visit_item_impl(self, item);
+        self.self_type = self_type;
+        self.trait_name = trait_name;
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        let prior = std::mem::replace(&mut self.function, function.sig.ident.to_string());
+        syn::visit::visit_item_fn(self, function);
+        self.function = prior;
+    }
+
+    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+        let prior = std::mem::replace(&mut self.function, method.sig.ident.to_string());
+        syn::visit::visit_impl_item_fn(self, method);
+        self.function = prior;
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let method = call.method.to_string();
+        if self.writes.contains(&method) {
+            self.port_write(&method);
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        let segments = &expression.path.segments;
+        if segments.len() >= 2 {
+            let method = segments[segments.len() - 1].ident.to_string();
+            if self.writes.contains(&method)
+                && resolve_alias(
+                    &segments[segments.len() - 2].ident.to_string(),
+                    self.aliases,
+                ) == "LabInputPort"
+            {
+                self.port_write(&method);
+            }
+        }
+        syn::visit::visit_expr_path(self, expression);
     }
 }
 

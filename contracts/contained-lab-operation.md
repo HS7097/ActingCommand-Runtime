@@ -49,7 +49,10 @@ and persists the before frame inside the instance mutex, with validation of the
 request's token before and after capture. It records the fresh projection and
 prepared selection before calling the existing `HostShared::input` exactly
 once. No outer instance lock or additional destructive-step scope surrounds
-that call.
+that call. The token validations around capture are lease validation on
+non-write paths; the input's device write runs only under the `FencedWrite` that
+`HostShared::input` obtains from `begin_destructive_step`
+(`read-session-resource-close.md`).
 
 After input, the handler revalidates that same token for the after frame. The
 existing input owner can transfer the lease at its safe boundary. A transferred

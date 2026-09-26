@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{InputAction, RuntimeReceipt};
+use actingcommand_contract::{InputAction, LeaseToken, RuntimeReceipt};
 use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult};
 use actingcommand_lab::LabInputPort;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeInputProxy};
@@ -9,18 +9,58 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeInp
 ///
 /// The resident Runtime remains the only owner of the real device backend.
 pub(super) struct RuntimeInputBackend {
-    proxy: RuntimeInputProxy,
+    lease: RuntimeInputLease,
+}
+
+enum RuntimeInputLease {
+    /// The proxy acquires, renews and releases its own connection-scoped lease.
+    Acquired(RuntimeInputProxy),
+    /// Inputs run under the caller's lease on this connection. Its holder renews and
+    /// releases it, so closing the port releases nothing.
+    Held {
+        client: RuntimeClient,
+        token: LeaseToken,
+        closed: bool,
+    },
 }
 
 impl RuntimeInputBackend {
     pub(super) fn connect(client: RuntimeClient, instance_alias: &str) -> DeviceResult<Self> {
         RuntimeInputProxy::connect(client, instance_alias)
-            .map(|proxy| Self { proxy })
+            .map(|proxy| Self {
+                lease: RuntimeInputLease::Acquired(proxy),
+            })
             .map_err(device_error)
     }
 
+    pub(super) fn with_held_lease(client: RuntimeClient, token: LeaseToken) -> Self {
+        Self {
+            lease: RuntimeInputLease::Held {
+                client,
+                token,
+                closed: false,
+            },
+        }
+    }
+
+    /// The lease step this port reports: its own acquisition or the caller's held lease.
+    pub(super) fn lease_action(&self) -> &'static str {
+        match self.lease {
+            RuntimeInputLease::Acquired(_) => "lease_acquire",
+            RuntimeInputLease::Held { .. } => "lease_held",
+        }
+    }
+
     pub(super) fn input_receipt(&mut self, action: InputAction) -> DeviceResult<RuntimeReceipt> {
-        self.proxy.input(action).map_err(device_error)
+        match &mut self.lease {
+            RuntimeInputLease::Acquired(proxy) => proxy.input(action).map_err(device_error),
+            RuntimeInputLease::Held { closed: true, .. } => Err(DeviceError::fatal(
+                "Runtime input port under the caller's lease is closed",
+            )),
+            RuntimeInputLease::Held { client, token, .. } => {
+                client.input(token, action).map_err(device_error)
+            }
+        }
     }
 
     fn execute(&mut self, action: InputAction) -> DeviceResult<()> {
@@ -60,7 +100,13 @@ impl LabInputPort for RuntimeInputBackend {
     }
 
     fn close(&mut self) -> DeviceResult<()> {
-        self.proxy.close().map_err(device_error)
+        match &mut self.lease {
+            RuntimeInputLease::Acquired(proxy) => proxy.close().map_err(device_error),
+            RuntimeInputLease::Held { closed, .. } => {
+                *closed = true;
+                Ok(())
+            }
+        }
     }
 }
 
