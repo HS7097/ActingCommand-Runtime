@@ -2975,6 +2975,16 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
         ],
     ),
     (
+        &["PauseScheduling", "ResumeScheduling"],
+        &["invalid_scheduling_pause_origin"],
+        &[
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ],
+    ),
+    (
         &["PublishFact", "PublishFacts"],
         &["fact_origin_mixed", "invalid_agent_dispatcher_origin"],
         &[

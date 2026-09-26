@@ -418,6 +418,12 @@ impl HostShared {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
+        // Workflow #191 ps1: the scheduling pauses, read and released before the registry lock.
+        let scheduling_pause = lock(
+            &self.scheduling_pause,
+            "read_runtime_status_scheduling_pause",
+        )?
+        .clone();
         // Resolve only metadata before taking the scheduler lock. Identity checks and the
         // registered instance set are shared with device-facing admission; they run under
         // the registry lock so an endpoint rebinding is never observed half-applied.
@@ -453,6 +459,7 @@ impl HostShared {
                 .get(&instance.instance_alias)
                 .cloned();
             let game_id = configured_games.get(&instance.instance_alias).cloned();
+            let pause = scheduling_pause.instance_state(&instance.instance_alias);
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -478,6 +485,7 @@ impl HostShared {
                 .with_adb_port(adb_port)
                 .with_resource_package(resource_package)
                 .with_game_id(game_id)
+                .and_then(|status| status.with_pause(pause))
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         "runtime_status_projection_invalid",
@@ -487,13 +495,15 @@ impl HostShared {
                 })?,
             );
         }
-        let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected).map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "runtime_status_projection_invalid",
-                "project_runtime_control_plane_status",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
+        let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected)
+            .and_then(|status| status.with_scheduling_pause(scheduling_pause.global_state()))
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "runtime_status_projection_invalid",
+                    "project_runtime_control_plane_status",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
         Ok(status)
     }
 

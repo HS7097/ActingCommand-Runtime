@@ -3,13 +3,16 @@
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use actingcommand_contract::{
-    CaptureBackendName, CaptureExtent, CaptureGeometryObservation, TaskGeometryConclusion,
+    CaptureBackendName, CaptureExtent, CaptureGeometryObservation,
+    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
     TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
     TaskGeometryRecheckTrigger,
 };
 use actingcommand_execution_kernel::CaptureGeometrySessionRef;
 
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
+/// How often an instance pause re-reads its instance's in-flight contained runs.
+const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +108,7 @@ impl ContainedRunControl {
     const NONE: u8 = 0;
     const CLIENT_REQUESTED: u8 = 1;
     const DEADLINE_EXCEEDED: u8 = 2;
+    const PAUSE_REQUESTED: u8 = 3;
 
     const fn new(request_id: RequestId, instance_id: InstanceId, client_cancellable: bool) -> Self {
         Self {
@@ -163,6 +167,20 @@ impl ContainedRunControl {
         );
     }
 
+    /// Workflow #191 ps1 (b): an instance pause whose drain timeout expired asks the run to
+    /// stop at its next checkpoint. Returns whether this call set the reason; a run already
+    /// ending for another reason keeps that reason.
+    pub(super) fn request_pause_cancel(&self) -> bool {
+        self.cancellation_reason
+            .compare_exchange(
+                Self::NONE,
+                Self::PAUSE_REQUESTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     pub(super) fn cancellation_reason(
         &self,
         now_monotonic_ms: u64,
@@ -179,6 +197,7 @@ impl ContainedRunControl {
         match self.cancellation_reason.load(Ordering::Acquire) {
             Self::CLIENT_REQUESTED => Some(ContainedTaskCancellationReason::ClientRequested),
             Self::DEADLINE_EXCEEDED => Some(ContainedTaskCancellationReason::DeadlineExceeded),
+            Self::PAUSE_REQUESTED => Some(ContainedTaskCancellationReason::PausedByOperator),
             _ => None,
         }
     }
@@ -186,6 +205,14 @@ impl ContainedRunControl {
     pub(super) fn deadline(&self) -> u64 {
         self.deadline_monotonic_ms.load(Ordering::Acquire)
     }
+}
+
+fn pause_drain_fatal(code: &'static str) -> RequestFailure {
+    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+        code,
+        "drain_paused_instance",
+        RuntimeErrorCode::RuntimeFatal,
+    ))
 }
 
 struct ActiveContainedRun<'a> {
@@ -1228,6 +1255,10 @@ impl RuntimeContainedTask<'_> {
             ContainedTaskCancellationReason::ClientRequested => (
                 "contained_task_cancelled",
                 RuntimeErrorCode::ContainedTaskCancelled,
+            ),
+            ContainedTaskCancellationReason::PausedByOperator => (
+                "contained_task_paused",
+                RuntimeErrorCode::ContainedTaskPaused,
             ),
             ContainedTaskCancellationReason::RecoveredAfterRestart => {
                 return Err(RequestFailure::poison_without_terminal(
@@ -3958,6 +3989,9 @@ impl HostShared {
                     Some("contained_task_cancelled") => {
                         ContainedTaskCancellationReason::ClientRequested
                     }
+                    Some("contained_task_paused") => {
+                        ContainedTaskCancellationReason::PausedByOperator
+                    }
                     _ => ContainedTaskCancellationReason::RecoveredAfterRestart,
                 });
                 return Ok(OperationSuccess {
@@ -4841,6 +4875,7 @@ impl HostShared {
                     failure.error.projection().code,
                     RuntimeErrorCode::ContainedTaskDeadlineExceeded
                         | RuntimeErrorCode::ContainedTaskCancelled
+                        | RuntimeErrorCode::ContainedTaskPaused
                 ) {
                     let reason = control
                         .cancellation_reason(
@@ -5660,6 +5695,9 @@ impl HostShared {
                         Some("contained_task_cancelled") => {
                             ContainedTaskCancellationReason::ClientRequested
                         }
+                        Some("contained_task_paused") => {
+                            ContainedTaskCancellationReason::PausedByOperator
+                        }
                         _ => ContainedTaskCancellationReason::RecoveredAfterRestart,
                     },
                     lease_terminal: lease_disposition,
@@ -5824,6 +5862,109 @@ impl HostShared {
             request_id,
             control,
         })
+    }
+
+    /// Workflow #191 ps1 (b): waits until no contained run of `instance_id` is in flight. A
+    /// run still in flight once `drain_timeout_ms` elapsed is asked to stop at its next
+    /// checkpoint (`contained_task_paused`); no lease is preempted or reclaimed. Runs asked to
+    /// stop that have not ended `SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS` later fail the drain.
+    pub(super) fn drain_contained_runs_for_pause(
+        &self,
+        instance_id: InstanceId,
+        drain_timeout_ms: u64,
+    ) -> Result<SchedulingDrainSummary, RequestFailure> {
+        let drain_deadline = Instant::now()
+            .checked_add(Duration::from_millis(drain_timeout_ms))
+            .ok_or_else(|| pause_drain_fatal("scheduling_pause_drain_deadline_overflow"))?;
+        let mut grace_deadline = None;
+        // Request identity -> (the run's control, whether this drain asked it to stop).
+        let mut tracked = BTreeMap::<RequestId, (Arc<ContainedRunControl>, bool)>::new();
+        let mut summary = SchedulingDrainSummary {
+            finished: 0,
+            cancelled: 0,
+        };
+        loop {
+            if let Some(error) = self
+                .fatal
+                .current()
+                .map_err(RequestFailure::poison_without_terminal)?
+            {
+                return Err(RequestFailure::poison_without_terminal(error));
+            }
+            if self.fatal.is_shutdown_requested() {
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "scheduling_pause_drain_interrupted",
+                        "drain_paused_instance",
+                        RuntimeErrorCode::RuntimeUnavailable,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    None,
+                ));
+            }
+            let active = lock(&self.contained_runs, "read_paused_instance_runs")?
+                .iter()
+                .filter(|(_, control)| control.instance_id == instance_id)
+                .map(|(request_id, control)| (*request_id, Arc::clone(control)))
+                .collect::<BTreeMap<_, _>>();
+            let ended = tracked
+                .iter()
+                .filter(|(request_id, (control, _))| {
+                    active
+                        .get(request_id)
+                        .is_none_or(|current| !Arc::ptr_eq(current, control))
+                })
+                .map(|(request_id, (_, cancelled))| (*request_id, *cancelled))
+                .collect::<Vec<_>>();
+            for (request_id, cancelled) in ended {
+                tracked.remove(&request_id);
+                let count = if cancelled {
+                    &mut summary.cancelled
+                } else {
+                    &mut summary.finished
+                };
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(|| pause_drain_fatal("scheduling_pause_drain_count_overflow"))?;
+            }
+            for (request_id, control) in active {
+                tracked.entry(request_id).or_insert((control, false));
+            }
+            if tracked.is_empty() {
+                return Ok(summary);
+            }
+            let now = Instant::now();
+            if now >= drain_deadline {
+                for (control, cancelled) in tracked.values_mut() {
+                    if !*cancelled && control.request_pause_cancel() {
+                        *cancelled = true;
+                    }
+                }
+                let grace = match grace_deadline {
+                    Some(grace) => grace,
+                    None => *grace_deadline.insert(
+                        now.checked_add(Duration::from_millis(
+                            SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS,
+                        ))
+                        .ok_or_else(|| {
+                            pause_drain_fatal("scheduling_pause_drain_deadline_overflow")
+                        })?,
+                    ),
+                };
+                if now >= grace {
+                    return Err(RequestFailure::request(
+                        RuntimeHostError::request(
+                            "scheduling_pause_drain_incomplete",
+                            "drain_paused_instance",
+                            RuntimeErrorCode::ContainedTaskBusy,
+                        ),
+                        RuntimeReceiptState::Failed,
+                        None,
+                    ));
+                }
+            }
+            thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
+        }
     }
 
     /// Keeps a committed `task.failed` on the control of the run that is still active under

@@ -89,6 +89,9 @@ activity windows and sampled intervals. Unavailable candidates leave the instanc
 and host capacity available to the next ranked task. The same predicate supplies
 the next possible admission time at bounded weekly window/cadence boundaries.
 Final admission still checks and commits the actual counters under the original lock.
+An operator scheduling pause (`contracts/scheduling-pause.md`) presents the same way: a
+candidate on a paused instance is deferred with reason `dispatch_paused_global` or
+`dispatch_paused_instance` and no next wake time, until `ResumeScheduling` lifts the pause.
 
 `policy.dispatch_rejected` retains its immutable ranking reasons and optionally
 carries `rejection`: the original Runtime error code, operation and fatal flag,

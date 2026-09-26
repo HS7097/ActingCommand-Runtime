@@ -23,8 +23,9 @@ use actingcommand_contract::{
     RuntimeInfo, RuntimeInstanceDiscovery, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus,
     RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
-    RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
-    TaskPayload, TaskSemanticFact, TerminalEvent,
+    RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
+    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseScope, TaskId, TaskOutcome, TaskPayload,
+    TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -968,6 +969,58 @@ impl RuntimeClient {
         }
     }
 
+    /// Pauses scheduling (`PauseScheduling`, Workflow #191 ps1) and returns the
+    /// `RuntimeResult::SchedulingPaused` result verbatim. An instance pause answers only once
+    /// its in-flight runs drained, so the receipt wait is `drain_timeout_ms` plus the host's
+    /// checkpoint grace (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) plus the IO margin.
+    pub fn pause_scheduling(
+        &self,
+        scope: SchedulingPauseScope,
+        reason_code: &str,
+        drain_timeout_ms: u64,
+    ) -> RuntimeClientResult<RuntimeResult> {
+        let io_timeout = self.connection("pause_scheduling")?.io_timeout;
+        let response_timeout = Duration::from_millis(drain_timeout_ms)
+            .checked_add(Duration::from_millis(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS))
+            .and_then(|timeout| timeout.checked_add(io_timeout))
+            .ok_or_else(|| {
+                RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "pause_scheduling")
+            })?;
+        let result = self.execute_with_timeout(
+            "pause_scheduling",
+            RuntimeOperation::PauseScheduling {
+                scope: scope.clone(),
+                reason_code: reason_code.to_owned(),
+                drain_timeout_ms,
+            },
+            Some(response_timeout),
+        )?;
+        match &result {
+            RuntimeResult::SchedulingPaused { scope: paused, .. } if *paused == scope => Ok(result),
+            _ => Err(self.unexpected_result("pause_scheduling")),
+        }
+    }
+
+    /// Lifts a scheduling pause (`ResumeScheduling`, Workflow #191 ps1) and returns the
+    /// `RuntimeResult::SchedulingResumed` result verbatim.
+    pub fn resume_scheduling(
+        &self,
+        scope: SchedulingPauseScope,
+    ) -> RuntimeClientResult<RuntimeResult> {
+        let result = self.execute(
+            "resume_scheduling",
+            RuntimeOperation::ResumeScheduling {
+                scope: scope.clone(),
+            },
+        )?;
+        match &result {
+            RuntimeResult::SchedulingResumed { scope: resumed, .. } if *resumed == scope => {
+                Ok(result)
+            }
+            _ => Err(self.unexpected_result("resume_scheduling")),
+        }
+    }
+
     pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
         #[cfg(feature = "test-observation")]
         record_active(
@@ -1329,6 +1382,9 @@ impl RuntimeClient {
                         ContainedTaskCancellationReason::ClientRequested
                         | ContainedTaskCancellationReason::RecoveredAfterRestart => {
                             "runtime_contained_task_cancelled"
+                        }
+                        ContainedTaskCancellationReason::PausedByOperator => {
+                            "runtime_contained_task_paused"
                         }
                     },
                     "run_contained_task",
