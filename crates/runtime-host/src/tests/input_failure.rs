@@ -454,13 +454,27 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     let transport_state = Arc::new(FakeState::default());
     *transport_state.adb_recovery.lock().unwrap() = Some(recovery.clone());
     transport_state.fail_input.store(true, Ordering::Release);
+    let issuer = IdentifierIssuer::new().expect("ids");
+    let step = Arc::new(actingcommand_contract::issue_fenced_write(
+        LeaseToken::new(
+            *issuer.mint_owner_epoch().expect("epoch").transport(),
+            *issuer.mint_lease_id().expect("lease").transport(),
+            *issuer.mint_instance_id().expect("instance").transport(),
+            *issuer.mint_holder_id().expect("holder").transport(),
+            100,
+        )
+        .expect("test step token"),
+        1,
+        std::num::NonZeroU64::new(1).expect("step"),
+        actingcommand_contract::FencedWritePurpose::Business,
+    ));
     let kernel = ExecutionKernel::new(Arc::new(FakeProvider::one(
         "node.a",
         instance_id(),
         Arc::clone(&transport_state),
     )));
     let kernel_error = kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, Arc::clone(&step))
         .expect_err("typed input failure");
     let detail = kernel_error
         .diagnostic_detail()
@@ -483,7 +497,7 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
             .contains("injected backend failure")
     );
     let absent = kernel
-        .input("missing", InputAction::Reset)
+        .input("missing", InputAction::Reset, step)
         .expect_err("missing producer detail");
     assert!(absent.diagnostic_detail().is_none());
     assert!(

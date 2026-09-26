@@ -179,7 +179,7 @@ enum SessionCommand {
         action: PreparedInputAction,
         frame: Option<InputFrameReference>,
         check: Option<Arc<dyn InputOperationCheck>>,
-        step: Option<Arc<FencedWrite>>,
+        step: Arc<FencedWrite>,
         response: SyncSender<ExecutionKernelResult<ExecutionInputOutcome>>,
     },
     Capture {
@@ -201,7 +201,7 @@ enum SessionCommand {
     },
     ApplicationLifecycle {
         action: ApplicationLifecycleAction,
-        step: Option<Arc<FencedWrite>>,
+        step: Arc<FencedWrite>,
         response: SyncSender<ExecutionKernelResult<()>>,
     },
     Close {
@@ -314,15 +314,16 @@ impl ExecutionSession {
         &self.resolved
     }
 
-    pub fn input(&self, action: InputAction) -> ExecutionKernelResult<()> {
-        self.input_prepared(action.try_into()?).map(|_| ())
+    pub fn input(&self, action: InputAction, step: Arc<FencedWrite>) -> ExecutionKernelResult<()> {
+        self.input_prepared(action.try_into()?, step).map(|_| ())
     }
 
     pub(crate) fn input_prepared(
         &self,
         action: PreparedInputAction,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        match self.input_prepared_retained(action) {
+        match self.input_prepared_retained(action, step) {
             Ok(selection) => Ok(selection),
             Err(primary) => {
                 let error = match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
@@ -338,8 +339,9 @@ impl ExecutionSession {
     pub(crate) fn input_prepared_retained(
         &self,
         action: PreparedInputAction,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        self.input_prepared_in_frame(action, None, None, None)
+        self.input_prepared_in_frame(action, None, None, step)
     }
 
     pub(crate) fn input_prepared_in_frame(
@@ -347,7 +349,7 @@ impl ExecutionSession {
         action: PreparedInputAction,
         frame: Option<InputFrameReference>,
         check: Option<Arc<dyn InputOperationCheck>>,
-        step: Option<Arc<FencedWrite>>,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
@@ -477,8 +479,9 @@ impl ExecutionSession {
     pub fn control_application(
         &self,
         action: ApplicationLifecycleAction,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<()> {
-        match self.control_application_retained(action, None) {
+        match self.control_application_retained(action, step) {
             Ok(()) => Ok(()),
             Err(primary) => {
                 let error = match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
@@ -494,7 +497,7 @@ impl ExecutionSession {
     pub(crate) fn control_application_retained(
         &self,
         action: ApplicationLifecycleAction,
-        step: Option<Arc<FencedWrite>>,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<()> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
@@ -761,6 +764,7 @@ fn run_session(
                     frame,
                     committed_frame.as_ref(),
                     check,
+                    &step,
                 );
                 drop(step);
                 let result = result
@@ -984,7 +988,7 @@ fn run_session(
                     );
                 }
                 let result = provider
-                    .control_application(&instance_alias, action)
+                    .control_application(&step, &instance_alias, action)
                     .map_err(|error| {
                         ExecutionKernelError::device("application_backend_operation_failed", &error)
                     });
@@ -1175,6 +1179,7 @@ fn observed_open_error(
     ExecutionKernelError::device(code, &error)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_input(
     provider: &dyn ExecutionBackendProvider,
     instance_alias: &str,
@@ -1183,6 +1188,7 @@ fn execute_input(
     frame: Option<InputFrameReference>,
     committed_frame: Option<&InputFrameContext>,
     check: Option<Arc<dyn InputOperationCheck>>,
+    witness: &FencedWrite,
 ) -> ExecutionKernelResult<ExecutionInputOutcome> {
     let mut observations = backends.prepare(provider, instance_alias)?;
     let execute = || -> ExecutionKernelResult<ExecutionInputOutcome> {
@@ -1232,7 +1238,7 @@ fn execute_input(
         };
         let recovery = backend.take_adb_recovery();
         let started = Instant::now();
-        let executed = execute_action(backend, &action, context.as_ref());
+        let executed = execute_action(backend, witness, &action, context.as_ref());
         let touch_response_us = Instant::now()
             .checked_duration_since(started)
             .and_then(|span| u64::try_from(span.as_micros()).ok());
@@ -1342,16 +1348,17 @@ fn execute_capture(
 
 fn execute_action(
     backend: &mut dyn InputBackend,
+    witness: &FencedWrite,
     action: &PreparedInputAction,
     context: Option<&InputExecutionContext>,
 ) -> DeviceResult<()> {
     match action {
         PreparedInputAction::Direct(InputAction::Tap { x, y }) => match context {
-            Some(context) => backend.tap_in_frame(*x, *y, context),
-            None => backend.tap(*x, *y),
+            Some(context) => backend.tap_in_frame(witness, *x, *y, context),
+            None => backend.tap(witness, *x, *y),
         },
         PreparedInputAction::Direct(InputAction::LongTap { x, y, duration_ms }) => {
-            backend.long_tap(*x, *y, *duration_ms)
+            backend.long_tap(witness, *x, *y, *duration_ms)
         }
         PreparedInputAction::Direct(InputAction::Swipe {
             x1,
@@ -1359,19 +1366,19 @@ fn execute_action(
             x2,
             y2,
             duration_ms,
-        }) => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
+        }) => backend.swipe(witness, *x1, *y1, *x2, *y2, *duration_ms),
         PreparedInputAction::SegmentedSwipe(plan) => {
             if !backend.supports_segmented_swipe() {
                 return Err(segmented_swipe_capability_error());
             }
             match context {
-                Some(context) => backend.segmented_swipe_prepared_in_frame(plan, context),
-                None => backend.segmented_swipe_prepared(plan),
+                Some(context) => backend.segmented_swipe_prepared_in_frame(witness, plan, context),
+                None => backend.segmented_swipe_prepared(witness, plan),
             }
         }
-        PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(key),
-        PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(text),
-        PreparedInputAction::Direct(InputAction::Reset) => backend.reset(),
+        PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(witness, key),
+        PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(witness, text),
+        PreparedInputAction::Direct(InputAction::Reset) => backend.reset(witness),
         PreparedInputAction::Direct(InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }) => Err(
             DeviceError::fatal("segmented input action was not prepared"),
         ),

@@ -3,7 +3,7 @@
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
 use actingcommand_contract::{
-    ApplicationLifecycleAction, EmulatorInstanceAction, InstanceId, MonitorObservation,
+    ApplicationLifecycleAction, EmulatorInstanceAction, FencedWrite, InstanceId, MonitorObservation,
 };
 use actingcommand_device::{
     CaptureBackend, DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, Frame,
@@ -899,8 +899,11 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// An application-lifecycle device write, admitted by the step witness the kernel
+    /// carries from the Host; the provider passes it on to the device write it performs.
     fn control_application(
         &self,
+        witness: &FencedWrite,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()>;

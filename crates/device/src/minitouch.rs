@@ -6,6 +6,7 @@ use crate::{
     DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceInfo, DeviceResourceCloseOutcome,
     DeviceResourceQuiescence, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
 };
+use actingcommand_contract::FencedWrite;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -485,11 +486,22 @@ impl MinitouchBackend {
 }
 
 impl InputBackend for MinitouchBackend {
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.long_tap(x, y, self.minitouch_config.tap_hold.as_millis() as u64)
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
+        self.long_tap(
+            witness,
+            x,
+            y,
+            self.minitouch_config.tap_hold.as_millis() as u64,
+        )
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         let duration_ms = bounded_gesture_duration_ms(duration_ms);
         let pressure = self.minitouch_config.default_pressure;
         self.validate_pressure(pressure)?;
@@ -500,7 +512,15 @@ impl InputBackend for MinitouchBackend {
         Ok(())
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        _witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         let duration_ms = bounded_gesture_duration_ms(duration_ms);
         let pressure = self.minitouch_config.default_pressure;
         self.validate_pressure(pressure)?;
@@ -528,7 +548,11 @@ impl InputBackend for MinitouchBackend {
         true
     }
 
-    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(
+        &mut self,
+        _witness: &FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
         let pressure = self.minitouch_config.default_pressure;
         self.validate_pressure(pressure)?;
         let events = plan
@@ -576,19 +600,19 @@ impl InputBackend for MinitouchBackend {
         Ok(())
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
         Err(DeviceError::fatal(
             "MinitouchBackend key input is outside A1.1 touch fallback scope",
         ))
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
         Err(DeviceError::fatal(
             "MinitouchBackend text input is outside A1.1 touch fallback scope",
         ))
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
         self.write_and_flush("r\nc\n")
     }
 
@@ -604,7 +628,7 @@ impl InputBackend for MinitouchBackend {
         }
 
         let reset = match authority.resource_close_witness() {
-            Some(_witness) => self.reset().err(),
+            Some(witness) => self.reset(witness).err(),
             None => Some(
                 DeviceError::fatal("minitouch device reset requires current lease admission")
                     .with_resource_close_cause(

@@ -36,8 +36,9 @@ step clearing, delayed retry or automatic finish on Drop.
 ResourceClose permits the original ordered close of both backends even when the
 first fails. A Business witness cannot authorize a device-effect close. LocalOnly
 retains its original local-cleanup semantics. Cached close results contain outcome
-and occurrence data, never a witness. Business write signatures beyond the shared
-begin/finish and worker lifetime remain governed by their existing checks.
+and occurrence data, never a witness. Business input and application-lifecycle
+writes take the witness as described in the section below; their existing checks
+remain.
 
 Readonly, monitor and contained-task capture failures share this close path under
 the instance admission mutex. They can reuse a current business lease only when
@@ -61,3 +62,39 @@ continue to fail explicitly; a successful sibling close cannot clear that state.
 Resource quiescence has the existing Runtime-owned resource boundary described in
 `nemu-owned-resource-close.md`. SDK global state and a real-device recovery remain
 outside CI's proof.
+
+## Input and application-lifecycle writes take a FencedWrite
+
+Every device input and application-lifecycle write entry point requires the
+Business witness that `begin_destructive_step` issued for the step:
+
+- Device: the `InputBackend` write methods (`tap`, `tap_in_frame`, `long_tap`,
+  `swipe`, `segmented_swipe`, `segmented_swipe_prepared`,
+  `segmented_swipe_prepared_in_frame`, `key`, `text`, `reset`) take
+  `&FencedWrite` as their leading parameter, as do the ADB write methods
+  `shell_input_tap`, `shell_input_swipe`, `force_stop` and `launch_package` and
+  the device helpers that drive writes (`replay_input_records`,
+  `validate_maatouch`). `Adb::run` serves read-only commands and the
+  connection-time commands of backend opening; a command with a device effect
+  goes through `Adb::run_write(&FencedWrite, args)`. A backend treats the witness
+  only as the type-level proof that a step was begun; validating its content
+  belongs to the Scheduler. Wrappers pass the caller's witness through unchanged.
+- Kernel: the session's input and application-lifecycle commands carry a
+  required `Arc<FencedWrite>`, and the public `ExecutionKernel` and
+  `ExecutionSession` input and `control_application` entry points take it. The
+  Kernel neither issues nor copies a witness: the `Arc` only carries the Host's
+  step across the session thread, which lends `&FencedWrite` to the device write
+  and to `ExecutionBackendProvider::control_application`.
+- Host: the two `begin_destructive_step` sites (input and application lifecycle)
+  pass the witness they issued. Contained-task input and application effects
+  reach the device only through those two sites. A failed
+  `begin_destructive_step` reaches no write path.
+
+Boundary of this step: connection-time writes of backend opening (`connect`,
+`push`, `chmod`, `forward`, `shell_spawn`) stay under the existing open-phase
+authority; read-only operations (capture, `dumpsys`, `wm size`, version probes,
+foreground observation) take no witness; the close side is unchanged and keeps
+`DeviceCloseAuthority`. The Host's position-only checks (`validate_write` and
+related) remain alongside the witness. Witness semantics, the Scheduler's issue
+and consume, wire formats and the ledger's `input.committed` sequence are
+unchanged.

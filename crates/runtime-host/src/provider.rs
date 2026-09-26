@@ -7,8 +7,8 @@ use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
-    EmulatorInstanceAction, EmulatorVersionEvidence, InstanceId, MAX_INSTANCE_ALIAS_BYTES,
-    RuntimeErrorCode,
+    EmulatorInstanceAction, EmulatorVersionEvidence, FencedWrite, InstanceId,
+    MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
@@ -549,7 +549,11 @@ impl ExecutionBackendEntry {
         })
     }
 
-    fn control_application(&self, action: ApplicationLifecycleAction) -> DeviceResult<()> {
+    fn control_application(
+        &self,
+        witness: &FencedWrite,
+        action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
         let application_target = {
             let endpoint = self.endpoint();
             endpoint.require_bound("control_application")?;
@@ -560,15 +564,15 @@ impl ExecutionBackendEntry {
         adb.ensure_device(&serial, application_target.connect)?;
         match action {
             ApplicationLifecycleAction::Launch => {
-                adb.launch_package(&serial, &self.application_id)?;
+                adb.launch_package(witness, &serial, &self.application_id)?;
             }
             ApplicationLifecycleAction::Stop => {
-                adb.force_stop(&serial, &self.application_id)?;
+                adb.force_stop(witness, &serial, &self.application_id)?;
             }
             ApplicationLifecycleAction::Restart => {
-                adb.force_stop(&serial, &self.application_id)?;
+                adb.force_stop(witness, &serial, &self.application_id)?;
                 thread::sleep(Duration::from_millis(500));
-                adb.launch_package(&serial, &self.application_id)?;
+                adb.launch_package(witness, &serial, &self.application_id)?;
             }
         }
         Ok(())
@@ -914,11 +918,12 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
 
     fn control_application(
         &self,
+        witness: &FencedWrite,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
         match self.entry(instance_alias)? {
-            RegistryEntry::Real(entry) => entry.control_application(action),
+            RegistryEntry::Real(entry) => entry.control_application(witness, action),
             #[cfg(feature = "fixture-backends")]
             RegistryEntry::Fixture(_) => fixtures::FixtureEntry::control_application(),
         }
@@ -1174,26 +1179,45 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         self.backend.selection_context()
     }
 
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.run("tap", |backend| backend.tap(x, y))
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
+        self.run("tap", |backend| backend.tap(witness, x, y))
     }
 
     fn tap_in_frame(
         &mut self,
+        witness: &FencedWrite,
         x: i32,
         y: i32,
         context: &actingcommand_device::InputExecutionContext,
     ) -> DeviceResult<()> {
-        self.run("tap", |backend| backend.tap_in_frame(x, y, context))
+        self.run("tap", |backend| {
+            backend.tap_in_frame(witness, x, y, context)
+        })
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.run("long_tap", |backend| backend.long_tap(x, y, duration_ms))
+    fn long_tap(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
+        self.run("long_tap", |backend| {
+            backend.long_tap(witness, x, y, duration_ms)
+        })
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.run("swipe", |backend| {
-            backend.swipe(x1, y1, x2, y2, duration_ms)
+            backend.swipe(witness, x1, y1, x2, y2, duration_ms)
         })
     }
 
@@ -1201,32 +1225,37 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         self.backend.supports_segmented_swipe()
     }
 
-    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(
+        &mut self,
+        witness: &FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
         self.run("segmented_swipe", |backend| {
-            backend.segmented_swipe_prepared(plan)
+            backend.segmented_swipe_prepared(witness, plan)
         })
     }
 
     fn segmented_swipe_prepared_in_frame(
         &mut self,
+        witness: &FencedWrite,
         plan: &PreparedSegmentedSwipePlan,
         context: &actingcommand_device::InputExecutionContext,
     ) -> DeviceResult<()> {
         self.run("segmented_swipe", |backend| {
-            backend.segmented_swipe_prepared_in_frame(plan, context)
+            backend.segmented_swipe_prepared_in_frame(witness, plan, context)
         })
     }
 
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
-        self.run("key", |backend| backend.key(key))
+    fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
+        self.run("key", |backend| backend.key(witness, key))
     }
 
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
-        self.run("text", |backend| backend.text(text))
+    fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()> {
+        self.run("text", |backend| backend.text(witness, text))
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
-        self.run("reset", |backend| backend.reset())
+    fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()> {
+        self.run("reset", |backend| backend.reset(witness))
     }
 
     fn close_once(
@@ -1269,6 +1298,24 @@ mod tests {
     use super::*;
     use actingcommand_device::SegmentedSwipeAction;
 
+    /// A scheduler-shaped step witness for driving a write method directly.
+    fn step_witness() -> FencedWrite {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test step token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::Business,
+        )
+    }
+
     #[derive(Debug, Clone, Copy)]
     enum TestInputOperation {
         Tap,
@@ -1304,13 +1351,14 @@ mod tests {
         }
 
         fn invoke(self, backend: &mut dyn InputBackend) -> DeviceResult<()> {
+            let witness = step_witness();
             match self {
-                Self::Tap => backend.tap(10, 20),
-                Self::LongTap => backend.long_tap(10, 20, 30),
-                Self::Swipe => backend.swipe(10, 20, 30, 40, 50),
-                Self::Key => backend.key("KEYCODE_HOME"),
-                Self::Text => backend.text("neutral fixture"),
-                Self::Reset => backend.reset(),
+                Self::Tap => backend.tap(&witness, 10, 20),
+                Self::LongTap => backend.long_tap(&witness, 10, 20, 30),
+                Self::Swipe => backend.swipe(&witness, 10, 20, 30, 40, 50),
+                Self::Key => backend.key(&witness, "KEYCODE_HOME"),
+                Self::Text => backend.text(&witness, "neutral fixture"),
+                Self::Reset => backend.reset(&witness),
                 Self::Close => backend.close(),
             }
         }
@@ -1331,16 +1379,23 @@ mod tests {
     }
 
     impl InputBackend for RecordingInputBackend {
-        fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+        fn tap(&mut self, _witness: &FencedWrite, _x: i32, _y: i32) -> DeviceResult<()> {
             self.invoke("tap")
         }
 
-        fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+        fn long_tap(
+            &mut self,
+            _witness: &FencedWrite,
+            _x: i32,
+            _y: i32,
+            _duration_ms: u64,
+        ) -> DeviceResult<()> {
             self.invoke("long_tap")
         }
 
         fn swipe(
             &mut self,
+            _witness: &FencedWrite,
             _x1: i32,
             _y1: i32,
             _x2: i32,
@@ -1356,6 +1411,7 @@ mod tests {
 
         fn segmented_swipe_prepared(
             &mut self,
+            _witness: &FencedWrite,
             plan: &PreparedSegmentedSwipePlan,
         ) -> DeviceResult<()> {
             self.segmented_swipe_actions
@@ -1365,15 +1421,15 @@ mod tests {
             self.invoke("segmented_swipe")
         }
 
-        fn key(&mut self, _key: &str) -> DeviceResult<()> {
+        fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
             self.invoke("key")
         }
 
-        fn text(&mut self, _text: &str) -> DeviceResult<()> {
+        fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
             self.invoke("text")
         }
 
-        fn reset(&mut self) -> DeviceResult<()> {
+        fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
             self.invoke("reset")
         }
 
@@ -1516,7 +1572,7 @@ mod tests {
             true,
         );
         let returned = backend
-            .swipe(10, 20, 30, 40, 50)
+            .swipe(&step_witness(), 10, 20, 30, 40, 50)
             .expect_err("controlled MaaTouch write failure");
         assert_eq!(returned, original);
         assert_eq!(returned.message(), original.message());
@@ -1559,7 +1615,7 @@ mod tests {
             segmented_swipe_actions,
         } = diagnostic_input_backend_with(Ok(()), TouchBackendChoice::MaaTouch, true);
         backend
-            .segmented_swipe(action)
+            .segmented_swipe(&step_witness(), action)
             .expect("segmented swipe succeeds");
         assert_eq!(*calls.lock().expect("input calls"), ["segmented_swipe"]);
         assert_eq!(
@@ -1588,7 +1644,7 @@ mod tests {
             true,
         );
         let returned = backend
-            .segmented_swipe(action)
+            .segmented_swipe(&step_witness(), action)
             .expect_err("segmented swipe failure");
         assert_eq!(returned, original);
         assert_eq!(returned.message(), original.message());

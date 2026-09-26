@@ -80,17 +80,24 @@ impl ExecutionKernel {
         action.try_into()
     }
 
-    pub fn input(&self, instance_alias: &str, action: InputAction) -> ExecutionKernelResult<()> {
+    pub fn input(
+        &self,
+        instance_alias: &str,
+        action: InputAction,
+        step: Arc<FencedWrite>,
+    ) -> ExecutionKernelResult<()> {
         let action = self.prepare_input(action)?;
-        self.input_prepared(instance_alias, action).map(|_| ())
+        self.input_prepared(instance_alias, action, step)
+            .map(|_| ())
     }
 
     pub fn input_prepared(
         &self,
         instance_alias: &str,
         action: PreparedInputAction,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        self.input_prepared_with_registration_guard(instance_alias, action, ())
+        self.input_prepared_with_registration_guard(instance_alias, action, step, ())
     }
 
     /// Release the Host journal lock after session registration, before backend work.
@@ -98,11 +105,12 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         action: PreparedInputAction,
+        step: Arc<FencedWrite>,
         registration_guard: G,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
-        let result = session.input_prepared(action);
+        let result = session.input_prepared(action, step);
         self.finish_session_operation(&session, result)
     }
 
@@ -111,9 +119,10 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         action: PreparedInputAction,
+        step: Arc<FencedWrite>,
         registration_guard: G,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        self.input_prepared_in_frame(instance_alias, action, None, None, None, registration_guard)
+        self.input_prepared_in_frame(instance_alias, action, None, None, step, registration_guard)
     }
 
     pub fn input_prepared_in_frame<G>(
@@ -122,7 +131,7 @@ impl ExecutionKernel {
         action: PreparedInputAction,
         frame: Option<InputFrameReference>,
         check: Option<Arc<dyn InputOperationCheck>>,
-        step: Option<Arc<FencedWrite>>,
+        step: Arc<FencedWrite>,
         registration_guard: G,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
         let session = self.session(instance_alias)?;
@@ -339,19 +348,21 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
+        step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<()> {
-        self.control_application_with_registration_guard(instance_alias, action, ())
+        self.control_application_with_registration_guard(instance_alias, action, step, ())
     }
 
     pub fn control_application_with_registration_guard<G>(
         &self,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
+        step: Arc<FencedWrite>,
         registration_guard: G,
     ) -> ExecutionKernelResult<()> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
-        let result = session.control_application(action);
+        let result = session.control_application(action, step);
         self.finish_session_operation(&session, result)
     }
 
@@ -450,7 +461,7 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
-        step: Option<Arc<FencedWrite>>,
+        step: Arc<FencedWrite>,
         registration_guard: G,
     ) -> ExecutionKernelResult<()> {
         let session = self.session(instance_alias)?;

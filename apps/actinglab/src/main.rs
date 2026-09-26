@@ -9,11 +9,9 @@ use actingcommand_contract::{
 use actingcommand_device::CaptureBackendName;
 #[cfg(test)]
 use actingcommand_device::{AdbPathSource, Frame, PixelFormat};
-use actingcommand_device::{
-    CaptureBackendChoice, InputBackend, TouchBackendChoice, combine_operation_and_close,
-};
+use actingcommand_device::{CaptureBackendChoice, TouchBackendChoice, combine_operation_and_close};
 use actingcommand_lab::{
-    InstanceConfig, PackageValidationResponse, UserConfig,
+    InstanceConfig, LabInputPort, PackageValidationResponse, UserConfig,
     derive_absolute_coordinate_rect_from_match,
 };
 #[cfg(test)]

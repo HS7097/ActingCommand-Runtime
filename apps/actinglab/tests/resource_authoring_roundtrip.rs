@@ -33,7 +33,12 @@ struct SealedInput {
 }
 
 impl InputBackend for SealedInput {
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
+    fn tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        x: i32,
+        y: i32,
+    ) -> DeviceResult<()> {
         if (x, y) != (5, 6) {
             return Err(DeviceError::fatal("unexpected sealed authoring tap"));
         }
@@ -42,12 +47,19 @@ impl InputBackend for SealedInput {
         Ok(())
     }
 
-    fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+        _duration_ms: u64,
+    ) -> DeviceResult<()> {
         Err(DeviceError::fatal("unexpected sealed authoring long tap"))
     }
 
     fn swipe(
         &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
         _x1: i32,
         _y1: i32,
         _x2: i32,
@@ -57,15 +69,23 @@ impl InputBackend for SealedInput {
         Err(DeviceError::fatal("unexpected sealed authoring swipe"))
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _key: &str,
+    ) -> DeviceResult<()> {
         Err(DeviceError::fatal("unexpected sealed authoring key"))
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _text: &str,
+    ) -> DeviceResult<()> {
         Err(DeviceError::fatal("unexpected sealed authoring text"))
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &actingcommand_contract::FencedWrite) -> DeviceResult<()> {
         Err(DeviceError::fatal("unexpected sealed authoring reset"))
     }
 
@@ -198,6 +218,7 @@ impl ExecutionBackendProvider for SealedProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         _instance_alias: &str,
         _action: actingcommand_contract::ApplicationLifecycleAction,
     ) -> DeviceResult<()> {

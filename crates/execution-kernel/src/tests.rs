@@ -11,6 +11,25 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+/// A scheduler-shaped step witness for driving the kernel's write entries directly.
+#[cfg(test)]
+fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {
+    let issuer = IdentifierIssuer::new().expect("ids");
+    Arc::new(actingcommand_contract::issue_fenced_write(
+        actingcommand_contract::LeaseToken::new(
+            *issuer.mint_owner_epoch().expect("epoch").transport(),
+            *issuer.mint_lease_id().expect("lease").transport(),
+            *issuer.mint_instance_id().expect("instance").transport(),
+            *issuer.mint_holder_id().expect("holder").transport(),
+            100,
+        )
+        .expect("test step token"),
+        1,
+        std::num::NonZeroU64::new(1).expect("step"),
+        actingcommand_contract::FencedWritePurpose::Business,
+    ))
+}
+
 #[derive(Default)]
 struct FakeState {
     input_selection: Option<actingcommand_device::InputSelectionContext>,
@@ -50,10 +69,10 @@ fn kernel_close_preserves_each_failed_instance() {
         ],
     );
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("first input");
     kernel
-        .input("node.b", InputAction::Reset)
+        .input("node.b", InputAction::Reset, step_witness())
         .expect("second input");
     let mut error = kernel.close().expect_err("two close failures");
     assert_eq!(error.code(), "input_backend_close_failed");
@@ -153,6 +172,7 @@ fn c1b9_d02_readonly_close_authority() {
                 retained
                     .prepare_input(InputAction::Reset)
                     .expect("input plan"),
+                step_witness(),
                 (),
             )
             .expect_err("input failure returned to close owner");
@@ -228,7 +248,9 @@ fn c1b9_d09_close_terminal_cache() {
         }));
         let id = instance();
         let kernel = kernel(Arc::clone(&state), &[("node.a", id, "private-a")]);
-        kernel.input("node.a", InputAction::Reset).expect("input");
+        kernel
+            .input("node.a", InputAction::Reset, step_witness())
+            .expect("input");
         let session = kernel.session_for_test("node.a").expect("session");
         let first =
             session.close_with_authority(actingcommand_device::DeviceCloseAuthority::LocalOnly);
@@ -367,6 +389,7 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         _instance_alias: &str,
         _action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
@@ -407,16 +430,28 @@ impl InputBackend for FakeInput {
         self.state.lock().expect("state").input_selection.clone()
     }
 
-    fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+    fn tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+    ) -> DeviceResult<()> {
         self.execute()
     }
 
-    fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+        _duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.execute()
     }
 
     fn swipe(
         &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
         _x1: i32,
         _y1: i32,
         _x2: i32,
@@ -426,15 +461,23 @@ impl InputBackend for FakeInput {
         self.execute()
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _key: &str,
+    ) -> DeviceResult<()> {
         self.execute()
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _text: &str,
+    ) -> DeviceResult<()> {
         self.execute()
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &actingcommand_contract::FencedWrite) -> DeviceResult<()> {
         self.execute()
     }
 
@@ -541,11 +584,15 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     assert_eq!(state.lock().expect("state").input_opens, 0);
 
     let selected = kernel
-        .input_prepared("node.a", kernel.prepare_input(InputAction::Reset).unwrap())
+        .input_prepared(
+            "node.a",
+            kernel.prepare_input(InputAction::Reset).unwrap(),
+            step_witness(),
+        )
         .expect("first input");
     assert_eq!(selected.selection, Some(input_selection));
     kernel
-        .input("node.a", InputAction::Tap { x: 1, y: 2 })
+        .input("node.a", InputAction::Tap { x: 1, y: 2 }, step_witness())
         .expect("second input");
     let first = kernel.capture("node.a").expect("first capture");
     let second = kernel.capture("node.a").expect("second capture");
@@ -573,12 +620,16 @@ fn application_lifecycle_is_serialized_by_the_daemon_session_and_invalidates_bac
         &[("neutral.instance", instance(), "private-endpoint")],
     );
     kernel
-        .input("neutral.instance", InputAction::Reset)
+        .input("neutral.instance", InputAction::Reset, step_witness())
         .expect("open input");
     kernel.capture("neutral.instance").expect("open capture");
 
     kernel
-        .control_application("neutral.instance", ApplicationLifecycleAction::Restart)
+        .control_application(
+            "neutral.instance",
+            ApplicationLifecycleAction::Restart,
+            step_witness(),
+        )
         .expect("application restart");
 
     let snapshot = state.lock().expect("state");
@@ -603,10 +654,10 @@ fn instance_sessions_are_partitioned_and_identity_mismatch_is_fatal() {
         ],
     );
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("first instance");
     kernel
-        .input("node.b", InputAction::Reset)
+        .input("node.b", InputAction::Reset, step_witness())
         .expect("second instance");
     assert_eq!(state.lock().expect("state").input_opens, 2);
     assert_eq!(
@@ -631,7 +682,7 @@ fn input_failure_returns_original_error_then_later_input_uses_fresh_session() {
     }));
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     let error = kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input failure");
     assert_eq!(error.code(), "input_backend_operation_failed");
     assert!(!error.is_fatal());
@@ -644,7 +695,7 @@ fn input_failure_returns_original_error_then_later_input_uses_fresh_session() {
         assert_eq!(snapshot.input_closes, 1);
     }
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("separate input uses a fresh session");
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_opens, 2);
@@ -676,6 +727,7 @@ fn segmented_swipe_capability_failure_preserves_device_detail() {
                 slope_in: 2,
                 slope_out: 0,
             },
+            step_witness(),
         )
         .expect_err("segmented swipe capability rejection");
 
@@ -704,7 +756,7 @@ fn failed_input_open_is_retired_before_separate_capture() {
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
 
     let error = kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input open failure");
     assert_eq!(error.code(), "input_backend_open_failed");
     assert!(error.is_fatal());
@@ -738,7 +790,7 @@ fn capture_failure_returns_original_error_then_later_capture_uses_fresh_session(
     }));
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("open input");
     let error = kernel.capture("node.a").expect_err("capture failure");
     assert_eq!(error.code(), "capture_backend_operation_failed");
@@ -772,12 +824,16 @@ fn application_failure_returns_original_error_then_later_input_uses_fresh_sessio
     }));
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("open input");
     kernel.capture("node.a").expect("open capture");
 
     let error = kernel
-        .control_application("node.a", ApplicationLifecycleAction::Restart)
+        .control_application(
+            "node.a",
+            ApplicationLifecycleAction::Restart,
+            step_witness(),
+        )
         .expect_err("application failure");
     assert_eq!(error.code(), "application_backend_operation_failed");
     assert!(error.is_fatal());
@@ -790,7 +846,7 @@ fn application_failure_returns_original_error_then_later_input_uses_fresh_sessio
     }
 
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("separate input uses a fresh session");
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.application_calls, 1);
@@ -811,7 +867,7 @@ fn backend_open_and_close_failures_surface_without_private_details() {
         &[("node.a", instance(), "private-a")],
     );
     let error = input_kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input open");
     assert_eq!(error.code(), "input_backend_open_failed");
     assert!(error.is_fatal());
@@ -844,7 +900,7 @@ fn backend_open_and_close_failures_surface_without_private_details() {
         &[("node.a", instance(), "private-a")],
     );
     close_kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("open input");
     let error = close_kernel.close().expect_err("close failure");
     assert_eq!(error.code(), "input_backend_close_failed");
@@ -947,14 +1003,14 @@ fn execution_error_preserves_secondary_cleanup_detail() {
         let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
         let error = if capture {
             kernel
-                .input("node.a", InputAction::Reset)
+                .input("node.a", InputAction::Reset, step_witness())
                 .expect("open input session");
             kernel
                 .capture("node.a")
                 .expect_err("capture then close failure")
         } else {
             kernel
-                .input("node.a", InputAction::Reset)
+                .input("node.a", InputAction::Reset, step_witness())
                 .expect_err("input then close failure")
         };
         assert_eq!(
@@ -1008,7 +1064,7 @@ fn backend_panic_is_caught_then_later_input_uses_fresh_session() {
     }));
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     let error = kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect_err("panic must surface");
     assert_eq!(error.code(), "execution_session_response_lost");
     assert_eq!(error.secondary_code(), Some("execution_session_panicked"));
@@ -1021,7 +1077,7 @@ fn backend_panic_is_caught_then_later_input_uses_fresh_session() {
         snapshot.panic_input = false;
     }
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("separate input uses a fresh session");
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_opens, 2);
@@ -1040,7 +1096,7 @@ fn stale_failed_session_cannot_evict_same_instance_replacement() {
     let failed = kernel.session_for_test("node.a").expect("failed session");
 
     let error = kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input failure");
     assert_eq!(error.code(), "input_backend_operation_failed");
     state.lock().expect("state").fail_input = false;
@@ -1056,7 +1112,7 @@ fn stale_failed_session_cannot_evict_same_instance_replacement() {
     assert!(Arc::ptr_eq(&replacement, &current));
 
     kernel
-        .input("node.a", InputAction::Reset)
+        .input("node.a", InputAction::Reset, step_witness())
         .expect("replacement remains usable");
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_opens, 2);
@@ -1074,7 +1130,7 @@ fn kernel_retirement_failure_keeps_the_operation_error_primary_and_visible() {
     let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     let failed = kernel.session_for_test("node.a").expect("failed session");
     let primary = failed
-        .input(InputAction::Reset)
+        .input(InputAction::Reset, step_witness())
         .expect_err("direct session failure");
     assert_eq!(primary.code(), "input_backend_operation_failed");
     assert_eq!(primary.secondary_code(), None);
@@ -1107,7 +1163,7 @@ fn drop_closes_daemon_owned_input_session() {
     {
         let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
         kernel
-            .input("node.a", InputAction::Reset)
+            .input("node.a", InputAction::Reset, step_witness())
             .expect("open input");
     }
     assert_eq!(state.lock().expect("state").input_closes, 1);

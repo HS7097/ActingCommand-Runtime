@@ -20,7 +20,7 @@ impl InputBackendFactory for DisabledInputFactory {
     fn open(
         &self,
         _request: crate::InputBackendRequest,
-    ) -> LabResult<Box<dyn actingcommand_device::InputBackend>> {
+    ) -> LabResult<Box<dyn crate::LabInputPort>> {
         Err(LabError::device(
             "input must not be opened in readonly tests",
         ))

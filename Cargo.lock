@@ -144,6 +144,7 @@ dependencies = [
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "actingcommand-runtime-database",
+ "actingcommand-scheduler",
  "serde",
  "serde_json",
 ]

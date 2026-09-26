@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{DeviceCloseAuthority, DeviceError, DeviceResourceCloseOutcome, DeviceResult};
+use actingcommand_contract::FencedWrite;
 use serde::{Deserialize, Serialize};
 
 pub const SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS: u64 = 200;
@@ -134,6 +135,11 @@ pub struct InputSelectionContext {
     pub serial: String,
 }
 
+/// Every device write method takes the scheduler-issued `FencedWrite` of the step
+/// that admitted it as its leading parameter. The backend treats the witness only as
+/// the type-level proof that a step was begun; validating its content belongs to the
+/// scheduler. Read-only methods and the close side (witnessed by
+/// `DeviceCloseAuthority`) take none.
 pub trait InputBackend {
     /// Move observations of connections performed by the just-completed action.
     /// This reads no device state and carries no write authority.
@@ -153,31 +159,54 @@ pub trait InputBackend {
         None
     }
 
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()>;
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()>;
 
     fn tap_in_frame(
         &mut self,
+        witness: &FencedWrite,
         x: i32,
         y: i32,
         _context: &crate::InputExecutionContext,
     ) -> DeviceResult<()> {
-        self.tap(x, y)
+        self.tap(witness, x, y)
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()>;
+    fn long_tap(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()>;
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()>;
+    fn swipe(
+        &mut self,
+        witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()>;
 
     fn supports_segmented_swipe(&self) -> bool {
         false
     }
 
-    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+    fn segmented_swipe(
+        &mut self,
+        witness: &FencedWrite,
+        action: SegmentedSwipeAction,
+    ) -> DeviceResult<()> {
         let plan = prepare_segmented_swipe(action)?;
-        self.segmented_swipe_prepared(&plan)
+        self.segmented_swipe_prepared(witness, &plan)
     }
 
-    fn segmented_swipe_prepared(&mut self, _plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(
+        &mut self,
+        _witness: &FencedWrite,
+        _plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
         Err(DeviceError::fatal(
             "selected input backend does not support single_touch_drag_with_vertical_brake_v1",
         ))
@@ -185,17 +214,18 @@ pub trait InputBackend {
 
     fn segmented_swipe_prepared_in_frame(
         &mut self,
+        witness: &FencedWrite,
         plan: &PreparedSegmentedSwipePlan,
         _context: &crate::InputExecutionContext,
     ) -> DeviceResult<()> {
-        self.segmented_swipe_prepared(plan)
+        self.segmented_swipe_prepared(witness, plan)
     }
 
-    fn key(&mut self, key: &str) -> DeviceResult<()>;
+    fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()>;
 
-    fn text(&mut self, text: &str) -> DeviceResult<()>;
+    fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()>;
 
-    fn reset(&mut self) -> DeviceResult<()>;
+    fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()>;
 
     fn close_once(
         &mut self,

@@ -49,16 +49,28 @@ impl FileBackend {
 }
 
 impl InputBackend for FileBackend {
-    fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+    fn tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+    ) -> DeviceResult<()> {
         self.record("tap")
     }
 
-    fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+        _duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.record("long_tap")
     }
 
     fn swipe(
         &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
         _x1: i32,
         _y1: i32,
         _x2: i32,
@@ -68,15 +80,23 @@ impl InputBackend for FileBackend {
         self.record("swipe")
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _key: &str,
+    ) -> DeviceResult<()> {
         self.record("key")
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _text: &str,
+    ) -> DeviceResult<()> {
         self.record("text")
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &actingcommand_contract::FencedWrite) -> DeviceResult<()> {
         self.record("reset")
     }
 
@@ -194,6 +214,7 @@ impl ExecutionBackendProvider for FileProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         _instance_alias: &str,
         _action: actingcommand_contract::ApplicationLifecycleAction,
     ) -> DeviceResult<()> {

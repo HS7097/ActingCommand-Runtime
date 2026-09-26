@@ -3,7 +3,7 @@
 //! Fixture simulation backends: device-free instances that replay configured frames and
 //! accept a bounded number of inputs. Compiled only with the `fixture-backends` feature.
 
-use actingcommand_contract::{BackendOpenEntry, InstanceId};
+use actingcommand_contract::{BackendOpenEntry, FencedWrite, InstanceId};
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSensitivity,
     DeviceResourceCloseOutcome, DeviceResult, Frame, InputBackend, OpenedBackend,
@@ -142,16 +142,23 @@ impl FixtureInputBackend {
 }
 
 impl InputBackend for FixtureInputBackend {
-    fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+    fn tap(&mut self, _witness: &FencedWrite, _x: i32, _y: i32) -> DeviceResult<()> {
         self.consume()
     }
 
-    fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &FencedWrite,
+        _x: i32,
+        _y: i32,
+        _duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.consume()
     }
 
     fn swipe(
         &mut self,
+        _witness: &FencedWrite,
         _x1: i32,
         _y1: i32,
         _x2: i32,
@@ -161,15 +168,15 @@ impl InputBackend for FixtureInputBackend {
         self.consume()
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
         self.consume()
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
         self.consume()
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
         self.consume()
     }
 

@@ -6,7 +6,7 @@ mod semantic_fixture;
 #[path = "test_env.rs"]
 mod test_env;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
-use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult};
+use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
@@ -126,6 +126,7 @@ impl ExecutionBackendProvider for AuthoringRuntimeProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         _instance_alias: &str,
         _action: actingcommand_contract::ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
