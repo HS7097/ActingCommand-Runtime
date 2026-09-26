@@ -148,6 +148,8 @@ const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 /// Synthesized connection of the host's own startup-package scheduling thread (#316-B3).
 const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
+/// Fixed connection of the dedicated preparation lease (Workflow #317 sc3).
+const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 
 mod agent_control;
 mod backend_open;
@@ -242,6 +244,8 @@ pub enum RuntimeLifecycleFailureStage {
     PolicyForward,
     StrategicReport,
     SessionClose,
+    /// A step of a physical instance's connection preparation phase (Workflow #317 sc3).
+    ConnectionPreparation,
     OperationCleanup,
     ConnectionCleanup,
     ShutdownJoin,
@@ -1353,6 +1357,13 @@ impl RuntimeHost {
             return Err(original);
         }
         if let Err(original) = shared.expire_agent_sessions() {
+            failed_start_cleanup(shared, &info_path, None, None, None, None)?;
+            return Err(original);
+        }
+        // Workflow #317 sc3 (a): every registered physical instance starts unavailable and is
+        // connected and self-checked once, in order, before the host answers anyone; a failed
+        // preparation leaves its instance unavailable, only a fatal failure stops the start.
+        if let Err(original) = shared.prepare_physical_instances_on_start() {
             failed_start_cleanup(shared, &info_path, None, None, None, None)?;
             return Err(original);
         }
@@ -2710,6 +2721,15 @@ impl RegisteredInstance {
         self.adb_endpoint
             .as_ref()
             .is_some_and(ResolvedInstanceEndpoint::is_pending)
+    }
+
+    /// Workflow #317 sc3: whether the Runtime prepares and self-checks this instance's device
+    /// connection and gates its policy availability on that self-check: a physical instance
+    /// with a device endpoint (bound or pending), as the device registry assembles every
+    /// physical instance. A fixture simulation, and a provider that resolves physical
+    /// provenance without any endpoint, have no device connection to check and are exempt.
+    fn device_self_checked(&self) -> bool {
+        self.provenance == ExecutionBackendProvenance::PhysicalDevice && self.adb_endpoint.is_some()
     }
 }
 

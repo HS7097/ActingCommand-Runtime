@@ -88,10 +88,11 @@ impl HostShared {
     }
 
     /// Performs one control action whose intent is already recorded under `links`: fence,
-    /// session close, provider control, rebinding, `backend.selfcheck.*` invalidation (and the
-    /// policy availability it restores), ADB baseline, `command.validated` (or
+    /// session close, provider control, rebinding, `backend.selfcheck.*` invalidation (which
+    /// leaves a gated physical instance unavailable), ADB baseline, `command.validated` (or
     /// `command.rejected` + `runtime.failed`), `runtime.instance_bound`, `device.connected`,
-    /// and the startup package's scheduling intent.
+    /// after `start` / `restart` of a physical instance its connection preparation phase
+    /// (Workflow #317 sc3), and the startup package's scheduling intent.
     pub(super) fn drive_emulator_control(
         &self,
         resolved: &RegisteredInstance,
@@ -188,7 +189,7 @@ impl HostShared {
         };
         // Workflow #317 sc1: the self-check facts describe the session closed above, opened on
         // the binding just replaced; they are dropped before any lease can open a new one, and
-        // a policy availability a failed self-check withdrew returns to its seed (sc2).
+        // a gated physical instance stays unavailable until its next self-check passes (sc3).
         if let Err(error) = self.invalidate_backend_selfcheck_facts(instance_id) {
             return Err(self.emulator_control_failure(
                 links,
@@ -243,6 +244,19 @@ impl HostShared {
             )?;
         }
         self.record_device_connected(instance_id, action, outcome.running, terminal_event)?;
+        // Workflow #317 sc3 (b), #316 goal 5: a started or restarted physical instance is
+        // connected and self-checked at once; it stays unavailable until that self-check passes.
+        // A failed preparation is recorded and does not fail the completed control action.
+        if action != EmulatorInstanceAction::Stop && rebound.device_self_checked() {
+            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            self.prepare_instance_connection(
+                &rebound.instance_alias,
+                instance_id,
+                links.clone(),
+                &admission,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        }
         let startup_package = if action == EmulatorInstanceAction::Stop {
             None
         } else {

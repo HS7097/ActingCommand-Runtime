@@ -256,6 +256,12 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .resume_scheduling(pause_scope(optional_instance))
                 .map_err(ActingctlError::runtime)?,
         ),
+        // Workflow #317 sc3 (d): manual reconnect and self-check of one physical instance.
+        Command::SelfCheck { instance_alias } => serde_json::to_value(
+            client
+                .self_check_instance(&instance_alias)
+                .map_err(ActingctlError::runtime)?,
+        ),
         Command::Stream { spec } => serde_json::to_value(
             client
                 .capture_sequence(instance()?, spec)
@@ -369,6 +375,10 @@ enum Command {
     },
     /// `resume [--instance <alias>]`.
     Resume,
+    /// `selfcheck <alias>`: reconnect and self-check one physical instance now.
+    SelfCheck {
+        instance_alias: String,
+    },
     Stream {
         spec: CaptureSequenceSpec,
     },
@@ -428,7 +438,20 @@ impl Invocation {
         } else {
             None
         };
-        let mut index = if emulator_action.is_some() {
+        // `selfcheck` takes the instance alias as the second token.
+        let selfcheck_alias = if command == "selfcheck" {
+            Some(
+                arguments
+                    .get(1)
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.starts_with("--") && !value.trim().is_empty())
+                    .ok_or(ActingctlError::Usage)?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        let mut index = if emulator_action.is_some() || selfcheck_alias.is_some() {
             2
         } else if task_offset.is_some() {
             3
@@ -582,6 +605,9 @@ impl Invocation {
                 drain_timeout_ms: drain_timeout_ms.unwrap_or(DEFAULT_PAUSE_DRAIN_TIMEOUT_MS),
             },
             "resume" => Command::Resume,
+            "selfcheck" => Command::SelfCheck {
+                instance_alias: selfcheck_alias.ok_or(ActingctlError::Usage)?,
+            },
             "stream" => Command::Stream {
                 spec: CaptureSequenceSpec::new(
                     frame_count.unwrap_or(1),
@@ -639,6 +665,7 @@ impl Command {
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
                 | Self::AgentPublishFacts { .. }
+                | Self::SelfCheck { .. }
         )
     }
 }
@@ -700,7 +727,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),

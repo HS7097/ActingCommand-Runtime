@@ -419,7 +419,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             }),
         });
         if capture {
-            state.fail_capture_on.store(2, Ordering::Release);
+            state.fail_capture_on.store(3, Ordering::Release);
             state
                 .transient_capture_failure
                 .store(!fatal, Ordering::Release);
@@ -662,7 +662,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 })
             ));
             assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-            assert_eq!(state.capture_count.load(Ordering::Acquire), 2);
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 3);
             host.close().expect("successful close");
             continue;
         }
@@ -673,7 +673,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         );
         assert_eq!(
             state.capture_count.load(Ordering::Acquire),
-            if capture { 2 } else { 1 }
+            if capture { 3 } else { 2 }
         );
         assert_eq!(
             diagnostics.len(),

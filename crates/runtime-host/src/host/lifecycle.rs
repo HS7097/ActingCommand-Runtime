@@ -10,6 +10,7 @@ impl RuntimeLifecycleFailureStage {
             Self::PolicyForward => "runtime.lifecycle.policy_forward",
             Self::StrategicReport => "runtime.lifecycle.strategic_report",
             Self::SessionClose => "runtime.lifecycle.session_close",
+            Self::ConnectionPreparation => "runtime.lifecycle.connection_preparation",
             Self::OperationCleanup => "runtime.lifecycle.operation_cleanup",
             Self::ConnectionCleanup => "runtime.lifecycle.connection_cleanup",
             Self::ShutdownJoin => "runtime.lifecycle.shutdown_join",

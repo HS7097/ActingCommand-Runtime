@@ -167,12 +167,30 @@ Once an instance is bound, each of its backend opens is recorded as one
 `runtime.lifecycle_observed` event with phase `backend_open_observed`
 (`backend-open-observation.md`), and right after it the host records that
 report as the instance's four `backend.selfcheck.<entry>.*` runtime facts
-(`runtime-fact-store.md`, "Producers"); a `failed` one withdraws a policy
-instance's availability (`instance-fact-store.md`, "Backend self-check
-availability"). An explicitly selected capture backend, like an automatic
-one, primes its first frame at open and the first capture returns that frame
-(`backend-open-observation.md`, "Primed first frame"), so the open's self-check
-already carries the capture check.
+(`runtime-fact-store.md`, "Producers") and, for a device self-checked instance
+(physical, with a device endpoint), one `device.self_check` status hint
+(`backend-open-observation.md`, "Device self-check event"); a physical policy
+instance is available only while that self-check passes
+(`instance-fact-store.md`, "Backend self-check availability"). An explicitly
+selected capture backend, like an automatic one, primes its first frame at open
+and the first capture returns that frame (`backend-open-observation.md`,
+"Primed first frame"), so the open's self-check already carries the capture
+check.
+
+Startup sequence (Workflow #317 sc3): after the provider is assembled, the
+registry is read, the `runtime.instance_bound` events are appended and the
+fact seeds, configuration manifest and settlement facts are recorded, the host
+runs the connection preparation phase (`runtime-fact-store.md`, "Connection
+preparation phase") for every registered device self-checked instance in
+registry order, before any thread is spawned and so before `actingd ready`:
+the instance's availability is withdrawn, a dedicated preparation lease is
+granted, its input and capture backends are opened (a Nemu pair once) and
+recorded (`backend_open_observed`, facts, `device.self_check`), and the session
+is closed and the lease released again. An instance with a Nemu pair (touch
+backend `nemu_ipc`) therefore shows one `device.self_check` (`nemu`) before
+`ready`, one with independent backends two (`input`, `capture`). A failed preparation leaves its instance unavailable and does
+not stop the start; only a fatal failure (a ledger append, an unconfirmed
+close) does.
 
 `actingcommand-vision-provider-check --state-root <runtime-state>` reads the
 specified Runtime ledger through B's `ForensicRequest::events` and the shared

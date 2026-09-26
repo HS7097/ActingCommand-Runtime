@@ -29,9 +29,10 @@ The registry observes the selected backend's existing connection metadata:
 `status` describes the return of the open, `connection` the observed connection,
 and `capture_check` the actual capture/layout check. A constructed backend can therefore
 have Passed open status and Unknown connection/capture status. These observations
-are not dispatch eligibility or evidence of an input effect; only a `failed`
-self-check fact derived from one withdraws a policy instance's availability
-(`instance-fact-store.md`, "Backend self-check availability"). Existing connect,
+are not dispatch eligibility or evidence of an input effect; only the
+self-check facts derived from them decide a physical policy instance's
+availability (`instance-fact-store.md`, "Backend self-check availability",
+Workflow #317 sc3). Existing connect,
 capture, input, cleanup, cancellation and deadline operations retain their order
 and count. The getters read data already in memory.
 
@@ -113,7 +114,46 @@ scope. No new timing sample is taken. They do not populate `touch_response_us`
 or `capture_acquire_us`; the original Input/Capture events remain the only source
 of those performance samples. The host maps each event to the instance's
 `backend.selfcheck.*` runtime facts (`runtime-fact-store.md`, "Producers"); the
-event publishes no availability record and changes no policy admission.
+event itself publishes no availability record and changes no policy admission.
+
+## Device self-check event
+
+Workflow #317 sc3 (a status hint): right after it records an open's four
+`backend.selfcheck.<entry>.*` facts, under the same gate hold, the host appends
+one `device.self_check` event for that open when the instance is device
+self-checked (physical provenance with a device endpoint,
+`instance-fact-store.md`, "Backend self-check availability"). Every open of
+such an instance emits it through this one site: the connection preparation
+phase (startup, emulator `start` / `restart`, instance resume,
+`SelfCheckInstance`), the lazy business opens and a failed open's report alike.
+A fixture simulation, or a provider without a device endpoint, has no device
+connection to hint at and emits none (its facts are recorded as before).
+
+```text
+event_type runtime.lifecycle_observed, action device.self_check,
+origin (runtime, runtime, runtime), the open's links,
+severity info, or warning when status is failed
+payload runtime / device_self_check = {
+  instance_alias, entry: input | capture | nemu,
+  status: passed | failed | unknown,          # the backend.selfcheck.<entry>.status fact
+  selected?: <backend name>,
+  capture?: { width, height },                 # capture and nemu: the primed first frame
+  touch?: { max_x, max_y },                    # input and nemu: input geometry, else handshake limits
+  failure_code?: input_backend_open_failed | capture_backend_open_failed
+               | paired_backend_open_failed | input_check_failed | capture_check_failed,
+  generation                                   # the open's session generation
+}
+```
+
+`failure_code` is present exactly when `status` is `failed`: the entry's open
+code when the report's `status` or `connection` failed, else the entry's own
+check (`capture_check_failed` for a capture or pair capture check,
+`input_check_failed` otherwise). No frame artifact is attached. The payload is
+a new `RuntimePayload::DeviceSelfCheck` variant with the new closed
+`EventAction::DeviceSelfCheck`; its sensitivity is `internal`, and the public
+projection carries only the event type and action. The wire change is
+additive: a `deny_unknown_fields` reader must move to this contract before it
+reads such an event.
 
 ## Input parameters from the original connection
 

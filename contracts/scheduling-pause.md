@@ -4,7 +4,8 @@ Workflow #191 slices ps1 and ps2 (launcher design v3, Workflow #297 §3.1, §3.2
 (a)(b)(c), the resume paragraph and §3.3). `RuntimeOperation::PauseScheduling` stops the
 Runtime's own policy dispatch, globally or for one instance, and an instance pause hands the
 instance's device back to the person; `RuntimeOperation::ResumeScheduling` lifts the pause again
-and an instance resume reconnects the device at once, answering with its self-check.
+and an instance resume reconnects the device at once through the connection preparation phase
+(Workflow #317 sc3), answering with its self-check.
 
 ## Operations and origin gate
 
@@ -116,13 +117,16 @@ reconnects nothing.
 
 An instance resume (ps2) accepts a pause in stage `released` only. Under the instance
 admission guard it lifts the gate and then reconnects the device at once instead of at the next
-lazy open: `ExecutionKernel::open_instance_backends` opens the instance's input and capture
-backends through the same provider opens as the lazy paths (a backend the session still holds
-is reused; a Nemu pair opens once) and takes the first frame of a capture it opened, as the
-first lazy capture does, then drops it (no frame artifact is written). The opens are recorded
-like every open (`backend-open-observation.md`): `backend.open_observed`, the
-`backend.selfcheck.*` facts, and a `failed` self-check withdrawing the instance's policy
-availability. The receipt carries the self-check projected from those reports:
+lazy open. Since Workflow #317 sc3 the reconnect is the instance's connection preparation phase
+(`runtime-fact-store.md`, "Connection preparation phase"): under a dedicated preparation lease,
+`ExecutionKernel::open_instance_backends` opens the instance's input and capture backends
+through the same provider opens as the lazy paths (a Nemu pair opens once) and takes the first
+frame of a capture it opened, as the first lazy capture does, then drops it (no frame artifact
+is written). The opens are recorded like every open (`backend-open-observation.md`):
+`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check`, and the
+instance's policy availability following the self-check. The session is then closed and the
+lease released; the next task opens it lazily. The receipt carries the self-check projected
+from those reports:
 
 ```text
 selfcheck = {
@@ -138,15 +142,18 @@ selfcheck = {
   `backend` is its selected backend, `max_x` / `max_y` its connection's input geometry, else
   its handshake limits (absent for a Nemu pair). The check reads the connection back and sends
   no touch.
-- A side the session still held has no report of this resume: `ok: false`, no values.
-- `failure_code` is the failed open's device code verbatim, for example
-  `input_backend_open_failed`, `capture_backend_open_failed`,
-  `capture_backend_operation_failed` or `paired_backend_open_failed`.
+- A side without a report of this resume has `ok: false` and no values.
+- `failure_code` is the code of the failing step verbatim: a failed open's device code, for
+  example `input_backend_open_failed`, `capture_backend_open_failed`,
+  `capture_backend_operation_failed` or `paired_backend_open_failed`; a refused preparation
+  lease's scheduler code (`lease_busy`, `lease_cooldown`, `lease_transfer_not_safe`, both sides
+  `ok: false`); or a failed close's code.
 
 A failed reconnect does not roll the resume back and is not retried: the resume is performed,
-the failed session is closed through the existing capture-failure close path, and the receipt
-reports the failure. A successful reconnect keeps the session open for the next task. Only an
-unconfirmed close or a failed record fails the request. A resume triggers no extra policy
+the failure is recorded, the instance stays unavailable until a self-check passes, and the
+receipt reports it. Only an unconfirmed close or a failed record fails the request.
+`actingctl selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause and
+answers `InstanceSelfChecked { instance_alias, selfcheck }` with this `selfcheck` shape. A resume triggers no extra policy
 evaluation: the next cycle runs on its ordinary trigger.
 
 ## Revisions and refusals

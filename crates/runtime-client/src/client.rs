@@ -1021,6 +1021,24 @@ impl RuntimeClient {
         }
     }
 
+    /// Reconnects one physical instance and self-checks it now (`SelfCheckInstance`,
+    /// Workflow #317 sc3) and returns the `RuntimeResult::InstanceSelfChecked` result verbatim.
+    pub fn self_check_instance(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeResult> {
+        let result = self.execute(
+            "self_check_instance",
+            RuntimeOperation::SelfCheckInstance {
+                instance_alias: instance_alias.to_owned(),
+            },
+        )?;
+        match &result {
+            RuntimeResult::InstanceSelfChecked {
+                instance_alias: checked,
+                ..
+            } if checked == instance_alias => Ok(result),
+            _ => Err(self.unexpected_result("self_check_instance")),
+        }
+    }
+
     pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
         #[cfg(feature = "test-observation")]
         record_active(
@@ -5216,6 +5234,13 @@ pub(super) fn receipt_response_timeout(
         RuntimeOperation::ReleaseLease { .. } => {
             backend_open_timeout.checked_add(io_timeout).ok_or_else(|| {
                 RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "release_lease")
+            })
+        }
+        // Workflow #317 sc3: the preparation phase opens the backends (first frame included)
+        // and closes the session again before it answers.
+        RuntimeOperation::SelfCheckInstance { .. } => {
+            backend_open_timeout.checked_add(io_timeout).ok_or_else(|| {
+                RuntimeClientError::fatal("runtime_receipt_timeout_overflow", "self_check_instance")
             })
         }
         _ => Ok(io_timeout),

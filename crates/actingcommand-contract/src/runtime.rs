@@ -1566,7 +1566,10 @@ pub struct SchedulingDrainSummary {
 /// verified it: its open status and its check (`capture_check`, `input_check`) passed. A side
 /// the session still held is reused without an open and reports `ok: false` with no values.
 /// `failure_code` is the device code of a failed reconnect verbatim (for example
-/// `capture_backend_open_failed`); a failed self-check never rolls the resume back.
+/// `capture_backend_open_failed`); a failed self-check never rolls the resume back. Since
+/// Workflow #317 sc3 the reconnect is the host's preparation phase, which also answers
+/// `SelfCheckInstance` with this shape; a preparation that could not take its lease reports
+/// the scheduler code (for example `lease_transfer_not_safe`) with both sides `ok: false`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchedulingResumeSelfCheck {
@@ -3067,6 +3070,13 @@ pub enum RuntimeOperation {
     ResumeScheduling {
         scope: SchedulingPauseScope,
     },
+    /// Reconnects one physical instance and self-checks it now (Workflow #317 sc3): the
+    /// host's controlled preparation phase opens its input and capture backends under a
+    /// dedicated preparation lease, records the opens and closes the session again. Only an
+    /// explicit User+Ui or Cli+Cli request may issue it (the emulator control origin gate).
+    SelfCheckInstance {
+        instance_alias: String,
+    },
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -3321,6 +3331,7 @@ impl RuntimeOperation {
                 Ok(())
             }
             Self::ResumeScheduling { scope } => scope.validate(),
+            Self::SelfCheckInstance { instance_alias } => validate_instance_alias(instance_alias),
             Self::RecognizeArtifact { request } => request.validate(),
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::CaptureSequence {
@@ -3442,6 +3453,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::DiscoverInstances => "RuntimeOperation::DiscoverInstances",
             Self::PauseScheduling { .. } => "RuntimeOperation::PauseScheduling(<redacted>)",
             Self::ResumeScheduling { .. } => "RuntimeOperation::ResumeScheduling(<redacted>)",
+            Self::SelfCheckInstance { .. } => "RuntimeOperation::SelfCheckInstance(<redacted>)",
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
@@ -3610,12 +3622,14 @@ impl RuntimeRequest {
         {
             return Err(RuntimeContractError::new("invalid_governance_origin"));
         }
-        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator or
-        // spawn its discovery tool; Adapter/Agent origins are excluded so no scheduler or
-        // agent path can restart it.
+        // Only an explicit person (Ui) or operator (Cli) request may drive the emulator, spawn
+        // its discovery tool or reconnect it for a self-check; Adapter/Agent origins are
+        // excluded so no scheduler or agent path can restart or reconnect it.
         if matches!(
             self.operation,
-            RuntimeOperation::ControlEmulatorInstance { .. } | RuntimeOperation::DiscoverInstances
+            RuntimeOperation::ControlEmulatorInstance { .. }
+                | RuntimeOperation::DiscoverInstances
+                | RuntimeOperation::SelfCheckInstance { .. }
         ) && !matches!(
             (self.actor, self.source),
             (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
@@ -4190,6 +4204,12 @@ pub enum RuntimeResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         selfcheck: Option<SchedulingResumeSelfCheck>,
     },
+    /// The preparation phase of `SelfCheckInstance` ran (Workflow #317 sc3); `selfcheck` has
+    /// the shape of an instance resume's and is projected from the opens it made.
+    InstanceSelfChecked {
+        instance_alias: String,
+        selfcheck: SchedulingResumeSelfCheck,
+    },
     ContainedTaskCompleted {
         run_id: RunId,
         task_id: crate::TaskId,
@@ -4607,6 +4627,18 @@ impl RuntimeReceipt {
                 if let Some(selfcheck) = selfcheck {
                     selfcheck.validate()?;
                 }
+            }
+            Some(RuntimeResult::InstanceSelfChecked {
+                instance_alias,
+                selfcheck,
+            }) => {
+                validate_instance_alias(instance_alias)?;
+                if self.state != RuntimeReceiptState::Completed {
+                    return Err(RuntimeContractError::new(
+                        "invalid_instance_selfcheck_receipt",
+                    ));
+                }
+                selfcheck.validate()?;
             }
             Some(RuntimeResult::ProjectInterface { response }) => response
                 .validate()

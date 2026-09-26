@@ -230,7 +230,8 @@ fn scheduling_pause_release_failure(error: RuntimeHostError) -> RequestFailure {
 /// Nemu pair report, `ok` when its open status and `input_check` passed, with its selected
 /// backend and its connection's bounds (the input geometry, else the handshake limits). A side
 /// without a report of this reconnect (its backend was reused) is `ok: false` with no values.
-fn scheduling_resume_selfcheck(
+/// Since Workflow #317 sc3 it projects every preparation phase's opens.
+pub(super) fn scheduling_resume_selfcheck(
     observations: &[actingcommand_device::BackendOpenObservation],
     failure_code: Option<&str>,
 ) -> SchedulingResumeSelfCheck {
@@ -1767,12 +1768,15 @@ impl HostShared {
         })
     }
 
-    /// Workflow #191 ps2: the reconnect of an instance resume. It opens the instance's input and
-    /// capture backends through `ExecutionKernel::open_instance_backends` and records the opens
-    /// as every open is recorded (`backend.open_observed`, the `backend.selfcheck.*` facts and the
-    /// availability they gate). A failed open is closed through the capture-failure close path
-    /// and reported in the self-check with its device code; it never rolls the resume back and is
-    /// not retried. Only an unconfirmed close or a failed record fails the request.
+    /// Workflow #191 ps2: the reconnect of an instance resume, since Workflow #317 sc3 (c) the
+    /// instance's preparation phase (`prepare_instance_connection`): a dedicated preparation
+    /// lease, the opens of its input and capture backends through
+    /// `ExecutionKernel::open_instance_backends`, recorded as every open is recorded
+    /// (`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check` and the
+    /// availability they gate), then the session's close and the lease's release. A failing step
+    /// is reported in the self-check with its code and leaves the instance unavailable; it never
+    /// rolls the resume back and is not retried. Only a fatal failure (an unconfirmed close, a
+    /// failed record) fails the request.
     fn reconnect_resumed_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -1783,58 +1787,8 @@ impl HostShared {
         let links = self
             .events
             .request_links(request, Some(instance_id), None, None);
-        // The frame memory owner of every capture path: the first frame of a capture opened here
-        // is charged to it and dropped inside the open.
-        let frame_store = actingcommand_artifact_store::FrameStore::new(
-            frame_retention::spill_root(self.artifacts.root(), &request.request_id())
-                .map_err(RuntimeHostError::artifact)?,
-            frame_retention::capture_frame_store_config(),
-        )
-        .map_err(RuntimeHostError::artifact)?;
-        let registration = self
-            .mark_resources_in_use()
-            .map_err(RequestFailure::poison_without_terminal)?;
-        match self.execution.open_instance_backends(
-            instance_alias,
-            registration,
-            frame_store.memory_budget(),
-        ) {
-            Ok(observations) => {
-                self.append_backend_open_observations(
-                    &observations,
-                    links,
-                    EventSource::Device,
-                    OriginModule::DeviceProxy,
-                )
-                .map_err(RequestFailure::poison_without_terminal)?;
-                Ok(scheduling_resume_selfcheck(&observations, None))
-            }
-            Err(error) => {
-                self.append_backend_open_failure_observations(
-                    &error,
-                    links.clone(),
-                    EventSource::Device,
-                    OriginModule::DeviceProxy,
-                )
-                .map_err(RequestFailure::poison_without_terminal)?;
-                let failure_code = error.code();
-                let observations = error.failure_context().backend_open_observations().to_vec();
-                let error = self
-                    .finish_capture_failure_while_guarded(error, links.clone(), admission)
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                let error = RuntimeHostError::execution("reconnect_resumed_instance", &error);
-                if self
-                    .retain_unconfirmed_resources(&error, links)
-                    .map_err(RequestFailure::poison_without_terminal)?
-                {
-                    return Err(RequestFailure::poison_without_terminal(error));
-                }
-                Ok(scheduling_resume_selfcheck(
-                    &observations,
-                    Some(failure_code),
-                ))
-            }
-        }
+        self.prepare_instance_connection(instance_alias, instance_id, links, admission)
+            .map_err(RequestFailure::poison_without_terminal)
     }
 
     /// Workflow #191 ps2: the client on `connection_id` owes `instance_alias` a reset after its
