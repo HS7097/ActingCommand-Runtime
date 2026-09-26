@@ -6,6 +6,7 @@ use crate::{
     DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSeverity,
     DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, InputBackend,
 };
+use actingcommand_contract::FencedWrite;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -610,11 +611,22 @@ impl MaaTouchBackend {
 }
 
 impl InputBackend for MaaTouchBackend {
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.long_tap(x, y, self.maatouch_config.tap_hold.as_millis() as u64)
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
+        self.long_tap(
+            witness,
+            x,
+            y,
+            self.maatouch_config.tap_hold.as_millis() as u64,
+        )
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         let duration_ms = bounded_gesture_duration_ms(duration_ms);
         let pressure = self.maatouch_config.default_pressure;
         self.validate_input(x, y, pressure)?;
@@ -624,7 +636,15 @@ impl InputBackend for MaaTouchBackend {
         Ok(())
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        _witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         let duration_ms = bounded_gesture_duration_ms(duration_ms);
         let pressure = self.maatouch_config.default_pressure;
         self.validate_input(x1, y1, pressure)?;
@@ -650,7 +670,11 @@ impl InputBackend for MaaTouchBackend {
         true
     }
 
-    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(
+        &mut self,
+        _witness: &FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
         let pressure = self.maatouch_config.default_pressure;
         for event in plan.events() {
             match event {
@@ -684,17 +708,17 @@ impl InputBackend for MaaTouchBackend {
         Ok(())
     }
 
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
+    fn key(&mut self, _witness: &FencedWrite, key: &str) -> DeviceResult<()> {
         let key = validate_maatouch_line_token("key", key)?;
         self.write_and_flush(&format!("k {key} o\nc\n"))
     }
 
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
+    fn text(&mut self, _witness: &FencedWrite, text: &str) -> DeviceResult<()> {
         let text = validate_maatouch_line_token("text", text)?;
         self.write_and_flush(&format!("t {text}\nc\n"))
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
         self.write_and_flush("r\nc\n")
     }
 
@@ -710,7 +734,7 @@ impl InputBackend for MaaTouchBackend {
         }
 
         let reset = match authority.resource_close_witness() {
-            Some(_witness) => self.reset().err(),
+            Some(witness) => self.reset(witness).err(),
             None => Some(
                 DeviceError::fatal("MaaTouch device reset requires current lease admission")
                     .with_resource_close_cause(
@@ -772,7 +796,9 @@ impl Drop for MaaTouchBackend {
     }
 }
 /// Smoke-test helper for CLI probes; production callers should use `MaaTouchBackend` directly.
+/// Its touch plan writes to the device, so it takes the step witness like every write.
 pub fn validate_maatouch(
+    witness: &FencedWrite,
     config: &MaaTouchValidationConfig,
 ) -> DeviceResult<MaaTouchValidationResult> {
     let mut backend = MaaTouchBackend::new(
@@ -786,7 +812,7 @@ pub fn validate_maatouch(
         .cloned()
         .ok_or_else(|| DeviceError::fatal("MaaTouch handshake was not recorded after connect"))?;
 
-    let operation_result = run_touch_plan(&mut backend, &config.touch_plan);
+    let operation_result = run_touch_plan(witness, &mut backend, &config.touch_plan);
     let close_result = backend.close();
     combine_operation_and_close(operation_result, close_result)?;
 
@@ -806,10 +832,15 @@ fn validate_default_pressure(default_pressure: i32, max_pressure: i32) -> Device
     Ok(())
 }
 
-fn run_touch_plan(backend: &mut MaaTouchBackend, touch_plan: &TouchPlan) -> DeviceResult<()> {
-    backend.reset()?;
+fn run_touch_plan(
+    witness: &FencedWrite,
+    backend: &mut MaaTouchBackend,
+    touch_plan: &TouchPlan,
+) -> DeviceResult<()> {
+    backend.reset(witness)?;
     if let Some(wake) = touch_plan.wake_first {
         backend.long_tap(
+            witness,
             wake.x,
             wake.y,
             backend.maatouch_config.tap_hold.as_millis() as u64,
@@ -818,6 +849,7 @@ fn run_touch_plan(backend: &mut MaaTouchBackend, touch_plan: &TouchPlan) -> Devi
     }
     if let Some(tap) = touch_plan.tap {
         backend.long_tap(
+            witness,
             tap.x,
             tap.y,
             backend.maatouch_config.tap_hold.as_millis() as u64,

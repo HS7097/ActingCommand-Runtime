@@ -113,15 +113,29 @@ impl InputBackend for FakeBackend {
             .clone()
     }
 
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
+    fn tap(&mut self, _witness: &actingcommand_contract::FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
         self.input(InputAction::Tap { x, y })
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.input(InputAction::LongTap { x, y, duration_ms })
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.input(InputAction::Swipe {
             x1,
             y1,
@@ -135,7 +149,11 @@ impl InputBackend for FakeBackend {
         true
     }
 
-    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
         self.state
             .segmented_swipe_plans
             .lock()
@@ -144,19 +162,19 @@ impl InputBackend for FakeBackend {
         self.complete_input()
     }
 
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
+    fn key(&mut self, _witness: &actingcommand_contract::FencedWrite, key: &str) -> DeviceResult<()> {
         self.input(InputAction::Key {
             key: key.to_string(),
         })
     }
 
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
+    fn text(&mut self, _witness: &actingcommand_contract::FencedWrite, text: &str) -> DeviceResult<()> {
         self.input(InputAction::Text {
             text: text.to_string(),
         })
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &actingcommand_contract::FencedWrite) -> DeviceResult<()> {
         self.input(InputAction::Reset)
     }
 
@@ -612,6 +630,7 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         instance_alias: &str,
         _action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {

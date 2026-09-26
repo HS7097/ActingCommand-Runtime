@@ -1578,9 +1578,25 @@ mod tests {
             .expect("configured registry");
         let mut backend = ExecutionBackendProvider::open_input(&registry, "neutral.fixture")
             .expect("fixture input");
-        backend.tap(10, 20).expect("fixture input within budget");
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        let witness = actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test step token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::Business,
+        );
+        backend
+            .tap(&witness, 10, 20)
+            .expect("fixture input within budget");
         let error = backend
-            .tap(10, 20)
+            .tap(&witness, 10, 20)
             .expect_err("fixture input budget remains bounded");
         assert_eq!(error, DeviceError::fatal("fixture input budget exhausted"));
         assert!(error.diagnostic().is_none());

@@ -3661,6 +3661,7 @@ impl ExecutionBackendProvider for PlanningSeedProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         _instance_alias: &str,
         _action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
@@ -3731,6 +3732,7 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         _instance_alias: &str,
         _action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {

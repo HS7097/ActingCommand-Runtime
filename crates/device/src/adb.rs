@@ -9,6 +9,7 @@ use crate::{
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceResourceCloseOutcome,
     DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceResult,
 };
+use actingcommand_contract::FencedWrite;
 use std::ffi::OsString;
 use std::io::{self, Read};
 #[cfg(windows)]
@@ -379,14 +380,22 @@ impl Adb {
         Ok(output.stdout.trim().to_string())
     }
 
-    pub fn shell_input_tap(&self, serial: &str, x: i32, y: i32) -> DeviceResult<CommandOutput> {
+    pub fn shell_input_tap(
+        &self,
+        witness: &FencedWrite,
+        serial: &str,
+        x: i32,
+        y: i32,
+    ) -> DeviceResult<CommandOutput> {
         let x = x.to_string();
         let y = y.to_string();
-        self.run(&["-s", serial, "shell", "input", "tap", &x, &y])
+        self.run_write(witness, &["-s", serial, "shell", "input", "tap", &x, &y])
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn shell_input_swipe(
         &self,
+        witness: &FencedWrite,
         serial: &str,
         x1: i32,
         y1: i32,
@@ -399,36 +408,55 @@ impl Adb {
         let x2 = x2.to_string();
         let y2 = y2.to_string();
         let duration_ms = duration_ms.to_string();
-        self.run(&[
-            "-s",
-            serial,
-            "shell",
-            "input",
-            "swipe",
-            &x1,
-            &y1,
-            &x2,
-            &y2,
-            &duration_ms,
-        ])
+        self.run_write(
+            witness,
+            &[
+                "-s",
+                serial,
+                "shell",
+                "input",
+                "swipe",
+                &x1,
+                &y1,
+                &x2,
+                &y2,
+                &duration_ms,
+            ],
+        )
     }
 
-    pub fn force_stop(&self, serial: &str, package: &str) -> DeviceResult<CommandOutput> {
-        self.run(&["-s", serial, "shell", "am", "force-stop", package])
+    pub fn force_stop(
+        &self,
+        witness: &FencedWrite,
+        serial: &str,
+        package: &str,
+    ) -> DeviceResult<CommandOutput> {
+        self.run_write(
+            witness,
+            &["-s", serial, "shell", "am", "force-stop", package],
+        )
     }
 
-    pub fn launch_package(&self, serial: &str, package: &str) -> DeviceResult<CommandOutput> {
-        self.run(&[
-            "-s",
-            serial,
-            "shell",
-            "monkey",
-            "-p",
-            package,
-            "-c",
-            "android.intent.category.LAUNCHER",
-            "1",
-        ])
+    pub fn launch_package(
+        &self,
+        witness: &FencedWrite,
+        serial: &str,
+        package: &str,
+    ) -> DeviceResult<CommandOutput> {
+        self.run_write(
+            witness,
+            &[
+                "-s",
+                serial,
+                "shell",
+                "monkey",
+                "-p",
+                package,
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "1",
+            ],
+        )
     }
 
     /// Read-only: the package name of the activity Android reports as resumed
@@ -478,7 +506,17 @@ impl Adb {
         self.run(&["-s", serial, "shell", "chmod", mode, remote])
     }
 
+    /// Read-only commands, plus the connection-time commands of backend opening
+    /// (`connect`, `push`, `chmod`, `forward`), which stay under the open-phase authority.
+    /// A command with a device effect (input, application lifecycle) goes through
+    /// `run_write`.
     pub fn run(&self, args: &[&str]) -> DeviceResult<CommandOutput> {
+        run_text_with_timeout(&self.config.adb_path, args, self.config.command_timeout)
+    }
+
+    /// A device-effect command, admitted by the scheduler-issued step witness. The
+    /// witness is the type-level proof that a step was begun; the scheduler validates it.
+    pub fn run_write(&self, _witness: &FencedWrite, args: &[&str]) -> DeviceResult<CommandOutput> {
         run_text_with_timeout(&self.config.adb_path, args, self.config.command_timeout)
     }
 

@@ -192,15 +192,16 @@ impl HostShared {
                                 RuntimeHostError::scheduler("begin_destructive_input", &error)
                             })
                     });
-                match destructive {
-                    Ok(witness) => destructive_step = Some(Arc::new(witness)),
+                let witness = match destructive {
+                    Ok(witness) => Arc::new(witness),
                     Err(error) => {
                         return CriticalActionReport::Failed {
                             error: ActionFailure::scheduler(error),
                             effect: EffectDisposition::NotPerformed,
                         };
                     }
-                }
+                };
+                destructive_step = Some(Arc::clone(&witness));
                 let registration = match self.mark_resources_in_use() {
                     Ok(registration) => registration,
                     Err(error) => {
@@ -214,12 +215,8 @@ impl HostShared {
                     &instance_alias,
                     action_for_worker,
                     input_frame,
-                    input_check.map(|check| {
-                        check.fenced(Arc::clone(
-                            destructive_step.as_ref().expect("admitted step"),
-                        ))
-                    }),
-                    destructive_step.as_ref().map(Arc::clone),
+                    input_check.map(|check| check.fenced(Arc::clone(&witness))),
+                    witness,
                     registration,
                 );
                 match backend_result {
@@ -494,15 +491,16 @@ impl HostShared {
                             })
                     },
                 );
-                match destructive {
-                    Ok(witness) => destructive_step = Some(Arc::new(witness)),
+                let witness = match destructive {
+                    Ok(witness) => Arc::new(witness),
                     Err(error) => {
                         return CriticalActionReport::Failed {
                             error: ActionFailure::scheduler(error),
                             effect: EffectDisposition::NotPerformed,
                         };
                     }
-                }
+                };
+                destructive_step = Some(Arc::clone(&witness));
                 let registration = match self.mark_resources_in_use() {
                     Ok(registration) => registration,
                     Err(error) => {
@@ -517,7 +515,7 @@ impl HostShared {
                     .control_application_retained_with_registration_guard(
                         &instance_alias,
                         action,
-                        destructive_step.as_ref().map(Arc::clone),
+                        witness,
                         registration,
                     ) {
                     Ok(()) => CriticalActionReport::Succeeded {

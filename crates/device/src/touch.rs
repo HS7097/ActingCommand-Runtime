@@ -8,6 +8,7 @@ use crate::{
     DeviceResourceQuiescence, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
     MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig, PreparedSegmentedSwipePlan,
 };
+use actingcommand_contract::FencedWrite;
 use std::time::{Duration, Instant};
 
 const MAX_ADB_INPUT_GESTURE_MS: u64 = 60_000;
@@ -482,19 +483,33 @@ impl InputBackend for SelectedTouchBackend {
         })
     }
 
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.run_touch_action("tap", &[(x, y)], |backend| backend.tap(x, y))
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
+        self.run_touch_action("tap", &[(x, y)], |backend| backend.tap(witness, x, y))
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.run_touch_action("long_tap", &[(x, y)], |backend| {
-            backend.long_tap(x, y, duration_ms)
+            backend.long_tap(witness, x, y, duration_ms)
         })
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         self.run_touch_action("swipe", &[(x1, y1), (x2, y2)], |backend| {
-            backend.swipe(x1, y1, x2, y2, duration_ms)
+            backend.swipe(witness, x1, y1, x2, y2, duration_ms)
         })
     }
 
@@ -502,7 +517,11 @@ impl InputBackend for SelectedTouchBackend {
         self.active.backend.supports_segmented_swipe()
     }
 
-    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(
+        &mut self,
+        witness: &FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
         let action = plan.action();
         action.validate()?;
         if !self.active.backend.supports_segmented_swipe() {
@@ -513,7 +532,7 @@ impl InputBackend for SelectedTouchBackend {
         }
         self.validate_action_points("single_touch_drag_with_vertical_brake_v1", &action.points)?;
         let started = Instant::now();
-        match self.active.backend.segmented_swipe_prepared(plan) {
+        match self.active.backend.segmented_swipe_prepared(witness, plan) {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.record_runtime_failure(
@@ -528,16 +547,16 @@ impl InputBackend for SelectedTouchBackend {
         }
     }
 
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
-        self.active.backend.key(key)
+    fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
+        self.active.backend.key(witness, key)
     }
 
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
-        self.active.backend.text(text)
+    fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()> {
+        self.active.backend.text(witness, text)
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
-        self.active.backend.reset()
+    fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()> {
+        self.active.backend.reset(witness)
     }
 
     fn close_once(
@@ -1284,21 +1303,35 @@ impl InputBackend for AdbShellInputBackend {
         self.recovery.take()
     }
 
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
         let adb_config = self.adb_config.clone();
         let serial = self.serial.clone();
         self.tap_with_child(x, y, move |x, y| {
             Adb::new(adb_config)
-                .shell_input_tap(&serial, x, y)
+                .shell_input_tap(witness, &serial, x, y)
                 .map(|_| ())
         })
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.swipe(x, y, x, y, duration_ms)
+    fn long_tap(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
+        self.swipe(witness, x, y, x, y, duration_ms)
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
         let bounds = self.bounds()?;
         let action = AdbBoundsAction::Swipe { x1, y1, x2, y2 };
         validate_touch_coordinate("swipe x1", x1, bounds.max_x).map_err(|error| {
@@ -1316,23 +1349,23 @@ impl InputBackend for AdbShellInputBackend {
         self.ensure_connected()?;
         let duration_ms = duration_ms.clamp(1, MAX_ADB_INPUT_GESTURE_MS);
         let adb = self.adb_for_duration(duration_ms);
-        adb.shell_input_swipe(&self.serial, x1, y1, x2, y2, duration_ms)?;
+        adb.shell_input_swipe(witness, &self.serial, x1, y1, x2, y2, duration_ms)?;
         Ok(())
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
         Err(DeviceError::fatal(
             "AdbShellInputBackend key input is outside A1 touch fallback scope",
         ))
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
         Err(DeviceError::fatal(
             "AdbShellInputBackend text input is outside A1 touch fallback scope",
         ))
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
         self.ensure_connected()
     }
 
@@ -1431,6 +1464,24 @@ mod tests {
     use crate::{DeviceErrorCategory, DeviceErrorSensitivity, DeviceErrorSeverity};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    /// A scheduler-shaped step witness for driving a write method directly.
+    fn step_witness() -> FencedWrite {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test step token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::Business,
+        )
+    }
 
     fn adb_shell_input_test_backend() -> AdbShellInputBackend {
         AdbShellInputBackend::new(AdbConfig::default(), DeviceTarget::default())
@@ -1722,7 +1773,7 @@ mod tests {
         ] {
             let (x1, y1, x2, y2) = points;
             let error = backend
-                .swipe(x1, y1, x2, y2, 500)
+                .swipe(&step_witness(), x1, y1, x2, y2, 500)
                 .expect_err("swipe rejection before child");
             assert_eq!(error.message(), human);
             assert_eq!(
@@ -1740,7 +1791,7 @@ mod tests {
             );
         }
         let long_tap = backend
-            .long_tap(101, 50, 500)
+            .long_tap(&step_witness(), 101, 50, 500)
             .expect_err("delegated long tap rejection");
         assert_eq!(
             long_tap.adb_input_bounds_context(),
@@ -1940,16 +1991,23 @@ mod tests {
     }
 
     impl InputBackend for FakeBackend {
-        fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+        fn tap(&mut self, _witness: &FencedWrite, _x: i32, _y: i32) -> DeviceResult<()> {
             self.action_result.borrow_mut().remove(0)
         }
 
-        fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+        fn long_tap(
+            &mut self,
+            _witness: &FencedWrite,
+            _x: i32,
+            _y: i32,
+            _duration_ms: u64,
+        ) -> DeviceResult<()> {
             self.action_result.borrow_mut().remove(0)
         }
 
         fn swipe(
             &mut self,
+            _witness: &FencedWrite,
             _x1: i32,
             _y1: i32,
             _x2: i32,
@@ -1959,15 +2017,15 @@ mod tests {
             self.action_result.borrow_mut().remove(0)
         }
 
-        fn key(&mut self, _key: &str) -> DeviceResult<()> {
+        fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
             Ok(())
         }
 
-        fn text(&mut self, _text: &str) -> DeviceResult<()> {
+        fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
             Ok(())
         }
 
-        fn reset(&mut self) -> DeviceResult<()> {
+        fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
             Ok(())
         }
 
@@ -2058,7 +2116,7 @@ mod tests {
         )
         .expect("selected");
 
-        selected.tap(10, 20).expect("fallback tap");
+        selected.tap(&step_witness(), 10, 20).expect("fallback tap");
 
         assert_eq!(selected.backend_name(), TouchBackendName::AdbShellInput);
         assert!(selected.diagnostics().warnings.iter().any(|warning| {
@@ -2101,7 +2159,9 @@ mod tests {
         )
         .expect("selected");
 
-        let err = selected.tap(10, 20).expect_err("all failed");
+        let err = selected
+            .tap(&step_witness(), 10, 20)
+            .expect_err("all failed");
         assert!(err.to_string().contains("touch backend chain failed"));
         assert!(err.to_string().contains("adb input failed"));
     }
@@ -2121,7 +2181,9 @@ mod tests {
         )
         .expect("selected");
 
-        let err = selected.tap(10, 20).expect_err("fatal input error");
+        let err = selected
+            .tap(&step_witness(), 10, 20)
+            .expect_err("fatal input error");
 
         assert_eq!(err.message(), "serious input error");
         assert_eq!(selected.backend_name(), TouchBackendName::MaaTouch);
@@ -2149,7 +2211,9 @@ mod tests {
         )
         .expect("selected");
 
-        selected.long_tap(10, 20, 100).expect("transient fallback");
+        selected
+            .long_tap(&step_witness(), 10, 20, 100)
+            .expect("transient fallback");
 
         assert_eq!(selected.backend_name(), TouchBackendName::AdbShellInput);
     }
@@ -2169,7 +2233,9 @@ mod tests {
         )
         .expect("selected");
 
-        selected.swipe(10, 20, 30, 40, 100).expect("fallback swipe");
+        selected
+            .swipe(&step_witness(), 10, 20, 30, 40, 100)
+            .expect("fallback swipe");
 
         let attempt = selected
             .diagnostics()
@@ -2207,7 +2273,9 @@ mod tests {
         )
         .expect("selected");
 
-        let err = selected.tap(1281, 20).expect_err("out of bounds");
+        let err = selected
+            .tap(&step_witness(), 1281, 20)
+            .expect_err("out of bounds");
 
         assert!(err.message().contains("exceeds touch screen max"));
         assert_eq!(selected.backend_name(), TouchBackendName::MaaTouch);
@@ -2239,7 +2307,7 @@ mod tests {
         };
 
         selected
-            .tap(775, 691)
+            .tap(&step_witness(), 775, 691)
             .expect("selected backend must defer adb bounds");
 
         assert!(actions.borrow().is_empty());
@@ -2352,7 +2420,9 @@ mod tests {
         )
         .expect("selected");
 
-        selected.tap(10, 20).expect("degraded to adb");
+        selected
+            .tap(&step_witness(), 10, 20)
+            .expect("degraded to adb");
 
         assert_eq!(selected.backend_name(), TouchBackendName::AdbShellInput);
         assert!(selected.diagnostics().attempts.iter().any(|attempt| {

@@ -2,9 +2,10 @@
 
 //! JSON-line recording and replay for device input actions.
 //!
-//! Replay executes against an explicit `InputBackend`; it does not select a
-//! fallback backend or retry failed actions.
+//! Replay executes against an explicit `InputBackend` under the caller's step
+//! witness; it does not select a fallback backend or retry failed actions.
 
+use actingcommand_contract::FencedWrite;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -68,21 +69,23 @@ impl RecordedInputAction {
         }
     }
 
-    fn execute(&self, backend: &mut impl InputBackend) -> DeviceResult<()> {
+    fn execute(&self, witness: &FencedWrite, backend: &mut impl InputBackend) -> DeviceResult<()> {
         match self {
-            Self::Tap { x, y } => backend.tap(*x, *y),
-            Self::LongTap { x, y, duration_ms } => backend.long_tap(*x, *y, *duration_ms),
+            Self::Tap { x, y } => backend.tap(witness, *x, *y),
+            Self::LongTap { x, y, duration_ms } => backend.long_tap(witness, *x, *y, *duration_ms),
             Self::Swipe {
                 x1,
                 y1,
                 x2,
                 y2,
                 duration_ms,
-            } => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
-            Self::SingleTouchDragWithVerticalBrakeV1 { action } => backend.segmented_swipe(*action),
-            Self::Key { key } => backend.key(key),
-            Self::Text { text } => backend.text(text),
-            Self::Reset => backend.reset(),
+            } => backend.swipe(witness, *x1, *y1, *x2, *y2, *duration_ms),
+            Self::SingleTouchDragWithVerticalBrakeV1 { action } => {
+                backend.segmented_swipe(witness, *action)
+            }
+            Self::Key { key } => backend.key(witness, key),
+            Self::Text { text } => backend.text(witness, text),
+            Self::Reset => backend.reset(witness),
         }
     }
 }
@@ -133,6 +136,7 @@ pub fn write_replay_json_lines(records: &[RecordedInputEvent]) -> DeviceResult<S
 }
 
 pub fn replay_input_records(
+    witness: &FencedWrite,
     records: &[RecordedInputEvent],
     backend: &mut impl InputBackend,
 ) -> DeviceResult<ReplayReport> {
@@ -143,7 +147,7 @@ pub fn replay_input_records(
     let mut action_types = Vec::with_capacity(records.len());
     for (index, record) in records.iter().enumerate() {
         let action_type = record.action.action_type();
-        record.action.execute(backend).map_err(|err| {
+        record.action.execute(witness, backend).map_err(|err| {
             DeviceError::fatal(format!(
                 "replay action {} ({action_type}) failed: {err}",
                 index + 1
@@ -189,20 +193,34 @@ impl<B> RecordingInputBackend<B> {
 }
 
 impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.inner.tap(x, y)?;
+    fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
+        self.inner.tap(witness, x, y)?;
         self.record(RecordedInputAction::Tap { x, y });
         Ok(())
     }
 
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.inner.long_tap(x, y, duration_ms)?;
+    fn long_tap(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
+        self.inner.long_tap(witness, x, y, duration_ms)?;
         self.record(RecordedInputAction::LongTap { x, y, duration_ms });
         Ok(())
     }
 
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.inner.swipe(x1, y1, x2, y2, duration_ms)?;
+    fn swipe(
+        &mut self,
+        witness: &FencedWrite,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<()> {
+        self.inner.swipe(witness, x1, y1, x2, y2, duration_ms)?;
         self.record(RecordedInputAction::Swipe {
             x1,
             y1,
@@ -217,32 +235,36 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
         self.inner.supports_segmented_swipe()
     }
 
-    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
-        self.inner.segmented_swipe_prepared(plan)?;
+    fn segmented_swipe_prepared(
+        &mut self,
+        witness: &FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
+        self.inner.segmented_swipe_prepared(witness, plan)?;
         self.record(RecordedInputAction::SingleTouchDragWithVerticalBrakeV1 {
             action: plan.action(),
         });
         Ok(())
     }
 
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
-        self.inner.key(key)?;
+    fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
+        self.inner.key(witness, key)?;
         self.record(RecordedInputAction::Key {
             key: key.to_owned(),
         });
         Ok(())
     }
 
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
-        self.inner.text(text)?;
+    fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()> {
+        self.inner.text(witness, text)?;
         self.record(RecordedInputAction::Text {
             text: text.to_owned(),
         });
         Ok(())
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
-        self.inner.reset()?;
+    fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()> {
+        self.inner.reset(witness)?;
         self.record(RecordedInputAction::Reset);
         Ok(())
     }
@@ -259,6 +281,24 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
 mod tests {
     use super::*;
     use crate::DeviceErrorSeverity;
+
+    /// A scheduler-shaped step witness for driving a write method directly.
+    fn step_witness() -> FencedWrite {
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
+        actingcommand_contract::issue_fenced_write(
+            actingcommand_contract::LeaseToken::new(
+                *issuer.mint_owner_epoch().expect("epoch").transport(),
+                *issuer.mint_lease_id().expect("lease").transport(),
+                *issuer.mint_instance_id().expect("instance").transport(),
+                *issuer.mint_holder_id().expect("holder").transport(),
+                100,
+            )
+            .expect("test step token"),
+            1,
+            std::num::NonZeroU64::new(1).expect("step"),
+            actingcommand_contract::FencedWritePurpose::Business,
+        )
+    }
 
     #[derive(Default)]
     struct FakeInputBackend {
@@ -279,16 +319,23 @@ mod tests {
     }
 
     impl InputBackend for FakeInputBackend {
-        fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+        fn tap(&mut self, _witness: &FencedWrite, _x: i32, _y: i32) -> DeviceResult<()> {
             self.record("tap")
         }
 
-        fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+        fn long_tap(
+            &mut self,
+            _witness: &FencedWrite,
+            _x: i32,
+            _y: i32,
+            _duration_ms: u64,
+        ) -> DeviceResult<()> {
             self.record("long_tap")
         }
 
         fn swipe(
             &mut self,
+            _witness: &FencedWrite,
             _x1: i32,
             _y1: i32,
             _x2: i32,
@@ -298,15 +345,15 @@ mod tests {
             self.record("swipe")
         }
 
-        fn key(&mut self, _key: &str) -> DeviceResult<()> {
+        fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
             self.record("key")
         }
 
-        fn text(&mut self, _text: &str) -> DeviceResult<()> {
+        fn text(&mut self, _witness: &FencedWrite, _text: &str) -> DeviceResult<()> {
             self.record("text")
         }
 
-        fn reset(&mut self) -> DeviceResult<()> {
+        fn reset(&mut self, _witness: &FencedWrite) -> DeviceResult<()> {
             self.record("reset")
         }
 
@@ -336,7 +383,8 @@ mod tests {
         let records = parse_replay_json_lines(&sample_json_lines()).expect("valid replay stream");
         let mut backend = FakeInputBackend::default();
 
-        let report = replay_input_records(&records, &mut backend).expect("replay succeeds");
+        let report =
+            replay_input_records(&step_witness(), &records, &mut backend).expect("replay succeeds");
 
         let expected = vec![
             "tap".to_owned(),
@@ -356,8 +404,10 @@ mod tests {
         let backend = FakeInputBackend::default();
         let mut recorder = RecordingInputBackend::new(backend);
 
-        recorder.tap(10, 20).expect("tap records");
-        recorder.swipe(1, 2, 3, 4, 250).expect("swipe records");
+        recorder.tap(&step_witness(), 10, 20).expect("tap records");
+        recorder
+            .swipe(&step_witness(), 1, 2, 3, 4, 250)
+            .expect("swipe records");
 
         let encoded = recorder.to_json_lines().expect("JSONL encoding succeeds");
         let decoded = parse_replay_json_lines(&encoded).expect("JSONL decoding succeeds");
@@ -405,7 +455,8 @@ mod tests {
             fail_on: Some("tap"),
         };
 
-        let err = replay_input_records(&records, &mut backend).expect_err("tap must fail");
+        let err = replay_input_records(&step_witness(), &records, &mut backend)
+            .expect_err("tap must fail");
 
         assert_eq!(err.severity(), DeviceErrorSeverity::Fatal);
         assert!(err.message().contains("tap"));

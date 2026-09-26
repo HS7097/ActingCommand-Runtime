@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{InputBackend, InputSelectionContext, PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
+use actingcommand_contract::FencedWrite;
 use std::ffi::{CString, c_char};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,22 +289,30 @@ impl InputBackend for NemuInputView {
             serial: self.serial.clone(),
         })
     }
-    fn tap(&mut self, _: i32, _: i32) -> DeviceResult<()> {
+    fn tap(&mut self, _: &FencedWrite, _: i32, _: i32) -> DeviceResult<()> {
         Err(unsupported())
     }
-    fn long_tap(&mut self, _: i32, _: i32, _: u64) -> DeviceResult<()> {
+    fn long_tap(&mut self, _: &FencedWrite, _: i32, _: i32, _: u64) -> DeviceResult<()> {
         Err(unsupported())
     }
-    fn swipe(&mut self, _: i32, _: i32, _: i32, _: i32, _: u64) -> DeviceResult<()> {
+    fn swipe(
+        &mut self,
+        _: &FencedWrite,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: u64,
+    ) -> DeviceResult<()> {
         Err(unsupported())
     }
-    fn key(&mut self, _: &str) -> DeviceResult<()> {
+    fn key(&mut self, _: &FencedWrite, _: &str) -> DeviceResult<()> {
         Err(unsupported())
     }
-    fn text(&mut self, _: &str) -> DeviceResult<()> {
+    fn text(&mut self, _: &FencedWrite, _: &str) -> DeviceResult<()> {
         Err(unsupported())
     }
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _: &FencedWrite) -> DeviceResult<()> {
         Err(unsupported())
     }
     fn supports_segmented_swipe(&self) -> bool {
@@ -311,6 +320,7 @@ impl InputBackend for NemuInputView {
     }
     fn tap_in_frame(
         &mut self,
+        _witness: &FencedWrite,
         x: i32,
         y: i32,
         context: &InputExecutionContext,
@@ -328,6 +338,7 @@ impl InputBackend for NemuInputView {
     }
     fn segmented_swipe_prepared_in_frame(
         &mut self,
+        _witness: &FencedWrite,
         plan: &PreparedSegmentedSwipePlan,
         context: &InputExecutionContext,
     ) -> DeviceResult<()> {
