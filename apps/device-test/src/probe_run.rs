@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{load_evaluator_and_detector, page_error, task_error};
+use super::{DeviceWriteAdmission, load_evaluator_and_detector, page_error, task_error};
+use actingcommand_contract::FencedWrite;
 use actingcommand_device::{
     CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, MaaTouchValidationConfig,
     PixelFormat, ScreencapBackend, SelectedTouchBackend, TouchBackendConfig,
@@ -354,6 +355,7 @@ fn execute_probe_run(
     }
     let mut scene = scene_from_frame(&before)?;
     let seed_base = run_seed();
+    let mut admission = DeviceWriteAdmission::new()?;
     let mut backend = None::<SelectedTouchBackend>;
     let initial_page = detect_current_page(&detector, &evaluator, &scene)?;
     state.initial_page = initial_page.clone();
@@ -372,7 +374,9 @@ fn execute_probe_run(
             json!({"point": {"x": wake_point[0], "y": wake_point[1]}}),
         )?;
         let backend_ref = ensure_touch_backend(&mut backend, &config, journal)?;
-        if let Err(err) = backend_ref.tap(wake_point[0], wake_point[1]) {
+        if let Err(err) =
+            admission.write(|witness| backend_ref.tap(witness, wake_point[0], wake_point[1]))
+        {
             return close_backend_after_error(&mut backend, err);
         }
         journal.event(
@@ -544,7 +548,9 @@ fn execute_probe_run(
                         "actual_input": actual_input_json(input_action)
                     }),
                 )?;
-                if let Err(err) = execute_input_action(backend_ref, input_action) {
+                if let Err(err) = admission
+                    .write(|witness| execute_input_action(backend_ref, witness, input_action))
+                {
                     return close_backend_after_error(&mut backend, err);
                 }
                 state.executed = true;
@@ -1485,15 +1491,16 @@ fn validate_input_action(
 
 fn execute_input_action(
     backend: &mut dyn InputBackend,
+    witness: &FencedWrite,
     action: ActualInputAction,
 ) -> DeviceResult<()> {
     match action {
-        ActualInputAction::Tap(actual) => backend.tap(actual.x, actual.y),
+        ActualInputAction::Tap(actual) => backend.tap(witness, actual.x, actual.y),
         ActualInputAction::Drag {
             from,
             to,
             duration_ms,
-        } => backend.swipe(from.x, from.y, to.x, to.y, duration_ms),
+        } => backend.swipe(witness, from.x, from.y, to.x, to.y, duration_ms),
     }
 }
 

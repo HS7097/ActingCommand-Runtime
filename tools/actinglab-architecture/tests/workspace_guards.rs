@@ -1373,6 +1373,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         internal_dependencies(device_test),
         vec![
             "actingcommand-artifact-store".to_owned(),
+            "actingcommand-contract".to_owned(),
             "actingcommand-device".to_owned(),
             "actingcommand-execution-kernel".to_owned(),
             "actingcommand-host-metrics".to_owned(),
@@ -1380,6 +1381,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
             "actingcommand-page-detector".to_owned(),
             "actingcommand-recognition".to_owned(),
             "actingcommand-recognition-pack".to_owned(),
+            "actingcommand-scheduler".to_owned(),
         ],
         "device-test internal dependency boundary changed"
     );

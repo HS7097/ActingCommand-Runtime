@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::{FencedWrite, HolderId, IdentifierIssuer, InstanceId, LeaseToken};
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
     EmulatorCapabilityAvailability, EnvOverrides, Frame, InputBackend, MaaTouchValidationConfig,
@@ -18,6 +19,7 @@ use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, RecognitionPack, RecognitionTarget, TargetEvaluation,
     TargetKind, load_pack_from_json_str,
 };
+use actingcommand_scheduler::{ConnectionId, SchedulerConfig, SeedScheduler};
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -334,7 +336,8 @@ fn run_device(args: Vec<String>) -> DeviceResult<()> {
     println!("Touch backend: {}", backend.backend_name().as_str());
     print_touch_diagnostics(backend.diagnostics());
 
-    let operation_result = run_commands(&mut backend, &commands);
+    let operation_result = DeviceWriteAdmission::new()
+        .and_then(|mut admission| run_commands(&mut backend, &mut admission, &commands));
     let close_result = backend.close();
     combine_operation_and_close(operation_result, close_result)?;
 
@@ -652,12 +655,16 @@ fn run_benchmark_command(
             DeviceError::fatal("benchmark could not capture a frame with any backend")
         })?;
 
+    let mut admission = DeviceWriteAdmission::new()?;
     let mut control_backend = create_touch_backend(touch_backend_config(&config))?;
     let mut control_ms = Vec::with_capacity(options.rounds);
     for _ in 0..options.rounds {
-        let started = Instant::now();
-        control_backend.reset()?;
-        control_ms.push(started.elapsed().as_millis());
+        let elapsed = admission.write(|witness| {
+            let started = Instant::now();
+            control_backend.reset(witness)?;
+            Ok(started.elapsed().as_millis())
+        })?;
+        control_ms.push(elapsed);
     }
     let close = control_backend.close();
     combine_operation_and_close(Ok(()), close)?;
@@ -1320,19 +1327,145 @@ fn task_error(err: actingcommand_execution_kernel::TaskLoopError) -> DeviceError
     DeviceError::fatal(err.to_string())
 }
 
-fn run_commands(backend: &mut dyn InputBackend, commands: &[DeviceCommand]) -> DeviceResult<()> {
+/// Local write admission (Workflow #314 fw1). This probe writes to a device outside the
+/// Runtime, so it admits every write itself: a process-local Scheduler grants a lease on the
+/// target device, the write runs inside one destructive step under the witness that step
+/// issued, and the step is finished and the lease released before the next write. No ledger
+/// and no Runtime take part; an admission failure fails the write before anything is sent.
+pub(crate) struct DeviceWriteAdmission {
+    scheduler: SeedScheduler,
+    identifiers: IdentifierIssuer,
+    instance_id: InstanceId,
+    holder_id: HolderId,
+    connection_id: ConnectionId,
+    started: Instant,
+}
+
+impl DeviceWriteAdmission {
+    pub(crate) fn new() -> DeviceResult<Self> {
+        let identifiers = IdentifierIssuer::new().map_err(admission_error)?;
+        let owner_epoch = *identifiers
+            .mint_owner_epoch()
+            .map_err(admission_error)?
+            .transport();
+        let instance_id = *identifiers
+            .mint_instance_id()
+            .map_err(admission_error)?
+            .transport();
+        let holder_id = *identifiers
+            .mint_holder_id()
+            .map_err(admission_error)?
+            .transport();
+        let connection_id = ConnectionId::new(1).map_err(admission_error)?;
+        let scheduler = SeedScheduler::new(
+            owner_epoch,
+            SchedulerConfig::default(),
+            std::iter::empty(),
+            0,
+        )
+        .map_err(admission_error)?;
+        Ok(Self {
+            scheduler,
+            identifiers,
+            instance_id,
+            holder_id,
+            connection_id,
+            started: Instant::now(),
+        })
+    }
+
+    /// Runs one device write under a freshly admitted lease and destructive step.
+    pub(crate) fn write<T>(
+        &mut self,
+        write: impl FnOnce(&FencedWrite) -> DeviceResult<T>,
+    ) -> DeviceResult<T> {
+        let request_id = *self
+            .identifiers
+            .mint_request_id()
+            .map_err(admission_error)?
+            .transport();
+        let now = self.now_ms()?;
+        let token = self
+            .scheduler
+            .acquire(
+                request_id,
+                self.instance_id,
+                self.holder_id,
+                self.connection_id,
+                now,
+            )
+            .map_err(admission_error)?;
+        let begun = self.now_ms().and_then(|now| {
+            self.scheduler
+                .begin_destructive_step(&token, self.connection_id, now)
+                .map_err(admission_error)
+        });
+        let witness = match begun {
+            Ok(witness) => witness,
+            Err(error) => return combine_write_and_admission(Err(error), self.release(&token)),
+        };
+        let result = write(&witness);
+        let finished = self
+            .scheduler
+            .finish_destructive_step(witness, self.connection_id)
+            .map_err(admission_error)
+            .and_then(|()| self.release(&token));
+        combine_write_and_admission(result, finished)
+    }
+
+    fn release(&mut self, token: &LeaseToken) -> DeviceResult<()> {
+        let request_id = *self
+            .identifiers
+            .mint_request_id()
+            .map_err(admission_error)?
+            .transport();
+        let now = self.now_ms()?;
+        self.scheduler
+            .release(request_id, token, self.connection_id, now)
+            .map(|_| ())
+            .map_err(admission_error)
+    }
+
+    fn now_ms(&self) -> DeviceResult<u64> {
+        u64::try_from(self.started.elapsed().as_millis())
+            .map_err(|_| DeviceError::fatal("device write admission clock overflow"))
+    }
+}
+
+fn admission_error(error: impl std::fmt::Display) -> DeviceError {
+    DeviceError::fatal(format!("device write admission failed: {error}"))
+}
+
+fn combine_write_and_admission<T>(
+    write: DeviceResult<T>,
+    admission: DeviceResult<()>,
+) -> DeviceResult<T> {
+    match (write, admission) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(write), Err(admission)) => Err(DeviceError::fatal(format!(
+            "{write}; device write admission close also failed: {admission}"
+        ))),
+    }
+}
+
+fn run_commands(
+    backend: &mut dyn InputBackend,
+    admission: &mut DeviceWriteAdmission,
+    commands: &[DeviceCommand],
+) -> DeviceResult<()> {
     for command in commands {
         match *command {
             DeviceCommand::Reset => {
-                backend.reset()?;
+                admission.write(|witness| backend.reset(witness))?;
                 println!("reset sent");
             }
             DeviceCommand::Tap { x, y } => {
-                backend.tap(x, y)?;
+                admission.write(|witness| backend.tap(witness, x, y))?;
                 println!("tap sent: x={x} y={y}");
             }
             DeviceCommand::LongTap { x, y, duration_ms } => {
-                backend.long_tap(x, y, duration_ms)?;
+                admission.write(|witness| backend.long_tap(witness, x, y, duration_ms))?;
                 println!("longtap sent: x={x} y={y} duration_ms={duration_ms}");
             }
             DeviceCommand::Swipe {
@@ -1342,7 +1475,7 @@ fn run_commands(backend: &mut dyn InputBackend, commands: &[DeviceCommand]) -> D
                 y2,
                 duration_ms,
             } => {
-                backend.swipe(x1, y1, x2, y2, duration_ms)?;
+                admission.write(|witness| backend.swipe(witness, x1, y1, x2, y2, duration_ms))?;
                 println!("swipe sent: x1={x1} y1={y1} x2={x2} y2={y2} duration_ms={duration_ms}");
             }
             DeviceCommand::Capture { .. } => {
