@@ -356,7 +356,10 @@ the backend self-check facts (source `device-proxy` or `capture`).
   pending) and still under the instance admission guard, so a session opened
   on the new binding never loses its facts; and with `runtime_takeover` as
   part of the `backend.` family. An ADB failure leaves them in place. The
-  policy layer does not read them yet; `actingctl facts --program` lists them.
+  policy layer does not read them; a `failed` status instead withdraws a
+  policy instance's `session.instance.available` until a later `passed` or
+  their invalidation (Workflow #317 sc2, `instance-fact-store.md`, "Backend
+  self-check availability"). `actingctl facts --program` lists them.
 - `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module

@@ -507,6 +507,7 @@ impl ExecutionBackendEntry {
 
     fn open_nemu_session(
         &self,
+        memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         // Same pending guard as `open_input` / `open_capture`: a paired session is opened on
         // the bound target only.
@@ -531,6 +532,7 @@ impl ExecutionBackendEntry {
                 shutdown_timeout: input.maatouch_config.shutdown_timeout,
                 tap_hold: input.maatouch_config.tap_hold,
             },
+            memory,
         )
         .map_err(|error| {
             let mut report = actingcommand_contract::BackendOpenReport::unobserved(
@@ -908,9 +910,10 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
     fn open_nemu_session(
         &self,
         instance_alias: &str,
+        memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         match self.entry(instance_alias)? {
-            RegistryEntry::Real(entry) => entry.open_nemu_session(),
+            RegistryEntry::Real(entry) => entry.open_nemu_session(memory),
             #[cfg(feature = "fixture-backends")]
             RegistryEntry::Fixture(_) => Ok(None),
         }

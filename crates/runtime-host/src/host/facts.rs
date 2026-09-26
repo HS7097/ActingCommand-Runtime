@@ -7,6 +7,10 @@ use actingcommand_contract::priority_offset_task_id;
 /// `source_detector` of the three configuration-seeded policy instance facts.
 const POLICY_INSTANCE_SEED_DETECTOR: &str = "runtime.policy-configuration";
 const POLICY_INSTANCE_SEED_SCHEMA: &str = "fact.v1";
+/// `source_detector` and `source_snapshot_id` prefix of the `session.instance.available = false`
+/// records a failed backend self-check publishes (Workflow #317 sc2).
+const BACKEND_SELFCHECK_AVAILABILITY_DETECTOR: &str = "runtime.backend-selfcheck";
+pub(super) const BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX: &str = "backend_selfcheck:";
 
 /// One `record_list` row per identifier, each holding the single string field `field`.
 fn policy_instance_string_list_value(field: &str, identifiers: &[String]) -> ContractFactValue {
@@ -254,6 +258,71 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    /// Workflow #317 sc2: publishes `session.instance.available = false` for one configured
+    /// policy instance because its `<entry>` self-check of session `<generation>` failed, through
+    /// the seed's publisher ([`Self::publish_fact`]) and scope. The record differs from the seed
+    /// only in `source_detector` `runtime.backend-selfcheck` and `source_snapshot_id`
+    /// `backend_selfcheck:<entry>:<generation>`; `resource_bundle_hash` is the seed digest of the
+    /// value `false`.
+    pub(super) fn publish_backend_selfcheck_unavailable(
+        &self,
+        instance_alias: &str,
+        entry: &str,
+        generation: u64,
+    ) -> RuntimeHostResult<()> {
+        self.publish_policy_instance_availability(
+            instance_alias,
+            false,
+            BACKEND_SELFCHECK_AVAILABILITY_DETECTOR,
+            |_| format!("{BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX}{entry}:{generation}"),
+        )
+    }
+
+    /// Workflow #317 sc2: republishes the configured seed of `session.instance.available`
+    /// (`available`, with the seed's own detector, snapshot id and digest) as a new observation
+    /// at the host clock, through [`Self::publish_fact`].
+    pub(super) fn restore_policy_instance_availability(
+        &self,
+        instance_alias: &str,
+        available: bool,
+    ) -> RuntimeHostResult<()> {
+        self.publish_policy_instance_availability(
+            instance_alias,
+            available,
+            POLICY_INSTANCE_SEED_DETECTOR,
+            |digest| format!("snapshot:policy-config:{digest}"),
+        )
+    }
+
+    fn publish_policy_instance_availability(
+        &self,
+        instance_alias: &str,
+        available: bool,
+        source_detector: &str,
+        source_snapshot_id: impl FnOnce(&str) -> String,
+    ) -> RuntimeHostResult<()> {
+        let value = ContractFactValue::Boolean(available);
+        let digest =
+            policy_instance_seed_digest(instance_alias, POLICY_INSTANCE_AVAILABLE_KEY, &value)?;
+        self.publish_fact(FactRecord {
+            scope: FactScope::Instance {
+                instance_id: instance_alias.to_owned(),
+            },
+            key: POLICY_INSTANCE_AVAILABLE_KEY.to_owned(),
+            content: FactContent::Inline { value },
+            observed_at_unix_ms: self.clock.sample()?.unix_ms,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: source_detector.to_owned(),
+            source_snapshot_id: source_snapshot_id(&digest),
+            schema_version: POLICY_INSTANCE_SEED_SCHEMA.to_owned(),
+            resource_bundle_hash: digest,
+            invalidate_on: Vec::new(),
+        })
+        .map(|_| ())
     }
 
     pub(super) fn instance_fact_snapshot(

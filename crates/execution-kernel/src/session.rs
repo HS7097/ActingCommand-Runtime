@@ -90,10 +90,11 @@ impl SessionBackends {
         &mut self,
         provider: &dyn ExecutionBackendProvider,
         alias: &str,
+        memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
         if matches!(self, Self::Pending) {
             let mut observations = Vec::new();
-            *self = match provider.open_nemu_session(alias).map_err(|error| {
+            *self = match provider.open_nemu_session(alias, memory).map_err(|error| {
                 observed_open_error(
                     "paired_backend_open_failed",
                     actingcommand_contract::BackendOpenEntry::NemuPair,
@@ -1190,7 +1191,7 @@ fn execute_input(
     check: Option<Arc<dyn InputOperationCheck>>,
     witness: &FencedWrite,
 ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-    let mut observations = backends.prepare(provider, instance_alias)?;
+    let mut observations = backends.prepare(provider, instance_alias, None)?;
     let execute = || -> ExecutionKernelResult<ExecutionInputOutcome> {
         let context = match backends {
             SessionBackends::Nemu(_) => {
@@ -1274,7 +1275,7 @@ fn execute_capture(
     backends: &mut SessionBackends,
     memory: Option<&actingcommand_device::FrameMemoryBudget>,
 ) -> ExecutionKernelResult<Frame> {
-    let mut observations = backends.prepare(provider, instance_alias)?;
+    let mut observations = backends.prepare(provider, instance_alias, memory)?;
     let mut execute = || -> ExecutionKernelResult<Frame> {
         let backend = match backends {
             SessionBackends::Independent { capture, .. } => {

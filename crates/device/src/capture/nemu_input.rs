@@ -100,10 +100,16 @@ pub struct NemuIpcSession {
 }
 
 impl NemuIpcSession {
+    /// Opens the paired owner. With a frame budget (a Capture command's open) the capture view
+    /// primes its first frame through the owner exactly like an explicit capture backend
+    /// (Workflow #317 sc2): the report's `capture_check` and frame dimensions come from that
+    /// frame and the first `capture()` returns it. Without one (an Input command's open, which
+    /// has no committed frame and fails afterwards) nothing is acquired.
     pub fn open(
         capture: CaptureBackendConfig,
         application: NemuApplicationTarget,
         input: NemuInputConfig,
+        memory: Option<&crate::FrameMemoryBudget>,
     ) -> DeviceResult<crate::OpenedBackend<NemuSessionBackends>> {
         if capture.requested != CaptureBackendChoice::NemuIpc
             || input.command_timeout.is_zero()
@@ -156,20 +162,47 @@ impl NemuIpcSession {
             backend: Mutex::new(backend),
             input_config: input,
         });
+        let capture: Box<dyn CaptureBackend> = Box::new(NemuCaptureView {
+            owner: Arc::clone(&owner),
+            selection,
+            vendor_stdio: Vec::new(),
+            detached: false,
+        });
+        let capture = if memory.is_some() {
+            match prime_capture_backend(CaptureBackendName::NemuIpc, capture, memory) {
+                Ok((primed, _probe_message, _vendor_stdio)) => {
+                    if let Some((width, height)) = primed.opened_dimensions() {
+                        report.capture_check =
+                            actingcommand_contract::BackendObservationStatus::Passed;
+                        report.frame_width = Some(width);
+                        report.frame_height = Some(height);
+                    }
+                    primed
+                }
+                Err(primary) => {
+                    // The prime closed only the view; the owner's worker is closed here.
+                    let primary = match owner.close_once(DeviceCloseAuthority::LocalOnly, None) {
+                        Ok(outcome) => primary.with_stdio_observations(outcome.vendor_stdio()),
+                        Err(cleanup) => primary.merge_resource_cleanup(cleanup),
+                    };
+                    if let Some(check) = primary.capture_probe_check() {
+                        check.apply_failure(&mut report, &primary);
+                    }
+                    return Err(crate::observe_open_failure(report, primary));
+                }
+            }
+        } else {
+            capture
+        };
         Ok(crate::OpenedBackend::new(
             NemuSessionBackends {
                 owner: Arc::clone(&owner),
                 input: Box::new(NemuInputView {
-                    owner: Arc::clone(&owner),
+                    owner,
                     serial,
                     detached: false,
                 }),
-                capture: Box::new(NemuCaptureView {
-                    owner,
-                    selection,
-                    vendor_stdio: Vec::new(),
-                    detached: false,
-                }),
+                capture,
             },
             report,
         ))
