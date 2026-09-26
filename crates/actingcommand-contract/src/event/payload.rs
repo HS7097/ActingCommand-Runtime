@@ -1776,6 +1776,13 @@ pub enum RuntimeLifecyclePhase {
         reason: RecoveryLadderSuppression,
         until_unix_ms: u64,
     },
+    /// Startup recovery of the runtime fact store (Workflow #308 5d-1) passed over an
+    /// incomplete `runtime.fact_snapshot` set: `parts_found` of its `parts` were in the ledger.
+    FactSnapshotSetSkipped {
+        snapshot_id: u64,
+        parts_found: u16,
+        parts: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10594,6 +10601,16 @@ impl EventPayload {
                 recovery.validate()?;
             }
             validate_recovery_ladder_phase(&value.phase)?;
+            if let RuntimeLifecyclePhase::FactSnapshotSetSkipped {
+                parts_found, parts, ..
+            } = value.phase
+                && (parts_found == 0 || parts_found >= parts)
+            {
+                return Err(SanitizationError::new(
+                    "invalid_fact_snapshot_set_skipped",
+                    "runtime_payload",
+                ));
+            }
             if let RuntimeLifecyclePhase::ShutdownRequest { target, decision } = value.phase
                 && (target.validate().is_err()
                     || (decision == crate::RuntimeShutdownDecision::Accepted

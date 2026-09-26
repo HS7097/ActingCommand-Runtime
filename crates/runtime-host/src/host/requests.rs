@@ -175,10 +175,38 @@ impl HostShared {
                         RequestFailure::request(error, RuntimeReceiptState::Denied, None)
                     }
                 })?;
+                let result = RuntimeResult::RuntimeFactSnapshot { snapshot };
+                // Workflow #308 5d-1: a store whose reply exceeds one IPC frame is refused
+                // here instead of failing the frame write; paged reads are a follow-up.
+                let reply_bytes = RuntimeReceipt::success(
+                    request,
+                    RuntimeReceiptState::Completed,
+                    None,
+                    result.clone(),
+                )
+                .ok()
+                .and_then(|receipt| serde_json::to_vec(&receipt).ok())
+                .ok_or_else(|| RequestFailure::poison_without_terminal(receipt_error()))?
+                .len();
+                if reply_bytes > self.maximum_frame_bytes {
+                    return Err(RequestFailure::request(
+                        RuntimeHostError::request(
+                            "runtime_fact_snapshot_too_large_for_frame",
+                            "read_runtime_fact_snapshot",
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                        .with_native_detail(format!(
+                            "reply is {reply_bytes} bytes; one frame carries at most {} bytes",
+                            self.maximum_frame_bytes
+                        )),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    ));
+                }
                 Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
-                    result: RuntimeResult::RuntimeFactSnapshot { snapshot },
+                    result,
                 })
             }
             RuntimeOperation::ConfigureMonitor {

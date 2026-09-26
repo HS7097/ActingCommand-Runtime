@@ -5,7 +5,7 @@
 //! Every change is appended to the `GlobalLedger` before it enters the
 //! memory-only store, under the same write gate as the instance fact store.
 //! Nothing here reads a file: durability is the per-record event, and the
-//! periodic snapshot only shortens replay.
+//! periodic snapshot set only shortens replay.
 
 use super::facts::BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX;
 use super::*;
@@ -13,8 +13,15 @@ use crate::policy_host::PolicySettlement;
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, BackendOpenReport, DeviceSelfCheck,
     DeviceSelfCheckCapture, DeviceSelfCheckEntry, DeviceSelfCheckFailure, DeviceSelfCheckStatus,
-    DeviceSelfCheckTouch, FactValue, MAX_RUNTIME_FACT_KEY_BYTES,
+    DeviceSelfCheckTouch, FactValue, MAX_RUNTIME_FACT_KEY_BYTES, MAX_RUNTIME_FACT_SNAPSHOT_BYTES,
+    newest_complete_runtime_fact_snapshot_set,
 };
+
+/// First sequence window of the backward snapshot search at startup (the tail sequence
+/// itself); each further window doubles (the Workflow #317 rf1 read-face precedent).
+const RUNTIME_FACT_SNAPSHOT_SEARCH_WINDOW: u64 = 1;
+/// Snapshot events per page inside one window: each part may carry 512 KiB.
+const RUNTIME_FACT_SNAPSHOT_PAGE_EVENTS: usize = 16;
 
 /// Key families that stop describing the device once a new owner epoch starts.
 const TAKEOVER_INVALIDATED_FAMILIES: [&str; 3] = ["device.", "backend.", "application."];
@@ -805,8 +812,11 @@ impl HostShared {
             .snapshot(ledger_position, taken_at_unix_ms))
     }
 
-    /// Appends one `runtime.fact_snapshot` when the store changed since the
-    /// last seal. A never-changed store appends nothing.
+    /// Seals the store when it changed since the last seal (Workflow #308 5d-1): the records
+    /// are split into parts of at most `MAX_RUNTIME_FACT_SNAPSHOT_BYTES` and one
+    /// `runtime.fact_snapshot` is appended per part, in part order, under one
+    /// `fact_write_gate` hold. The store stays dirty until every part is appended; every
+    /// failure is fatal. A never-changed store appends nothing.
     pub(super) fn append_runtime_fact_snapshot_if_dirty(&self) -> RuntimeHostResult<bool> {
         let result: RuntimeHostResult<bool> = (|| {
             let _gate = lock(&self.fact_write_gate, "append_runtime_fact_snapshot")?;
@@ -818,25 +828,30 @@ impl HostShared {
                 .latest_sequence()
                 .map_err(|_| ledger_error("read_runtime_fact_position"))?;
             let taken_at_unix_ms = self.clock.sample()?.unix_ms;
-            let snapshot = lock(&self.runtime_facts, "append_runtime_fact_snapshot")?
+            let sealed = lock(&self.runtime_facts, "append_runtime_fact_snapshot")?
                 .snapshot(ledger_position, taken_at_unix_ms);
+            let parts = split_runtime_fact_snapshot(sealed)?;
             // The typed size and position codes surface here; sanitization would fold them.
-            snapshot.validate().map_err(|error| {
-                RuntimeHostError::fatal(
-                    error.code(),
-                    "append_runtime_fact_snapshot",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-            let links = self.events.system_links()?;
-            self.append_event_under_fact_gate(
-                EventSeverity::Info,
-                EventSource::Runtime,
-                OriginModule::RuntimeFacts,
-                EventActor::Runtime,
-                links,
-                RuntimePayloadDraft::fact_snapshot(snapshot, AuditInput::new()),
-            )?;
+            for part in &parts {
+                part.validate().map_err(|error| {
+                    RuntimeHostError::fatal(
+                        error.code(),
+                        "append_runtime_fact_snapshot",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            }
+            for part in parts {
+                let links = self.events.system_links()?;
+                self.append_event_under_fact_gate(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::RuntimeFacts,
+                    EventActor::Runtime,
+                    links,
+                    RuntimePayloadDraft::fact_snapshot(part, AuditInput::new()),
+                )?;
+            }
             self.runtime_facts_dirty.store(false, Ordering::Release);
             self.synchronize_fact_store_under_gate()?;
             Ok(true)
@@ -871,37 +886,206 @@ impl HostShared {
     }
 }
 
-/// Rebuilds the store from the newest `runtime.fact_snapshot` plus every
-/// `runtime.fact_recorded` / `runtime.fact_invalidated` appended after it, in
-/// ledger order. On owner takeover, device-bound instance facts are then
-/// invalidated, ledger first. Returns the store and whether it is dirty.
+/// Splits the sealed store into snapshot parts of at most `MAX_RUNTIME_FACT_SNAPSHOT_BYTES`
+/// serialized bytes (Workflow #308 5d-1): records in store order, greedily, a new part
+/// starting when the next record would not fit; every part carries the sealed identity with
+/// its own `part` and the shared `parts`. An empty store is one empty part; a record too
+/// large for any part forms a part of its own, which `validate` then refuses.
+fn split_runtime_fact_snapshot(
+    sealed: RuntimeFactSnapshot,
+) -> RuntimeHostResult<Vec<RuntimeFactSnapshot>> {
+    let fatal = |code| {
+        RuntimeHostError::fatal(
+            code,
+            "append_runtime_fact_snapshot",
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    };
+    let mut envelope = RuntimeFactSnapshot {
+        part: u16::MAX,
+        parts: u16::MAX,
+        records: Vec::new(),
+        ..sealed
+    };
+    // The widest part numbers, so the real envelope is never larger than the one measured.
+    let envelope_bytes = serde_json::to_vec(&envelope)
+        .map_err(|_| fatal("invalid_runtime_fact_snapshot"))?
+        .len();
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = envelope_bytes;
+    for record in sealed.records {
+        let record_bytes = serde_json::to_vec(&record)
+            .map_err(|_| fatal("invalid_runtime_fact_snapshot"))?
+            .len();
+        // Every record after the first in a part adds one separating comma.
+        if !current.is_empty() && current_bytes + 1 + record_bytes > MAX_RUNTIME_FACT_SNAPSHOT_BYTES
+        {
+            groups.push(std::mem::take(&mut current));
+            current_bytes = envelope_bytes;
+        }
+        current_bytes += usize::from(!current.is_empty()) + record_bytes;
+        current.push(record);
+    }
+    if !current.is_empty() || groups.is_empty() {
+        groups.push(current);
+    }
+    let parts = u16::try_from(groups.len())
+        .map_err(|_| fatal("runtime_fact_snapshot_payload_too_large"))?;
+    envelope.parts = parts;
+    Ok(groups
+        .into_iter()
+        .zip(1..=parts)
+        .map(|(records, part)| RuntimeFactSnapshot {
+            schema_version: envelope.schema_version.clone(),
+            part,
+            records,
+            ..envelope
+        })
+        .collect())
+}
+
+/// `runtime.fact_snapshot` events at or below `upper`, newest first (Workflow #308 5d-1):
+/// read backwards from the ledger tail in sequence windows that double in size, each through
+/// type-indexed pages, so a search stops without reading older snapshot events. After a part
+/// other than part 1, the next window stops at that part's `snapshot_id`: the set's earlier
+/// parts were appended after it, so older sets are read only when the search needs them.
+struct SnapshotEventsNewestFirst<'a> {
+    ledger: &'a GlobalLedger,
+    upper: u64,
+    window: u64,
+    floor: u64,
+    buffered: Vec<PersistedEvent>,
+}
+
+impl SnapshotEventsNewestFirst<'_> {
+    /// The next older snapshot part with its sequence, validated; an invalid one is fatal.
+    fn next(&mut self) -> RuntimeHostResult<Option<(u64, RuntimeFactSnapshot)>> {
+        let query = EventQuery {
+            event_type: Some(EventType::RuntimeFactSnapshot),
+            ..EventQuery::default()
+        };
+        while self.buffered.is_empty() && self.upper > 0 {
+            let floor = if self.floor < self.upper {
+                self.floor
+            } else {
+                0
+            };
+            let lower = self.upper.saturating_sub(self.window).max(floor);
+            let mut after = lower;
+            loop {
+                let page = self
+                    .ledger
+                    .query_page(
+                        query.clone(),
+                        after,
+                        self.upper,
+                        RUNTIME_FACT_SNAPSHOT_PAGE_EVENTS,
+                    )
+                    .map_err(|_| ledger_error("recover_runtime_facts"))?;
+                let exhausted = page.len() < RUNTIME_FACT_SNAPSHOT_PAGE_EVENTS;
+                if let Some(last) = page.last() {
+                    after = last.sequence();
+                }
+                self.buffered.extend(page);
+                if exhausted {
+                    break;
+                }
+            }
+            self.upper = lower;
+            self.window = self.window.saturating_mul(2);
+        }
+        let Some(event) = self.buffered.pop() else {
+            return Ok(None);
+        };
+        let sequence = event.sequence();
+        let EventPayload::Runtime(RuntimePayload::FactSnapshot(payload)) = event.payload() else {
+            return Err(runtime_fact_replay_failed(
+                sequence,
+                "payload is not runtime.fact_snapshot",
+            ));
+        };
+        let snapshot = payload.snapshot().clone();
+        snapshot.validate().map_err(|error| {
+            runtime_fact_replay_failed(
+                sequence,
+                &RuntimeFactError::Invalid { code: error.code() }.to_string(),
+            )
+        })?;
+        self.floor = if snapshot.part > 1 {
+            snapshot.snapshot_id
+        } else {
+            0
+        };
+        Ok(Some((sequence, snapshot)))
+    }
+}
+
+/// Rebuilds the store from the newest complete `runtime.fact_snapshot` set plus every
+/// `runtime.fact_recorded` / `runtime.fact_invalidated` appended after its last part, in
+/// ledger order (Workflow #308 5d-1). The set is searched backwards from the ledger tail;
+/// every incomplete set passed over is recorded as one `runtime.lifecycle_observed`
+/// `fact_snapshot_set_skipped`. Without a complete set every record event is replayed. On
+/// owner takeover, device-bound instance facts are then invalidated, ledger first. Returns
+/// the store and whether it is dirty.
 pub(super) fn recover_runtime_fact_store(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
+    owner_epoch: actingcommand_contract::OwnerEpoch,
     takeover: bool,
     now_unix_ms: u64,
 ) -> RuntimeHostResult<(RuntimeFactStore, bool)> {
     let mut store = RuntimeFactStore::new();
-    let snapshots = ledger
-        .query(EventQuery {
-            event_type: Some(EventType::RuntimeFactSnapshot),
-            ..EventQuery::default()
-        })
-        .map_err(|_| ledger_error("recover_runtime_facts"))?;
+    let mut newest_first = SnapshotEventsNewestFirst {
+        ledger,
+        upper: ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error("recover_runtime_facts"))?,
+        window: RUNTIME_FACT_SNAPSHOT_SEARCH_WINDOW,
+        floor: 0,
+        buffered: Vec::new(),
+    };
+    let search = newest_complete_runtime_fact_snapshot_set(|| newest_first.next())?;
+    for skipped in &search.skipped {
+        let draft = events.draft(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            events.system_links()?,
+            RuntimePayloadDraft::lifecycle_observed(
+                owner_epoch,
+                RuntimeLifecyclePhase::FactSnapshotSetSkipped {
+                    snapshot_id: skipped.snapshot_id,
+                    parts_found: skipped.parts_found,
+                    parts: skipped.parts,
+                },
+                AuditInput::new(),
+            ),
+        )?;
+        let draft = events.sanitize(draft)?;
+        ledger
+            .append(draft)
+            .map_err(|_| ledger_error("append_runtime_lifecycle_observed"))?;
+    }
     let mut from_sequence = 1;
-    if let Some(latest) = snapshots.last() {
-        let EventPayload::Runtime(RuntimePayload::FactSnapshot(payload)) = latest.payload() else {
-            return Err(runtime_fact_replay_failed(
-                latest.sequence(),
-                "payload is not runtime.fact_snapshot",
-            ));
-        };
-        store
-            .replay(payload.snapshot())
-            .map_err(|error| runtime_fact_replay_failed(latest.sequence(), &error.to_string()))?;
-        from_sequence = latest.sequence().checked_add(1).ok_or_else(|| {
-            runtime_fact_replay_failed(latest.sequence(), "ledger sequence overflow")
-        })?;
+    if let Some(set) = &search.set {
+        // Part 1 replaces the empty store; the later parts' records join it in part order.
+        for (index, (sequence, part)) in set.iter().enumerate() {
+            let replayed = if index == 0 {
+                store.replay(part).map(|_| ())
+            } else {
+                part.records
+                    .iter()
+                    .try_for_each(|record| store.record(record.clone()).map(|_| ()))
+            };
+            replayed.map_err(|error| runtime_fact_replay_failed(*sequence, &error.to_string()))?;
+        }
+        if let Some((last, _)) = set.last() {
+            from_sequence = last
+                .checked_add(1)
+                .ok_or_else(|| runtime_fact_replay_failed(*last, "ledger sequence overflow"))?;
+        }
     }
     let appended = ledger
         .query(EventQuery {
@@ -929,6 +1113,9 @@ pub(super) fn recover_runtime_fact_store(
                     )
                     .map_err(|error| runtime_fact_replay_failed(sequence, &error.to_string()))?;
             }
+            // A part of an incomplete set passed over above: the record events around it
+            // already carry its content.
+            EventPayload::Runtime(RuntimePayload::FactSnapshot(_)) => {}
             _ => {
                 return Err(runtime_fact_replay_failed(
                     sequence,

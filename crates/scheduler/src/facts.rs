@@ -182,13 +182,16 @@ impl RuntimeFactStore {
     }
 
     /// Sealed image of every live record, bound to the ledger position the host
-    /// observed when sealing. Expired records are included; expiry is a read
-    /// predicate evaluated by consumers.
+    /// observed when sealing, as part 1 of 1 with `snapshot_id` = that position.
+    /// Expired records are included; expiry is a read predicate evaluated by consumers.
     pub fn snapshot(&self, ledger_position: u64, taken_at_unix_ms: u64) -> RuntimeFactSnapshot {
         RuntimeFactSnapshot {
             schema_version: RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
             ledger_position,
             taken_at_unix_ms,
+            snapshot_id: ledger_position,
+            part: 1,
+            parts: 1,
             records: self.active.values().cloned().collect(),
         }
     }
