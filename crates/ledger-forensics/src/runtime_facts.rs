@@ -5,7 +5,7 @@ use actingcommand_contract::{
     EventPayload, EventQuery, EventType, LedgerReadScope, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_FACTS, OriginModule, ProjectedEvent, ProjectionPayload, ProjectionProfile,
     RUNTIME_FACT_SCHEMA_VERSION, RuntimeEventQueryPageRequest, RuntimeFactRecord, RuntimeFactScope,
-    RuntimeFactSnapshot, RuntimePayload,
+    RuntimeFactSnapshot, RuntimePayload, newest_complete_runtime_fact_snapshot_set,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, LedgerIoKind,
@@ -55,9 +55,10 @@ pub enum ForensicRuntimeFactsUnavailable {
 }
 
 /// Replays the runtime fact store at `position` (inclusive) from one read-only metadata
-/// snapshot: the latest `runtime.fact_snapshot` at or before it (or an empty store), then
-/// every `runtime.fact_recorded` / `runtime.fact_invalidated` after it in ledger order,
-/// under the same acceptance rules as the Runtime's startup replay. Any refusal fails.
+/// snapshot: the newest complete `runtime.fact_snapshot` set at or before it (or an empty
+/// store), then every `runtime.fact_recorded` / `runtime.fact_invalidated` after its last
+/// part in ledger order, under the same acceptance rules as the Runtime's startup replay.
+/// Any refusal fails.
 pub fn runtime_facts_at(
     state_root: impl AsRef<Path>,
     position: u64,
@@ -123,7 +124,7 @@ fn read(
     )?;
     let taken_at_unix_ms = taken_at_unix_ms
         .ok_or_else(|| facts_error("runtime_facts_position_missing", "no event at the position"))?;
-    let mut sealed = None;
+    let mut sealed = Vec::new();
     let snapshot_query = EventQuery {
         event_type: Some(EventType::RuntimeFactSnapshot),
         ..EventQuery::default()
@@ -135,13 +136,31 @@ fn read(
         position,
         deadline,
         |event| {
-            sealed = Some(event.sequence);
+            sealed.push(event.sequence);
             Ok(())
         },
     )?;
+    // Workflow #308 5d-1: the newest complete snapshot set, its parts read newest first.
+    let search = newest_complete_runtime_fact_snapshot_set(|| {
+        sealed
+            .pop()
+            .map(|sequence| snapshot_part(&snapshot, sequence, position, deadline))
+            .transpose()
+    })?;
     let mut store = BTreeMap::new();
+    let mut from_sequence = 1;
+    if let Some(set) = search.set {
+        for (_, part) in &set {
+            for record in &part.records {
+                store.insert((record.scope.clone(), record.key.clone()), record.clone());
+            }
+        }
+        if let Some((last, _)) = set.last() {
+            from_sequence = last.saturating_add(1);
+        }
+    }
     let facts_query = EventQuery {
-        from_sequence: Some(sealed.unwrap_or(1)),
+        from_sequence: Some(from_sequence),
         origin_module: Some(OriginModule::RuntimeFacts),
         ..EventQuery::default()
     };
@@ -151,7 +170,7 @@ fn read(
         ProjectionProfile::Forensic,
         position,
         deadline,
-        |event| apply(&mut store, event, sealed),
+        |event| apply(&mut store, event),
     )?;
     Ok(ForensicRuntimeFactsResult::Available {
         source,
@@ -160,16 +179,64 @@ fn read(
             schema_version: RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
             ledger_position: position,
             taken_at_unix_ms,
+            snapshot_id: position,
+            part: 1,
+            parts: 1,
             records: store.into_values().collect(),
         },
     })
 }
 
-/// One event, applied exactly as `RuntimeFactStore::replay` / `record` / `invalidate`.
+/// The validated snapshot part at `sequence`, read with its full payload.
+fn snapshot_part(
+    snapshot: &GlobalLedgerMetadata,
+    sequence: u64,
+    position: u64,
+    deadline: Instant,
+) -> ForensicResult<(u64, RuntimeFactSnapshot)> {
+    let refused = |detail: &str| {
+        ForensicError::new(
+            "runtime_fact_replay_failed",
+            OPERATION,
+            format!("sequence {sequence}: {detail}"),
+        )
+    };
+    let query = EventQuery {
+        from_sequence: Some(sequence),
+        to_sequence: Some(sequence),
+        event_type: Some(EventType::RuntimeFactSnapshot),
+        ..EventQuery::default()
+    };
+    let mut part = None;
+    visit(
+        snapshot,
+        &query,
+        ProjectionProfile::Forensic,
+        position,
+        deadline,
+        |event| {
+            let ProjectionPayload::Full(payload) = &event.payload else {
+                return Err(refused("payload is not the full projection"));
+            };
+            let EventPayload::Runtime(RuntimePayload::FactSnapshot(payload)) = payload.as_ref()
+            else {
+                return Err(refused("payload is not runtime.fact_snapshot"));
+            };
+            part = Some(payload.snapshot().clone());
+            Ok(())
+        },
+    )?;
+    let part = part.ok_or_else(|| refused("snapshot part is not readable"))?;
+    part.validate()
+        .map_err(|error| refused(&format!("runtime fact rejected: {}", error.code())))?;
+    Ok((sequence, part))
+}
+
+/// One event after the snapshot set, applied exactly as `RuntimeFactStore::record` /
+/// `invalidate`; a part of an incomplete set passed over changes nothing.
 fn apply(
     store: &mut BTreeMap<(RuntimeFactScope, String), RuntimeFactRecord>,
     event: &ProjectedEvent,
-    sealed: Option<u64>,
 ) -> ForensicResult<()> {
     let refused = |detail: &str| {
         ForensicError::new(
@@ -182,18 +249,7 @@ fn apply(
         return Err(refused("payload is not the full projection"));
     };
     match payload.as_ref() {
-        EventPayload::Runtime(RuntimePayload::FactSnapshot(payload))
-            if sealed == Some(event.sequence) =>
-        {
-            let snapshot = payload.snapshot();
-            snapshot
-                .validate()
-                .map_err(|error| refused(&format!("runtime fact rejected: {}", error.code())))?;
-            store.clear();
-            for record in &snapshot.records {
-                store.insert((record.scope.clone(), record.key.clone()), record.clone());
-            }
-        }
+        EventPayload::Runtime(RuntimePayload::FactSnapshot(_)) => {}
         EventPayload::Runtime(RuntimePayload::FactRecorded(payload)) => {
             let record = payload.record();
             record

@@ -12,7 +12,7 @@
 //! The store that holds these records lives in `actingcommand-scheduler` and is
 //! memory-only. Durability comes solely from the ledger: every accepted record
 //! is appended as an event before it enters memory, and the whole store is
-//! sealed periodically as a [`RuntimeFactSnapshot`] (iron rule 13).
+//! sealed periodically as a set of [`RuntimeFactSnapshot`] parts (iron rule 13).
 
 use crate::event::{InstanceId, OriginModule, SanitizationError};
 use crate::fact::{FactScalar, FactValue};
@@ -22,16 +22,16 @@ use std::collections::BTreeMap;
 /// Schema identity carried by every sealed snapshot.
 pub const RUNTIME_FACT_SCHEMA_VERSION: &str = "actingcommand.runtime-fact.v1";
 /// Upper bound on live records held by one Runtime process.
-pub const MAX_RUNTIME_FACTS: usize = 4_096;
+pub const MAX_RUNTIME_FACTS: usize = 16_384;
 /// Upper bound on one key, in bytes.
 pub const MAX_RUNTIME_FACT_KEY_BYTES: usize = 128;
 /// Upper bound on rows in a record-list value.
 pub const MAX_RUNTIME_FACT_RECORD_ROWS: usize = 256;
 /// Upper bound on fields per record-list row.
 pub const MAX_RUNTIME_FACT_RECORD_FIELDS: usize = 64;
-/// Upper bound on the serialized snapshot carried by one `runtime.fact_snapshot`
+/// Upper bound on the serialized snapshot part carried by one `runtime.fact_snapshot`
 /// event: the same single-event payload bound the ledger applies to a
-/// `fact.observed` event. A larger store is rejected, never truncated.
+/// `fact.observed` event. A larger store is sealed as several parts, never truncated.
 pub const MAX_RUNTIME_FACT_SNAPSHOT_BYTES: usize = crate::fact::MAX_FACT_OBSERVATION_BYTES;
 /// Shortest period between two periodic `runtime.fact_snapshot` events.
 pub const RUNTIME_FACT_SNAPSHOT_INTERVAL_MS: u64 = 60_000;
@@ -341,19 +341,33 @@ impl RuntimeFactInvalidation {
     }
 }
 
-/// Sealed image of the whole store at one ledger position.
+/// Sealed image of the store at one ledger position: the whole store, or one part of a
+/// snapshot set (Workflow #308 5d-1). Every part of one set shares `snapshot_id`
+/// (= `ledger_position`) and `parts`; `part` counts from 1. A snapshot sealed before parts
+/// existed reads as part 1 of 1 with `snapshot_id` 0.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeFactSnapshot {
     pub schema_version: String,
     pub ledger_position: u64,
     pub taken_at_unix_ms: u64,
+    #[serde(default)]
+    pub snapshot_id: u64,
+    #[serde(default = "first_snapshot_part")]
+    pub part: u16,
+    #[serde(default = "first_snapshot_part")]
+    pub parts: u16,
     pub records: Vec<RuntimeFactRecord>,
 }
 
+const fn first_snapshot_part() -> u16 {
+    1
+}
+
 impl RuntimeFactSnapshot {
-    /// Checks the schema identity, the ledger position, the record bound,
-    /// every record, and the serialized size one ledger event may carry.
+    /// Checks the schema identity, the ledger position, `1 <= part <= parts`, the record
+    /// bound, every record, and the serialized size one ledger event may carry; the bounds
+    /// apply to this part.
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.schema_version != RUNTIME_FACT_SCHEMA_VERSION {
             return Err(SanitizationError::new(
@@ -365,6 +379,12 @@ impl RuntimeFactSnapshot {
             return Err(SanitizationError::new(
                 "runtime_fact_ledger_position_invalid",
                 "ledger_position",
+            ));
+        }
+        if self.part == 0 || self.part > self.parts {
+            return Err(SanitizationError::new(
+                "runtime_fact_snapshot_part_invalid",
+                "part",
             ));
         }
         if self.records.len() > MAX_RUNTIME_FACTS {
@@ -388,4 +408,70 @@ impl RuntimeFactSnapshot {
         }
         Ok(())
     }
+}
+
+/// An incomplete snapshot set passed over by [`newest_complete_runtime_fact_snapshot_set`]:
+/// `parts_found` contiguous parts of `snapshot_id` out of its `parts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkippedRuntimeFactSnapshotSet {
+    pub snapshot_id: u64,
+    pub parts_found: u16,
+    pub parts: u16,
+}
+
+/// Outcome of [`newest_complete_runtime_fact_snapshot_set`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeFactSnapshotSetSearch {
+    /// The newest complete set in part order, each part with its ledger sequence; `None`
+    /// when the ledger holds no complete set.
+    pub set: Option<Vec<(u64, RuntimeFactSnapshot)>>,
+    /// Every incomplete set passed over before it, newest first.
+    pub skipped: Vec<SkippedRuntimeFactSnapshotSet>,
+}
+
+/// Workflow #308 5d-1: finds the newest complete snapshot set among `runtime.fact_snapshot`
+/// parts that `next_newest` yields newest first, each with its ledger sequence. A set is
+/// complete when its newest part is part `parts` and the parts before it are `parts - 1`
+/// down to 1 of the same `snapshot_id` and `parts`, contiguous among the snapshot events. A
+/// set that is not (a stop while sealing) is skipped and the search continues with the next
+/// older part. Nothing older than the complete set is read.
+pub fn newest_complete_runtime_fact_snapshot_set<E>(
+    mut next_newest: impl FnMut() -> Result<Option<(u64, RuntimeFactSnapshot)>, E>,
+) -> Result<RuntimeFactSnapshotSetSearch, E> {
+    let mut search = RuntimeFactSnapshotSetSearch::default();
+    let mut pending = next_newest()?;
+    while let Some(newest) = pending.take() {
+        let (snapshot_id, part, parts) = (newest.1.snapshot_id, newest.1.part, newest.1.parts);
+        let mut set = vec![newest];
+        let mut expected = part;
+        while expected > 1 {
+            match next_newest()? {
+                Some(older)
+                    if (older.1.snapshot_id, older.1.part, older.1.parts)
+                        == (snapshot_id, expected - 1, parts) =>
+                {
+                    set.push(older);
+                    expected -= 1;
+                }
+                other => {
+                    pending = other;
+                    break;
+                }
+            }
+        }
+        if expected == 1 {
+            if part == parts {
+                set.reverse();
+                search.set = Some(set);
+                return Ok(search);
+            }
+            pending = next_newest()?;
+        }
+        search.skipped.push(SkippedRuntimeFactSnapshotSet {
+            snapshot_id,
+            parts_found: part - expected + 1,
+            parts,
+        });
+    }
+    Ok(search)
 }

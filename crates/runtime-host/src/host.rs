@@ -1233,6 +1233,7 @@ impl RuntimeHost {
         let (runtime_facts, runtime_facts_dirty) = runtime_facts::recover_runtime_fact_store(
             &ledger,
             &events,
+            owner_epoch,
             takeover,
             config.clock.sample()?.unix_ms,
         )?;
@@ -1268,6 +1269,7 @@ impl RuntimeHost {
             facts: Mutex::new(facts),
             runtime_facts: Mutex::new(runtime_facts),
             runtime_facts_dirty: AtomicBool::new(runtime_facts_dirty),
+            maximum_frame_bytes: config.maximum_frame_bytes,
             policy_inputs: Mutex::new(config.policy_inputs),
             authoritative_policy_outcomes: Mutex::new(authoritative_policy_outcomes),
             procedure_manifest: Mutex::new(config.procedure_manifest),
@@ -2822,6 +2824,8 @@ struct HostShared {
     // The Runtime's own facts: ledger-first, memory-only, sealed periodically while dirty.
     runtime_facts: Mutex<RuntimeFactStore>,
     runtime_facts_dirty: AtomicBool,
+    // The IPC frame bound a `RuntimeFactSnapshot` read reply must fit (Workflow #308 5d-1).
+    maximum_frame_bytes: usize,
     policy_inputs: Mutex<Option<PolicyInputSnapshot>>,
     // A bounded cache of exact GlobalLedger projections; it never computes or owns outcomes.
     authoritative_policy_outcomes:
