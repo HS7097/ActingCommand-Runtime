@@ -89,6 +89,55 @@ fatal codes of the seeding itself.
 The test hook `evaluate_policy_cycle_with_test_inputs` replaces the
 configuration and seeds the store the same way before it evaluates.
 
+## Backend self-check availability
+
+Workflow #317 slice sc2 (the bounded reading of #316 goal 5): a failed backend
+self-check withdraws a configured policy instance's availability. Right after
+the host records an open's `backend.selfcheck.<entry>.*` runtime facts
+(`runtime-fact-store.md`, "Producers") it compares the recorded `status` with
+the instance's active `session.instance.available` record of scope
+`instance { instance_id: <alias> }`; the recording, this decision and its
+publication hold one host-wide self-check availability gate (taken before the
+`fact_write_gate`), so concurrent opens and invalidations cannot interleave:
+
+- `failed` (any entry) publishes `session.instance.available = false` unless
+  that record already holds `false`. The record goes through the seed's publish
+  path and scope (`publish_fact`: system links, source `runtime`, origin module
+  `fact-store`, actor `runtime`, one `fact.published` event) and has the seed's
+  form except `source_detector` `runtime.backend-selfcheck` and
+  `source_snapshot_id` `backend_selfcheck:<entry>:<generation>`, where
+  `<entry>` is `input`, `capture` or `nemu` and `<generation>` the open's
+  session generation; `resource_bundle_hash` is the seed digest of the value
+  `false`, and the observation time is the host clock.
+- `passed` (any entry), when the active record is such a `backend_selfcheck:`
+  record and no entry of the instance still holds `failed`, republishes the
+  configured seed — the seed's own record (detector, snapshot id and digest of
+  the configured value) as a new observation at the host clock. An instance
+  configured `available = false` therefore stays `false`.
+- `unknown` (an unobserved provider, a fixture simulation, a check the open
+  did not make) never changes availability, so an open that observes nothing
+  can never withdraw an instance.
+
+When emulator control invalidates the self-check facts after `stop`, `start`
+or `restart`, the same restore applies (no entry is `failed` any more); the
+next open decides again. An owner takeover invalidates them with the
+`backend.` family before seeding, and a clean restart keeps them; in both
+cases the seed, whose snapshot id differs from the `backend_selfcheck:`
+record, replaces that record as described under "Seeding at startup", and the
+next open decides again.
+
+Only a configured policy instance is gated: without policy inputs, or for an
+instance that is not a policy instance, nothing is published. The evaluator
+is unchanged; it excludes an instance projected `available = false`, so the
+policy stops dispatching to the instance and resumes once the seed value
+returns. A refusal of the publication (for example `fact_observation_not_newer`
+after a wall-clock step back) is returned to the open's observation consumer,
+whose existing failure path poisons the Runtime; a fatal refusal marks the
+Runtime fatal as every `publish_fact` does, and an instance the registry does
+not hold fails `backend_selfcheck_instance_unregistered` (fatal). The strict
+reading — an instance unavailable until a self-check passed — needs a
+controlled preparation phase (opens happen inside a lease) and is not built.
+
 ## Projection into the evaluation
 
 `project_authoritative_policy_inputs_under_gate` (every evaluation, dispatch

@@ -167,7 +167,12 @@ Once an instance is bound, each of its backend opens is recorded as one
 `runtime.lifecycle_observed` event with phase `backend_open_observed`
 (`backend-open-observation.md`), and right after it the host records that
 report as the instance's four `backend.selfcheck.<entry>.*` runtime facts
-(`runtime-fact-store.md`, "Producers").
+(`runtime-fact-store.md`, "Producers"); a `failed` one withdraws a policy
+instance's availability (`instance-fact-store.md`, "Backend self-check
+availability"). An explicitly selected capture backend, like an automatic
+one, primes its first frame at open and the first capture returns that frame
+(`backend-open-observation.md`, "Primed first frame"), so the open's self-check
+already carries the capture check.
 
 `actingcommand-vision-provider-check --state-root <runtime-state>` reads the
 specified Runtime ledger through B's `ForensicRequest::events` and the shared

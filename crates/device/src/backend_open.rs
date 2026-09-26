@@ -311,7 +311,9 @@ pub(crate) fn capture_open_report(
         } else {
             BackendObservationStatus::Failed
         };
-        if automatic && !attempt.cached && attempt.ok && Some(attempt.backend) == selected {
+        // A fresh automatic probe and an explicit selection (Workflow #317 sc2) both acquired
+        // the selected backend's primed frame; a cached selection acquired nothing.
+        if !attempt.cached && attempt.ok && Some(attempt.backend) == selected {
             report.capture_check = BackendObservationStatus::Passed;
             report.connection = BackendObservationStatus::Passed;
         }

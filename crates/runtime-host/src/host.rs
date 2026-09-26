@@ -1250,6 +1250,7 @@ impl RuntimeHost {
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
+            backend_selfcheck_availability_gate: Mutex::new(()),
             signature_write_gate: Mutex::new(()),
             device_diagnostics: Mutex::new(device_diagnostic::DeviceDiagnosticBudget::new(
                 owner_epoch,
@@ -2781,6 +2782,9 @@ struct HostShared {
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    // A backend self-check write and the policy availability it implies are one ordered step
+    // (Workflow #317 sc2); taken before, never inside, `fact_write_gate`.
+    backend_selfcheck_availability_gate: Mutex<()>,
     // Serialize explicit catalog transitions; the catalog itself is rebuilt by Ledger.
     signature_write_gate: Mutex<()>,
     device_diagnostics: Mutex<device_diagnostic::DeviceDiagnosticBudget>,
