@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::{
+    InstancePauseStage, InstancePauseState, SchedulingPauseScope, SchedulingPauseState,
+};
 
 fn validate_static_fact_pool_authority(
     catalog: &actingcommand_policy::CompiledCatalog,
@@ -114,6 +117,66 @@ impl TrustedPolicyDispatchStore {
     }
 }
 
+/// Workflow #191 ps1: the operator's scheduling pauses. They live in memory only, so a
+/// restart forgets them, and they have no expiry. The global pause and every instance pause
+/// hold their own revision; setting or lifting a gate bumps the revision of its scope.
+#[derive(Clone, Default)]
+pub(super) struct SchedulingPauseTable {
+    global_revision: u64,
+    global: Option<SchedulingPauseState>,
+    instance_revisions: BTreeMap<String, u64>,
+    instances: BTreeMap<String, InstancePauseState>,
+}
+
+impl SchedulingPauseTable {
+    /// The deferral code a policy dispatch to `instance_alias` meets, if a gate is closed.
+    pub(super) fn deferral(&self, instance_alias: &str) -> Option<&'static str> {
+        if self.global.is_some() {
+            Some("dispatch_paused_global")
+        } else if self.instances.contains_key(instance_alias) {
+            Some("dispatch_paused_instance")
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn global_state(&self) -> Option<SchedulingPauseState> {
+        self.global.clone()
+    }
+
+    pub(super) fn instance_state(&self, instance_alias: &str) -> Option<InstancePauseState> {
+        self.instances.get(instance_alias).cloned()
+    }
+
+    fn lift_instance(&mut self, instance_alias: &str) -> RuntimeHostResult<u64> {
+        self.instances.remove(instance_alias);
+        next_scheduling_pause_revision(
+            self.instance_revisions
+                .entry(instance_alias.to_owned())
+                .or_default(),
+        )
+    }
+}
+
+fn next_scheduling_pause_revision(revision: &mut u64) -> RuntimeHostResult<u64> {
+    *revision = revision.checked_add(1).ok_or_else(|| {
+        RuntimeHostError::fatal(
+            "scheduling_pause_revision_overflow",
+            "change_scheduling_pause",
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    })?;
+    Ok(*revision)
+}
+
+fn scheduling_pause_denied(code: &'static str, operation: &'static str) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest),
+        RuntimeReceiptState::Denied,
+        None,
+    )
+}
+
 struct PolicyAdmissionAppender<'a> {
     ledger: &'a GlobalLedger,
     initial_fact_gate: RefCell<Option<MutexGuard<'a, ()>>>,
@@ -225,6 +288,10 @@ impl HostShared {
             Some(seed) => seed,
             None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
         };
+        // Workflow #191 ps1: the scheduling pauses as this cycle starts; a paused candidate is
+        // deferred exactly as admission would refuse it.
+        let scheduling_pause =
+            lock(&self.scheduling_pause, "read_policy_scheduling_pause")?.clone();
         let (mut cycle, eligibility_unknown_pairs) = {
             let mut policy = lock(&self.policy, "evaluate_policy_cycle")?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -237,6 +304,7 @@ impl HostShared {
                     seed,
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
+                    scheduling_pause: &|instance_alias| scheduling_pause.deferral(instance_alias),
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -782,28 +850,38 @@ impl HostShared {
                 now_unix_ms,
             };
             let context = &authoritative_context;
-            let mut gate_error = match lock(
-                &self.performance_control,
-                "gate_policy_performance_dispatch",
-            )?
-            .gate_dispatch(
-                &intent.instance_id,
-                intent.prerequisites.urgency_milli,
-                context.now_unix_ms,
-            )? {
-                PerformanceDispatchGate::Allowed => None,
-                PerformanceDispatchGate::Deferred {
-                    reason,
-                    deadline_disposition,
-                    event,
-                    retry_after_ms,
-                } => {
-                    if let Some(event) = event {
-                        self.record_performance_events(&[
-                            PerformanceSemanticEvent::BalanceChanged(event),
-                        ])?;
-                    }
-                    let code = if deadline_disposition
+            // Workflow #191 ps1: an operator scheduling pause (global, then this instance)
+            // defers the dispatch before the performance and capacity gates are consulted.
+            let pause_deferral = lock(&self.scheduling_pause, "gate_policy_scheduling_pause")?
+                .deferral(&intent.instance_id);
+            let mut gate_error = match pause_deferral {
+                Some(code) => Some(RuntimeHostError::request(
+                    code,
+                    "admit_policy_dispatch",
+                    RuntimeErrorCode::InvalidRequest,
+                )),
+                None => match lock(
+                    &self.performance_control,
+                    "gate_policy_performance_dispatch",
+                )?
+                .gate_dispatch(
+                    &intent.instance_id,
+                    intent.prerequisites.urgency_milli,
+                    context.now_unix_ms,
+                )? {
+                    PerformanceDispatchGate::Allowed => None,
+                    PerformanceDispatchGate::Deferred {
+                        reason,
+                        deadline_disposition,
+                        event,
+                        retry_after_ms,
+                    } => {
+                        if let Some(event) = event {
+                            self.record_performance_events(&[
+                                PerformanceSemanticEvent::BalanceChanged(event),
+                            ])?;
+                        }
+                        let code = if deadline_disposition
                         == Some(
                             actingcommand_contract::PerformanceDeadlineDisposition::CapacityFailure,
                         ) {
@@ -811,34 +889,35 @@ impl HostShared {
                     } else {
                         reason
                     };
-                    let mut projection =
-                        RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false);
-                    if let Some(retry_after_ms) = retry_after_ms {
-                        projection = projection.with_retry_after(retry_after_ms);
+                        let mut projection =
+                            RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false);
+                        if let Some(retry_after_ms) = retry_after_ms {
+                            projection = projection.with_retry_after(retry_after_ms);
+                        }
+                        let mut error = RuntimeHostError::with_projection(
+                            code,
+                            "admit_policy_dispatch",
+                            projection,
+                        );
+                        // A throttle deferral tells the driver when this instance may start: the
+                        // error carries the wait and the rejection record the absolute time.
+                        if let Some(retry_after_ms) = retry_after_ms {
+                            let next_eligible_unix_ms = context
+                                .now_unix_ms
+                                .checked_add(retry_after_ms)
+                                .ok_or_else(|| {
+                                    policy_admission_fatal(
+                                        "policy_admission_clock_overflow",
+                                        "admit_policy_dispatch",
+                                    )
+                                })?;
+                            let mut rejection = error.policy_rejection();
+                            rejection.next_eligible_unix_ms = Some(next_eligible_unix_ms);
+                            error.lifecycle.policy_rejection = Some(Box::new(rejection));
+                        }
+                        Some(error)
                     }
-                    let mut error = RuntimeHostError::with_projection(
-                        code,
-                        "admit_policy_dispatch",
-                        projection,
-                    );
-                    // A throttle deferral tells the driver when this instance may start: the
-                    // error carries the wait and the rejection record the absolute time.
-                    if let Some(retry_after_ms) = retry_after_ms {
-                        let next_eligible_unix_ms = context
-                            .now_unix_ms
-                            .checked_add(retry_after_ms)
-                            .ok_or_else(|| {
-                                policy_admission_fatal(
-                                    "policy_admission_clock_overflow",
-                                    "admit_policy_dispatch",
-                                )
-                            })?;
-                        let mut rejection = error.policy_rejection();
-                        rejection.next_eligible_unix_ms = Some(next_eligible_unix_ms);
-                        error.lifecycle.policy_rejection = Some(Box::new(rejection));
-                    }
-                    Some(error)
-                }
+                },
             };
             if gate_error.is_none()
                 && let Err(error) = self.admit_capacity()
@@ -1289,6 +1368,158 @@ impl HostShared {
             }
             result => result,
         }
+    }
+
+    /// `PauseScheduling` (Workflow #191 ps1). `Global` closes the dispatch gate of every
+    /// instance and closes no device session. `Instance` closes the gate of one physical
+    /// instance at once (stage `Draining`), drains its in-flight contained runs and answers
+    /// once none is left (stage `Paused`); a failed drain lifts the gate again.
+    pub(super) fn pause_scheduling(
+        &self,
+        scope: &SchedulingPauseScope,
+        reason_code: &str,
+        drain_timeout_ms: u64,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let since_unix_ms = self
+            .runtime_clock_sample()
+            .map_err(RequestFailure::poison_without_terminal)?
+            .unix_ms;
+        let (instance_alias, instance_id, revision) = match scope {
+            SchedulingPauseScope::Global => {
+                let mut table = lock(&self.scheduling_pause, "pause_global_scheduling")?;
+                if table.global.is_some() {
+                    return Err(scheduling_pause_denied(
+                        "scheduling_already_paused",
+                        "pause_scheduling",
+                    ));
+                }
+                let revision = next_scheduling_pause_revision(&mut table.global_revision)?;
+                table.global = Some(SchedulingPauseState {
+                    revision,
+                    reason_code: reason_code.to_owned(),
+                    since_unix_ms,
+                });
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::SchedulingPaused {
+                        scope: scope.clone(),
+                        revision,
+                        drained: None,
+                    },
+                });
+            }
+            SchedulingPauseScope::Instance { instance_alias } => {
+                let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+                let mut table = lock(&self.scheduling_pause, "pause_instance_scheduling")?;
+                if table.instances.contains_key(instance_alias) {
+                    return Err(scheduling_pause_denied(
+                        "scheduling_already_paused",
+                        "pause_scheduling",
+                    ));
+                }
+                let revision = next_scheduling_pause_revision(
+                    table
+                        .instance_revisions
+                        .entry(instance_alias.clone())
+                        .or_default(),
+                )?;
+                table.instances.insert(
+                    instance_alias.clone(),
+                    InstancePauseState {
+                        revision,
+                        reason_code: reason_code.to_owned(),
+                        since_unix_ms,
+                        stage: InstancePauseStage::Draining,
+                    },
+                );
+                (instance_alias, instance_id, revision)
+            }
+        };
+        match self.drain_contained_runs_for_pause(instance_id, drain_timeout_ms) {
+            Ok(drained) => {
+                let mut table = lock(&self.scheduling_pause, "finish_instance_pause_drain")?;
+                let state = table
+                    .instances
+                    .get_mut(instance_alias)
+                    .filter(|state| {
+                        state.revision == revision && state.stage == InstancePauseStage::Draining
+                    })
+                    .ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "scheduling_pause_state_lost",
+                            "pause_scheduling",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                state.stage = InstancePauseStage::Paused;
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::SchedulingPaused {
+                        scope: scope.clone(),
+                        revision,
+                        drained: Some(drained),
+                    },
+                })
+            }
+            // No half-open pause: the failed drain lifts the gate it closed.
+            Err(failure) => {
+                match lock(&self.scheduling_pause, "lift_failed_instance_pause")
+                    .and_then(|mut table| table.lift_instance(instance_alias))
+                {
+                    Ok(_) => Err(failure),
+                    Err(error) => Err(failure.replace_with_poison(error)),
+                }
+            }
+        }
+    }
+
+    /// `ResumeScheduling` (Workflow #191 ps1): lifts the matching gate and bumps its revision.
+    /// An instance whose pause is still draining cannot be resumed yet.
+    pub(super) fn resume_scheduling(
+        &self,
+        scope: &SchedulingPauseScope,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let mut table = lock(&self.scheduling_pause, "resume_scheduling")?;
+        let revision = match scope {
+            SchedulingPauseScope::Global => {
+                if table.global.is_none() {
+                    return Err(scheduling_pause_denied(
+                        "scheduling_not_paused",
+                        "resume_scheduling",
+                    ));
+                }
+                table.global = None;
+                next_scheduling_pause_revision(&mut table.global_revision)?
+            }
+            SchedulingPauseScope::Instance { instance_alias } => {
+                match table.instances.get(instance_alias).map(|state| state.stage) {
+                    None => {
+                        return Err(scheduling_pause_denied(
+                            "scheduling_not_paused",
+                            "resume_scheduling",
+                        ));
+                    }
+                    Some(InstancePauseStage::Draining) => {
+                        return Err(scheduling_pause_denied(
+                            "scheduling_pause_draining",
+                            "resume_scheduling",
+                        ));
+                    }
+                    Some(InstancePauseStage::Paused) => table.lift_instance(instance_alias)?,
+                }
+            }
+        };
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::SchedulingResumed {
+                scope: scope.clone(),
+                revision,
+                selfcheck: None,
+            },
+        })
     }
 
     pub(super) fn refresh_policy_dispatches(&self) -> RuntimeHostResult<()> {

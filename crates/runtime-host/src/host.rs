@@ -216,7 +216,7 @@ use monitor_control::monitor_probe_loop;
 use observation::CompletedReadonlyObservation;
 use performance::{CapacityUse, performance_monitor_loop};
 use planning::planning_request_failure;
-use policy_dispatch::TrustedPolicyDispatchStore;
+use policy_dispatch::{SchedulingPauseTable, TrustedPolicyDispatchStore};
 #[cfg(test)]
 pub(crate) use policy_outcome::insert_authoritative_policy_outcome;
 #[cfg(test)]
@@ -1299,6 +1299,7 @@ impl RuntimeHost {
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeMap::new()),
+            scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             startup_packages,
             pending_host_work: Mutex::new(VecDeque::new()),
             resource_packages: config.resource_packages,
@@ -2839,6 +2840,8 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
+    // Workflow #191 ps1: the operator's scheduling pauses (memory only, no expiry).
+    scheduling_pause: Mutex<SchedulingPauseTable>,
     // Slice #316-B3: startup packages by registered instance, and the work handed to the
     // host's own scheduling thread (startup packages; since #316-B4 also recovery ladders).
     startup_packages: BTreeMap<InstanceId, ContainedTaskRequest>,

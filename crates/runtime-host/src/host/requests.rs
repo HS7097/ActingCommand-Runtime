@@ -310,6 +310,23 @@ impl HostShared {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.control_emulator_instance(request, validated, instance_alias, *action)
             }
+            // Workflow #191 ps1: an instance pause applies to physical instances only.
+            RuntimeOperation::PauseScheduling {
+                scope,
+                reason_code,
+                drain_timeout_ms,
+            } => {
+                if let Some(instance_alias) = scope.instance_alias() {
+                    self.require_physical_instance_alias(instance_alias)?;
+                }
+                self.pause_scheduling(scope, reason_code, *drain_timeout_ms)
+            }
+            RuntimeOperation::ResumeScheduling { scope } => {
+                if let Some(instance_alias) = scope.instance_alias() {
+                    self.require_physical_instance_alias(instance_alias)?;
+                }
+                self.resume_scheduling(scope)
+            }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
                 holder_id,

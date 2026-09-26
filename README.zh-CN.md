@@ -179,6 +179,8 @@ actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms
 actingctl monitor-clear --state-root <state-root> --instance <alias>
 actingctl emulator status --state-root <state-root> --instance <alias>
 actingctl emulator start --state-root <state-root> --instance <alias>     # 另有 stop | restart（仅显式请求；按实例围栏；配置了 startup_package 则随后以受控任务排程）
+actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]     # 停止策略派发：全局，或单个物理实例（先排空其在途任务）；只在内存、无过期（contracts/scheduling-pause.md）
+actingctl resume --state-root <state-root> [--instance <alias>]     # 解除该暂停；status 显示全局与各实例的暂停态
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>
 actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # 手动优先级偏移（±1000000 milli），写成 session.task.<task_id>.priority_offset 事实；不带 --instance 时为任务级，作用于唯一配置的游戏（否则 task_offset_scope_ambiguous）
 actingctl request-shutdown --state-root <state-root>

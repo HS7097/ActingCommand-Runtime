@@ -74,6 +74,14 @@ pub const MAX_RUNTIME_EVENT_QUERY_EVENTS: u16 = 256;
 pub const MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES: usize = 768 * 1024;
 pub const MAX_GOVERNANCE_CLIENT_BYTES: usize = 64;
 pub const MAX_GOVERNANCE_CLIENT_VERSION_BYTES: usize = 32;
+/// Closed bounds of `PauseScheduling.drain_timeout_ms` (Workflow #191 ps1).
+pub const MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS: u64 = 1_000;
+pub const MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS: u64 = 600_000;
+/// Bound of a scheduling pause `reason_code` (`[a-z0-9_.-]`).
+pub const MAX_SCHEDULING_PAUSE_REASON_BYTES: usize = 64;
+/// How long an instance pause waits, once its drain timeout expired, for the runs it asked to
+/// stop to reach their next checkpoint; past it the pause fails and its gate is lifted.
+pub const SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS: u64 = 30_000;
 pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
     "actingcommand.runtime.planning-document.v1";
 pub const MAX_RUNTIME_PLANNING_DOCUMENT_BYTES: usize = 512 * 1024;
@@ -1282,6 +1290,10 @@ pub struct RuntimeInstanceStatus {
     /// absent when the host runs without policy inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     game_id: Option<String>,
+    /// The operator's scheduling pause of this instance (Workflow #191 ps1); absent when
+    /// the instance is not paused. Held in memory only: it never survives a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pause: Option<InstancePauseState>,
 }
 
 impl RuntimeInstanceStatus {
@@ -1307,6 +1319,7 @@ impl RuntimeInstanceStatus {
             adb_port: None,
             resource_package: None,
             game_id: None,
+            pause: None,
         };
         status.validate()?;
         Ok(status)
@@ -1320,6 +1333,9 @@ impl RuntimeInstanceStatus {
                 MAX_STATUS_GAME_ID_BYTES,
                 "invalid_runtime_status_game",
             )?;
+        }
+        if let Some(pause) = &self.pause {
+            pause.validate()?;
         }
         if self.capabilities.is_some() && self.backend_provenance.is_none() {
             return Err(RuntimeContractError::new(
@@ -1411,6 +1427,16 @@ impl RuntimeInstanceStatus {
     pub fn game_id(&self) -> Option<&str> {
         self.game_id.as_deref()
     }
+
+    pub fn with_pause(mut self, pause: Option<InstancePauseState>) -> RuntimeContractResult<Self> {
+        self.pause = pause;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub const fn pause(&self) -> Option<&InstancePauseState> {
+        self.pause.as_ref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1420,6 +1446,10 @@ pub struct RuntimeControlPlaneStatus {
     instances: Vec<RuntimeInstanceStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<crate::RuntimeStateSource>,
+    /// The operator's global scheduling pause (Workflow #191 ps1); absent when scheduling is
+    /// not globally paused. Held in memory only: it never survives a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scheduling_pause: Option<SchedulingPauseState>,
 }
 
 impl RuntimeControlPlaneStatus {
@@ -1443,9 +1473,23 @@ impl RuntimeControlPlaneStatus {
             owner_epoch,
             instances,
             source: None,
+            scheduling_pause: None,
         };
         status.validate()?;
         Ok(status)
+    }
+
+    pub fn with_scheduling_pause(
+        mut self,
+        scheduling_pause: Option<SchedulingPauseState>,
+    ) -> RuntimeContractResult<Self> {
+        self.scheduling_pause = scheduling_pause;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub const fn scheduling_pause(&self) -> Option<&SchedulingPauseState> {
+        self.scheduling_pause.as_ref()
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
@@ -1453,6 +1497,9 @@ impl RuntimeControlPlaneStatus {
             source
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_runtime_state_source"))?;
+        }
+        if let Some(pause) = &self.scheduling_pause {
+            pause.validate()?;
         }
         let mut aliases = BTreeSet::new();
         let mut instance_ids = BTreeSet::new();
@@ -1477,6 +1524,108 @@ impl RuntimeControlPlaneStatus {
     pub fn instances(&self) -> &[RuntimeInstanceStatus] {
         &self.instances
     }
+}
+
+/// What an operator scheduling pause covers (Workflow #191 ps1): every policy dispatch, or the
+/// policy dispatches of one registered physical instance. The two scopes hold their own state
+/// and revision and never imply each other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SchedulingPauseScope {
+    Global,
+    Instance { instance_alias: String },
+}
+
+impl SchedulingPauseScope {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        match self {
+            Self::Global => Ok(()),
+            Self::Instance { instance_alias } => validate_instance_alias(instance_alias),
+        }
+    }
+
+    pub fn instance_alias(&self) -> Option<&str> {
+        match self {
+            Self::Global => None,
+            Self::Instance { instance_alias } => Some(instance_alias),
+        }
+    }
+}
+
+/// The in-flight contained runs an instance pause drained: `finished` ended on their own,
+/// `cancelled` were asked to stop after the drain timeout (`contained_task_paused`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingDrainSummary {
+    pub finished: u32,
+    pub cancelled: u32,
+}
+
+/// The connection self-check a resumed instance reports. Slice ps2 defines and fills it; this
+/// slice never produces one, so `SchedulingResumed.selfcheck` is always absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct SchedulingResumeSelfCheck {}
+
+/// Where a per-instance pause stands: its in-flight runs are still draining, or none is left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstancePauseStage {
+    Draining,
+    Paused,
+}
+
+/// The global scheduling pause as `Status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingPauseState {
+    pub revision: u64,
+    pub reason_code: String,
+    pub since_unix_ms: u64,
+}
+
+impl SchedulingPauseState {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        validate_scheduling_pause_reason(&self.reason_code)?;
+        if self.revision == 0 || self.since_unix_ms == 0 {
+            return Err(RuntimeContractError::new("invalid_scheduling_pause_state"));
+        }
+        Ok(())
+    }
+}
+
+/// One instance's scheduling pause as `Status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstancePauseState {
+    pub revision: u64,
+    pub reason_code: String,
+    pub since_unix_ms: u64,
+    pub stage: InstancePauseStage,
+}
+
+impl InstancePauseState {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        validate_scheduling_pause_reason(&self.reason_code)?;
+        if self.revision == 0 || self.since_unix_ms == 0 {
+            return Err(RuntimeContractError::new("invalid_scheduling_pause_state"));
+        }
+        Ok(())
+    }
+}
+
+/// A scheduling pause reason is a closed code: `1..=64` bytes of `[a-z0-9_.-]`.
+pub fn validate_scheduling_pause_reason(reason_code: &str) -> RuntimeContractResult<()> {
+    if reason_code.is_empty()
+        || reason_code.len() > MAX_SCHEDULING_PAUSE_REASON_BYTES
+        || !reason_code.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+        })
+    {
+        return Err(RuntimeContractError::new("invalid_scheduling_pause_reason"));
+    }
+    Ok(())
 }
 
 /// One instance an instance discovery query reported. `bound_alias` is the registered
@@ -2833,6 +2982,20 @@ pub enum RuntimeOperation {
     /// its bound alias. Spawns the vendor tool, so the origin gate is the emulator control
     /// one; binds, leases and opens nothing and records one `command.validated` observation.
     DiscoverInstances,
+    /// Pauses policy dispatch (Workflow #191 ps1). Only an explicit User+Ui or Cli+Cli request
+    /// may issue it. `Global` closes the dispatch gate for every instance; `Instance` closes it
+    /// for one physical instance and then drains that instance's in-flight contained runs:
+    /// they finish on their own within `drain_timeout_ms` (`1_000..=600_000`, validated for
+    /// both scopes, used only by `Instance`) or are asked to stop at their next checkpoint.
+    PauseScheduling {
+        scope: SchedulingPauseScope,
+        reason_code: String,
+        drain_timeout_ms: u64,
+    },
+    /// Lifts the matching scheduling pause; same origin gate as `PauseScheduling`.
+    ResumeScheduling {
+        scope: SchedulingPauseScope,
+    },
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -3070,6 +3233,23 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 policy.validate()
             }
+            Self::PauseScheduling {
+                scope,
+                reason_code,
+                drain_timeout_ms,
+            } => {
+                scope.validate()?;
+                validate_scheduling_pause_reason(reason_code)?;
+                if !(MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS..=MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS)
+                    .contains(drain_timeout_ms)
+                {
+                    return Err(RuntimeContractError::new(
+                        "invalid_scheduling_pause_drain_timeout",
+                    ));
+                }
+                Ok(())
+            }
+            Self::ResumeScheduling { scope } => scope.validate(),
             Self::RecognizeArtifact { request } => request.validate(),
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::CaptureSequence {
@@ -3189,6 +3369,8 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::ControlEmulatorInstance(<redacted>)"
             }
             Self::DiscoverInstances => "RuntimeOperation::DiscoverInstances",
+            Self::PauseScheduling { .. } => "RuntimeOperation::PauseScheduling(<redacted>)",
+            Self::ResumeScheduling { .. } => "RuntimeOperation::ResumeScheduling(<redacted>)",
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
@@ -3368,6 +3550,17 @@ impl RuntimeRequest {
             (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
         ) {
             return Err(RuntimeContractError::new("invalid_emulator_control_origin"));
+        }
+        // Only the person (Ui) or the operator (Cli) may pause or resume scheduling; no
+        // scheduler, agent or Lab path can stop or restart dispatch by itself.
+        if matches!(
+            self.operation,
+            RuntimeOperation::PauseScheduling { .. } | RuntimeOperation::ResumeScheduling { .. }
+        ) && !matches!(
+            (self.actor, self.source),
+            (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+        ) {
+            return Err(RuntimeContractError::new("invalid_scheduling_pause_origin"));
         }
         // Fact publication (Workflow #308 slice 4a-2): an observation whose every key is a
         // manual priority offset may also come from the person (Ui) or the operator (Cli);
@@ -3564,6 +3757,9 @@ pub enum ContainedTaskCancellationReason {
     DeadlineExceeded,
     ClientRequested,
     RecoveredAfterRestart,
+    /// An instance scheduling pause asked the run to stop after its drain timeout
+    /// (`contained_task_paused`, Workflow #191 ps1).
+    PausedByOperator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3666,6 +3862,7 @@ pub enum RuntimeErrorCode {
     ContainedTaskDeadlineExceeded,
     ContainedTaskBusy,
     ContainedTaskCancelled,
+    ContainedTaskPaused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3904,6 +4101,21 @@ pub enum RuntimeResult {
     /// The provider's on-demand instance discovery answer (`DiscoverInstances`).
     InstancesDiscovered {
         discovery: RuntimeInstanceDiscovery,
+    },
+    /// The scheduling pause is in effect (`PauseScheduling`); an instance pause answers once
+    /// its in-flight runs drained and carries what they did.
+    SchedulingPaused {
+        scope: SchedulingPauseScope,
+        revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drained: Option<SchedulingDrainSummary>,
+    },
+    /// The scheduling pause is lifted (`ResumeScheduling`).
+    SchedulingResumed {
+        scope: SchedulingPauseScope,
+        revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selfcheck: Option<SchedulingResumeSelfCheck>,
     },
     ContainedTaskCompleted {
         run_id: RunId,
@@ -4290,6 +4502,31 @@ impl RuntimeReceipt {
             }
             Some(RuntimeResult::Status { status }) => status.validate()?,
             Some(RuntimeResult::InstancesDiscovered { discovery }) => discovery.validate()?,
+            Some(RuntimeResult::SchedulingPaused {
+                scope,
+                revision,
+                drained,
+            }) => {
+                scope.validate()?;
+                if self.state != RuntimeReceiptState::Completed
+                    || *revision == 0
+                    || drained.is_some() != matches!(scope, SchedulingPauseScope::Instance { .. })
+                {
+                    return Err(RuntimeContractError::new(
+                        "invalid_scheduling_pause_receipt",
+                    ));
+                }
+            }
+            Some(RuntimeResult::SchedulingResumed {
+                scope, revision, ..
+            }) => {
+                scope.validate()?;
+                if self.state != RuntimeReceiptState::Completed || *revision == 0 {
+                    return Err(RuntimeContractError::new(
+                        "invalid_scheduling_pause_receipt",
+                    ));
+                }
+            }
             Some(RuntimeResult::ProjectInterface { response }) => response
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_response"))?,

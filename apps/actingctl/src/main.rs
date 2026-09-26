@@ -10,6 +10,7 @@ use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
     ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
     EventSource, FactObservation, FactRecord, FactScope, RuntimeMonitorPolicy,
+    SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
@@ -25,6 +26,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
 /// `source_detector` of the priority offsets `task-offset` publishes.
 const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
+/// `pause` defaults (Workflow #191 ps1): the reason code and the instance drain timeout.
+const DEFAULT_PAUSE_REASON: &str = "operator";
+const DEFAULT_PAUSE_DRAIN_TIMEOUT_MS: u64 = 60_000;
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -234,6 +238,24 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .discover_instances()
                 .map_err(ActingctlError::runtime)?,
         ),
+        // Workflow #191 ps1: without --instance the pause / resume is global.
+        Command::Pause {
+            reason_code,
+            drain_timeout_ms,
+        } => serde_json::to_value(
+            client
+                .pause_scheduling(
+                    pause_scope(optional_instance),
+                    &reason_code,
+                    drain_timeout_ms,
+                )
+                .map_err(ActingctlError::runtime)?,
+        ),
+        Command::Resume => serde_json::to_value(
+            client
+                .resume_scheduling(pause_scope(optional_instance))
+                .map_err(ActingctlError::runtime)?,
+        ),
         Command::Stream { spec } => serde_json::to_value(
             client
                 .capture_sequence(instance()?, spec)
@@ -268,6 +290,13 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     }
     .map_err(|_| ActingctlError::Output)?;
     Ok(output)
+}
+
+fn pause_scope(instance: Option<String>) -> SchedulingPauseScope {
+    match instance {
+        Some(instance_alias) => SchedulingPauseScope::Instance { instance_alias },
+        None => SchedulingPauseScope::Global,
+    }
 }
 
 fn task_run_request(
@@ -333,6 +362,13 @@ enum Command {
         action: EmulatorInstanceAction,
     },
     EmulatorDiscover,
+    /// `pause [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]`.
+    Pause {
+        reason_code: String,
+        drain_timeout_ms: u64,
+    },
+    /// `resume [--instance <alias>]`.
+    Resume,
     Stream {
         spec: CaptureSequenceSpec,
     },
@@ -374,6 +410,8 @@ impl Invocation {
         let mut config = false;
         let mut record_file = None;
         let mut shutdown_wait = None;
+        let mut pause_reason = None;
+        let mut drain_timeout_ms = None;
         // `task-offset` takes the task and the offset as the second and third tokens.
         let task_offset = if command == "task-offset" {
             let task_id = arguments
@@ -409,6 +447,22 @@ impl Invocation {
                         return Err(ActingctlError::Usage);
                     }
                     shutdown_wait = Some(Duration::from_secs(seconds));
+                }
+                "--reason" if command == "pause" && pause_reason.is_none() => {
+                    let reason = require_text(&arguments, &mut index)?;
+                    actingcommand_contract::validate_scheduling_pause_reason(&reason)
+                        .map_err(|_| ActingctlError::Usage)?;
+                    pause_reason = Some(reason);
+                }
+                "--drain-timeout-ms" if command == "pause" && drain_timeout_ms.is_none() => {
+                    let timeout = require_u64(&arguments, &mut index)?;
+                    if !(actingcommand_contract::MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS
+                        ..=actingcommand_contract::MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS)
+                        .contains(&timeout)
+                    {
+                        return Err(ActingctlError::Usage);
+                    }
+                    drain_timeout_ms = Some(timeout);
                 }
                 "--state-root" => {
                     state_root = Some(PathBuf::from(require_value(&arguments, &mut index)?));
@@ -523,6 +577,11 @@ impl Invocation {
                 Some("discover") => Command::EmulatorDiscover,
                 _ => return Err(ActingctlError::Usage),
             },
+            "pause" => Command::Pause {
+                reason_code: pause_reason.unwrap_or_else(|| DEFAULT_PAUSE_REASON.to_owned()),
+                drain_timeout_ms: drain_timeout_ms.unwrap_or(DEFAULT_PAUSE_DRAIN_TIMEOUT_MS),
+            },
+            "resume" => Command::Resume,
             "stream" => Command::Stream {
                 spec: CaptureSequenceSpec::new(
                     frame_count.unwrap_or(1),
@@ -543,9 +602,12 @@ impl Invocation {
             }
             _ => return Err(ActingctlError::Usage),
         };
-        // `task-offset` takes `--instance` optionally: without it the offset is task-level.
-        if !matches!(command, Command::TaskOffset { .. })
-            && command.requires_instance() != instance.is_some()
+        // `task-offset` takes `--instance` optionally: without it the offset is task-level;
+        // `pause` / `resume` without it are global.
+        if !matches!(
+            command,
+            Command::TaskOffset { .. } | Command::Pause { .. } | Command::Resume
+        ) && command.requires_instance() != instance.is_some()
         {
             return Err(ActingctlError::Usage);
         }
@@ -638,7 +700,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
+                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),

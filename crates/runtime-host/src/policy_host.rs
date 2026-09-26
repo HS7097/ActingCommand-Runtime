@@ -212,6 +212,9 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) seed: u64,
     pub(crate) trigger: PolicyTrigger,
     pub(crate) sampled_at_monotonic_ms: u64,
+    /// Workflow #191 ps1: the deferral code of an operator scheduling pause covering the
+    /// instance alias, if any.
+    pub(crate) scheduling_pause: &'a dyn Fn(&str) -> Option<&'static str>,
 }
 
 /// Correlates an admission request; Runtime rebuilds approval authority and current time.
@@ -1181,6 +1184,7 @@ impl PolicyHost {
             seed,
             trigger,
             sampled_at_monotonic_ms,
+            scheduling_pause,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -1204,25 +1208,36 @@ impl PolicyHost {
             resources,
             time,
             seed,
-            |intent| match self
-                .control
-                .preview_admission(&active.compiled, intent, time.unix_ms)
-            {
-                Ok(_) => Ok(CandidateEligibility::Eligible),
-                Err(error) if is_availability_denial(&error) => {
-                    let rejection = error.policy_rejection();
-                    Ok(CandidateEligibility::Deferred {
-                        reason: DecisionReason {
-                            code: rejection.code,
-                            detail: format!(
-                                "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
-                                rejection.budget, rejection.next_eligible_unix_ms
-                            ),
-                        },
-                        next_wake_unix_ms: rejection.next_eligible_unix_ms,
-                    })
-                }
-                Err(error) => Err(error),
+            |intent| match scheduling_pause(&intent.instance_id) {
+                // An operator scheduling pause defers the candidate with no wake time: only
+                // `ResumeScheduling` lifts it.
+                Some(code) => Ok(CandidateEligibility::Deferred {
+                    reason: DecisionReason {
+                        code: code.to_owned(),
+                        detail: "Runtime scheduling paused by the operator".to_owned(),
+                    },
+                    next_wake_unix_ms: None,
+                }),
+                None => match self
+                    .control
+                    .preview_admission(&active.compiled, intent, time.unix_ms)
+                {
+                    Ok(_) => Ok(CandidateEligibility::Eligible),
+                    Err(error) if is_availability_denial(&error) => {
+                        let rejection = error.policy_rejection();
+                        Ok(CandidateEligibility::Deferred {
+                            reason: DecisionReason {
+                                code: rejection.code,
+                                detail: format!(
+                                    "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
+                                    rejection.budget, rejection.next_eligible_unix_ms
+                                ),
+                            },
+                            next_wake_unix_ms: rejection.next_eligible_unix_ms,
+                        })
+                    }
+                    Err(error) => Err(error),
+                },
             },
         )?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
