@@ -17,20 +17,42 @@ The registry observes the selected backend's existing connection metadata:
 - Capture factories supply selection attempts and the dimensions already
   obtained by construction or an existing probe. A fresh automatic probe can
   report that capture check as passed. A cached selection reports Unknown and
-  carries no current-attempt duration. An explicit constructor that has not
-  acquired a frame leaves the capture check Unknown.
+  carries no current-attempt duration. An explicit selection primes one frame
+  at open and reports that capture check ("Primed first frame" below).
 - A Nemu paired open reports one owner, its actual connection/resolution
   initialization and both backend roles. The resolution probe is distinct from
-  acquisition of a complete frame.
+  acquisition of a complete frame; a paired open by a Capture command also
+  primes one frame inside the owner.
 - Production fixture providers report SimulationNotApplicable. A provider
   without observation data reports Unknown.
 
 `status` describes the return of the open, `connection` the observed connection,
 and `capture_check` the actual capture/layout check. A constructed backend can therefore
 have Passed open status and Unknown connection/capture status. These observations
-are not dispatch eligibility or evidence of an input effect. Existing connect,
+are not dispatch eligibility or evidence of an input effect; only a `failed`
+self-check fact derived from one withdraws a policy instance's availability
+(`instance-fact-store.md`, "Backend self-check availability"). Existing connect,
 capture, input, cleanup, cancellation and deadline operations retain their order
 and count. The getters read data already in memory.
+
+## Primed first frame
+
+Workflow #317 slice sc2: an explicitly selected capture backend (`adb`,
+`droidcast_raw`, `nemu_ipc`) acquires one frame at open through the same prime
+as a fresh automatic probe. The frame's layout is checked and it is admitted to
+the opening Capture command's `FrameMemoryBudget`, so the held frame counts
+against that live set (an open without a budget fails
+`frame_memory_owner_missing_or_mismatched`, as an automatic open does).
+`open_report()` records `capture_check` and `connection` Passed and the
+frame's dimensions. The first `capture()` returns that frame with its own
+acquisition span (`capture_acquire_us`): open plus first capture acquire
+exactly one frame, and the frame enters the performance samples once, when it
+is returned. A paired Nemu open by a Capture command does the same inside its
+owner (the capture view is primed through the owner's worker); a paired open by
+an Input command has no budget and acquires nothing. A failed prime closes the
+backend (for a pair, the owner) and fails the open with the check in its one
+open failure report and no selected backend, exactly as an automatic probe
+failure; construction failures before any acquisition keep their paths.
 
 ## Request and session identity
 
@@ -183,6 +205,8 @@ attempts, open status, connection status and their elapsed values keep their
 original meanings. In particular, a cached selection remains Unknown with no
 current selection duration even when its new actual frame passes. Simulation
 remains SimulationNotApplicable; an unobserved provider remains Unknown.
+After a primed open the first capture is the primed frame, so this completion
+restates the check and dimensions the open already recorded.
 
 The check runs before frame memory admission so a later budget refusal retains
 the capture/layout result that actually occurred. Layout failure still reaches
@@ -191,7 +215,7 @@ by this observation. Host records a Failed capture check at Error severity in
 the original lifecycle event, with the original operation failure and cleanup
 facts unchanged. No extra acquisition or separate performance sample is emitted.
 
-Automatic prime admission failures retain the actual check and valid dimensions
+Automatic and explicit prime admission failures retain the actual check and valid dimensions
 in the original DeviceError evidence before cleanup. Selection transfers those
 scalars into its one open failure report even when open returns before the kernel
 capture loop. The current candidate attempt remains Failed and the open has no
@@ -216,4 +240,4 @@ drain the report under the current request/correlation/frame/run/instance links.
 The existing strict codec, sanitizer, Sensitive native details and public summary
 already carry the closed capture-check enum and dimensions; no wire field or
 event type is added. This is a capture/layout observation, not a complete
-connection self-check or dispatch availability.
+connection self-check or dispatch availability by itself.

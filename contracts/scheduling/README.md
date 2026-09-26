@@ -111,6 +111,13 @@ task, pool, server and game identifiers and references retain their own rules.
 JSON Schema bounds alias character length; the shared contract/compiler also
 enforces the UTF-8 byte limit.
 
+In the Runtime the policy sees an instance's availability only as the
+`session.instance.available` instance fact (`contracts/instance-fact-store.md`):
+the configuration seeds it and a failed backend self-check withdraws it until a
+later passed self-check, an emulator stop/start/restart or a Runtime restart
+restores the seed (Workflow #317 sc2). The policy never reads `backend.selfcheck.*` itself; an
+instance projected unavailable receives no dispatch.
+
 Activity sampling uses a ledger-derived seed and `same_round_stable`: the host records the seed once and must reuse the sampled value throughout the same scheduling round. Resampling within a round is invalid.
 
 ## Score-Assisted Priority

@@ -890,9 +890,12 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>>;
 
+    /// `_memory` is the opening Capture command's frame budget (`None` for an Input command);
+    /// a paired open with a budget primes its first frame (Workflow #317 sc2).
     fn open_nemu_session(
         &self,
         _instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<
         Option<actingcommand_device::OpenedBackend<actingcommand_device::NemuSessionBackends>>,
     > {

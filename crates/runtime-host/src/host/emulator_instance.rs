@@ -88,8 +88,8 @@ impl HostShared {
     }
 
     /// Performs one control action whose intent is already recorded under `links`: fence,
-    /// session close, provider control, rebinding, `backend.selfcheck.*` invalidation, ADB
-    /// baseline, `command.validated` (or
+    /// session close, provider control, rebinding, `backend.selfcheck.*` invalidation (and the
+    /// policy availability it restores), ADB baseline, `command.validated` (or
     /// `command.rejected` + `runtime.failed`), `runtime.instance_bound`, `device.connected`,
     /// and the startup package's scheduling intent.
     pub(super) fn drive_emulator_control(
@@ -186,7 +186,8 @@ impl HostShared {
             }
         };
         // Workflow #317 sc1: the self-check facts describe the session closed above, opened on
-        // the binding just replaced; they are dropped before any lease can open a new one.
+        // the binding just replaced; they are dropped before any lease can open a new one, and
+        // a policy availability a failed self-check withdrew returns to its seed (sc2).
         if let Err(error) = self.invalidate_backend_selfcheck_facts(instance_id) {
             return Err(self.emulator_control_failure(
                 links,

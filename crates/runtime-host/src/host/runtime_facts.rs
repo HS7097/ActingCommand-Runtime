@@ -7,6 +7,7 @@
 //! Nothing here reads a file: durability is the per-record event, and the
 //! periodic snapshot only shortens replay.
 
+use super::facts::BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX;
 use super::*;
 use crate::policy_host::PolicySettlement;
 use actingcommand_contract::{
@@ -150,12 +151,18 @@ impl HostShared {
     /// same millisecond or after a wall-clock step back), read and written under one
     /// `fact_write_gate` hold. A newer open of the same entry therefore always replaces them;
     /// every refusal is returned. `checked_at_unix_ms` saturates at `i64::MAX` for a wall clock
-    /// beyond it; the records' `observed_at_unix_ms` stays exact.
+    /// beyond it; the records' `observed_at_unix_ms` stays exact. The instance's policy
+    /// availability then follows the recorded status (Workflow #317 sc2), both under one
+    /// `backend_selfcheck_availability_gate` hold.
     pub(super) fn record_backend_selfcheck_facts(
         &self,
         instance_id: InstanceId,
         report: &BackendOpenReport,
     ) -> RuntimeHostResult<()> {
+        let _availability = lock(
+            &self.backend_selfcheck_availability_gate,
+            "record_backend_selfcheck_facts",
+        )?;
         let checked_at_unix_ms = self.clock.sample()?.unix_ms;
         let overflow = || {
             RuntimeHostError::fatal(
@@ -170,10 +177,11 @@ impl HostShared {
             BackendOpenEntry::Capture => ("capture", OriginModule::Capture),
             BackendOpenEntry::NemuPair => ("nemu", OriginModule::DeviceProxy),
         };
+        let status = backend_selfcheck_status(report);
         let values = [
             (
                 BACKEND_SELFCHECK_STATUS_SUFFIX,
-                FactValue::String(backend_selfcheck_status(report).to_owned()),
+                FactValue::String(status.to_owned()),
             ),
             (
                 BACKEND_SELFCHECK_GENERATION_SUFFIX,
@@ -213,7 +221,13 @@ impl HostShared {
                 })?;
             }
             Ok(())
-        })();
+        })()
+        .and_then(|()| {
+            self.gate_policy_availability_on_selfcheck(
+                instance_id,
+                Some((entry, report.session_generation, status)),
+            )
+        });
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -224,11 +238,17 @@ impl HostShared {
 
     /// Drops every `backend.selfcheck.*` fact the store holds for one instance with
     /// `device_closed`: the session they describe is closed and the instance endpoint was
-    /// rebound (or returned to pending). Every refusal is returned.
+    /// rebound (or returned to pending). The instance's policy availability then returns to its
+    /// configured seed when a failed self-check had withdrawn it (Workflow #317 sc2); the next
+    /// open decides again. Every refusal is returned.
     pub(super) fn invalidate_backend_selfcheck_facts(
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
+        let _availability = lock(
+            &self.backend_selfcheck_availability_gate,
+            "invalidate_backend_selfcheck_facts",
+        )?;
         let scope = RuntimeFactScope::Instance { instance_id };
         let keys = lock(&self.runtime_facts, "read_backend_selfcheck_facts")?
             .records()
@@ -244,7 +264,117 @@ impl HostShared {
                 RuntimeFactInvalidationReason::DeviceClosed,
             )?;
         }
+        let result = self.gate_policy_availability_on_selfcheck(instance_id, None);
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Workflow #317 sc2 (the bounded reading of #316 goal 5): keeps the policy availability
+    /// `session.instance.available` of a configured policy instance in step with its backend
+    /// self-check. The caller holds `backend_selfcheck_availability_gate`, so the decision and
+    /// its publication through [`Self::publish_fact`] (which takes `fact_write_gate` itself) are
+    /// one step against every other self-check write. `recorded` is the entry, generation and
+    /// status just recorded, `None` after the facts were invalidated.
+    ///
+    /// - `failed` publishes `false` (`backend_selfcheck:<entry>:<generation>`) unless the
+    ///   instance's own active record already holds `false`;
+    /// - `passed`, and the invalidation, republish the configured seed when the active record
+    ///   is one this gate published and no entry of the instance is still `failed`;
+    /// - `unknown` never changes availability.
+    ///
+    /// An instance without a configured policy seed (no policy inputs, or not a policy
+    /// instance) has no availability to gate. Every refusal is returned.
+    fn gate_policy_availability_on_selfcheck(
+        &self,
+        instance_id: InstanceId,
+        recorded: Option<(&str, u64, &str)>,
+    ) -> RuntimeHostResult<()> {
+        if recorded.is_some_and(|(_, _, status)| status == "unknown") {
+            return Ok(());
+        }
+        let instance_alias = lock(
+            &self.registered_instances,
+            "gate_policy_availability_on_selfcheck",
+        )?
+        .get(&instance_id)
+        .map(|instance| instance.instance_alias.clone())
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "backend_selfcheck_instance_unregistered",
+                "gate_policy_availability_on_selfcheck",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let Some(seed_available) =
+            lock(&self.policy_inputs, "gate_policy_availability_on_selfcheck")?
+                .as_ref()
+                .and_then(|inputs| {
+                    inputs
+                        .instance_seeds()
+                        .find(|seed| seed.instance_id == instance_alias)
+                        .map(|seed| seed.available)
+                })
+        else {
+            return Ok(());
+        };
+        let (active, failed) = {
+            let _gate = lock(
+                &self.fact_write_gate,
+                "gate_policy_availability_on_selfcheck",
+            )?;
+            self.synchronize_fact_store_under_gate()?;
+            let active = lock(&self.facts, "gate_policy_availability_on_selfcheck")?
+                .active_record(
+                    &FactScope::Instance {
+                        instance_id: instance_alias.clone(),
+                    },
+                    POLICY_INSTANCE_AVAILABLE_KEY,
+                )
+                .cloned();
+            (active, self.backend_selfcheck_failed(instance_id)?)
+        };
+        match recorded {
+            Some((entry, generation, "failed")) => {
+                let unavailable = active.as_ref().is_some_and(|record| {
+                    record.content
+                        == (FactContent::Inline {
+                            value: ContractFactValue::Boolean(false),
+                        })
+                });
+                if !unavailable {
+                    self.publish_backend_selfcheck_unavailable(&instance_alias, entry, generation)?;
+                }
+            }
+            _ => {
+                let withdrawn_by_selfcheck = active.as_ref().is_some_and(|record| {
+                    record
+                        .source_snapshot_id
+                        .starts_with(BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX)
+                });
+                if withdrawn_by_selfcheck && !failed {
+                    self.restore_policy_instance_availability(&instance_alias, seed_available)?;
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Whether any `backend.selfcheck.<entry>.status` of the instance currently holds `failed`.
+    fn backend_selfcheck_failed(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let failed = FactValue::String("failed".to_owned());
+        Ok(lock(&self.runtime_facts, "read_backend_selfcheck_status")?
+            .records()
+            .any(|record| {
+                record.scope == scope
+                    && record.key.starts_with(BACKEND_SELFCHECK_PREFIX)
+                    && record.key.rsplit('.').next() == Some(BACKEND_SELFCHECK_STATUS_SUFFIX)
+                    && record.value == failed
+            }))
     }
 
     /// Appends `runtime.fact_recorded` first, then accepts the record into

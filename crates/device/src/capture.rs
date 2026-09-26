@@ -640,26 +640,15 @@ pub fn create_capture_backend_with_memory(
     let mut selected = match config.requested {
         CaptureBackendChoice::Auto => create_auto_capture_backend(config, memory),
         CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config, memory),
-        CaptureBackendChoice::Adb => {
-            let used = CaptureBackendName::AdbScreencap;
-            Ok(SelectedCaptureBackend {
-                selection: None,
-                backend: Box::new(
-                    ScreencapBackend::new(config.adb_config, config.target)
-                        .with_capture_timeout(config.capture_timeout),
-                ),
-                diagnostics: CaptureBackendDiagnostics {
-                    requested: config.requested,
-                    used,
-                    attempts: vec![CaptureBackendAttempt::success(
-                        used,
-                        "explicit backend selected".to_string(),
-                        None,
-                        false,
-                    )],
-                },
-            })
-        }
+        CaptureBackendChoice::Adb => selected_explicit_primed(
+            config.requested,
+            CaptureBackendName::AdbScreencap,
+            Box::new(
+                ScreencapBackend::new(config.adb_config, config.target)
+                    .with_capture_timeout(config.capture_timeout),
+            ),
+            memory,
+        ),
         CaptureBackendChoice::DroidcastRaw => {
             let backend = DroidcastRawBackend::new(
                 config.adb_config,
@@ -667,19 +656,21 @@ pub fn create_capture_backend_with_memory(
                 config.droidcast,
                 config.capture_timeout,
             )?;
-            Ok(selected_explicit(
+            selected_explicit_primed(
                 config.requested,
                 CaptureBackendName::DroidcastRaw,
                 Box::new(backend),
-            ))
+                memory,
+            )
         }
         CaptureBackendChoice::NemuIpc => {
             let backend = NemuIpcBackend::new(config.target, config.nemu, config.capture_timeout)?;
-            Ok(selected_explicit(
+            selected_explicit_primed(
                 config.requested,
                 CaptureBackendName::NemuIpc,
                 Box::new(backend),
-            ))
+                memory,
+            )
         }
     }?;
     selected.selection = Some(Arc::new(selection));
@@ -908,6 +899,35 @@ fn selected_explicit(
                 false,
             )],
         },
+    }
+}
+
+/// Workflow #317 sc2: an explicitly selected backend acquires one frame at open exactly like an
+/// automatic probe ([`prime_capture_backend`], charged to `memory`). `open_report()` carries that
+/// frame's check and dimensions and the first `capture()` returns it with its own acquisition
+/// span. A failed prime has already closed the backend; the open fails with the check in its one
+/// open failure report and no selected backend, as an automatic probe failure does.
+fn selected_explicit_primed(
+    requested: CaptureBackendChoice,
+    used: CaptureBackendName,
+    backend: Box<dyn CaptureBackend>,
+    memory: Option<&crate::FrameMemoryBudget>,
+) -> DeviceResult<SelectedCaptureBackend> {
+    match prime_capture_backend(used, backend, memory) {
+        Ok((backend, _probe_message, vendor_stdio)) => {
+            let mut selected = selected_explicit(requested, used, backend);
+            for attempt in &mut selected.diagnostics.attempts {
+                attempt.vendor_stdio.clone_from(&vendor_stdio);
+            }
+            Ok(selected)
+        }
+        Err(primary) => {
+            let mut report = crate::backend_open::capture_open_report(requested, None, &[]);
+            if let Some(check) = primary.capture_probe_check() {
+                check.apply_failure(&mut report, &primary);
+            }
+            Err(crate::observe_open_failure(report, primary))
+        }
     }
 }
 
