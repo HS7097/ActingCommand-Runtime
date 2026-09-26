@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, Lab, LabPorts};
-use actingcommand_contract::{EnvResolved, LabError, LabResult, NeedsDetection};
-use actingcommand_device::{
-    CaptureBackendConfig, Frame, InputBackend, PixelFormat, combine_operation_and_close,
+use crate::{
+    CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, Lab, LabInputPort, LabPorts,
 };
+use actingcommand_contract::{EnvResolved, LabError, LabResult, NeedsDetection};
+use actingcommand_device::{CaptureBackendConfig, Frame, PixelFormat, combine_operation_and_close};
 use actingcommand_execution_kernel::{
     EnvCandidateMatcher, EnvDetectionCandidate, EnvDetectionCatalog, EnvDetectionKey,
     EnvDetectionStep, EnvDetectionStepPlan, EnvDetector, EnvironmentCandidateObservation,
@@ -823,7 +823,7 @@ fn run_detection_steps<P: LabPorts>(
 
 fn run_touch_action(
     action: &crate::EnvTouchAction,
-    backend: &mut dyn InputBackend,
+    backend: &mut dyn LabInputPort,
 ) -> actingcommand_device::DeviceResult<()> {
     match action {
         crate::EnvTouchAction::Tap { x, y } => backend.tap(*x, *y),

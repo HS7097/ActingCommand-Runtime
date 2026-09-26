@@ -5,10 +5,8 @@ use crate::{
     stream_input_relay_action,
 };
 use actingcommand_contract::{EventActor, EventSource, InputAction, RuntimeReceipt};
-use actingcommand_device::{
-    CaptureBackendChoice, Frame, InputBackend, combine_operation_and_close,
-};
-use actingcommand_lab::UserConfig;
+use actingcommand_device::{CaptureBackendChoice, Frame, combine_operation_and_close};
+use actingcommand_lab::{LabInputPort, UserConfig};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

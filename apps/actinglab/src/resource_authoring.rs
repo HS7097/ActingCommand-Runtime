@@ -545,6 +545,7 @@ mod tests {
 
         fn control_application(
             &self,
+            _witness: &actingcommand_contract::FencedWrite,
             _instance_alias: &str,
             _action: actingcommand_contract::ApplicationLifecycleAction,
         ) -> DeviceResult<()> {

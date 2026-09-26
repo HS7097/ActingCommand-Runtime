@@ -1,6 +1,6 @@
 use crate::{
     CaptureBackendChoice, CaptureFreshProbeReport, CaptureFreshProbeStatus,
-    CaptureFreshnessExpectation, CliError, CliOutcome, FlagArgs, GlobalOptions, InputBackend,
+    CaptureFreshnessExpectation, CliError, CliOutcome, FlagArgs, GlobalOptions, LabInputPort,
     PackRect, PageDetector, PageEvaluation, RecognitionEvaluator, Scene, TargetEvaluation,
     UserConfig, VecDeque, canonical_game, canonical_server, capture_diagnosis_recovery_json,
     capture_for_command, capture_fresh_probe_report, capture_fresh_probe_report_json,

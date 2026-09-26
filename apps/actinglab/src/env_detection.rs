@@ -7,14 +7,15 @@ use super::{
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::{
-    AdbConfig, CaptureBackend, CaptureBackendConfig, DeviceError, DeviceTarget, InputBackend,
-    MaaTouchConfig, TouchBackendConfig,
+    AdbConfig, CaptureBackend, CaptureBackendConfig, DeviceError, DeviceTarget, MaaTouchConfig,
+    TouchBackendConfig,
 };
 use actingcommand_lab::{
     CaptureBackendFactory, CaptureBackendRequest, Clock, ConfigSource, EnvDetectRequest,
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
-    InputBackendRequest, Lab, LabError, LabPorts, LabState, SemanticInputExecutor, UserConfig,
+    InputBackendRequest, Lab, LabError, LabInputPort, LabPorts, LabState, SemanticInputExecutor,
+    UserConfig,
 };
 
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
@@ -450,7 +451,7 @@ pub(super) struct AppInputFactory {
 }
 
 impl InputBackendFactory for AppInputFactory {
-    fn open(&self, request: InputBackendRequest) -> Result<Box<dyn InputBackend>, LabError> {
+    fn open(&self, request: InputBackendRequest) -> Result<Box<dyn LabInputPort>, LabError> {
         let InputBackendRequest {
             instance_alias,
             config: _runtime_owned_touch_config,
@@ -502,7 +503,7 @@ impl ObservedInputBackend {
     }
 }
 
-impl InputBackend for ObservedInputBackend {
+impl LabInputPort for ObservedInputBackend {
     fn tap(&mut self, x: i32, y: i32) -> actingcommand_device::DeviceResult<()> {
         let operation = self.proxy.tap(x, y);
         self.finish_operation(operation)
@@ -540,23 +541,12 @@ impl InputBackend for ObservedInputBackend {
         self.finish_operation(operation)
     }
 
-    fn reset(&mut self) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.proxy.reset();
-        self.finish_operation(operation)
-    }
-
-    fn close_once(
-        &mut self,
-        _authority: actingcommand_device::DeviceCloseAuthority,
-    ) -> actingcommand_device::DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+    fn close(&mut self) -> actingcommand_device::DeviceResult<()> {
         let close = self.proxy.close();
         let report = self
             .publish_report()
             .map_err(|error| DeviceError::fatal(error.to_string()));
-        combine_device_results(close, report)?;
-        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
-            1,
-        ))
+        combine_device_results(close, report)
     }
 }
 

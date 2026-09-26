@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{InputAction, RuntimeReceipt};
-use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult, InputBackend};
+use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult};
+use actingcommand_lab::LabInputPort;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeInputProxy};
 
 /// Lab compatibility adapter for the Runtime's typed input proxy.
@@ -27,7 +28,7 @@ impl RuntimeInputBackend {
     }
 }
 
-impl InputBackend for RuntimeInputBackend {
+impl LabInputPort for RuntimeInputBackend {
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
         self.execute(InputAction::Tap { x, y })
     }
@@ -58,18 +59,8 @@ impl InputBackend for RuntimeInputBackend {
         })
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
-        self.execute(InputAction::Reset)
-    }
-
-    fn close_once(
-        &mut self,
-        _authority: actingcommand_device::DeviceCloseAuthority,
-    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
-        self.proxy.close().map_err(device_error)?;
-        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
-            1,
-        ))
+    fn close(&mut self) -> DeviceResult<()> {
+        self.proxy.close().map_err(device_error)
     }
 }
 

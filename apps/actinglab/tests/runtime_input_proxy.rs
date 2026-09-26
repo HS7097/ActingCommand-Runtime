@@ -897,7 +897,12 @@ struct FakeBackend {
 }
 
 impl InputBackend for FakeBackend {
-    fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+    fn tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+    ) -> DeviceResult<()> {
         self.state.tap_started.store(true, Ordering::Release);
         let delay_ms = self.state.tap_delay_ms.load(Ordering::Acquire);
         if delay_ms > 0 {
@@ -907,12 +912,19 @@ impl InputBackend for FakeBackend {
         Ok(())
     }
 
-    fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+    fn long_tap(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _x: i32,
+        _y: i32,
+        _duration_ms: u64,
+    ) -> DeviceResult<()> {
         Ok(())
     }
 
     fn swipe(
         &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
         _x1: i32,
         _y1: i32,
         _x2: i32,
@@ -922,15 +934,23 @@ impl InputBackend for FakeBackend {
         Ok(())
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
+    fn key(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _key: &str,
+    ) -> DeviceResult<()> {
         Ok(())
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
+    fn text(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        _text: &str,
+    ) -> DeviceResult<()> {
         Ok(())
     }
 
-    fn reset(&mut self) -> DeviceResult<()> {
+    fn reset(&mut self, _witness: &actingcommand_contract::FencedWrite) -> DeviceResult<()> {
         Ok(())
     }
 
@@ -1093,6 +1113,7 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn control_application(
         &self,
+        _witness: &actingcommand_contract::FencedWrite,
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {

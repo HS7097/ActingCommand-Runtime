@@ -4,10 +4,10 @@ use super::*;
 
 use crate::{
     CaptureBackendFactory, ConfigSource, InputBackendAttemptReport, InputBackendFactory,
-    InputBackendReport, InputBackendRequest, SemanticInputExecutor, SemanticRequestContext,
+    InputBackendReport, InputBackendRequest, LabInputPort, SemanticInputExecutor,
+    SemanticRequestContext,
 };
 use actingcommand_contract::InputAction;
-use actingcommand_device::InputBackend;
 use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use std::fs::File;
@@ -260,7 +260,7 @@ fn write_zip(path: &std::path::Path, files: &[(&str, &[u8])]) {
 struct DisabledInputFactory;
 
 impl InputBackendFactory for DisabledInputFactory {
-    fn open(&self, _request: InputBackendRequest) -> LabResult<Box<dyn InputBackend>> {
+    fn open(&self, _request: InputBackendRequest) -> LabResult<Box<dyn LabInputPort>> {
         Err(LabError::device(
             "drive must use the semantic Runtime command port",
         ))

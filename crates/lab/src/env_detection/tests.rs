@@ -10,7 +10,7 @@ use tempfile::TempDir;
 struct DisabledInputFactory;
 
 impl InputBackendFactory for DisabledInputFactory {
-    fn open(&self, _request: crate::InputBackendRequest) -> EnvResult<Box<dyn InputBackend>> {
+    fn open(&self, _request: crate::InputBackendRequest) -> EnvResult<Box<dyn LabInputPort>> {
         Err(LabError::device("input must not be opened in this test"))
     }
 }
