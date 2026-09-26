@@ -7,13 +7,17 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use actingcommand_actinglab_architecture::{
-    LedgerOwnerModule, contract_dependency_violations, discover_ledger_owners,
-    extract_command_inventory, inspect_contract_fact_matching, inspect_generic_authoring_identity,
+    LedgerOwnerModule, RefusalBranch, contract_dependency_violations, discover_ledger_owners,
+    extract_command_inventory, inspect_contract_fact_matching, inspect_disallowed_lint_escapes,
+    inspect_dispatch_arm_calls, inspect_enum_variants, inspect_field_accesses,
+    inspect_function_origin_terms, inspect_generic_authoring_identity,
     inspect_generic_runtime_identity, inspect_lab_source, inspect_ledger_append_ingress,
     inspect_ledger_forbidden_sources, inspect_ledger_public_api, inspect_persisted_event_ownership,
-    inspect_producer_event_capabilities, inspect_public_api, inspect_stderr_writes,
-    lab_removability_violations, ledger_owns_query_matching,
-    resource_tooling_removability_violations, workspace_dependency_violations,
+    inspect_producer_event_capabilities, inspect_provider_symbol_literals, inspect_public_api,
+    inspect_pure_decision_source, inspect_refusal_branches, inspect_stderr_writes,
+    inspect_store_write_api, inspect_store_writes, lab_removability_violations,
+    ledger_owns_query_matching, resource_tooling_removability_violations,
+    workspace_dependency_allow_list_violations, workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -2574,6 +2578,755 @@ fn production_packages_cannot_reach_resource_tooling() {
                 .unwrap_or_else(|| "no path".to_string())
         );
     }
+}
+
+fn workspace_relative(root: &Path, file: &Path) -> String {
+    file.strip_prefix(root)
+        .expect("workspace source")
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn owned(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+/// Workflow #310 work package B item 1: the workspace dependency faces of the pure decision
+/// crates, checked on the resolve graph of the shared `--all-features` metadata call.
+const PURE_DECISION_DEPENDENCY_ALLOW_LISTS: &[(&str, &[&str])] = &[
+    ("actingcommand-scheduler", &["actingcommand-contract"]),
+    (
+        "actingcommand-policy",
+        &["actingcommand-contract", "actingcommand-selection-policy"],
+    ),
+    (
+        "actingcommand-selection-policy",
+        &["actingcommand-contract"],
+    ),
+];
+
+#[test]
+fn b1_pure_decision_crates_stay_within_their_dependency_allow_lists() {
+    let violations = workspace_dependency_allow_list_violations(
+        &workspace_metadata(),
+        PURE_DECISION_DEPENDENCY_ALLOW_LISTS,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        violations.is_empty(),
+        "pure decision crate dependency allow-list violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// The modules meant to be pure: every `src/*.rs` of policy and selection-policy (the
+/// selection-policy `src/bin` shell is outside), and scheduler's `facts.rs` and `lib.rs`.
+fn pure_decision_sources(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for directory in ["crates/policy/src", "crates/selection-policy/src"] {
+        let before = files.len();
+        let entries = fs::read_dir(root.join(directory))
+            .unwrap_or_else(|error| panic!("read {directory}: {error}"));
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|error| panic!("read {directory} entry: {error}"))
+                .path();
+            if path.is_file() && path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+        assert!(files.len() > before, "{directory} has no Rust sources");
+    }
+    for file in [
+        "crates/scheduler/src/facts.rs",
+        "crates/scheduler/src/lib.rs",
+    ] {
+        let path = root.join(file);
+        assert!(path.is_file(), "{file} is missing");
+        files.push(path);
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn b1_pure_decision_modules_hold_no_side_effect_authority_in_production_items() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for file in pure_decision_sources(&root) {
+        let path = workspace_relative(&root, &file);
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        violations.extend(
+            inspect_pure_decision_source(&path, &source)
+                .unwrap_or_else(|error| panic!("scan {path} for side effects: {error}")),
+        );
+    }
+    assert!(
+        violations.is_empty(),
+        "side-effect authority in production items of pure decision code:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// The resolved-path clippy bans each pure decision crate's `clippy.toml` must carry. Clippy
+/// reads the configuration nearest the package manifest, so the ban reaches every target of that
+/// package and no other package.
+const PURE_DECISION_DISALLOWED_METHODS: &[&str] = &[
+    "std::fs::canonicalize",
+    "std::fs::copy",
+    "std::fs::create_dir",
+    "std::fs::create_dir_all",
+    "std::fs::exists",
+    "std::fs::hard_link",
+    "std::fs::metadata",
+    "std::fs::read",
+    "std::fs::read_dir",
+    "std::fs::read_link",
+    "std::fs::read_to_string",
+    "std::fs::remove_dir",
+    "std::fs::remove_dir_all",
+    "std::fs::remove_file",
+    "std::fs::rename",
+    "std::fs::set_permissions",
+    "std::fs::symlink_metadata",
+    "std::fs::write",
+    "std::time::Instant::now",
+    "std::time::SystemTime::now",
+];
+const PURE_DECISION_DISALLOWED_TYPES: &[&str] = &[
+    "std::fs::DirBuilder",
+    "std::fs::DirEntry",
+    "std::fs::File",
+    "std::fs::OpenOptions",
+    "std::fs::ReadDir",
+    "std::net::TcpListener",
+    "std::net::TcpStream",
+    "std::net::UdpSocket",
+    "std::time::SystemTime",
+];
+/// Named exemptions from those bans: (crate directory, banned path, reason).
+const PURE_DECISION_CLIPPY_EXEMPTIONS: &[(&str, &str, &str)] = &[(
+    "crates/selection-policy",
+    "std::fs::read",
+    "src/bin/selection-eval.rs is the crate's declared offline file-reading shell and clippy.toml \
+     reaches every target of the package; the library half's std::fs stays banned by the \
+     production-item scan",
+)];
+/// Named `allow` / `expect` escapes of the banning lints: (workspace file, reason). A site may
+/// only join this list in the PR that adds it; an entry without a matching site fails too.
+const PURE_DECISION_LINT_ESCAPES: &[(&str, &str)] = &[];
+
+fn configured_disallowed_paths(document: &toml::Value, key: &str, file: &str) -> BTreeSet<String> {
+    document
+        .get(key)
+        .and_then(toml::Value::as_array)
+        .unwrap_or_else(|| panic!("{file} has no {key} list"))
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .or_else(|| entry.get("path").and_then(toml::Value::as_str))
+                .unwrap_or_else(|| panic!("{file}: {key} entry without a path"))
+                .to_string()
+        })
+        .collect()
+}
+
+/// Manifest lint tables that set a banning lint (or a group containing it) to `allow`.
+fn manifest_lint_allowances(document: &toml::Value, table: &[&str], file: &str) -> Vec<String> {
+    let mut value = document;
+    for key in table {
+        match value.get(key) {
+            Some(next) => value = next,
+            None => return Vec::new(),
+        }
+    }
+    [
+        "disallowed_methods",
+        "disallowed_types",
+        "style",
+        "all",
+        "warnings",
+    ]
+    .into_iter()
+    .filter(|lint| {
+        value.get(*lint).and_then(|level| {
+            level
+                .as_str()
+                .or_else(|| level.get("level").and_then(toml::Value::as_str))
+        }) == Some("allow")
+    })
+    .map(|lint| format!("{file}: {}.{lint} = allow", table.join(".")))
+    .collect()
+}
+
+#[test]
+fn b1_pure_decision_crates_ban_side_effects_in_clippy_and_name_every_escape() {
+    let root = workspace_root();
+    let mut problems = Vec::new();
+    for (crate_directory, _, _) in PURE_DECISION_CLIPPY_EXEMPTIONS {
+        assert!(
+            [
+                "crates/policy",
+                "crates/scheduler",
+                "crates/selection-policy"
+            ]
+            .contains(crate_directory),
+            "exemption names an unknown crate {crate_directory}"
+        );
+    }
+    for (_, banned, _) in PURE_DECISION_CLIPPY_EXEMPTIONS {
+        assert!(
+            PURE_DECISION_DISALLOWED_METHODS.contains(banned)
+                || PURE_DECISION_DISALLOWED_TYPES.contains(banned),
+            "exemption names {banned}, which is not a required ban"
+        );
+    }
+    let workspace_manifest = fs::read_to_string(root.join("Cargo.toml"))
+        .unwrap_or_else(|error| panic!("read Cargo.toml: {error}"));
+    let workspace_manifest = toml::from_str::<toml::Value>(&workspace_manifest)
+        .unwrap_or_else(|error| panic!("parse Cargo.toml: {error}"));
+    for table in [
+        ["workspace", "lints", "clippy"],
+        ["workspace", "lints", "rust"],
+    ] {
+        problems.extend(manifest_lint_allowances(
+            &workspace_manifest,
+            &table,
+            "Cargo.toml",
+        ));
+    }
+    let mut escapes = Vec::new();
+    for crate_directory in [
+        "crates/policy",
+        "crates/scheduler",
+        "crates/selection-policy",
+    ] {
+        let config_path = format!("{crate_directory}/clippy.toml");
+        let config = fs::read_to_string(root.join(&config_path))
+            .unwrap_or_else(|error| panic!("read {config_path}: {error}"));
+        let config = toml::from_str::<toml::Value>(&config)
+            .unwrap_or_else(|error| panic!("parse {config_path}: {error}"));
+        for (key, required) in [
+            ("disallowed-methods", PURE_DECISION_DISALLOWED_METHODS),
+            ("disallowed-types", PURE_DECISION_DISALLOWED_TYPES),
+        ] {
+            let configured = configured_disallowed_paths(&config, key, &config_path);
+            for banned in required {
+                let exempt = PURE_DECISION_CLIPPY_EXEMPTIONS
+                    .iter()
+                    .any(|(directory, path, _)| directory == &crate_directory && path == banned);
+                if !exempt && !configured.contains(*banned) {
+                    problems.push(format!("{config_path}: {key} lacks {banned}"));
+                }
+            }
+        }
+        let manifest_path = format!("{crate_directory}/Cargo.toml");
+        let manifest = fs::read_to_string(root.join(&manifest_path))
+            .unwrap_or_else(|error| panic!("read {manifest_path}: {error}"));
+        let manifest = toml::from_str::<toml::Value>(&manifest)
+            .unwrap_or_else(|error| panic!("parse {manifest_path}: {error}"));
+        for table in [["lints", "clippy"], ["lints", "rust"]] {
+            problems.extend(manifest_lint_allowances(&manifest, &table, &manifest_path));
+        }
+        let mut files = Vec::new();
+        collect_rust_files(&root.join(crate_directory), &mut files);
+        files.sort();
+        assert!(!files.is_empty(), "{crate_directory} has no Rust sources");
+        for file in files {
+            let path = workspace_relative(&root, &file);
+            let source =
+                fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            escapes.extend(
+                inspect_disallowed_lint_escapes(&path, &source)
+                    .unwrap_or_else(|error| panic!("scan {path} for lint escapes: {error}")),
+            );
+        }
+    }
+    let mut unused = PURE_DECISION_LINT_ESCAPES
+        .iter()
+        .map(|(path, _)| *path)
+        .collect::<BTreeSet<_>>();
+    for escape in escapes {
+        match PURE_DECISION_LINT_ESCAPES
+            .iter()
+            .find(|(path, _)| escape.starts_with(&format!("{path}:")))
+        {
+            Some((path, _)) => {
+                unused.remove(path);
+            }
+            None => problems.push(format!("unnamed lint escape {escape}")),
+        }
+    }
+    problems.extend(
+        unused
+            .into_iter()
+            .map(|path| format!("stale PURE_DECISION_LINT_ESCAPES entry {path}")),
+    );
+    assert!(
+        problems.is_empty(),
+        "pure decision clippy bans are incomplete or escaped without a name:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// Workflow #310 work package B item 3: every refusal branch of `RuntimeRequest::validate`,
+/// as (classified operations, refusal codes, origin terms). A change to any origin category is
+/// a change to this table.
+const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
+    (
+        &[],
+        &["unsupported_request_schema"],
+        &["self.schema_version"],
+    ),
+    (
+        &[],
+        &["invalid_request_timestamp"],
+        &["self.submitted_at_unix_ms"],
+    ),
+    (&[], &["invalid_client_origin"], &["valid_client_origin"]),
+    (
+        &["RequestShutdown"],
+        &["invalid_shutdown_origin"],
+        &[
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ],
+    ),
+    (
+        &["RecordAuthoringEvent"],
+        &["invalid_resource_authoring_origin"],
+        &["EventActor::Lab", "EventSource::Lab"],
+    ),
+    (
+        &[
+            "MatchDiagnosticSignatures",
+            "RegisterDiagnosticSignature",
+            "RetireDiagnosticSignature",
+        ],
+        &["invalid_signature_origin"],
+        &["EventActor::Lab", "EventSource::Lab"],
+    ),
+    (
+        &[
+            "RecognizeArtifact",
+            "RecordDebugEvent",
+            "ReleaseLabPin",
+            "RunContainedLabOperation",
+        ],
+        &["invalid_runtime_debug_origin"],
+        &["EventActor::Lab", "EventSource::Lab"],
+    ),
+    (
+        &["DebugPackage", "ExportEvidence"],
+        &["invalid_runtime_debug_origin"],
+        &["EventActor::Lab", "EventSource::Lab"],
+    ),
+    // Governance after slice cfg4: a card is declared by the person or the operator; an approval
+    // is the person's only. The host's accepted-connection half is checked by
+    // b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection.
+    (
+        &["DeclareGovernanceIdentity"],
+        &["invalid_governance_origin"],
+        &["valid_governance_declaration_origin"],
+    ),
+    (
+        &["RecordApprovalDecision"],
+        &["invalid_governance_origin"],
+        &["EventActor::User", "EventSource::Ui"],
+    ),
+    (
+        &["ControlEmulatorInstance", "DiscoverInstances"],
+        &["invalid_emulator_control_origin"],
+        &[
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ],
+    ),
+    (
+        &["PublishFact", "PublishFacts"],
+        &["fact_origin_mixed", "invalid_agent_dispatcher_origin"],
+        &[
+            "EventActor::Agent",
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Adapter",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ],
+    ),
+    (
+        &[
+            "AgentSessionStatus",
+            "AssessPredictiveMaintenance",
+            "CompileProposal",
+            "PrepareStrategicReport",
+            "ProjectPolicyForward",
+            "ProjectPolicyInputIdentity",
+            "PromoteProposal",
+            "RecordAgentResponse",
+            "ResumeAgentSession",
+            "StartAgentSession",
+        ],
+        &["invalid_agent_dispatcher_origin"],
+        &["EventActor::Agent", "EventSource::Adapter"],
+    ),
+];
+
+/// Operations `RuntimeRequest::validate` admits from every origin `valid_client_origin`
+/// accepts, with no narrower category. They are classified here explicitly, so a new operation
+/// fails the guard until it joins a refusal branch or this list.
+const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
+    "AcquireLease",
+    "ApplicationLifecycle",
+    "CancelContainedTask",
+    "CancelQueuedLease",
+    "CaptureSequence",
+    "ClearMonitor",
+    "ConfigureMonitor",
+    "Health",
+    "Input",
+    "MonitorStatus",
+    "ObserveContainedPage",
+    "ObserveReadonly",
+    "PollQueuedLease",
+    "ProjectInterface",
+    "QueryEvents",
+    "QueueLease",
+    "ReadMaterial",
+    "RecordClientAction",
+    "ReleaseLease",
+    "RenewLease",
+    "RunContainedTask",
+    "RuntimeFactSnapshot",
+    "SafeReset",
+    "Status",
+    "SubscribeEvents",
+];
+
+const RUNTIME_CONTRACT_SOURCE: &str = "crates/actingcommand-contract/src/runtime.rs";
+
+fn runtime_request_origin_branches(root: &Path) -> Vec<RefusalBranch> {
+    let source = fs::read_to_string(root.join(RUNTIME_CONTRACT_SOURCE))
+        .unwrap_or_else(|error| panic!("read {RUNTIME_CONTRACT_SOURCE}: {error}"));
+    inspect_refusal_branches(
+        RUNTIME_CONTRACT_SOURCE,
+        &source,
+        "RuntimeRequest",
+        "validate",
+        "RuntimeOperation",
+    )
+    .unwrap_or_else(|error| panic!("{error}"))
+}
+
+#[test]
+fn b3_every_runtime_operation_has_an_explicit_origin_category() {
+    let root = workspace_root();
+    let source = fs::read_to_string(root.join(RUNTIME_CONTRACT_SOURCE))
+        .unwrap_or_else(|error| panic!("read {RUNTIME_CONTRACT_SOURCE}: {error}"));
+    let variants = inspect_enum_variants(RUNTIME_CONTRACT_SOURCE, &source, "RuntimeOperation")
+        .unwrap_or_else(|error| panic!("{error}"));
+    let branches = runtime_request_origin_branches(&root);
+
+    let actual = branches.iter().cloned().collect::<BTreeSet<_>>();
+    let expected = RUNTIME_REQUEST_ORIGIN_BRANCHES
+        .iter()
+        .map(|(variants, codes, terms)| RefusalBranch {
+            variants: owned(variants),
+            codes: owned(codes),
+            terms: owned(terms),
+        })
+        .collect::<BTreeSet<_>>();
+    let unlisted = actual.difference(&expected).collect::<Vec<_>>();
+    let vanished = expected.difference(&actual).collect::<Vec<_>>();
+    assert!(
+        unlisted.is_empty() && vanished.is_empty(),
+        "origin categories of RuntimeRequest::validate differ from RUNTIME_REQUEST_ORIGIN_BRANCHES:\n\
+         branches not in the table:\n{unlisted:#?}\ntable entries without a branch:\n{vanished:#?}"
+    );
+
+    let classified = branches
+        .iter()
+        .flat_map(|branch| branch.variants.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let open = RUNTIME_OPEN_ORIGIN_OPERATIONS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let declared = variants.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let doubly = classified.intersection(&open).collect::<Vec<_>>();
+    assert!(
+        doubly.is_empty(),
+        "operations both in a refusal branch and in RUNTIME_OPEN_ORIGIN_OPERATIONS: {doubly:?}"
+    );
+    let unclassified = declared
+        .iter()
+        .filter(|variant| !classified.contains(*variant) && !open.contains(*variant))
+        .collect::<Vec<_>>();
+    assert!(
+        unclassified.is_empty(),
+        "RuntimeOperation variants without an explicit origin category (name them in a refusal \
+         branch of RuntimeRequest::validate or in RUNTIME_OPEN_ORIGIN_OPERATIONS): {unclassified:?}"
+    );
+    let stale = open.difference(&declared).collect::<Vec<_>>();
+    assert!(
+        stale.is_empty(),
+        "RUNTIME_OPEN_ORIGIN_OPERATIONS names operations RuntimeOperation no longer declares: {stale:?}"
+    );
+}
+
+/// Production accesses to the accepted governance connections in crates/runtime-host/src: the
+/// set grows only when `declare_governance_identity` accepts an identity card, the approval gate
+/// reads it, and connection cleanup shrinks it.
+const GOVERNANCE_CONNECTION_ACCESSES: &[&str] = &[
+    "crates/runtime-host/src/host/governance.rs::HostShared::declare_governance_identity -> governance_connections.contains",
+    "crates/runtime-host/src/host/governance.rs::HostShared::declare_governance_identity -> governance_connections.insert",
+    "crates/runtime-host/src/host/governance.rs::HostShared::record_approval_decision -> governance_connections.contains",
+    "crates/runtime-host/src/host/lease.rs::HostShared::cleanup_connection -> governance_connections.remove",
+];
+
+/// Production Rust sources of crates/runtime-host/src (test files and `tests` trees excluded).
+fn runtime_host_production_sources(root: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("crates/runtime-host/src"), &mut files);
+    files.sort();
+    let sources = files
+        .into_iter()
+        .map(|file| (workspace_relative(root, &file), file))
+        .filter(|(path, _)| {
+            !path
+                .split('/')
+                .any(|component| component == "tests" || component == "tests.rs")
+        })
+        .map(|(path, file)| {
+            let source =
+                fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            (path, source)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !sources.is_empty(),
+        "crates/runtime-host/src has no production Rust sources"
+    );
+    sources
+}
+
+#[test]
+fn b3_governance_origin_is_person_or_operator_and_approval_needs_an_accepted_connection() {
+    let root = workspace_root();
+    // Slice cfg4 in the contract gate: a card is declared by User + Ui or Cli + Cli, and an
+    // approval decision is User + Ui only.
+    let contract = fs::read_to_string(root.join(RUNTIME_CONTRACT_SOURCE))
+        .unwrap_or_else(|error| panic!("read {RUNTIME_CONTRACT_SOURCE}: {error}"));
+    assert_eq!(
+        inspect_function_origin_terms(
+            RUNTIME_CONTRACT_SOURCE,
+            &contract,
+            "valid_governance_declaration_origin"
+        )
+        .unwrap_or_else(|error| panic!("{error}")),
+        owned(&[
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ]),
+        "a governance identity card is declared by the person or the operator only"
+    );
+    let branches = runtime_request_origin_branches(&root);
+    for (operation, terms) in [
+        (
+            "DeclareGovernanceIdentity",
+            &["valid_governance_declaration_origin"][..],
+        ),
+        (
+            "RecordApprovalDecision",
+            &["EventActor::User", "EventSource::Ui"][..],
+        ),
+    ] {
+        let branch = branches
+            .iter()
+            .find(|branch| branch.variants.iter().any(|variant| variant == operation))
+            .unwrap_or_else(|| panic!("{operation} has no governance refusal branch"));
+        assert_eq!(
+            (&branch.variants, &branch.codes, &branch.terms),
+            (
+                &owned(&[operation]),
+                &owned(&["invalid_governance_origin"]),
+                &owned(terms)
+            ),
+            "{operation} left its own governance origin branch"
+        );
+    }
+
+    // The host refuses an approval first unless it comes from User + Ui on a connection whose
+    // identity card was accepted.
+    let governance_path = "crates/runtime-host/src/host/governance.rs";
+    let governance = fs::read_to_string(root.join(governance_path))
+        .unwrap_or_else(|error| panic!("read {governance_path}: {error}"));
+    let approval = inspect_refusal_branches(
+        governance_path,
+        &governance,
+        "HostShared",
+        "record_approval_decision",
+        "RuntimeOperation",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        approval.first(),
+        Some(&RefusalBranch {
+            variants: Vec::new(),
+            codes: owned(&["governance_authority_required"]),
+            terms: owned(&[
+                "EventActor::User",
+                "EventSource::Ui",
+                "self.governance_connections",
+            ]),
+        }),
+        "record_approval_decision must first refuse anything but User + Ui on an accepted connection"
+    );
+    let accesses = runtime_host_production_sources(&root)
+        .iter()
+        .flat_map(|(path, source)| {
+            inspect_field_accesses(path, source, "governance_connections")
+                .unwrap_or_else(|error| panic!("scan {path}: {error}"))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        accesses,
+        GOVERNANCE_CONNECTION_ACCESSES
+            .iter()
+            .map(|row| (*row).to_string())
+            .collect::<BTreeSet<_>>(),
+        "accepted governance connections changed hands"
+    );
+}
+
+/// Production sites in crates/runtime-host/src that write instance fact store state (the
+/// store's mutating methods and constructor, and every fact payload construction), with
+/// whether a `fact_write_gate` guard is held in scope: (row, reason).
+const INSTANCE_FACT_WRITE_SITES: &[(&str, &str)] = &[
+    (
+        "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> InstanceFactStore::recover [no fact_write_gate]",
+        "startup replays the ledger into the store before the host is shared",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::publish_facts -> FactPayloadDraft::observation [fact_write_gate held]",
+        "the single fact publication entry, for PublishFact and PublishFacts alike",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> FactPayloadDraft::invalidated [no fact_write_gate]",
+        "event-driven invalidation during ledger replay; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> acknowledge_generated_invalidation [no fact_write_gate]",
+        "event-driven invalidation during ledger replay; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> synchronize [no fact_write_gate]",
+        "ledger replay into the shared store; its callers hold the gate",
+    ),
+    (
+        "crates/runtime-host/src/host/policy_dispatch.rs::HostShared::project_policy_forward -> synchronize [no fact_write_gate]",
+        "replays a private clone for a forward projection; the shared store is not written",
+    ),
+];
+
+#[test]
+fn b3_fact_publication_reaches_the_store_through_one_gated_entry() {
+    let root = workspace_root();
+    let store_path = "crates/runtime-host/src/fact_store.rs";
+    let store = fs::read_to_string(root.join(store_path))
+        .unwrap_or_else(|error| panic!("read {store_path}: {error}"));
+    let api = inspect_store_write_api(store_path, &store, "InstanceFactStore")
+        .unwrap_or_else(|error| panic!("{error}"));
+    let rows = runtime_host_production_sources(&root)
+        .iter()
+        .flat_map(|(path, source)| {
+            inspect_store_writes(
+                path,
+                source,
+                "InstanceFactStore",
+                &api,
+                "FactPayloadDraft",
+                "fact_write_gate",
+            )
+            .unwrap_or_else(|error| panic!("scan {path}: {error}"))
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = INSTANCE_FACT_WRITE_SITES
+        .iter()
+        .map(|(row, _)| (*row).to_string())
+        .collect::<BTreeSet<_>>();
+    let unlisted = rows.difference(&expected).collect::<Vec<_>>();
+    let vanished = expected.difference(&rows).collect::<Vec<_>>();
+    assert!(
+        unlisted.is_empty() && vanished.is_empty(),
+        "instance fact store write sites differ from INSTANCE_FACT_WRITE_SITES:\n\
+         sites not in the table:\n{}\ntable entries without a site:\n{}",
+        unlisted
+            .iter()
+            .map(|row| row.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        vanished
+            .iter()
+            .map(|row| row.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    let requests_path = "crates/runtime-host/src/host/requests.rs";
+    let requests = fs::read_to_string(root.join(requests_path))
+        .unwrap_or_else(|error| panic!("read {requests_path}: {error}"));
+    assert_eq!(
+        inspect_dispatch_arm_calls(
+            requests_path,
+            &requests,
+            "HostShared",
+            "process_validated",
+            "RuntimeOperation",
+            &["PublishFact", "PublishFacts"],
+        )
+        .unwrap_or_else(|error| panic!("{error}")),
+        vec![
+            ("PublishFact".to_string(), owned(&["publish_facts"])),
+            ("PublishFacts".to_string(), owned(&["publish_facts"])),
+        ],
+        "PublishFact and PublishFacts must both dispatch only to the single publish_facts entry"
+    );
+}
+
+#[test]
+fn bplus_vision_provider_check_takes_provider_symbols_from_vision_ffi() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("apps/vision-provider-check"), &mut files);
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "apps/vision-provider-check has no Rust sources"
+    );
+    let mut violations = Vec::new();
+    for file in files {
+        let path = workspace_relative(&root, &file);
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        violations.extend(
+            inspect_provider_symbol_literals(&path, &source)
+                .unwrap_or_else(|error| panic!("scan {path}: {error}")),
+        );
+    }
+    assert!(
+        violations.is_empty(),
+        "apps/vision-provider-check spells provider ABI symbols; take them from actingcommand-vision-ffi:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]

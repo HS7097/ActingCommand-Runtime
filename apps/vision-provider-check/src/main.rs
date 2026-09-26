@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_vision_ffi::{
-    CudaDeviceSelector, FastDeployPpocrArtifacts, OnnxExecutionProvider, OnnxRuntimeArtifacts,
-    VisionFfiError, VisionFfiResult, VisionProviderArtifactManifest,
+    CudaDeviceSelector, FREE_BUFFER_SYMBOL, FastDeployPpocrArtifacts, NN_CLASSIFY_SYMBOL,
+    OCR_READ_TEXT_SYMBOL, OnnxExecutionProvider, OnnxRuntimeArtifacts, VisionFfiError,
+    VisionFfiResult, VisionProviderArtifactManifest, validate_fastdeploy_ppocr_provider_abi,
+    validate_onnxruntime_provider_abi,
 };
 mod ledger;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
+use std::ffi::CStr;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -48,18 +51,40 @@ enum ExportExpectation {
 }
 
 impl ExportExpectation {
-    fn required_symbols(self) -> &'static [&'static str] {
+    /// The provider ABI symbols, as the vision-ffi loader names them.
+    fn required_symbols(self) -> &'static [&'static [u8]] {
         match self {
             ExportExpectation::None => &[],
-            ExportExpectation::FastDeployPpocrProvider => &[
-                "ac_fastdeploy_ppocr_read_text_json",
-                "ac_vision_free_buffer",
-            ],
-            ExportExpectation::OnnxRuntimeProvider => {
-                &["ac_onnxruntime_classify_json", "ac_vision_free_buffer"]
+            ExportExpectation::FastDeployPpocrProvider => {
+                &[OCR_READ_TEXT_SYMBOL, FREE_BUFFER_SYMBOL]
             }
+            ExportExpectation::OnnxRuntimeProvider => &[NN_CLASSIFY_SYMBOL, FREE_BUFFER_SYMBOL],
         }
     }
+
+    /// Resolves the required symbols through the vision-ffi ABI validator of this provider kind.
+    fn validate_provider_abi(self, library: &Path) -> VisionFfiResult<()> {
+        match self {
+            ExportExpectation::None => Ok(()),
+            ExportExpectation::FastDeployPpocrProvider => {
+                validate_fastdeploy_ppocr_provider_abi(library)
+            }
+            ExportExpectation::OnnxRuntimeProvider => validate_onnxruntime_provider_abi(library),
+        }
+    }
+}
+
+/// The export-table name of one NUL-terminated vision-ffi symbol constant.
+fn symbol_name(symbol: &'static [u8]) -> VisionFfiResult<&'static str> {
+    CStr::from_bytes_with_nul(symbol)
+        .ok()
+        .and_then(|name| name.to_str().ok())
+        .ok_or_else(|| {
+            VisionFfiError::fatal(
+                "vision-provider-check",
+                "vision-ffi provider symbol is not a NUL-terminated UTF-8 name",
+            )
+        })
 }
 
 #[derive(Debug, Serialize)]
@@ -417,7 +442,12 @@ fn run_export_audit(options: &CheckOptions) -> VisionFfiResult<ExportAuditReport
         )
     })?;
     let exports = parse_pe_exports(&bytes)?;
-    let expected_symbols = expectation.required_symbols().to_vec();
+    let expected_symbols = expectation
+        .required_symbols()
+        .iter()
+        .copied()
+        .map(symbol_name)
+        .collect::<VisionFfiResult<Vec<_>>>()?;
     let present_symbols: Vec<_> = expected_symbols
         .iter()
         .copied()
@@ -433,6 +463,11 @@ fn run_export_audit(options: &CheckOptions) -> VisionFfiResult<ExportAuditReport
         .filter(|export| export.starts_with('?') || export.starts_with("??"))
         .count();
     let sample_exports = exports.iter().take(80).cloned().collect();
+    // The static table only lists names; a complete one must also pass the loader's own ABI
+    // check, whose failure fails the audit.
+    if missing_symbols.is_empty() {
+        expectation.validate_provider_abi(library)?;
+    }
 
     Ok(ExportAuditReport {
         ok: missing_symbols.is_empty(),
@@ -1510,7 +1545,7 @@ mod tests {
         let library = root.join("runtime.dll");
         fs::write(
             &library,
-            synthetic_pe_with_exports(&["ac_vision_free_buffer"]),
+            synthetic_pe_with_exports(&[abi_symbol(FREE_BUFFER_SYMBOL)]),
         )
         .expect("synthetic PE");
 
@@ -1529,7 +1564,7 @@ mod tests {
     #[test]
     fn pe_export_parser_reads_synthetic_exports() {
         let exports = parse_pe_exports(&synthetic_pe_with_exports(&[
-            "ac_vision_free_buffer",
+            abi_symbol(FREE_BUFFER_SYMBOL),
             "?CxxSymbol@@YAXXZ",
         ]))
         .expect("parse exports");
@@ -1538,14 +1573,14 @@ mod tests {
             exports,
             vec![
                 "?CxxSymbol@@YAXXZ".to_string(),
-                "ac_vision_free_buffer".to_string()
+                abi_symbol(FREE_BUFFER_SYMBOL).to_string()
             ]
         );
     }
 
     #[test]
     fn pe_export_parser_rejects_too_small_optional_header() {
-        let mut bytes = synthetic_pe_with_exports(&["ac_vision_free_buffer"]);
+        let mut bytes = synthetic_pe_with_exports(&[abi_symbol(FREE_BUFFER_SYMBOL)]);
         write_u16(&mut bytes, 0x84 + 16, 64);
 
         let err = parse_pe_exports(&bytes).expect_err("small optional header rejected");
@@ -1555,7 +1590,7 @@ mod tests {
 
     #[test]
     fn pe_export_parser_rejects_overflowing_rva_range() {
-        let mut bytes = synthetic_pe_with_exports(&["ac_vision_free_buffer"]);
+        let mut bytes = synthetic_pe_with_exports(&[abi_symbol(FREE_BUFFER_SYMBOL)]);
         let optional = 0x84 + 20;
         let data_directory = optional + 112;
         let section = optional + 240;
@@ -1572,7 +1607,7 @@ mod tests {
 
     #[test]
     fn pe_export_parser_rejects_truncated_name_table() {
-        let mut bytes = synthetic_pe_with_exports(&["ac_vision_free_buffer"]);
+        let mut bytes = synthetic_pe_with_exports(&[abi_symbol(FREE_BUFFER_SYMBOL)]);
         bytes.truncate(0x241);
 
         let err = parse_pe_exports(&bytes).expect_err("truncated PE rejected");
@@ -1586,7 +1621,7 @@ mod tests {
         let library = root.join("runtime.dll");
         fs::write(
             &library,
-            synthetic_pe_with_exports(&["?CxxSymbol@@YAXXZ", "ac_vision_free_buffer"]),
+            synthetic_pe_with_exports(&["?CxxSymbol@@YAXXZ", abi_symbol(FREE_BUFFER_SYMBOL)]),
         )
         .expect("synthetic PE");
 
@@ -1604,12 +1639,16 @@ mod tests {
         assert!(!report.ok);
         assert_eq!(report.export_count, 2);
         assert_eq!(report.msvc_cxx_symbol_count, 1);
-        assert_eq!(report.present_symbols, vec!["ac_vision_free_buffer"]);
+        assert_eq!(report.present_symbols, vec![abi_symbol(FREE_BUFFER_SYMBOL)]);
         assert_eq!(
             report.missing_symbols,
-            vec!["ac_fastdeploy_ppocr_read_text_json"]
+            vec![abi_symbol(OCR_READ_TEXT_SYMBOL)]
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn abi_symbol(symbol: &'static [u8]) -> &'static str {
+        symbol_name(symbol).expect("vision-ffi symbol name")
     }
 
     fn temp_fixture_dir(label: &str) -> PathBuf {

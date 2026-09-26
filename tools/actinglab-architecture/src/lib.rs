@@ -3296,6 +3296,1336 @@ fn qualified(module: Option<&str>, name: &str) -> String {
     module.map_or_else(|| name.to_string(), |module| format!("{module}::{name}"))
 }
 
+// Workflow #310 work package B: dependency faces and purity of the pure decision crates, the
+// RuntimeOperation origin categories, the instance fact publication path, and provider ABI
+// symbol literals.
+
+/// Checks each named workspace package's direct dependencies on other workspace packages
+/// against its allow-list, on the resolve graph of one `cargo metadata` document. Normal, dev
+/// and build edges all count; packages outside the workspace are not part of the table. A named
+/// package that does not resolve to exactly one workspace member is an error, not a pass.
+pub fn workspace_dependency_allow_list_violations(
+    metadata: &str,
+    allow_lists: &[(&str, &[&str])],
+) -> Result<Vec<String>, String> {
+    let document: serde_json::Value = serde_json::from_str(metadata)
+        .map_err(|err| format!("failed to parse cargo metadata: {err}"))?;
+    let packages = document
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata is missing packages".to_string())?;
+    let workspace_members = document
+        .get("workspace_members")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata is missing workspace_members".to_string())?
+        .iter()
+        .map(required_string)
+        .collect::<Result<HashSet<_>, _>>()?;
+    let mut package_names = HashMap::new();
+    for package in packages {
+        package_names.insert(
+            required_field_string(package, "id")?,
+            required_field_string(package, "name")?,
+        );
+    }
+    let nodes = document
+        .pointer("/resolve/nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata is missing resolve.nodes".to_string())?;
+    let mut dependencies = HashMap::new();
+    for node in nodes {
+        let id = required_field_string(node, "id")?;
+        let node_dependencies = node
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| format!("cargo metadata node {id} is missing dependencies"))?
+            .iter()
+            .map(required_string)
+            .collect::<Result<Vec<_>, _>>()?;
+        dependencies.insert(id, node_dependencies);
+    }
+
+    let mut violations = Vec::new();
+    for (package, allowed) in allow_lists {
+        let ids = workspace_members
+            .iter()
+            .filter(|id| package_names.get(*id).is_some_and(|name| name == package))
+            .collect::<Vec<_>>();
+        let [id] = ids.as_slice() else {
+            return Err(format!(
+                "workspace package {package} resolves to {} workspace members",
+                ids.len()
+            ));
+        };
+        let edges = dependencies
+            .get(*id)
+            .ok_or_else(|| format!("cargo metadata has no resolve node for {package}"))?;
+        for dependency in edges {
+            if !workspace_members.contains(dependency) {
+                continue;
+            }
+            let name = package_names.get(dependency).ok_or_else(|| {
+                format!("cargo metadata node has unknown package id {dependency}")
+            })?;
+            if !allowed.contains(&name.as_str()) {
+                violations.push(format!(
+                    "{package} depends on workspace package {name} outside its allow-list [{}]",
+                    allowed.join(", ")
+                ));
+            }
+        }
+    }
+    violations.sort();
+    violations.dedup();
+    Ok(violations)
+}
+
+/// Finds side-effect authority named by the production items of a pure decision module: a path
+/// under `std::fs` or `std::net`, `SystemTime`, `Instant::now`, or a path into the ledger or
+/// device crate. `use` trees are expanded (globs included) and macro bodies are read as token
+/// paths. Items outside production by their cfg scope (`#[cfg(test)]` and the like) are dropped
+/// first, so test code may name these freely. This text reading supplements the resolved-path
+/// clippy bans of the same crates. Each violation is `path:line: <label>`.
+pub fn inspect_pure_decision_source(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    if !ledger_owners::production_attributes(&file.attrs)? {
+        return Ok(Vec::new());
+    }
+    let items = ledger_owners::production_items(&file.items)?;
+    let mut visitor = SideEffectPathVisitor {
+        path,
+        violations: Vec::new(),
+    };
+    for item in &items {
+        visitor.visit_item(item);
+    }
+    visitor.violations.dedup();
+    Ok(visitor.violations)
+}
+
+struct SideEffectPathVisitor<'a> {
+    path: &'a str,
+    violations: Vec<String>,
+}
+
+impl SideEffectPathVisitor<'_> {
+    fn check(&mut self, segments: &[String], span: Span) {
+        if let Some(label) = side_effect_label(segments) {
+            self.violations
+                .push(format!("{}:{}: {label}", self.path, span.start().line));
+        }
+    }
+}
+
+fn side_effect_label(segments: &[String]) -> Option<&'static str> {
+    let names = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    match names.as_slice() {
+        ["std", "fs", ..] => Some("std::fs"),
+        ["std", "net", ..] => Some("std::net"),
+        ["actingcommand_ledger", ..] => Some("ledger crate path"),
+        ["actingcommand_device", ..] => Some("device crate path"),
+        _ if names.contains(&"SystemTime") => Some("std::time::SystemTime"),
+        _ if names.windows(2).any(|pair| pair == ["Instant", "now"]) => Some("Instant::now"),
+        _ => None,
+    }
+}
+
+fn collect_use_leaves(
+    prefix: &mut Vec<String>,
+    tree: &UseTree,
+    leaves: &mut Vec<(Vec<String>, Span)>,
+) {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_leaves(prefix, &path.tree, leaves);
+            prefix.pop();
+        }
+        UseTree::Name(name) => {
+            let mut full = prefix.clone();
+            full.push(name.ident.to_string());
+            leaves.push((full, name.ident.span()));
+        }
+        UseTree::Rename(rename) => {
+            let mut full = prefix.clone();
+            full.push(rename.ident.to_string());
+            leaves.push((full, rename.ident.span()));
+        }
+        UseTree::Glob(glob) => leaves.push((prefix.clone(), glob.star_token.spans[0])),
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_leaves(prefix, item, leaves);
+            }
+        }
+    }
+}
+
+/// Every `ident(::ident)*` run of a flattened token stream, with the span of its first ident.
+fn token_paths(flat: &[TokenTree]) -> Vec<(Vec<String>, Span)> {
+    let mut paths = Vec::new();
+    let mut index = 0;
+    while index < flat.len() {
+        let TokenTree::Ident(first) = &flat[index] else {
+            index += 1;
+            continue;
+        };
+        let mut segments = vec![first.to_string()];
+        let mut next = index + 1;
+        while let (
+            Some(TokenTree::Punct(colon)),
+            Some(TokenTree::Punct(second)),
+            Some(TokenTree::Ident(segment)),
+        ) = (flat.get(next), flat.get(next + 1), flat.get(next + 2))
+        {
+            if colon.as_char() != ':' || second.as_char() != ':' {
+                break;
+            }
+            segments.push(segment.to_string());
+            next += 3;
+        }
+        paths.push((segments, first.span()));
+        index = next;
+    }
+    paths
+}
+
+fn path_names(path: &syn::Path) -> Vec<String> {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect()
+}
+
+impl<'ast> Visit<'ast> for SideEffectPathVisitor<'_> {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let mut leaves = Vec::new();
+        collect_use_leaves(&mut Vec::new(), &item.tree, &mut leaves);
+        for (segments, span) in leaves {
+            self.check(&segments, span);
+        }
+        syn::visit::visit_item_use(self, item);
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        self.check(&[item.ident.to_string()], item.ident.span());
+        syn::visit::visit_item_extern_crate(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if let Some(first) = path.segments.first() {
+            self.check(&path_names(path), first.ident.span());
+        }
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let mut flat = Vec::new();
+        flatten_tokens(mac.tokens.clone(), &mut flat);
+        for (segments, span) in token_paths(&flat) {
+            self.check(&segments, span);
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+/// Finds every `allow` / `expect` attribute, direct or under `cfg_attr`, test code included,
+/// that silences clippy's `disallowed_methods` / `disallowed_types` lints, also through
+/// `clippy::style`, `clippy::all` or `warnings`. Each finding is `path:line: <level>(<lint>)`;
+/// the caller names every one it accepts.
+pub fn inspect_disallowed_lint_escapes(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let mut visitor = LintEscapeVisitor {
+        path,
+        escapes: Vec::new(),
+        error: None,
+    };
+    visitor.visit_file(&file);
+    if let Some(error) = visitor.error {
+        return Err(error);
+    }
+    Ok(visitor.escapes)
+}
+
+struct LintEscapeVisitor<'a> {
+    path: &'a str,
+    escapes: Vec<String>,
+    error: Option<String>,
+}
+
+impl<'ast> Visit<'ast> for LintEscapeVisitor<'_> {
+    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+        match lint_escapes(&attribute.meta) {
+            Ok(lints) => {
+                let line = attribute.pound_token.spans[0].start().line;
+                for lint in lints {
+                    self.escapes.push(format!("{}:{line}: {lint}", self.path));
+                }
+            }
+            Err(error) => {
+                self.error.get_or_insert(format!("{}: {error}", self.path));
+            }
+        }
+        syn::visit::visit_attribute(self, attribute);
+    }
+}
+
+fn nested_metas(list: &syn::MetaList) -> Result<Vec<syn::Meta>, String> {
+    syn::parse::Parser::parse2(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        list.tokens.clone(),
+    )
+    .map(|metas| metas.into_iter().collect())
+    .map_err(|error| {
+        format!(
+            "unparsable {} attribute: {error}",
+            path_names(&list.path).join("::")
+        )
+    })
+}
+
+fn lint_escapes(meta: &syn::Meta) -> Result<Vec<String>, String> {
+    let syn::Meta::List(list) = meta else {
+        return Ok(Vec::new());
+    };
+    if list.path.is_ident("cfg_attr") {
+        let mut escapes = Vec::new();
+        for attribute in nested_metas(list)?.iter().skip(1) {
+            escapes.extend(lint_escapes(attribute)?);
+        }
+        return Ok(escapes);
+    }
+    let level = if list.path.is_ident("allow") {
+        "allow"
+    } else if list.path.is_ident("expect") {
+        "expect"
+    } else {
+        return Ok(Vec::new());
+    };
+    Ok(nested_metas(list)?
+        .iter()
+        .filter_map(|lint| {
+            let names = path_names(lint.path());
+            let silences = matches!(
+                names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                ["warnings"]
+                    | [
+                        "clippy",
+                        "disallowed_methods" | "disallowed_types" | "style" | "all"
+                    ]
+            );
+            silences.then(|| format!("{level}({})", names.join("::")))
+        })
+        .collect())
+}
+
+/// One refusal branch of a gate function, as [`inspect_refusal_branches`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RefusalBranch {
+    /// The `<classifier>::Variant` names the branch selects, sorted.
+    pub variants: Vec<String>,
+    /// The refusal codes the branch returns, sorted.
+    pub codes: Vec<String>,
+    /// The origin terms the branch tests, sorted: `EventActor::*` / `EventSource::*` values,
+    /// `valid_*_origin` predicates, and `self.<field>` reads other than the request's own
+    /// `actor` / `source` / `operation`.
+    pub terms: Vec<String>,
+}
+
+/// Lists the production variants of the one enum named `enum_name`, in declaration order.
+pub fn inspect_enum_variants(
+    path: &str,
+    source: &str,
+    enum_name: &str,
+) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let items = ledger_owners::production_items(&file.items)?;
+    let mut all = Vec::new();
+    collect_nested_items(&items, &mut all);
+    let enums = all
+        .iter()
+        .filter_map(|item| match item {
+            Item::Enum(item_enum) if item_enum.ident == enum_name => Some(item_enum),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [item_enum] = enums.as_slice() else {
+        return Err(format!(
+            "{path}: expected one enum {enum_name}, found {}",
+            enums.len()
+        ));
+    };
+    let variants = item_enum
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect::<Vec<_>>();
+    if variants.is_empty() {
+        return Err(format!("{path}: enum {enum_name} has no variants"));
+    }
+    Ok(variants)
+}
+
+fn find_function_block(
+    path: &str,
+    items: &[Item],
+    owner: Option<&str>,
+    function: &str,
+) -> Result<syn::Block, String> {
+    let mut all = Vec::new();
+    collect_nested_items(items, &mut all);
+    let mut blocks = Vec::new();
+    for item in all {
+        match (owner, item) {
+            (None, Item::Fn(item_fn)) if item_fn.sig.ident == function => {
+                blocks.push(item_fn.block.as_ref().clone());
+            }
+            (Some(owner), Item::Impl(item_impl))
+                if impl_self_ident(item_impl).is_some_and(|ident| ident == owner) =>
+            {
+                for member in &item_impl.items {
+                    if let syn::ImplItem::Fn(method) = member
+                        && method.sig.ident == function
+                    {
+                        blocks.push(method.block.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let count = blocks.len();
+    let mut blocks = blocks.into_iter();
+    match (blocks.next(), count) {
+        (Some(block), 1) => Ok(block),
+        _ => Err(format!(
+            "{path}: expected one production function {}{function}, found {count}",
+            owner.map(|owner| format!("{owner}::")).unwrap_or_default()
+        )),
+    }
+}
+
+/// Extracts the refusal branches of `owner::function`, one per top-level statement of its body:
+/// - `if <condition> { .. }` whose body returns a refusal code: its variants are the
+///   `<classifier>::Variant` patterns of any `matches!` in the condition, and its terms are the
+///   origin terms the condition reads;
+/// - `let <binding> = match .. { <classifier>::Variant .. => .., _ => None }`: its variants are the
+///   named arms; its codes and terms come from the later `if let .. = <binding>` statement. A
+///   catch-all arm must yield `None`, so it classifies nothing.
+///
+/// Codes are string literals passed first to an `*Error::new|request|fatal` constructor. Every
+/// `<classifier>::Variant` the body names must belong to a branch: a classification in any other
+/// shape, a catch-all beside named variants, or a classifying `let` never consumed is an error.
+pub fn inspect_refusal_branches(
+    path: &str,
+    source: &str,
+    owner: &str,
+    function: &str,
+    classifier: &str,
+) -> Result<Vec<RefusalBranch>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let items = ledger_owners::production_items(&file.items)?;
+    let block = find_function_block(path, &items, Some(owner), function)?;
+    let location = format!("{path}: {owner}::{function}");
+    let mut branches = Vec::new();
+    let mut consumers = HashSet::new();
+    for (index, statement) in block.stmts.iter().enumerate() {
+        match statement {
+            Stmt::Expr(Expr::If(expr_if), _) if !consumers.contains(&index) => {
+                let variants = classifier_variants_in(&location, classifier, |visitor| {
+                    visitor.visit_expr(&expr_if.cond)
+                })?;
+                let codes = refusal_codes(|visitor| visitor.visit_block(&expr_if.then_branch));
+                if codes.is_empty() {
+                    if !variants.is_empty() {
+                        return Err(format!(
+                            "{location} selects {} without a refusal code",
+                            variants.join(", ")
+                        ));
+                    }
+                    continue;
+                }
+                branches.push(RefusalBranch {
+                    variants,
+                    codes,
+                    terms: origin_terms(|visitor| visitor.visit_expr(&expr_if.cond)),
+                });
+            }
+            Stmt::Local(local) => {
+                let Some(init) = &local.init else {
+                    continue;
+                };
+                let Expr::Match(expr_match) = init.expr.as_ref() else {
+                    continue;
+                };
+                let variants = classifying_match_variants(&location, expr_match, classifier)?;
+                if variants.is_empty() {
+                    continue;
+                }
+                let Some(binding) = pattern_ident(&local.pat) else {
+                    return Err(format!(
+                        "{location}: a classifying match must bind one name"
+                    ));
+                };
+                let consumer = block.stmts.iter().enumerate().skip(index + 1).find_map(
+                    |(position, statement)| match statement {
+                        Stmt::Expr(Expr::If(expr_if), _)
+                            if matches!(
+                                expr_if.cond.as_ref(),
+                                Expr::Let(expr_let)
+                                    if matches!(
+                                        expr_let.expr.as_ref(),
+                                        Expr::Path(scrutinee) if scrutinee.path.is_ident(binding)
+                                    )
+                            ) =>
+                        {
+                            Some((position, expr_if))
+                        }
+                        _ => None,
+                    },
+                );
+                let Some((position, consumer)) = consumer else {
+                    return Err(format!(
+                        "{location}: classifying binding {binding} is never consumed by a refusal"
+                    ));
+                };
+                consumers.insert(position);
+                let codes = refusal_codes(|visitor| visitor.visit_expr_if(consumer));
+                if codes.is_empty() {
+                    return Err(format!(
+                        "{location}: classifying binding {binding} is consumed without a refusal code"
+                    ));
+                }
+                branches.push(RefusalBranch {
+                    variants,
+                    codes,
+                    terms: origin_terms(|visitor| visitor.visit_expr_if(consumer)),
+                });
+            }
+            _ => {}
+        }
+    }
+    let mut mentions = ClassifierMentionVisitor {
+        classifier,
+        variants: BTreeSetString::new(),
+    };
+    mentions.visit_block(&block);
+    let classified = branches
+        .iter()
+        .flat_map(|branch| branch.variants.iter().cloned())
+        .collect::<BTreeSetString>();
+    let unaccounted = mentions
+        .variants
+        .difference(&classified)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unaccounted.is_empty() {
+        return Err(format!(
+            "{location} names {} outside a recognised refusal branch",
+            unaccounted.join(", ")
+        ));
+    }
+    if branches.is_empty() {
+        return Err(format!("{location} has no refusal branch"));
+    }
+    Ok(branches)
+}
+
+type BTreeSetString = std::collections::BTreeSet<String>;
+
+/// Lists the origin terms (see [`RefusalBranch::terms`]) that one production free function's
+/// body reads, sorted.
+pub fn inspect_function_origin_terms(
+    path: &str,
+    source: &str,
+    function: &str,
+) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let items = ledger_owners::production_items(&file.items)?;
+    let block = find_function_block(path, &items, None, function)?;
+    let terms = origin_terms(|visitor| visitor.visit_block(&block));
+    if terms.is_empty() {
+        return Err(format!("{path}: {function} reads no origin term"));
+    }
+    Ok(terms)
+}
+
+fn classifier_variant(pattern: &Pat, classifier: &str) -> Option<String> {
+    let path = match pattern {
+        Pat::Path(value) => &value.path,
+        Pat::Struct(value) => &value.path,
+        Pat::TupleStruct(value) => &value.path,
+        Pat::Paren(value) => return classifier_variant(&value.pat, classifier),
+        _ => return None,
+    };
+    match path_names(path).as_slice() {
+        [.., owner, variant] if owner == classifier => Some(variant.clone()),
+        _ => None,
+    }
+}
+
+/// Adds the classifier variants one pattern names; a catch-all case beside them is an error.
+fn collect_classifier_pattern(
+    pattern: &Pat,
+    classifier: &str,
+    variants: &mut BTreeSetString,
+) -> Result<(), String> {
+    let cases = match pattern {
+        Pat::Or(value) => value.cases.iter().collect::<Vec<_>>(),
+        other => vec![other],
+    };
+    let mut named = Vec::new();
+    let mut catch_all = false;
+    for case in cases {
+        match classifier_variant(case, classifier) {
+            Some(variant) => named.push(variant),
+            None => catch_all |= matches!(case, Pat::Wild(_) | Pat::Ident(_)),
+        }
+    }
+    if !named.is_empty() && catch_all {
+        return Err(format!(
+            "catch-all pattern beside {classifier} variants {}",
+            named.join(", ")
+        ));
+    }
+    variants.extend(named);
+    Ok(())
+}
+
+fn matches_pattern(mac: &syn::Macro) -> Result<Pat, String> {
+    syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| {
+            input.parse::<Expr>()?;
+            input.parse::<syn::Token![,]>()?;
+            let pattern = Pat::parse_multi_with_leading_vert(input)?;
+            if input.peek(syn::Token![if]) {
+                input.parse::<syn::Token![if]>()?;
+                input.parse::<Expr>()?;
+            }
+            if input.peek(syn::Token![,]) {
+                input.parse::<syn::Token![,]>()?;
+            }
+            Ok(pattern)
+        },
+        mac.tokens.clone(),
+    )
+    .map_err(|error| format!("unparsable matches! invocation: {error}"))
+}
+
+struct ClassifierPatternVisitor<'a> {
+    classifier: &'a str,
+    variants: BTreeSetString,
+    error: Option<String>,
+}
+
+impl<'ast> Visit<'ast> for ClassifierPatternVisitor<'_> {
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if mac.path.is_ident("matches") {
+            let collected = matches_pattern(mac).and_then(|pattern| {
+                collect_classifier_pattern(&pattern, self.classifier, &mut self.variants)
+            });
+            if let Err(error) = collected {
+                self.error.get_or_insert(error);
+            }
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+fn classifier_variants_in(
+    location: &str,
+    classifier: &str,
+    visit: impl FnOnce(&mut ClassifierPatternVisitor<'_>),
+) -> Result<Vec<String>, String> {
+    let mut visitor = ClassifierPatternVisitor {
+        classifier,
+        variants: BTreeSetString::new(),
+        error: None,
+    };
+    visit(&mut visitor);
+    match visitor.error {
+        Some(error) => Err(format!("{location}: {error}")),
+        None => Ok(visitor.variants.into_iter().collect()),
+    }
+}
+
+fn classifying_match_variants(
+    location: &str,
+    expr_match: &ExprMatch,
+    classifier: &str,
+) -> Result<Vec<String>, String> {
+    let mut variants = BTreeSetString::new();
+    let mut catch_all_bodies = Vec::new();
+    for arm in &expr_match.arms {
+        let before = variants.len();
+        collect_classifier_pattern(&arm.pat, classifier, &mut variants)
+            .map_err(|error| format!("{location}: {error}"))?;
+        if variants.len() == before && matches!(arm.pat, Pat::Wild(_) | Pat::Ident(_)) {
+            catch_all_bodies.push(arm.body.as_ref());
+        }
+    }
+    if !variants.is_empty()
+        && catch_all_bodies
+            .iter()
+            .any(|body| !matches!(body, Expr::Path(value) if value.path.is_ident("None")))
+    {
+        return Err(format!(
+            "{location}: a catch-all arm beside {classifier} variants must yield None"
+        ));
+    }
+    Ok(variants.into_iter().collect())
+}
+
+struct ClassifierMentionVisitor<'a> {
+    classifier: &'a str,
+    variants: BTreeSetString,
+}
+
+impl ClassifierMentionVisitor<'_> {
+    fn mention(&mut self, segments: &[String]) {
+        if let [.., owner, variant] = segments
+            && owner == self.classifier
+        {
+            self.variants.insert(variant.clone());
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ClassifierMentionVisitor<'_> {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        self.mention(&path_names(path));
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let mut flat = Vec::new();
+        flatten_tokens(mac.tokens.clone(), &mut flat);
+        for (segments, _) in token_paths(&flat) {
+            self.mention(&segments);
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+struct RefusalCodeVisitor {
+    codes: BTreeSetString,
+}
+
+impl<'ast> Visit<'ast> for RefusalCodeVisitor {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let Expr::Path(function) = call.func.as_ref()
+            && let [.., owner, constructor] = path_names(&function.path).as_slice()
+            && owner.ends_with("Error")
+            && matches!(constructor.as_str(), "new" | "request" | "fatal")
+            && let Some(Expr::Lit(syn::ExprLit {
+                lit: Lit::Str(code),
+                ..
+            })) = call.args.first()
+        {
+            self.codes.insert(code.value());
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
+
+fn refusal_codes(visit: impl FnOnce(&mut RefusalCodeVisitor)) -> Vec<String> {
+    let mut visitor = RefusalCodeVisitor {
+        codes: BTreeSetString::new(),
+    };
+    visit(&mut visitor);
+    visitor.codes.into_iter().collect()
+}
+
+struct OriginTermVisitor {
+    terms: BTreeSetString,
+}
+
+impl OriginTermVisitor {
+    fn path_term(&mut self, segments: &[String]) {
+        if let [.., kind, value] = segments
+            && matches!(kind.as_str(), "EventActor" | "EventSource")
+        {
+            self.terms.insert(format!("{kind}::{value}"));
+        }
+        if let Some(last) = segments.last()
+            && last.starts_with("valid_")
+            && last.ends_with("_origin")
+        {
+            self.terms.insert(last.clone());
+        }
+    }
+
+    fn field_term(&mut self, field: &str) {
+        if !matches!(field, "actor" | "source" | "operation") {
+            self.terms.insert(format!("self.{field}"));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for OriginTermVisitor {
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        self.path_term(&path_names(&node.path));
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_expr_field(&mut self, node: &'ast syn::ExprField) {
+        if let Expr::Path(base) = node.base.as_ref()
+            && base.path.is_ident("self")
+            && let syn::Member::Named(field) = &node.member
+        {
+            self.field_term(&field.to_string());
+        }
+        syn::visit::visit_expr_field(self, node);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let mut flat = Vec::new();
+        flatten_tokens(mac.tokens.clone(), &mut flat);
+        for (segments, _) in token_paths(&flat) {
+            self.path_term(&segments);
+        }
+        for window in flat.windows(3) {
+            if let [
+                TokenTree::Ident(base),
+                TokenTree::Punct(dot),
+                TokenTree::Ident(field),
+            ] = window
+                && base == "self"
+                && dot.as_char() == '.'
+            {
+                self.field_term(&field.to_string());
+            }
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+fn origin_terms(visit: impl FnOnce(&mut OriginTermVisitor)) -> Vec<String> {
+    let mut visitor = OriginTermVisitor {
+        terms: BTreeSetString::new(),
+    };
+    visit(&mut visitor);
+    visitor.terms.into_iter().collect()
+}
+
+/// The write API of a store type, as [`inspect_store_write_api`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreWriteApi {
+    /// `&mut self` methods visible outside their module, sorted.
+    pub mutating_methods: Vec<String>,
+    /// Receiver-less associated functions returning the store, visible outside their module.
+    pub constructors: Vec<String>,
+}
+
+/// Reads the write API of `type_name` from its inherent production impls: the `&mut self`
+/// methods and the receiver-less functions returning `Self` that are visible outside the
+/// defining module. A type without such an impl or without a mutating method is an error.
+pub fn inspect_store_write_api(
+    path: &str,
+    source: &str,
+    type_name: &str,
+) -> Result<StoreWriteApi, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let items = ledger_owners::production_items(&file.items)?;
+    let mut all = Vec::new();
+    collect_nested_items(&items, &mut all);
+    let mut api = StoreWriteApi {
+        mutating_methods: Vec::new(),
+        constructors: Vec::new(),
+    };
+    for item in all {
+        let Item::Impl(item_impl) = item else {
+            continue;
+        };
+        if item_impl.trait_.is_some()
+            || !impl_self_ident(item_impl).is_some_and(|ident| ident == type_name)
+        {
+            continue;
+        }
+        for member in &item_impl.items {
+            let syn::ImplItem::Fn(method) = member else {
+                continue;
+            };
+            if matches!(method.vis, Visibility::Inherited) {
+                continue;
+            }
+            let name = method.sig.ident.to_string();
+            match method.sig.receiver() {
+                Some(receiver) => {
+                    if matches!(receiver.ty.as_ref(), Type::Reference(reference) if reference.mutability.is_some())
+                    {
+                        api.mutating_methods.push(name);
+                    }
+                }
+                None => {
+                    if signature_returns_ident(&method.sig, &["Self", type_name]) {
+                        api.constructors.push(name);
+                    }
+                }
+            }
+        }
+    }
+    if api.mutating_methods.is_empty() {
+        return Err(format!(
+            "{path}: {type_name} exposes no mutating method outside its module"
+        ));
+    }
+    api.mutating_methods.sort();
+    api.constructors.sort();
+    Ok(api)
+}
+
+/// Lists the production sites in one source file that write store state: calls of the store's
+/// mutating methods and constructors (`api`, from [`inspect_store_write_api`]) and every
+/// `<payload_type>::*` construction, since a published or invalidated fact becomes store state
+/// on the next synchronisation. The store's own inherent impl is its implementation and is not
+/// listed. Each row is `path::Owner::function -> target [<gate_field> held]` or
+/// `[no <gate_field>]`: held when a binding of `lock(&self.<gate_field>, ..)` made earlier in an
+/// enclosing block is still alive (not passed to `drop`).
+pub fn inspect_store_writes(
+    path: &str,
+    source: &str,
+    store: &str,
+    api: &StoreWriteApi,
+    payload_type: &str,
+    gate_field: &str,
+) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    if !ledger_owners::production_attributes(&file.attrs)? {
+        return Ok(Vec::new());
+    }
+    let items = ledger_owners::production_items(&file.items)?;
+    let mut visitor = StoreWriteVisitor {
+        path,
+        store,
+        api,
+        payload_type,
+        gate_field,
+        scope: FunctionScope::default(),
+        gates: Vec::new(),
+        rows: Vec::new(),
+    };
+    for item in &items {
+        visitor.visit_item(item);
+    }
+    visitor.rows.sort();
+    visitor.rows.dedup();
+    Ok(visitor.rows)
+}
+
+#[derive(Default)]
+struct FunctionScope {
+    owner: Option<String>,
+    function: Option<String>,
+}
+
+impl FunctionScope {
+    fn name(&self) -> String {
+        match (&self.owner, &self.function) {
+            (Some(owner), Some(function)) => format!("{owner}::{function}"),
+            (None, Some(function)) => function.clone(),
+            (_, None) => "<item>".to_string(),
+        }
+    }
+}
+
+struct StoreWriteVisitor<'a> {
+    path: &'a str,
+    store: &'a str,
+    api: &'a StoreWriteApi,
+    payload_type: &'a str,
+    gate_field: &'a str,
+    scope: FunctionScope,
+    gates: Vec<Vec<String>>,
+    rows: Vec<String>,
+}
+
+impl StoreWriteVisitor<'_> {
+    fn record(&mut self, target: String) {
+        let gate = if self.gates.iter().any(|scope| !scope.is_empty()) {
+            format!("{} held", self.gate_field)
+        } else {
+            format!("no {}", self.gate_field)
+        };
+        self.rows.push(format!(
+            "{}::{} -> {target} [{gate}]",
+            self.path,
+            self.scope.name()
+        ));
+    }
+
+    fn path_target(&self, segments: &[String]) -> Option<String> {
+        let [.., owner, name] = segments else {
+            return None;
+        };
+        ((owner == self.store && self.api.constructors.contains(name))
+            || owner == self.payload_type)
+            .then(|| format!("{owner}::{name}"))
+    }
+}
+
+/// True when `expr` contains a call `lock(&self.<field>, ..)`.
+fn locks_field(expr: &Expr, field: &str) -> bool {
+    struct LockVisitor<'a> {
+        field: &'a str,
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for LockVisitor<'_> {
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if matches!(call.func.as_ref(), Expr::Path(function) if function.path.is_ident("lock"))
+                && let Some(Expr::Reference(reference)) = call.args.first()
+                && is_self_field(&reference.expr, self.field)
+            {
+                self.found = true;
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+    }
+    let mut visitor = LockVisitor {
+        field,
+        found: false,
+    };
+    visitor.visit_expr(expr);
+    visitor.found
+}
+
+fn is_self_field(expr: &Expr, field: &str) -> bool {
+    matches!(expr, Expr::Field(value) if is_self_field_access(value, field))
+}
+
+fn is_self_field_access(value: &syn::ExprField, field: &str) -> bool {
+    matches!(value.base.as_ref(), Expr::Path(base) if base.path.is_ident("self"))
+        && matches!(&value.member, syn::Member::Named(name) if name == field)
+}
+
+fn local_binding(pattern: &Pat) -> Option<String> {
+    match pattern {
+        Pat::Ident(value) => Some(value.ident.to_string()),
+        Pat::Type(value) => local_binding(&value.pat),
+        _ => None,
+    }
+}
+
+impl<'ast> Visit<'ast> for StoreWriteVisitor<'_> {
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        let owner = impl_self_ident(node).map(ToString::to_string);
+        if node.trait_.is_none() && owner.as_deref() == Some(self.store) {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.scope.owner, owner);
+        syn::visit::visit_item_impl(self, node);
+        self.scope.owner = previous;
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        let previous = self.scope.function.replace(node.sig.ident.to_string());
+        let gates = std::mem::take(&mut self.gates);
+        syn::visit::visit_impl_item_fn(self, node);
+        self.gates = gates;
+        self.scope.function = previous;
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+        let owner = self.scope.owner.take();
+        let previous = self.scope.function.replace(node.sig.ident.to_string());
+        let gates = std::mem::take(&mut self.gates);
+        syn::visit::visit_item_fn(self, node);
+        self.gates = gates;
+        self.scope.function = previous;
+        self.scope.owner = owner;
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.gates.push(Vec::new());
+        for statement in &block.stmts {
+            self.visit_stmt(statement);
+            match statement {
+                Stmt::Local(local) => {
+                    if let Some(init) = &local.init
+                        && locks_field(&init.expr, self.gate_field)
+                        && let Some(binding) = local_binding(&local.pat)
+                        && binding != "_"
+                        && let Some(scope) = self.gates.last_mut()
+                    {
+                        scope.push(binding);
+                    }
+                }
+                Stmt::Expr(Expr::Call(call), _) => {
+                    if matches!(call.func.as_ref(), Expr::Path(function) if function.path.is_ident("drop"))
+                        && let Some(Expr::Path(argument)) = call.args.first()
+                        && let Some(name) = argument.path.get_ident()
+                    {
+                        for scope in &mut self.gates {
+                            scope.retain(|binding| name != binding);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.gates.pop();
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let method = node.method.to_string();
+        if self.api.mutating_methods.contains(&method) {
+            self.record(method);
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let Expr::Path(function) = node.func.as_ref()
+            && let Some(target) = self.path_target(&path_names(&function.path))
+        {
+            self.record(target);
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let mut flat = Vec::new();
+        flatten_tokens(mac.tokens.clone(), &mut flat);
+        for window in flat.windows(2) {
+            if let [TokenTree::Punct(dot), TokenTree::Ident(method)] = window
+                && dot.as_char() == '.'
+                && self.api.mutating_methods.contains(&method.to_string())
+            {
+                self.record(format!("{method} (in macro)"));
+            }
+        }
+        for (segments, _) in token_paths(&flat) {
+            if let Some(target) = self.path_target(&segments) {
+                self.record(format!("{target} (in macro)"));
+            }
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+/// Lists, for each named `<classifier>::Variant`, the calls that the one match arm naming it
+/// inside `owner::function` makes on `self`: `method` for a method of `self`, `field.method` for
+/// a method of a `self` field, in source order. A variant without exactly one arm is an error.
+pub fn inspect_dispatch_arm_calls(
+    path: &str,
+    source: &str,
+    owner: &str,
+    function: &str,
+    classifier: &str,
+    variants: &[&str],
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    struct ArmFinder<'a> {
+        classifier: &'a str,
+        arms: Vec<(BTreeSetString, syn::Arm)>,
+        error: Option<String>,
+    }
+    impl<'ast> Visit<'ast> for ArmFinder<'_> {
+        fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+            let mut named = BTreeSetString::new();
+            match collect_classifier_pattern(&arm.pat, self.classifier, &mut named) {
+                Ok(()) if !named.is_empty() => self.arms.push((named, arm.clone())),
+                Ok(()) => {}
+                Err(error) => {
+                    self.error.get_or_insert(error);
+                }
+            }
+            syn::visit::visit_arm(self, arm);
+        }
+    }
+    struct SelfCallVisitor {
+        calls: Vec<String>,
+    }
+    impl<'ast> Visit<'ast> for SelfCallVisitor {
+        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+            match node.receiver.as_ref() {
+                Expr::Path(receiver) if receiver.path.is_ident("self") => {
+                    self.calls.push(node.method.to_string());
+                }
+                Expr::Field(receiver) if matches!(receiver.base.as_ref(), Expr::Path(base) if base.path.is_ident("self")) => {
+                    if let syn::Member::Named(field) = &receiver.member {
+                        self.calls.push(format!("{field}.{}", node.method));
+                    }
+                }
+                _ => {}
+            }
+            syn::visit::visit_expr_method_call(self, node);
+        }
+    }
+
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let items = ledger_owners::production_items(&file.items)?;
+    let block = find_function_block(path, &items, Some(owner), function)?;
+    let mut finder = ArmFinder {
+        classifier,
+        arms: Vec::new(),
+        error: None,
+    };
+    finder.visit_block(&block);
+    if let Some(error) = finder.error {
+        return Err(format!("{path}: {owner}::{function}: {error}"));
+    }
+    let mut calls = Vec::new();
+    for variant in variants {
+        let arms = finder
+            .arms
+            .iter()
+            .filter(|(named, _)| named.contains(*variant))
+            .collect::<Vec<_>>();
+        let [(_, arm)] = arms.as_slice() else {
+            return Err(format!(
+                "{path}: {owner}::{function} has {} arms for {classifier}::{variant}",
+                arms.len()
+            ));
+        };
+        let mut visitor = SelfCallVisitor { calls: Vec::new() };
+        visitor.visit_arm(arm);
+        calls.push(((*variant).to_string(), visitor.calls));
+    }
+    Ok(calls)
+}
+
+/// Lists every production access to `self.<field>` in one source file as
+/// `path::Owner::function -> field.method`: the method called on the field itself or on
+/// `lock(&self.<field>, ..)` (through `?`). Any other access is `field.<other>`.
+pub fn inspect_field_accesses(
+    path: &str,
+    source: &str,
+    field: &str,
+) -> Result<Vec<String>, String> {
+    struct FieldAccessVisitor<'a> {
+        path: &'a str,
+        field: &'a str,
+        scope: FunctionScope,
+        consumed: HashSet<*const syn::ExprField>,
+        rows: Vec<String>,
+    }
+    impl FieldAccessVisitor<'_> {
+        fn record(&mut self, access: &str) {
+            self.rows.push(format!(
+                "{}::{} -> {}.{access}",
+                self.path,
+                self.scope.name(),
+                self.field
+            ));
+        }
+    }
+    fn peel(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Try(value) => peel(&value.expr),
+            Expr::Paren(value) => peel(&value.expr),
+            other => other,
+        }
+    }
+    impl<'ast> Visit<'ast> for FieldAccessVisitor<'_> {
+        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+            let owner = impl_self_ident(node).map(ToString::to_string);
+            let previous = std::mem::replace(&mut self.scope.owner, owner);
+            syn::visit::visit_item_impl(self, node);
+            self.scope.owner = previous;
+        }
+
+        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+            let previous = self.scope.function.replace(node.sig.ident.to_string());
+            syn::visit::visit_impl_item_fn(self, node);
+            self.scope.function = previous;
+        }
+
+        fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+            let owner = self.scope.owner.take();
+            let previous = self.scope.function.replace(node.sig.ident.to_string());
+            syn::visit::visit_item_fn(self, node);
+            self.scope.function = previous;
+            self.scope.owner = owner;
+        }
+
+        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+            let receiver = match peel(&node.receiver) {
+                Expr::Field(value) => Some(value),
+                Expr::Call(call) if matches!(call.func.as_ref(), Expr::Path(function) if function.path.is_ident("lock")) => {
+                    match call.args.first() {
+                        Some(Expr::Reference(reference)) => match reference.expr.as_ref() {
+                            Expr::Field(value) => Some(value),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(value) = receiver
+                && is_self_field_access(value, self.field)
+            {
+                self.consumed.insert(value as *const syn::ExprField);
+                self.record(&node.method.to_string());
+            }
+            syn::visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_field(&mut self, node: &'ast syn::ExprField) {
+            if !self.consumed.contains(&(node as *const syn::ExprField))
+                && is_self_field_access(node, self.field)
+            {
+                self.record("<other>");
+            }
+            syn::visit::visit_expr_field(self, node);
+        }
+    }
+
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    if !ledger_owners::production_attributes(&file.attrs)? {
+        return Ok(Vec::new());
+    }
+    let items = ledger_owners::production_items(&file.items)?;
+    let mut visitor = FieldAccessVisitor {
+        path,
+        field,
+        scope: FunctionScope::default(),
+        consumed: HashSet::new(),
+        rows: Vec::new(),
+    };
+    for item in &items {
+        visitor.visit_item(item);
+    }
+    visitor.rows.sort();
+    visitor.rows.dedup();
+    Ok(visitor.rows)
+}
+
+/// Finds string, byte-string and C-string literals whose value starts with `ac_` (a provider ABI
+/// symbol name) anywhere in one source file, test code, attributes and macro bodies included:
+/// provider symbol names have one source, the vision-ffi loader. Each violation is
+/// `path:line: <literal>`.
+pub fn inspect_provider_symbol_literals(path: &str, source: &str) -> Result<Vec<String>, String> {
+    syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let tokens = source
+        .parse::<TokenStream>()
+        .map_err(|err| format!("failed to tokenize {path}: {err}"))?;
+    let mut flat = Vec::new();
+    flatten_tokens(tokens, &mut flat);
+    let mut violations = Vec::new();
+    for token in flat {
+        let TokenTree::Literal(literal) = token else {
+            continue;
+        };
+        let value = match Lit::new(literal.clone()) {
+            Lit::Str(value) => value.value().into_bytes(),
+            Lit::ByteStr(value) => value.value(),
+            Lit::CStr(value) => value.value().into_bytes(),
+            _ => continue,
+        };
+        if value.starts_with(b"ac_") {
+            violations.push(format!(
+                "{path}:{}: provider symbol literal {literal}",
+                literal.span().start().line
+            ));
+        }
+    }
+    Ok(violations)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

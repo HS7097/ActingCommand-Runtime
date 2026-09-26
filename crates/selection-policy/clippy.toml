@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Pure decision crate (Workflow #310 work package B item 1): no file system, network or clock
+# authority, banned by resolved path for every target of this package. The architecture guard
+# (tools/actinglab-architecture) requires these entries and names every exemption and escape.
+# Named exemption: std::fs::read stays allowed here because src/bin/selection-eval.rs is the
+# crate's declared offline file-reading shell and this file reaches every target of the package;
+# the library half's std::fs stays banned by the guard's production-item scan.
+disallowed-methods = [
+    { path = "std::fs::canonicalize", reason = "pure decision code reads no file system" },
+    { path = "std::fs::copy", reason = "pure decision code reads no file system" },
+    { path = "std::fs::create_dir", reason = "pure decision code reads no file system" },
+    { path = "std::fs::create_dir_all", reason = "pure decision code reads no file system" },
+    { path = "std::fs::exists", reason = "pure decision code reads no file system" },
+    { path = "std::fs::hard_link", reason = "pure decision code reads no file system" },
+    { path = "std::fs::metadata", reason = "pure decision code reads no file system" },
+    { path = "std::fs::read_dir", reason = "pure decision code reads no file system" },
+    { path = "std::fs::read_link", reason = "pure decision code reads no file system" },
+    { path = "std::fs::read_to_string", reason = "pure decision code reads no file system" },
+    { path = "std::fs::remove_dir", reason = "pure decision code reads no file system" },
+    { path = "std::fs::remove_dir_all", reason = "pure decision code reads no file system" },
+    { path = "std::fs::remove_file", reason = "pure decision code reads no file system" },
+    { path = "std::fs::rename", reason = "pure decision code reads no file system" },
+    { path = "std::fs::set_permissions", reason = "pure decision code reads no file system" },
+    { path = "std::fs::symlink_metadata", reason = "pure decision code reads no file system" },
+    { path = "std::fs::write", reason = "pure decision code reads no file system" },
+    { path = "std::time::Instant::now", reason = "pure decision code takes time as an explicit input" },
+    { path = "std::time::SystemTime::now", reason = "pure decision code takes time as an explicit input" },
+]
+disallowed-types = [
+    { path = "std::fs::DirBuilder", reason = "pure decision code reads no file system" },
+    { path = "std::fs::DirEntry", reason = "pure decision code reads no file system" },
+    { path = "std::fs::File", reason = "pure decision code reads no file system" },
+    { path = "std::fs::OpenOptions", reason = "pure decision code reads no file system" },
+    { path = "std::fs::ReadDir", reason = "pure decision code reads no file system" },
+    { path = "std::net::TcpListener", reason = "pure decision code opens no network connection" },
+    { path = "std::net::TcpStream", reason = "pure decision code opens no network connection" },
+    { path = "std::net::UdpSocket", reason = "pure decision code opens no network connection" },
+    { path = "std::time::SystemTime", reason = "pure decision code takes time as an explicit input" },
+]
