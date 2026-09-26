@@ -163,6 +163,12 @@ is excluded from port grouping: its port never identifies it in the ledger port
 map or in the `status` `adb_port` field. A failed append is fatal, as for
 `runtime.started`.
 
+Once an instance is bound, each of its backend opens is recorded as one
+`runtime.lifecycle_observed` event with phase `backend_open_observed`
+(`backend-open-observation.md`), and right after it the host records that
+report as the instance's four `backend.selfcheck.<entry>.*` runtime facts
+(`runtime-fact-store.md`, "Producers").
+
 `actingcommand-vision-provider-check --state-root <runtime-state>` reads the
 specified Runtime ledger through B's `ForensicRequest::events` and the shared
 `origin_module=provider` filter. It uses `--after` (exclusive), `--through`

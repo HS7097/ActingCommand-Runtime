@@ -86,8 +86,9 @@ the Event V2 Rust contract and its strict serde codec own this payload.
 Connection/probe attempt durations retain their actual original measurement
 scope. No new timing sample is taken. They do not populate `touch_response_us`
 or `capture_acquire_us`; the original Input/Capture events remain the only source
-of those performance samples. This event does not publish a RuntimeFactStore
-availability record or change policy admission.
+of those performance samples. The host maps each event to the instance's
+`backend.selfcheck.*` runtime facts (`runtime-fact-store.md`, "Producers"); the
+event publishes no availability record and changes no policy admission.
 
 ## Input parameters from the original connection
 

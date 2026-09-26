@@ -9,10 +9,21 @@
 
 use super::*;
 use crate::policy_host::PolicySettlement;
-use actingcommand_contract::{FactValue, MAX_RUNTIME_FACT_KEY_BYTES};
+use actingcommand_contract::{
+    BackendObservationStatus, BackendOpenEntry, BackendOpenReport, FactValue,
+    MAX_RUNTIME_FACT_KEY_BYTES,
+};
 
 /// Key families that stop describing the device once a new owner epoch starts.
 const TAKEOVER_INVALIDATED_FAMILIES: [&str; 3] = ["device.", "backend.", "application."];
+
+/// Self-check fact keys are `backend.selfcheck.<entry>.<suffix>` (Workflow #317 slice sc1),
+/// `<entry>` being `input`, `capture` or `nemu`.
+const BACKEND_SELFCHECK_PREFIX: &str = "backend.selfcheck.";
+const BACKEND_SELFCHECK_STATUS_SUFFIX: &str = "status";
+const BACKEND_SELFCHECK_GENERATION_SUFFIX: &str = "generation";
+const BACKEND_SELFCHECK_SELECTED_SUFFIX: &str = "selected";
+const BACKEND_SELFCHECK_CHECKED_AT_SUFFIX: &str = "checked_at_unix_ms";
 
 /// The admitted package's `control.json` `game` / `server` declarations, copied verbatim.
 pub(super) const TASK_GAME_FACT_KEY: &str = "task.game";
@@ -37,6 +48,30 @@ const TASK_SETTLEMENT_SUFFIXES: [&str; 4] = [
 
 fn task_settlement_fact_key(task_id: &str, suffix: &str) -> String {
     format!("task.{task_id}.{suffix}")
+}
+
+/// `passed` when the open's `status`, its `connection` and the entry's own check
+/// (`input_check`, `capture_check`, both for a Nemu pair) all passed; `failed` when any of them
+/// failed; otherwise `unknown`.
+fn backend_selfcheck_status(report: &BackendOpenReport) -> &'static str {
+    let (check, paired_check) = match report.entry {
+        BackendOpenEntry::Input => (report.input_check, None),
+        BackendOpenEntry::Capture => (report.capture_check, None),
+        BackendOpenEntry::NemuPair => (report.capture_check, Some(report.input_check)),
+    };
+    let mut observed = [report.status, report.connection, check]
+        .into_iter()
+        .chain(paired_check);
+    if observed
+        .clone()
+        .any(|status| status == BackendObservationStatus::Failed)
+    {
+        "failed"
+    } else if observed.all(|status| status == BackendObservationStatus::Passed) {
+        "passed"
+    } else {
+        "unknown"
+    }
 }
 
 /// Refuses a catalog with a task whose settlement fact keys would exceed the 128-byte runtime
@@ -79,6 +114,87 @@ impl HostShared {
         let observed_at_unix_ms = self.clock.sample()?.unix_ms;
         for record in manifest.to_fact_records(observed_at_unix_ms, OriginModule::Runtime) {
             self.record_runtime_fact(record)?;
+        }
+        Ok(())
+    }
+
+    /// Records the four `backend.selfcheck.<entry>.*` facts of one recorded backend open
+    /// (Workflow #317 slice sc1), ledger-first through [`Self::record_runtime_fact`]: instance
+    /// scope, source `device-proxy` (input, nemu) or `capture`, no lifetime, one clock sample as
+    /// the observation time of all four. A newer open of the same entry replaces them and an
+    /// identical record appends nothing; every refusal (including `runtime_fact_stale`) is
+    /// returned. `checked_at_unix_ms` saturates at `i64::MAX` for a wall clock beyond it; the
+    /// records' `observed_at_unix_ms` stays exact.
+    pub(super) fn record_backend_selfcheck_facts(
+        &self,
+        instance_id: InstanceId,
+        report: &BackendOpenReport,
+    ) -> RuntimeHostResult<()> {
+        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
+        let generation = i64::try_from(report.session_generation).map_err(|_| {
+            RuntimeHostError::fatal(
+                "backend_selfcheck_fact_overflow",
+                "record_backend_selfcheck_facts",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let (entry, source) = match report.entry {
+            BackendOpenEntry::Input => ("input", OriginModule::DeviceProxy),
+            BackendOpenEntry::Capture => ("capture", OriginModule::Capture),
+            BackendOpenEntry::NemuPair => ("nemu", OriginModule::DeviceProxy),
+        };
+        let values = [
+            (
+                BACKEND_SELFCHECK_STATUS_SUFFIX,
+                FactValue::String(backend_selfcheck_status(report).to_owned()),
+            ),
+            (
+                BACKEND_SELFCHECK_GENERATION_SUFFIX,
+                FactValue::Integer(generation),
+            ),
+            (
+                BACKEND_SELFCHECK_SELECTED_SUFFIX,
+                FactValue::String(report.selected.clone().unwrap_or_else(|| "-".to_owned())),
+            ),
+            (
+                BACKEND_SELFCHECK_CHECKED_AT_SUFFIX,
+                FactValue::Integer(i64::try_from(observed_at_unix_ms).unwrap_or(i64::MAX)),
+            ),
+        ];
+        for (suffix, value) in values {
+            self.record_runtime_fact(RuntimeFactRecord {
+                scope: RuntimeFactScope::Instance { instance_id },
+                key: format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{suffix}"),
+                value,
+                observed_at_unix_ms,
+                source,
+                ttl_ms: None,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Drops every `backend.selfcheck.*` fact the store holds for one instance with
+    /// `device_closed`: the session they describe is closed and the instance endpoint was
+    /// rebound (or returned to pending). Every refusal is returned.
+    pub(super) fn invalidate_backend_selfcheck_facts(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let keys = lock(&self.runtime_facts, "read_backend_selfcheck_facts")?
+            .records()
+            .filter(|record| {
+                record.scope == scope && record.key.starts_with(BACKEND_SELFCHECK_PREFIX)
+            })
+            .map(|record| record.key.clone())
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.invalidate_runtime_fact(
+                &scope,
+                &key,
+                RuntimeFactInvalidationReason::DeviceClosed,
+            )?;
         }
         Ok(())
     }

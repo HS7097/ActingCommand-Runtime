@@ -13,7 +13,8 @@ ledger events, the append-first rule, startup replay, takeover invalidation,
 the periodic snapshot, the read operation, the offline read, and the producers built so far
 (see "Producers"). The `task.` family has three single-key producers (`task.game`,
 `task.server`, `task.page`) and the four per-task settlement facts
-(`task.<catalog_task_id>.*`, Workflow #308 slice 5b); the remaining producers
+(`task.<catalog_task_id>.*`, Workflow #308 slice 5b); the `backend.` family has
+the backend self-check facts (`backend.selfcheck.*`, Workflow #317 slice sc1); the remaining producers
 (`host.`, … facts), policy-input rewiring, and the per-instance read operation land
 in later slices.
 
@@ -244,8 +245,9 @@ exits nonzero with `runtime_facts_not_available` or the failure code.
 
 ## Producers
 
-Six producers write the store today; all go through the append-first rule
-above, with source `runtime` except the settlement facts (source `policy`).
+Seven producers write the store today; all go through the append-first rule
+above, with source `runtime` except the settlement facts (source `policy`) and
+the backend self-check facts (source `device-proxy` or `capture`).
 
 - `device.connected` (slice #316-B) — instance scope, `boolean`: the running
   state emulator instance control observed after `status` / `start` / `stop` /
@@ -318,6 +320,41 @@ above, with source `runtime` except the settlement facts (source `policy`).
   promotion refuse a catalog with a longer task id with
   `task_id_too_long_for_facts` (request class) before anything is appended, so
   no run of such a task can exist.
+- Backend self-check facts (Workflow #317, slice sc1) — instance scope, no
+  lifetime, source `device-proxy` for the `input` and `nemu` entries and
+  `capture` for `capture`. Every original open of one entry for one instance,
+  success or failure and whatever the provider (native, fixture simulation,
+  unobserved), is recorded as one `runtime.lifecycle_observed` event with phase
+  `backend_open_observed` (`backend-open-observation.md`); right after that
+  event the host records four facts from its report, all with one host-clock
+  sample as `observed_at_unix_ms`, under `backend.selfcheck.<entry>.` where
+  `<entry>` is `input`, `capture` or `nemu` (the `nemu_pair` entry):
+  - `status` (`string`): `passed` when the report's `status` and `connection`
+    are `passed` and so is the entry's own check (`input_check` for input,
+    `capture_check` for capture, both for nemu); `failed` when any of those is
+    `failed`; otherwise `unknown` (an unobserved provider, a fixture
+    simulation, or a check the open did not make).
+  - `generation` (`integer`): the report's `session_generation`.
+  - `selected` (`string`): the selected backend name, or `-` when none was
+    selected.
+  - `checked_at_unix_ms` (`integer`): the observation time, saturated at the
+    largest integer for a wall clock beyond it (the records'
+    `observed_at_unix_ms` stays exact).
+
+  A newer open of the same entry replaces all four and an identical record
+  appends nothing. A report whose event links carry no instance fails with
+  `backend_selfcheck_instance_missing` (fatal); every refusal of a record
+  (including `runtime_fact_stale`, an open of one entry at the same or an
+  earlier wall-clock millisecond than the stored facts) is returned to the
+  open's observation consumer, whose existing failure path poisons the Runtime
+  exactly as a failed event append does. A lease release, a task end
+  or a retained-session close leaves them in place: they describe the last
+  open. Invalidated with `device_closed` by emulator control after `stop`,
+  `start` and `restart`, once the endpoint was rebound (or returned to
+  pending) and still under the instance admission guard, so a session opened
+  on the new binding never loses its facts; and with `runtime_takeover` as
+  part of the `backend.` family. An ADB failure leaves them in place. The
+  policy layer does not read them yet; `actingctl facts --program` lists them.
 - `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module
@@ -384,7 +421,8 @@ Contract: `runtime_fact_ledger_position_invalid`,
 a refusal while recording settlement facts is raised as fatal with the same
 code); `runtime_fact_store_desync`, `runtime_fact_replay_failed`,
 `invalid_runtime_config_manifest`, `policy_settlement_instance_unknown`,
-`policy_settlement_missing`, `policy_settlement_fact_overflow` (fatal). Offline read:
+`policy_settlement_missing`, `policy_settlement_fact_overflow`,
+`backend_selfcheck_instance_missing`, `backend_selfcheck_fact_overflow` (fatal). Offline read:
 `runtime_facts_source_incomplete`, `runtime_facts_position_missing`,
 `runtime_facts_read_budget_exceeded`; `actingledger facts`:
 `runtime_facts_not_available`.

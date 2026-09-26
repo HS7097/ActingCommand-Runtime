@@ -41,6 +41,7 @@ impl HostShared {
             return Err(ledger_error("append_backend_open_observations"));
         }
         let mut persisted = Vec::new();
+        let mut recorded = Vec::new();
         for observation in observations {
             let receipt = observation.occurrence.recorded_event::<EventId>();
             if receipt.get().is_some() {
@@ -78,6 +79,7 @@ impl HostShared {
                 })?;
             let _ = receipt.set(*event.event_id());
             persisted.push(event);
+            recorded.push(&observation.report);
         }
         if !persisted.is_empty() {
             self.synchronize_fact_store_under_gate().inspect_err(|_| {
@@ -87,6 +89,20 @@ impl HostShared {
         drop(gate);
         for event in persisted {
             self.observe_pipeline_event(&event)?;
+        }
+        if recorded.is_empty() {
+            return Ok(());
+        }
+        // Workflow #317 sc1: every recorded open becomes its instance's self-check facts.
+        let instance_id = *links.instance_id().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "backend_selfcheck_instance_missing",
+                "record_backend_selfcheck_facts",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        for report in recorded {
+            self.record_backend_selfcheck_facts(instance_id, report)?;
         }
         Ok(())
     }
